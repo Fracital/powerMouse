@@ -16,7 +16,7 @@ import type DocumentClient from '../dom/Client';
 import Module from '../Module';
 import { skippedFrames } from '../nativeErrors';
 import { LazyWeakMap, LazyWeakSet } from '../ownCollections';
-import { placeOf } from '../positionParts';
+import { placeOf, positionParts } from '../positionParts';
 import { reportParts } from '../reportParts';
 import type { ReportView } from '../reportsSeen';
 import ProxyModule from './Proxy';
@@ -282,6 +282,8 @@ interface CallSite {
 const FRAME_PLACE = /:\d+:\d+(\)?)$/;
 /** a CallSite's getters of its place, in placeOf's order */
 const PLACES = ['getPosition', 'getLineNumber', 'getColumnNumber'];
+/** a URL's fragment */
+const HASH = /#.*$/s;
 
 type PrepareStackTrace = (error: unknown, sites: CallSite[]) => unknown;
 
@@ -770,10 +772,19 @@ export default class UnrouteModule extends Module<Client> {
 		if (!location && this.#isInternal(filename))
 			location = this.pageLocation(native.error) ?? NO_LOCATION;
 		// a script that has no file name for the browser and is the page's
-		// for its stack: one of the page's markup (see rewriteInlineScripts)
-		if (!location && filename === '') {
+		// for its stack: one of the page's markup (see rewriteInlineScripts);
+		// and code of the document the inject rewrote (a script of its
+		// markup, a handler), which the browser places in what it ran: where
+		// its stack's top frame is in the document, placed as its own
+		const own = (name: unknown) =>
+			!this.client.isWorker &&
+			typeof name === 'string' &&
+			name.replace(HASH, '') ===
+				`${this.client.global.location?.href}`.replace(HASH, '');
+		if (!location && (filename === '' || own(filename))) {
 			const site = this.pageLocation(native.error);
-			if (site?.routed) location = site;
+			if (site?.routed && (filename === '' || own(site.routed)))
+				location = site;
 		}
 		const routed = location
 			? location.routed
@@ -1205,8 +1216,8 @@ export default class UnrouteModule extends Module<Client> {
 		// which gives it no file name: it has the source URL the inject names
 		// it with (rewriteInlineScripts), the page's URL natively
 		const scriptName = (site: CallSite) =>
-			site.getFileName() ??
-			(site.isEval() ? undefined : site.getScriptNameOrSourceURL());
+			site.getFileName() ||
+			(site.isEval() ? site.getFileName() : site.getScriptNameOrSourceURL());
 		const fileName = (site: CallSite): string | null | undefined => {
 			const name = scriptName(site);
 			return typeof name === 'string'
@@ -1214,9 +1225,12 @@ export default class UnrouteModule extends Module<Client> {
 				: name;
 		};
 		// where a frame stands in the page's text, where the map its script's
-		// rewrite carries says (../positionParts.ts): offset, line, column
-		const placed = (site: CallSite) =>
-			placeOf(fileName(site), site.getPosition?.());
+		// rewrite carries says (../positionParts.ts): offset, line, column. A
+		// frame of no file kept may be in code the inject rewrote (an inline
+		// script, a handler, eval), whose map is found by its script. `at`:
+		// another position in the frame's script
+		const placed = (site: CallSite, at = site.getPosition?.()) =>
+			placeOf(fileName(site), at, site);
 		// a frame's text with its own line and column the page's; for code
 		// the page's eval runs, the eval's place too, where the frame below
 		// is the call (V8 names the call's place, which is the frame's)
@@ -1227,16 +1241,23 @@ export default class UnrouteModule extends Module<Client> {
 			sites: CallSite[],
 		) => {
 			const place = placed(site);
-			if (place) return text.replace(FRAME_PLACE, `:${place[1]}:${place[2]}$1`);
+			if (place) text = text.replace(FRAME_PLACE, `:${place[1]}:${place[2]}$1`);
+			return placedOrigin(site, text, index, sites);
+		};
+		// an eval's origin in `text` placed, as the frame below's script has
+		// it (../positionMaps.ts placeOrigin)
+		const placedOrigin = (
+			site: CallSite,
+			text: string,
+			index: number,
+			sites: CallSite[],
+		) => {
 			const below = sites[index + 1];
-			const caller = below && site.isEval() ? placed(below) : null;
-			if (!caller) return text;
-			const name = fileName(below!);
-			const origin = `(${name}:${below!.getLineNumber()}:${below!.getColumnNumber()})`;
-			const at = text.indexOf(origin);
-			return at < 0
-				? text
-				: `${text.slice(0, at)}(${name}:${caller[1]}:${caller[2]})${text.slice(at + origin.length)}`;
+			return below && site.isEval()
+				? (positionParts
+						.maps?.()
+						.origin(text, below, fileName(below), placed) ?? text)
+				: text;
 		};
 		// a frame inside the inject bundle: no page URL corresponds to it
 		// (or a function the inject made with a realm's Function: its code has
@@ -1351,7 +1372,12 @@ export default class UnrouteModule extends Module<Client> {
 										index,
 										sites,
 									)
-								: cleanFrame(value, index, sites);
+								: placedOrigin(
+										target,
+										cleanFrame(value, index, sites),
+										index,
+										sites,
+									);
 						};
 					const value = Reflect.get(target, key, target);
 					return typeof value === 'function' ? value.bind(target) : value;

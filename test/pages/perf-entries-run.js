@@ -392,6 +392,14 @@
 			),
 	);
 	await phase(
+		'inline',
+		() =>
+			new Promise((resolve) => {
+				window.perfInlineDone = resolve;
+				setTimeout(window.perfInlineTask, 0);
+			}),
+	);
+	await phase(
 		'classic',
 		() =>
 			new Promise((resolve) => {

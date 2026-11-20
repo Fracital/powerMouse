@@ -14,14 +14,15 @@
 // and the suite compares every case with the page loaded natively, along with
 // the uncaught errors the console shows. Both demo modes.
 //
-// Source positions (line and column numbers) are compared apart. One in a
-// script file of the page's (a frame, an eval's origin, an error event's
-// place; test/pages/error-surfaces-columns.js has a case of code the rewriter
-// writes around) stands where natively: the service worker's rewrite of the
-// file carries the map of itself to the page's text, which the stack's
-// formatter reads. Elsewhere (the page's markup, which the inject rewrites,
-// and code with no file) they differ, printed as a measurement, and so do
-// the few places in files EXPECTED_PLACES lists. The proxy does not forward
+// Source positions (line and column numbers) are compared apart, and each
+// (a frame, an eval's origin, an error event's place) stands where
+// natively. In a script file of the page's
+// (test/pages/error-surfaces-columns.js has a case of code the rewriter
+// writes around) the service worker's rewrite of the file carries the map
+// of itself to the page's text, which the stack's formatter reads; in code
+// the inject rewrote (a script of the page's markup, eval, new Function, a
+// string timer) the map its rewrite handed over, found by the hash of the
+// script V8 ran. The few places EXPECTED_PLACES lists stand elsewhere. The proxy does not forward
 // a page's CSP, so a violation never fires through it: measured, not
 // compared. A resource the page's markup loads is listed twice through the
 // proxy (Chrome fetches what its preload scanner found in a written document
@@ -94,9 +95,7 @@ const places = (value) => {
 	});
 	return found;
 };
-// a script file of the page's (not its markup, nor code with no file)
-const SCRIPT_FILE = /\/error-surfaces-[\w-]+\.js(?:[?#]|$)/;
-// the places in script files that stand elsewhere, and why
+// the places that stand elsewhere, and why
 const EXPECTED_PLACES = [
 	[
 		/^(functionStack|dedicatedWorker|moduleWorker|sharedWorker): error-surfaces-(lib|worker)\.js:(11|50):3 /,
@@ -168,11 +167,9 @@ for (const [mode, base] of [
 			`${DUMP}/${mode}.json`,
 			JSON.stringify({ ...proxied, console: consoleErrors }, null, 2),
 		);
-	const moved = [];
-	// a place in a script file of the page's stands where natively: the
-	// service worker's rewrite carries the map of itself to the page's text
+	// a place stands where natively: the map of its script's rewrite says
 	const misplaced = [];
-	let filePlaces = 0;
+	let counted = 0;
 	for (const name of Object.keys(native.cases)) {
 		const got = JSON.stringify(proxied.cases[name]);
 		ok(`${mode}: ${name} names no proxy URL`, !leaks(got ?? ''), got);
@@ -190,19 +187,14 @@ for (const [mode, base] of [
 		if (have !== want) continue;
 		const nativePlaces = places(native.cases[name]);
 		const proxiedPlaces = places(proxied.cases[name]);
-		let elsewhere = false;
 		nativePlaces.forEach(([url, line, column], i) => {
 			const [, ...at] = proxiedPlaces[i] ?? [];
-			const same = at[0] === line && at[1] === column;
-			if (SCRIPT_FILE.test(url)) {
-				filePlaces++;
-				if (!same)
-					misplaced.push(
-						`${name}: ${url.replace(/.*\//, '')}:${line}:${column} proxied ${at.join(':')}`,
-					);
-			} else if (!same) elsewhere = true;
+			counted++;
+			if (at[0] !== line || at[1] !== column)
+				misplaced.push(
+					`${name}: ${url.replace(/.*\//, '')}:${line}:${column} proxied ${at.join(':')}`,
+				);
 		});
-		if (elsewhere) moved.push(name);
 	}
 	const unexplained = misplaced.filter((place) => {
 		const expected = EXPECTED_PLACES.find(([pattern]) => pattern.test(place));
@@ -210,12 +202,9 @@ for (const [mode, base] of [
 		return !expected;
 	});
 	ok(
-		`${mode}: every place in a script file of the page's stands where natively (${filePlaces})`,
-		filePlaces > 0 && unexplained.length === 0,
+		`${mode}: every place stands where natively (${counted})`,
+		counted > 0 && unexplained.length === 0,
 		unexplained.join(' | '),
-	);
-	console.log(
-		`${mode}: measured source positions that differ (the page's markup, code with no file): ${moved.join(', ') || 'none'}`,
 	);
 	const shown = consoleErrors.filter((stack) => !/registerPaint/.test(stack));
 	ok(

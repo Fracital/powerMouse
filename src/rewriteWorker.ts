@@ -23,6 +23,7 @@ import StompURL from './StompURL';
 import { REWRITE_MODULES, REWRITE_PORT } from './transport/messages';
 import { RpcHelper } from './transport/rpc';
 import { rewriteBytesInWasm } from './wasm/rewriteBytes';
+import { takeApart } from './wasm/rewriter';
 import {
 	adoptModules,
 	heldModules,
@@ -53,7 +54,10 @@ function rewrite(request: RewriteRequest): string | RewriteAnswer {
 		request.source,
 		told,
 	);
-	return told.by ? { output, by: told.by } : output;
+	// (the map of code asked for apart: an inline script of a document,
+	// src/prewrite.ts)
+	const map = request.source?.apart ? takeApart() : '';
+	return told.by ? { output, by: told.by, ...(map ? { map } : {}) } : output;
 }
 
 /**

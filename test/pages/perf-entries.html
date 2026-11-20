@@ -80,6 +80,15 @@
 			id="site-frame"
 			src="http://a.zone.localhost:__PORT__/perf/page/entries-site?run=__RUN__"
 		></iframe>
+		<script>
+			// a function of the markup a long animation frame names (its position
+			// is in the markup's script, as natively)
+			function perfInlineTask() {
+				const end = performance.now() + 80;
+				while (performance.now() < end);
+				window.perfInlineDone();
+			}
+		</script>
 		<script src="/pages/perf-entries-run.js"></script>
 	</body>
 </html>

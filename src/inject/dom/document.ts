@@ -102,9 +102,9 @@ codecParts.bytes = () => heldPart('codecBytes')?.();
 cacheCallParts.calls = () => deferred('cacheCalls');
 // and what Origin.from() answers, with a realm's first call
 originFromParts.answer = () => deferred('originFrom');
-// and the reader of the maps of script files' rewrites, with the first
-// position of one a page reads
-positionParts.read = () => deferred('placeIn');
+// and the readers of the maps of script files' rewrites and of code the
+// inject rewrote, with the first position of one a page reads
+positionParts.maps = () => deferred('positionReaders');
 // and what reads a window as an array method or a list of arguments does,
 // with a document's first such call
 windowArrayParts.make = () => deferred('windowArrays');

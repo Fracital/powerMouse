@@ -36,6 +36,8 @@ const FLAG_SINGLE = 128;
 const FLAG_PRINT = 256;
 // the output carries the map of itself to the script's text (rust/rwjs/src/positions.rs)
 export const FLAG_POSITIONS = 512;
+/** the map comes beside the output, which carries none (rust/core-module/src/rewriter.rs) */
+const FLAG_APART = 1024;
 const STATUS_INVALID = 7;
 const ROUTE_IMPORT = 1;
 const ROUTE_SOURCE_MAP = 2;
@@ -47,6 +49,19 @@ interface Source {
 	shifts?: number[];
 	embed?: boolean;
 	positions?: boolean;
+	apart?: boolean;
+}
+
+/**
+ * The map of the last rewrite asked for apart (`Source.apart`,
+ * rust/core-module/src/rewriter.rs FLAG_APART), '' when there is none
+ */
+let apart = '';
+/** the map of the last rewrite asked for apart, once */
+export function takeApart(): string {
+	const taken = apart;
+	apart = '';
+	return taken;
 }
 
 /**
@@ -86,7 +101,7 @@ export function rewriterRevision(): string | null {
  * the page wrote it, and a revision 1 module takes the flags of the parse
  * questions for a rewrite.
  */
-export const REVISION = '19';
+export const REVISION = '20';
 
 /** whether an instance answered REVISION, asked once of each */
 const speaks = new WeakMap<BufferInstance, boolean>();
@@ -288,6 +303,10 @@ export function rewriteWith(
 	if (loose) key ??= sourceKey(script);
 	let flags = isModule ? FLAG_MODULE : 0;
 	if (source?.positions) flags |= FLAG_POSITIONS;
+	// (a text with a lone surrogate crosses as stand-ins, which a map
+	// would count)
+	apart = '';
+	if (source?.apart && !loose) flags |= FLAG_APART;
 	if (source?.text === undefined) {
 		// the script's own text is the one kept: written into the output by
 		// the module when a function of it is marked, or kept in this realm
@@ -342,12 +361,13 @@ export function rewriteWith(
 					'SyntaxError: no browser runs this script',
 				)
 			: null;
-	if (here && source?.text === undefined) {
+	if ((here && source?.text === undefined) || flags & FLAG_APART) {
 		const meta = instance.call('', FLAG_META);
 		if (!('output' in meta)) return null;
-		const tab = meta.output.indexOf('\t');
-		if (+meta.output.slice(0, tab) > 0)
-			keepSource(meta.output.slice(tab + 1), script);
+		const [marks, key, map] = meta.output.split('\t');
+		if (here && source?.text === undefined && +marks! > 0)
+			keepSource(key!, script);
+		apart = map ?? '';
 	}
 	return cross.back(result.output);
 }

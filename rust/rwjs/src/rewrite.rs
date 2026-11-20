@@ -73,6 +73,10 @@ pub struct Options<'c> {
 	/// write the map of the output to the source for the positions a page
 	/// reads (src/positions.rs): a script file the service worker serves
 	pub positions: bool,
+	/// make the same map but hand it over beside the output, which carries
+	/// none ([`Output::map`]): code the inject rewrites (an inline script,
+	/// a handler, eval), whose positions it reads by the script V8 ran
+	pub apart: bool,
 	pub config: &'c Config,
 	pub params: &'c Params,
 }
@@ -83,6 +87,9 @@ pub struct Output {
 	pub marks: u32,
 	/// the key the marks name, '' when there is none
 	pub key: String,
+	/// the map of the output to the source, under [`Options::apart`]
+	/// (src/positions.rs [`positions::write_apart`]), else ''
+	pub map: String,
 }
 
 /// The revision of this module, which it answers for `FLAG_REVISION`: raised
@@ -93,7 +100,7 @@ pub struct Output {
 /// an older module's text and the glue never drives a module it was not
 /// written for (src/wasm/rewriter.ts holds the same number).
 /// rust/host/parity.mjs --cases holds it to the outputs (cases.revision).
-pub const REVISION: &str = "19";
+pub const REVISION: &str = "20";
 
 /// Why the rewriter hands a script back to the JavaScript one
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -505,7 +512,7 @@ pub fn rewrite(source: &str, options: &Options, route: &mut Route) -> Result<Out
 	let held = options.holder && marks > 0;
 	// the map of the output to the source goes last in that text, where
 	// the output is not the source (src/positions.rs)
-	let mapped = options.positions && (!edits.is_empty() || !pre.is_empty());
+	let mapped = options.apart || (options.positions && (!edits.is_empty() || !pre.is_empty()));
 	if !pre.is_empty() || held || mapped {
 		let directive = if options.module { None } else { program.directives.last() };
 		let at = match directive {
@@ -547,7 +554,26 @@ pub fn rewrite(source: &str, options: &Options, route: &mut Route) -> Result<Out
 	drop(program);
 	drop(allocator);
 	let key = if held { Some(key.unwrap_or_else(|| source_key(source))) } else { key };
+	let mut map = String::new();
 	let text = match &key {
+		_ if options.apart => {
+			let api = &options.config.api;
+			let held_key = if held { key.as_deref() } else { None };
+			let room = |_: &edits::Positions| lead.len() + held_key.map_or(0, |key| holder_room(api, key, source));
+			let written = std::cell::Cell::new(0);
+			apply_mapped(source, edits, &room, &|byte| offsets.convert(byte), &mut |out, _| {
+				let start = out.len();
+				out.push_str(&lead);
+				if let Some(key) = held_key {
+					holder_statement_into(out, api, key, source);
+				}
+				written.set(positions::utf16_len(&out[start..]));
+			})
+			.map(|(text, found)| {
+				positions::write_apart(&mut map, written.get(), &positions::line_lengths(source), &found);
+				text
+			})
+		}
 		_ if mapped => {
 			let api = &options.config.api;
 			let url = &options.params.url;
@@ -600,6 +626,7 @@ pub fn rewrite(source: &str, options: &Options, route: &mut Route) -> Result<Out
 		text,
 		marks,
 		key: if marks > 0 { key.unwrap_or_else(|| source_key(source)) } else { String::new() },
+		map,
 	})
 }
 
@@ -644,6 +671,7 @@ pub(crate) mod tests {
 			module,
 			holder: false,
 			positions: false,
+			apart: false,
 			config: &config,
 			params: &params,
 		};
@@ -1178,6 +1206,7 @@ pub(crate) mod tests {
 			module: false,
 			holder: false,
 			positions: false,
+			apart: false,
 			config: &config,
 			params: &params,
 		};
@@ -1191,6 +1220,54 @@ pub(crate) mod tests {
 		);
 		assert_eq!(out("--> a", &mut route), "--> a\nPRE;");
 		assert_eq!(out("a-->b", &mut route), "PRE;a-->b");
+	}
+
+	#[test]
+	fn a_map_apart_leaves_the_output_as_it_was() {
+		let config = Config::default();
+		let params = Params {
+			pre: "PRE;".into(),
+			..Params::default()
+		};
+		// the map's numbers (base64 VLQ, unsigned)
+		let numbers = |map: &str| {
+			const DIGITS: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+			let mut out = Vec::new();
+			let (mut value, mut scale) = (0u64, 1u64);
+			for c in map.chars() {
+				let digit = DIGITS.find(c).unwrap() as u64;
+				value += (digit & 31) * scale;
+				scale *= 32;
+				if digit & 32 == 0 {
+					out.push(value as usize);
+					(value, scale) = (0, 1);
+				}
+			}
+			out
+		};
+		for source in ["location", "'use strict'\nlocation.href = a\nb()", "f(`${location}`)\n\n"] {
+			let rewritten = |apart: bool| {
+				let options = Options {
+					module: false,
+					holder: false,
+					positions: false,
+					apart,
+					config: &config,
+					params: &params,
+				};
+				let mut route = |_: u32, _: &str| None;
+				rewrite(source, &options, &mut route).unwrap()
+			};
+			let (plain, apart) = (rewritten(false), rewritten(true));
+			assert_eq!(apart.text, plain.text, "{source}");
+			assert!(plain.map.is_empty() && !apart.map.is_empty());
+			// past the text ahead of the code, where it starts, where that
+			// text stands, then the lines (their count first)
+			let read = numbers(&apart.map);
+			let (past, at) = (read[0], read[1]);
+			assert!(apart.text[at..past].contains("PRE;"), "{source}: {at}..{past}");
+			assert_eq!(read[3], source.split('\n').count(), "{source}");
+		}
 	}
 
 	/// the close comments' end found as it was when each line was cut at

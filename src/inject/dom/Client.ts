@@ -69,7 +69,9 @@ import { contextText, linkRoute, opaqueContext } from '../../visited';
 import { ownCodec, shareCodec, type CodecBackend } from '../../wasm/codec';
 import Client from '../Client';
 import { LazyMap, LazySet, LazyWeakMap, LazyWeakSet } from '../ownCollections';
+import { keepCode, MAPPED } from '../positionParts';
 import {
+	apartMap,
 	controllerModule,
 	deferredText,
 	getPublicSuffix,
@@ -163,7 +165,7 @@ export function nonceOf(element: Element): string {
 }
 const nativeQuerySelectorAll = Element.prototype.querySelectorAll;
 const nativeRemoveAttribute = Element.prototype.removeAttribute;
-const nativeScriptText = Reflect.getOwnPropertyDescriptor(
+export const nativeScriptText = Reflect.getOwnPropertyDescriptor(
 	HTMLScriptElement.prototype,
 	'text',
 )!;
@@ -297,6 +299,8 @@ const documentViewGetter = Reflect.getOwnPropertyDescriptor(
  * text, with the decode tables of every named entity in each frame.
  */
 const ESCAPED = /&(amp|lt|gt|nbsp);/g;
+/** a script that names itself (`//# sourceURL=`) */
+const NAMED = /^\/\/[#@]\s*sourceURL=/m;
 const UNESCAPED: Record<string, string> = {
 	amp: '&',
 	lt: '<',
@@ -3565,10 +3569,11 @@ export default class DocumentClient extends Client {
 		// document.write, and a script that runs inside a write has no URL:
 		// its stack frames and errors read `<anonymous>`, where the network's
 		// parser names the document. Each is named for the document (the
-		// route, which reads back as the page's URL), unless it names itself.
-		// Markup the page writes is left as natively: unnamed.
+		// route, which reads back as the page's URL, without its fragment, as
+		// natively), unless it names itself. Markup the page writes is left as
+		// natively: unnamed.
 		const sourceURL = parsed
-			? `\n//# sourceURL=${this.global.location.href}`
+			? `\n//# sourceURL=${this.global.location.href.replace(/#.*$/s, '')}`
 			: '';
 		for (const script of root.querySelectorAll('script')) {
 			// an SVG script element has no `text`: its textContent is the source
@@ -3630,21 +3635,34 @@ export default class DocumentClient extends Client {
 			}
 			const isModule = scriptKind(script) === 'module';
 			// the restore runs after the script's directive prologue, so a strict
-			// script stays strict
-			// what the worker made of it already (prewrite.ts), else made here
-			let rewritten =
-				this.#table()?.script(isModule, source) ??
-				modifyJS(
+			// script stays strict. What the worker made of it already
+			// (prewrite.ts), else made here. Its positions read as its text's
+			// (in the page's markup, where the worker or codePlace found it):
+			// the map its rewrite hands over is kept by the script V8 runs
+			// (../positionParts.ts keepCode)
+			const table = this.#table();
+			let rewritten = table?.script(isModule, source);
+			let map = table?.found?.[3];
+			let place = table?.found?.[4];
+			if (rewritten === undefined) {
+				place = parsed ? deferred('codePlace')(this, source) : undefined;
+				rewritten = modifyJS(
 					source,
 					this.baseURL,
 					this.config,
 					isModule ? 'genericModule' : 'generic',
 					isModule ? '' : scriptPreamble(source),
+					MAPPED,
 				);
+				map = apartMap;
+			}
 			if (isModule) rewritten = this.moduleText(rewritten, null);
-			const named = /^\/\/[#@]\s*sourceURL=/m.test(rewritten)
-				? rewritten
-				: rewritten + sourceURL;
+			const named = NAMED.test(rewritten) ? rewritten : rewritten + sourceURL;
+			keepCode(
+				map,
+				{ tail: named === rewritten ? '' : sourceURL, place },
+				rewritten,
+			);
 			const text = named.replace(/<\/script/gi, '<\\/script');
 			write(text);
 			sources?.set(text, source);

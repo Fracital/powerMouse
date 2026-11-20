@@ -395,6 +395,41 @@ runs): 1,265 to 1,316 ms warm over the twelve biggest scripts (+4.0%),
 peak memory unchanged (13.8x the input). Without the flag the module writes
 and times as before. `core.wasm` is 4,070 bytes bigger (726,782).
 
+Code the inject rewrites has no file to name it by: a script of the page's
+markup, an event handler attribute, eval, `new Function`, a string timer, a
+script the page inserts, a javascript: URL. Its rewrite asks for the map
+apart (flag 1024): the module makes the same map but writes nothing into
+the output, which is byte for byte the plain rewrite, and the meta call
+(16) answers `marks<TAB>key<TAB>map`. The inject holds the map with the
+output and what the script V8 runs has around it (a handler's mark before,
+a markup script's sourceURL after) and where the code stands in the
+document (`ScriptSource.place`), the newest 4,096
+(`src/inject/positionParts.ts` `keepCode`, about 130 bytes of the
+document bundle). The first time a frame of no file kept is placed, the
+reader (`positionMaps.ts` `placeCode`, a deferred part) hashes each code
+held since the last time as V8 names a script (`CallSite.getScriptHash()`,
+SHA-256 of its UTF-8, `src/sha.ts` `sha256Hex`, about 80 MB/s), lets the
+text go, and decodes the map of the one that matches. The module hashed
+the output itself at first (a midstate the inject finished with the tail),
+but SHA-256 in wasm runs at about 120 MB/s against the rewrite's 65, which
+made every rewrite apart 63% slower on the bench corpus, where most code
+is never placed. Making the map apart costs 6% (16.3 ms/MB against 15.4
+plain, `big12`, warm, least of 7), as the statement's does (16.1);
+counting the source's lines eight bytes at a time where none ends a line
+or leaves ASCII took the map's own cost from 13% to that. On the corpus
+(`all.json`) every output apart is the plain one and every map the
+statement's (4,012 scripts), and `core.wasm` is 1,605 bytes bigger
+(728,387). A markup script's lines are the document's and its first
+line's column is where its text starts (measured, Chrome 157); the service
+worker finds that place for a prewritten script (`prewrite`, each piece's place in the document counted as it streams),
+the inject for one it rewrites (`violations.ts` `codePlace`). A handler of
+the markup counts from where its start tag ends (`handlerPlace`). A long
+animation frame's script has no hash: a markup script's is the kept map
+of this document's markup whose output is long enough and puts the
+position where an inline script's text has the function's name before it,
+else the only one long enough (`LongFrames.ts`). A CSP violation of eval,
+`Function` or a string timer names the page's call, placed the same way.
+
 ## 6. The boundary and loading
 
 ### The ABI
@@ -428,18 +463,19 @@ truth for the thing most likely to leak an origin.
 
 The flags of `r`, and what each call takes and answers:
 
-| Flag | Input                          | Answer                                    |
-| ---- | ------------------------------ | ----------------------------------------- |
-| 0    | a classic script               | the rewritten script                      |
-| 1    | text                           | the host's routing of it (the round trip) |
-| 2    | a module                       | the rewritten module                      |
-| 4    | (with 0 or 2)                  | the holder statement is written too       |
-| 8    | `url`, `key`, `shifts`, `lead` | nothing: they hold for the next rewrite   |
-| 16   | nothing                        | `marks<TAB>key` of the last rewrite       |
-| 32   | nothing                        | the revision of what the module writes    |
-| 64   | a classic script               | `1` when it parses, `0` when not          |
-| 128  | a classic script               | `1` when it is one expression statement   |
-| 512  | (with 0 or 2)                  | the position map statement is written too |
+| Flag | Input                          | Answer                                                            |
+| ---- | ------------------------------ | ----------------------------------------------------------------- |
+| 0    | a classic script               | the rewritten script                                              |
+| 1    | text                           | the host's routing of it (the round trip)                         |
+| 2    | a module                       | the rewritten module                                              |
+| 4    | (with 0 or 2)                  | the holder statement is written too                               |
+| 8    | `url`, `key`, `shifts`, `lead` | nothing: they hold for the next rewrite                           |
+| 16   | nothing                        | `marks<TAB>key` of the last rewrite (under 1024, then `<TAB>map`) |
+| 32   | nothing                        | the revision of what the module writes                            |
+| 64   | a classic script               | `1` when it parses, `0` when not                                  |
+| 128  | a classic script               | `1` when it is one expression statement                           |
+| 512  | (with 0 or 2)                  | the position map statement is written too                         |
+| 1024 | (with 0 or 2)                  | the map is made apart, for 16 to answer                           |
 
 `lead` is what runs before the script's own code (the worker bootstrap, a
 module's `import.meta` lines, the caller's preamble), built by `scriptLead`

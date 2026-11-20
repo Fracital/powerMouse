@@ -43,9 +43,19 @@ export interface Prewritten {
 	url: string;
 	/**
 	 * [kind (c: classic, m: module), where the script's text stands in the
-	 * markup (start, end), its rewrite (PackedRewrite)]
+	 * markup (start, end), its rewrite (PackedRewrite), the map the rewrite
+	 * handed over apart ('' for none: src/wasm/rewriter.ts takeApart), and
+	 * where its text starts in the document (the lines before, the column:
+	 * src/rewriteJS.ts ScriptSource.place)]
 	 */
-	scripts: [kind: 'c' | 'm', start: number, end: number, ...PackedRewrite][];
+	scripts: [
+		kind: 'c' | 'm',
+		start: number,
+		end: number,
+		...PackedRewrite,
+		map: string,
+		place: [before: number, column: number],
+	][];
 	/** [where the style's text stands in the markup (start, end), its rewrite] */
 	styles: [start: number, end: number, output: string][];
 }
@@ -54,7 +64,7 @@ export interface Prewritten {
 function unpack(
 	kind: 'c' | 'm',
 	source: string,
-	[rest, at, holder]: PackedRewrite,
+	[rest, at, holder]: readonly [...PackedRewrite, ...unknown[]],
 	access: string,
 	preamble = true,
 ): string {
@@ -232,7 +242,11 @@ const PROLOGUE =
 
 /** the client's lookup of a Prewritten table */
 export class PrewrittenTable {
-	readonly #scripts = new Map<string, PackedRewrite>();
+	/** each script's rewrite, then its map and where it stands (PrewrittenTable's) */
+	readonly #scripts = new Map<
+		string,
+		[...PackedRewrite, map?: string, place?: [number, number]]
+	>();
 	readonly #styles = new Map<string, string>();
 	readonly #access: string;
 	/** the URL the outputs were made for */
@@ -263,7 +277,7 @@ export class PrewrittenTable {
 	 */
 	script(module: boolean, source: string, bare = false): string | undefined {
 		const kind = module ? 'm' : 'c';
-		const packed = this.#scripts.get(`${kind}\u0000${source}`);
+		const packed = (this.found = this.#scripts.get(`${kind}\u0000${source}`));
 		if (packed === undefined) return undefined;
 		if (module || !bare) return unpack(kind, source, packed, this.#access);
 		if (packed[1] !== -1)
@@ -276,6 +290,8 @@ export class PrewrittenTable {
 		if (at === -1 || !PROLOGUE.test(output.slice(0, at))) return undefined;
 		return output.slice(0, at) + output.slice(at + preamble.length);
 	}
+	/** the entry script() last found: its map is at 3, where it stands in the document at 4 */
+	found?: [...PackedRewrite, map?: string, place?: [number, number]];
 	style(source: string): string | undefined {
 		return this.#styles.get(source);
 	}
