@@ -7265,12 +7265,17 @@ export function registerRewrites(
 			(kind !== 'wjs' && type) || 'text/javascript',
 		);
 		const module = kind === 'module';
+		// (its output carries the map of itself to the page's text, as a
+		// script file's does: a frame of a blob: script, a worker's among
+		// them, reads its place in the page's Blob)
 		return new Response(
 			modifyJS(
 				decodeScript(bytes, type, module),
 				page,
 				rewriter.config,
 				module ? 'genericModule' : 'generic',
+				'',
+				SCRIPT_FILE,
 			),
 			{ headers },
 		);

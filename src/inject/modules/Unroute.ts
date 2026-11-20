@@ -23,15 +23,21 @@ import ProxyModule from './Proxy';
 import ResourceBufferModule from './ResourceBuffer';
 
 /**
- * The proxy-origin prefix every route of this context starts with. A
- * document's origin comes from its base URL: an about:srcdoc frame reads its
- * location origin as "null", while its base URL is the parent's routed one.
+ * The proxy origin this context's routes are under. A document's comes
+ * from its base URL: an about:srcdoc frame reads its location origin as
+ * "null", while its base URL is the parent's routed one. A worker's is its
+ * location's, but where that is opaque (a data: worker's), the origin its
+ * bundle came from (WorkerClient.bundleOrigin).
  */
+const proxyOrigin = (client: Client) =>
+	client.isDOM
+		? (client as DocumentClient).baseURI.origin
+		: ((client as { bundleOrigin?: string }).bundleOrigin ??
+			client.global.location.origin);
+
+/** the proxy-origin prefix every route of this context starts with */
 export function routedPrefix(client: Client): string {
-	const base = client.isDOM
-		? (client as DocumentClient).baseURI
-		: client.global.location;
-	return `${base.origin}${client.directory}`;
+	return `${proxyOrigin(client)}${client.directory}`;
 }
 
 /**
@@ -39,10 +45,7 @@ export function routedPrefix(client: Client): string {
  * the proxy's own files (the inject bundles) are served from.
  */
 export function scopePrefix(client: Client): string {
-	const base = client.isDOM
-		? (client as DocumentClient).baseURI
-		: client.global.location;
-	return `${base.origin}${client.scope}`;
+	return `${proxyOrigin(client)}${client.scope}`;
 }
 
 /**

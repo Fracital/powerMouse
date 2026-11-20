@@ -632,11 +632,6 @@ refuses fires a violation, natively either.
   worker's own policy reaches its inject once its script's body starts, so
   what a module it imports connects to at its top level is refused by the
   service worker without a violation. A worker's script list that takes
-  nonces, hashes or 'strict-dynamic' judges none of its imports. A
-  `data:` worker's violation names no place (lineNumber and columnNumber
-  0: its realm tells none of its frames from the inject's), and a `blob:`
-  worker's import() violation names the column the rewrite of the call
-  maps to, natively its specifier's (csp-workers and csp-worker-requests
-  list them).
+  nonces, hashes or 'strict-dynamic' judges none of its imports.
 - An `<object>` of a page-made `blob:` URL does not load through the proxy,
   with or without a policy.
