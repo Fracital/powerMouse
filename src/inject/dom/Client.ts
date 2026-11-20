@@ -4011,6 +4011,14 @@ export default class DocumentClient extends Client {
 	): string | undefined {
 		return this.#table()?.script(module, source, bare);
 	}
+	/** @internal the worker's rewrite of a handler of this document's markup, its map and its place (PrewrittenTable.handler) */
+	prewrittenHandler(
+		name: string,
+		source: string,
+		placed: boolean,
+	): [output: string, map: string, place?: [number, number]] | undefined {
+		return this.#table()?.handler(name, source, placed);
+	}
 	/** the worker's table, while this client's URL is the one it was made for (a <base> the page adds changes it) */
 	#table(): PrewrittenTable | null {
 		const table = this.#prewritten;

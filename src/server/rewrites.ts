@@ -28,6 +28,7 @@ import {
 	type ScriptFacts,
 } from '../csp';
 import { freshFrameDocument } from '../freshFrame';
+import { sourceKey } from '../functionSource';
 import { rewriteLinkHeader } from '../headers';
 import { helperNames } from '../helperNames';
 import { modifyHTML, modifyHTMLStreamed } from '../htmlShell';
@@ -75,6 +76,8 @@ import {
 	workerKindUnisolated,
 } from '../partition';
 import {
+	handlerPreamble,
+	handlerSources,
 	hasBase,
 	inlineSources,
 	packRewrite,
@@ -6250,7 +6253,8 @@ export function registerRewrites(
 		const scanned = scanMarkup(markup);
 		if (scanned ? scanned.base : hasBase(markup)) return null;
 		const { scripts, styles } = inlineSources(markup, scanned ?? undefined);
-		if (!scripts.length && !styles.length) return null;
+		const handlers = handlerSources(markup);
+		if (!scripts.length && !styles.length && !handlers.length) return null;
 		const rewrites = partition !== null ? rewriter.rewrites : undefined;
 		const encoder = new TextEncoder();
 		const dispatches: Promise<void>[] = [];
@@ -6273,6 +6277,92 @@ export function registerRewrites(
 			counted = Math.max(counted, start);
 			return [lines, start - lineStart];
 		});
+		// where each handler's start tag ends, which V8 counts its positions
+		// from (the place handlerPlace finds in the page)
+		const ends = [
+			...new Set(
+				handlers.flatMap(([, , , places]) => places.map(([, e]) => e)),
+			),
+		].sort((a, b) => a - b);
+		const tagPlaces = new Map<number, [number, number]>();
+		{
+			let [lines, lineStart] = [at[0], -at[1]];
+			let counted = 0;
+			for (const tagEnd of ends) {
+				for (
+					let end = markup.indexOf('\n', counted);
+					end >= 0 && end < tagEnd;
+					end = markup.indexOf('\n', end + 1)
+				) {
+					lines++;
+					lineStart = end + 1;
+				}
+				counted = Math.max(counted, tagEnd);
+				tagPlaces.set(tagEnd, [lines, tagEnd - lineStart]);
+			}
+		}
+		const handlerOutputs = handlers.map(
+			async ([source, start, end, places]): Promise<
+				NonNullable<Prewritten['handlers']>[number] | null
+			> => {
+				const entry = (
+					output: string,
+					map: string,
+				): NonNullable<Prewritten['handlers']>[number] => [
+					start,
+					end,
+					output,
+					map,
+					places.map(([name, tagEnd]) => [name, ...tagPlaces.get(tagEnd)!]),
+				];
+				let sent!: () => void;
+				dispatches.push(new Promise((resolve) => (sent = resolve)));
+				try {
+					const preamble = handlerPreamble(access, sourceKey(source));
+					const key = rewrites
+						? await rewrites.key(
+								[
+									CACHE_GENERATION,
+									url.toString(),
+									'generic',
+									'handler',
+									cacheConfig(config, 'generic', (name) =>
+										source.includes(name),
+									),
+									url.codec.key,
+									partition!,
+								],
+								encoder.encode(source),
+							)
+						: null;
+					const kept = key !== null ? await rewrites!.match(key) : null;
+					if (kept !== null)
+						return entry(
+							await kept.text(),
+							(await (await rewrites!.match(`${key}m`))?.text()) ?? '',
+						);
+					const told: RewrittenBy = {};
+					const rewriting = pool.rewriteHandler(
+						source,
+						url,
+						config,
+						preamble,
+						told,
+					);
+					sent();
+					const output = await rewriting;
+					if (output === null) return null;
+					if (key !== null) {
+						void rewrites!.put(key, output);
+						if (told.map) void rewrites!.put(`${key}m`, told.map);
+					}
+					return entry(output, told.map ?? '');
+				} finally {
+					sent();
+				}
+			},
+		);
+		for (const output of handlerOutputs) output.catch(() => {});
 		const outputs = scripts.map(
 			async (
 				[kind, source, start, end],
@@ -6355,12 +6445,17 @@ export function registerRewrites(
 					},
 				);
 				const done = await Promise.all(outputs);
+				const handled = (await Promise.all(handlerOutputs)).filter(
+					(entry): entry is NonNullable<Prewritten['handlers']>[number] =>
+						entry !== null,
+				);
 				return {
 					url: url.toString(),
 					scripts: done.filter(
 						(entry): entry is Prewritten['scripts'][number] => entry !== null,
 					),
 					styles: styleOutputs,
+					...(handled.length ? { handlers: handled } : {}),
 				};
 			},
 		};

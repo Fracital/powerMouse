@@ -178,7 +178,10 @@ hooking every handler's in every frame cost some 19 KB a frame, these
 about 2 KB in a frame that has a handler attribute and nothing in one
 that has none). Its violation as it is compiled names the code that dispatched its
 event or read its property, else its place in the markup (where its start
-tag ends, where V8 counts the handler's own frame from); as it is parsed,
+tag ends, where V8 counts the handler's own frame from: the service
+worker's, sent with its rewrite, src/prewrite.ts, else found in the page,
+`./markupPlaces.ts` handlerPlace; two handlers of one text are two
+scripts, each with its own place); as it is parsed,
 none, or the write. A javascript: URL is judged at script-src-elem as
 Chrome judges it: as its navigation starts, by the policies of the
 document whose code started it (a link's click, a location it set, a

@@ -247,6 +247,30 @@ export class RewritePool {
 		);
 	}
 	/**
+	 * A handler of a document's markup (an onclick's text), rewritten by the
+	 * worker with the least in hand as the client rewrites it (`preamble`,
+	 * src/prewrite.ts handlerPreamble): the text is kept by the client, so
+	 * the output holds no holder statement. Null when none is ready or
+	 * answered in time; `told` has the map handed over apart.
+	 */
+	async rewriteHandler(
+		script: string,
+		url: StompURL,
+		config: Config,
+		preamble: string,
+		told?: RewrittenBy,
+	): Promise<string | null> {
+		return this.#rewriteOne(
+			script,
+			url,
+			config,
+			'generic',
+			{ apart: true, text: null },
+			preamble,
+			told,
+		);
+	}
+	/**
 	 * The script rewritten by a worker, or null when the caller must rewrite
 	 * it itself (none is ready or answered in time). `told` is which backend
 	 * rewrote it: always the wasm module. The wasm rewriter takes even a 12 MB
