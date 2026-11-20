@@ -2,7 +2,8 @@
 // "Architecture"): the controllers' `extensions` RPC (install, list,
 // enable, remove, update) and the contexts' `<directory>extapi` route
 // (chrome.storage, dynamic rules, registered scripts, cookies, management,
-// webRequest listeners, scripts to inject). A context's call is a fetch
+// webRequest listeners, a service worker's fetch handler, scripts to
+// inject). A context's call is a fetch
 // from its own document, so the worker knows its client: an extension page
 // is the extension's by its URL, a content document shows the token its
 // shell was given.
@@ -14,6 +15,7 @@ import {
 	type WebRequestListener,
 } from '../../extensions/types';
 import { definition, documentToken, isolatedSource } from './contentScripts';
+import { fetchEvents } from './fetchEvents';
 import type { ExtensionRegistry } from './registry';
 import { scriptCache } from './store';
 import { webRequests } from './webRequest';
@@ -43,11 +45,15 @@ export async function extensionCommand(
 				return await registry.infoOf(command.id);
 			case 'enable': {
 				const info = await registry.setEnabled(command.id, command.enabled);
-				if (!command.enabled) webRequests.forget(command.id);
+				if (!command.enabled) {
+					webRequests.forget(command.id);
+					fetchEvents.forget(command.id);
+				}
 				return info;
 			}
 			case 'remove':
 				webRequests.forget(command.id);
+				fetchEvents.forget(command.id);
 				await registry.remove(command.id);
 				return undefined;
 			case 'update':
@@ -220,6 +226,16 @@ export async function extensionApi(
 				value = undefined;
 				break;
 			}
+			case 'serviceWorker':
+				// the page an MV3 worker runs in has a fetch handler, or none
+				await fetchEvents.register(
+					String(call.context ?? client ?? ''),
+					channel,
+					id,
+					!!args[0],
+				);
+				value = undefined;
+				break;
 			case 'css': {
 				// insertCSS / removeCSS: the files' or the code's text, localized
 				// and rewritten as the extension's stylesheet

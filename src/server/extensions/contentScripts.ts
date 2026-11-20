@@ -6,7 +6,11 @@
 // once and wrapped as a function the runtime calls at its run_at point.
 // A document no extension reaches gets none of it.
 import { scriptMatches } from '../../extensions/match';
-import { extensionOfURL, extensionURL } from '../../extensions/origin';
+import {
+	cleanPath,
+	extensionOfURL,
+	extensionURL,
+} from '../../extensions/origin';
 import {
 	BACKGROUND_PAGE,
 	CONTENT_SCRIPT_ROUTE,
@@ -121,7 +125,7 @@ function pageKind(loaded: Loaded, path: string): ContextKind {
 		path === BACKGROUND_PAGE ||
 		(background?.service_worker &&
 			path === serviceWorkerPage(background.service_worker)) ||
-		(background?.page && path === background.page.replace(/^\/+/, ''))
+		(background?.page && path === cleanPath(background.page))
 	)
 		return 'background';
 	return 'tab';
@@ -168,7 +172,7 @@ export async function documentShell(
 			path === serviceWorkerPage(background.service_worker)
 		)
 			payload.serviceWorker = {
-				url: extensionURL(own, background.service_worker),
+				url: extensionURL(own, cleanPath(background.service_worker)),
 				module: background.type === 'module',
 			};
 	} else {

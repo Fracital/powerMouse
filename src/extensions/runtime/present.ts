@@ -7,22 +7,25 @@
 // what its messages come from and what a message to it names, is the
 // inject's: src/inject/dom/Client.ts `origin`.) Set as the page's
 // document opens, after the inject's hooks went in; the inject itself
-// keeps reading the emulated origin. These are the extension's own pages,
-// whose code is the extension's: the getters read as natives by name and
-// length, not by source.
-import { displayExtensionURL } from '../origin';
-import { natives } from './natives';
+// keeps reading the emulated origin. What the runtime defines here reads as
+// native, by name, length and source (natives.ts masking).
+import { displayExtensionOrigin, displayExtensionURL } from '../origin';
+import { masking, natives } from './natives';
 
 const { defineProperty, getOwnPropertyDescriptor } = natives;
 const apply = natives.Reflect.apply;
 
-/** a URL of an emulated origin as Chrome's; anything else as it is */
-const shown = (value: string) =>
-	value.includes('.invalid') ? displayExtensionURL(value) : value;
+/** a URL of an emulated origin as Chrome's (a blob: URL's too); anything else as it is */
+export const shown = (value: string) =>
+	value.includes('.invalid')
+		? value.startsWith('blob:')
+			? `blob:${displayExtensionURL(value.slice(5))}`
+			: displayExtensionURL(value)
+		: value;
 
-/** a getter named and sized as the native `get <name>` */
-function getterLike(name: string, get: (this: unknown) => unknown) {
-	return getOwnPropertyDescriptor(
+/** a getter named, sized and shown as the native `get <name>` */
+export function getterLike(name: string, get: (this: unknown) => unknown) {
+	const getter = getOwnPropertyDescriptor(
 		{
 			get [name]() {
 				return apply(get, this, []);
@@ -30,11 +33,30 @@ function getterLike(name: string, get: (this: unknown) => unknown) {
 		},
 		name,
 	)!.get!;
+	masking.native(getter, `get ${name}`);
+	return getter;
 }
 
-/** a method named and sized as `native` */
-function methodLike(
-	native: Function,
+/** a setter named, sized and shown as the native `set <name>` */
+export function setterLike(
+	name: string,
+	set: (this: unknown, value: unknown) => void,
+) {
+	const setter = getOwnPropertyDescriptor(
+		{
+			set [name](value: unknown) {
+				apply(set, this, [value]);
+			},
+		},
+		name,
+	)!.set!;
+	masking.native(setter, `set ${name}`);
+	return setter;
+}
+
+/** a method named, sized and shown as `native` (a name and length) */
+export function methodLike(
+	native: { name: string; length: number },
 	run: (this: unknown, args: unknown[]) => unknown,
 ) {
 	const method = {
@@ -43,6 +65,7 @@ function methodLike(
 		},
 	}[native.name];
 	defineProperty(method, 'length', { value: native.length });
+	masking.native(method, native.name);
 	return method;
 }
 
@@ -84,6 +107,7 @@ const READBACKS: [string, string[]][] = [
 	['HTMLInputElement', ['src']],
 	['HTMLFormElement', ['action']],
 	['StyleSheet', ['href']],
+	['Request', ['url', 'referrer']],
 	['Response', ['url']],
 	['XMLHttpRequest', ['responseURL']],
 	['EventSource', ['url']],
@@ -147,14 +171,9 @@ function presentLocation(real: Location, script: string | undefined) {
 			});
 		const set = descriptor.set;
 		if (set)
-			descriptor.set = getOwnPropertyDescriptor(
-				{
-					set [name](value: unknown) {
-						apply(set, own(this), [value]);
-					},
-				},
-				name,
-			)!.set;
+			descriptor.set = setterLike(name, function (value) {
+				apply(set, own(this), [value]);
+			});
 		const value = descriptor.value;
 		if (typeof value === 'function' && value !== valueOf)
 			descriptor.value = methodLike(value, function (args) {
@@ -175,9 +194,38 @@ function presentLocation(real: Location, script: string | undefined) {
 }
 
 /**
+ * A link's parts (an `<a>`'s, an `<area>`'s) as the URL its `href` shows
+ * reads them; another URL's, and a blob: URL's but its origin, as the
+ * inject's read them
+ */
+function showLinkParts(prototype: object | undefined) {
+	const href = prototype && getOwnPropertyDescriptor(prototype, 'href')?.get;
+	if (!href) return;
+	for (const name of ['origin', 'protocol', 'host', 'hostname']) {
+		const descriptor = getOwnPropertyDescriptor(prototype, name);
+		const get = descriptor?.get;
+		if (!get || !descriptor.configurable) continue;
+		defineProperty(prototype, name, {
+			...descriptor,
+			get: getterLike(name, function () {
+				const parts = partsOf(String(apply(href, this, [])));
+				const value = apply(get, this, []);
+				return parts
+					? parts[name]
+					: name === 'origin' && typeof value === 'string'
+						? displayExtensionOrigin(value)
+						: value;
+			}),
+		});
+	}
+}
+
+/**
  * Show the page's origin as Chrome's: its location, every member in
- * READBACKS and `document.domain` read the emulated origin's URLs as
- * `chrome-extension://` (an emulated service worker's location: `script`)
+ * READBACKS, a link's parts, `document.domain` and the blob: URLs it makes
+ * read the emulated origin's URLs as `chrome-extension://` (an emulated
+ * service worker's location: `script`). A blob: URL in that form goes back
+ * to the inject as its own (src/routeURL.ts proxyBlobURL).
  */
 export function presentExtensionPage(script?: string) {
 	const global = globalThis as unknown as Record<
@@ -188,9 +236,22 @@ export function presentExtensionPage(script?: string) {
 		presentLocation(natives.location, script);
 		for (const [name, members] of READBACKS)
 			for (const member of members) showGetter(global[name]?.prototype, member);
+		showLinkParts(global.HTMLAnchorElement?.prototype);
+		showLinkParts(global.HTMLAreaElement?.prototype);
 		showGetter(global.Document?.prototype, 'domain', (domain) =>
 			domain.replace(/^([a-p]{32})\.invalid$/, '$1'),
 		);
+		const URLCtor = globalThis.URL;
+		const create = getOwnPropertyDescriptor(URLCtor, 'createObjectURL');
+		const made = create?.value as Function | undefined;
+		if (made && create?.writable)
+			defineProperty(URLCtor, 'createObjectURL', {
+				...create,
+				value: methodLike(made, function (args) {
+					const url = apply(made, this, args);
+					return typeof url === 'string' ? shown(url) : url;
+				}),
+			});
 	} catch (error) {
 		console.error(
 			'STomp: the extension page keeps its emulated origin:',
