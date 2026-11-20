@@ -108,6 +108,19 @@ const STORAGE_AREAS = ['local', 'sync', 'session', 'managed'];
 const ICON_INLINE_MAX = 64 * 1024;
 /** permissions that let an extension's code into pages it has host access to */
 const INJECTING = ['scripting', 'tabs', 'activeTab'];
+/** how long a navigation the host announced waits for its request */
+const EXPECTED_MS = 5000;
+
+/** a navigation's URL as the worker sees it, without its fragment */
+function navigationKey(url: string): string {
+	try {
+		const parsed = new URL(url);
+		parsed.hash = '';
+		return parsed.href;
+	} catch (error) {
+		return url.split('#')[0];
+	}
+}
 
 const copy = <T>(value: T): T =>
 	value === undefined ? value : (JSON.parse(JSON.stringify(value)) as T);
@@ -244,6 +257,12 @@ export class ExtensionRegistry {
 	#dnrHosts = new Set<DnrHost>();
 	/** the tab of each client, as the controllers' hubs told it */
 	#clientTabs = new Map<string, number>();
+	/** each tab's top document, as last placed */
+	#tabDocuments = new Map<number, string>();
+	/** the navigations the host sent a tab on, by URL (without its fragment) */
+	#expected = new Map<string, { tabId: number; at: number }>();
+	/** the tabs each extension holds activeTab for (a click on its button) */
+	#activeTabs = new Map<string, Set<number>>();
 	/** the scope's cookie jar (createServer hands it over) */
 	cookies?: Cookies;
 	/** the controllers' addresses: every extension context talks on one (the worker sets it) */
@@ -307,7 +326,10 @@ export class ExtensionRegistry {
 				extensionState.put(id, 'dnr', state).catch(() => {});
 		};
 		host.tabOf = (client) => this.#clientTabs.get(client) ?? -1;
+		host.hostNavigationTab = (url) => this.#navigationTab(url);
 		host.hooks = {
+			activeTabGranted: (id, tabId) =>
+				this.#activeTabs.get(id)?.has(tabId) ?? false,
 			badge: (id, tabId, count) =>
 				this.#post(id, {
 					t: 'dnr-badge',
@@ -334,6 +356,37 @@ export class ExtensionRegistry {
 		this.#clientTabs.set(client, tabId);
 		if (this.#clientTabs.size > 4096)
 			this.#clientTabs.delete(this.#clientTabs.keys().next().value!);
+		// a new document in the tab ends the activeTab grants made on it
+		if (this.#tabDocuments.get(tabId) !== client) {
+			if (this.#tabDocuments.has(tabId))
+				for (const tabs of this.#activeTabs.values()) tabs.delete(tabId);
+			this.#tabDocuments.set(tabId, client);
+		}
+	}
+
+	/** the host is sending a tab to `url`: its main frame's request is that tab's */
+	expectNavigation(url: string, tabId: number) {
+		const key = navigationKey(url);
+		this.#expected.delete(key);
+		this.#expected.set(key, { tabId, at: Date.now() });
+		if (this.#expected.size > 256)
+			this.#expected.delete(this.#expected.keys().next().value!);
+	}
+
+	/** the tab the host sent to `url` lately (taken), -1 for none */
+	#navigationTab(url: string): number {
+		const key = navigationKey(url);
+		const expected = this.#expected.get(key);
+		if (!expected) return -1;
+		this.#expected.delete(key);
+		return Date.now() - expected.at <= EXPECTED_MS ? expected.tabId : -1;
+	}
+
+	/** a click on its button granted the extension activeTab for the tab */
+	grantActiveTab(id: string, tabId: number) {
+		if (!this.#loaded.get(id)?.granted.has('activeTab')) return;
+		if (!this.#activeTabs.has(id)) this.#activeTabs.set(id, new Set());
+		this.#activeTabs.get(id)!.add(tabId);
 	}
 
 	#post(id: string, message: unknown) {
@@ -717,6 +770,7 @@ export class ExtensionRegistry {
 		if (loaded.record.enabled !== enabled) {
 			loaded.record = { ...loaded.record, enabled };
 			await records.put(loaded.record);
+			if (!enabled) this.#activeTabs.delete(id);
 			await this.#dnrSync(id);
 			this.#emit({ type: enabled ? 'enabled' : 'disabled', id });
 		}
@@ -731,6 +785,7 @@ export class ExtensionRegistry {
 		await files.remove(id);
 		await storageAreas.forget(id);
 		await extensionState.forget(id);
+		this.#activeTabs.delete(id);
 		await this.#dnrSync(id);
 		this.#emit({ type: 'removed', id });
 	}

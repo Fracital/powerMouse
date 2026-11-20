@@ -64,6 +64,12 @@ export async function extensionCommand(
 			case 'place':
 				registry.placeClient(String(command.client), Number(command.tabId));
 				return undefined;
+			case 'expect':
+				registry.expectNavigation(String(command.url), Number(command.tabId));
+				return undefined;
+			case 'grant':
+				registry.grantActiveTab(String(command.id), Number(command.tabId));
+				return undefined;
 			default:
 				throw new ExtensionError(
 					'unsupported',
