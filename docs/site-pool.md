@@ -961,7 +961,11 @@ How it is told, in order:
   same. The suite measures 1.1 to 2.0 s for `frame.go()` to a site of the
   stopped slot, then 0.2 to 0.3 s for a link from another slot (4.4 s when
   the link is the first to find the agent gone); before, `frame.go()`
-  showed Chrome's error page.
+  showed Chrome's error page. Every call the hub waits on an agent for
+  has that 4 s bound, the viewport and geometry a `frame.go()` tells the
+  slot first included: when nothing else had asked the agent since its
+  document went, a `frame.go()` to a site of the slot waited for good on
+  them, and now shows the site from the host's origin in about 4.1 s.
 
 A page that is not a secure context has no service worker, so no STomp
 at all: the reachable case is a secure host whose slots are not (another
