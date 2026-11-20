@@ -22,6 +22,7 @@ import type {
 	PasskeyRequest,
 	PasskeysInit,
 } from '../passkeys/types';
+import type { DnrCommand } from '../server/dnr';
 import type {
 	NavigateInfo,
 	RequestInfo,
@@ -706,6 +707,11 @@ export class RemoteController extends EventTarget {
 			),
 			signal,
 		);
+	}
+	/** the extensions' declarativeNetRequest rules (see StompController.dnr) */
+	async dnr(command: DnrCommand): Promise<unknown> {
+		await this.#ready;
+		return this.#rpc.call('dnr', command);
 	}
 	/** replace the request rules (see StompController.setRules) */
 	async setRules(rules: RequestRule[]): Promise<void> {

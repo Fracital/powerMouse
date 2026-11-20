@@ -513,9 +513,13 @@ function registerController(
 				} catch (error) {
 					socketHost = '';
 				}
+				// the extensions' rules (src/server/dnr.ts) first: the site's
+				// shields are the built-in blocker's, not theirs
+				const ruled = srv.dnr.socketBlocked(url, source, type);
 				const blocked =
-					srv.shields.blocks(socketHost) &&
-					!!(await srv.blocker?.socket(url, source, type));
+					!!ruled ||
+					(srv.shields.blocks(socketHost) &&
+						!!(await srv.blocker?.socket(url, source, type)));
 				if (blocked && config.requestLog)
 					report({
 						url,
@@ -525,7 +529,9 @@ function registerController(
 						ms: 0,
 						cached: false,
 						bytes: null,
-						error: 'blocked by the content blocker',
+						error: ruled?.action
+							? `blocked by extension ${ruled.action.extensionId}, rule ${ruled.action.ruleId}`
+							: 'blocked by the content blocker',
 						kind: 'blocked',
 					});
 				return [blocked, []];
@@ -541,10 +547,16 @@ function registerController(
 			retire: async () => {
 				drainController(ref);
 			},
-			goneClients: async (asked) => [
-				Array.isArray(asked) ? await goneClients(asked) : [],
-				[],
-			],
+			goneClients: async (asked) => {
+				const gone = Array.isArray(asked) ? await goneClients(asked) : [];
+				// (a gone document's frame no longer holds allowAllRequests)
+				if (gone.length) {
+					const { dnr } = await server;
+					for (const id of gone) dnr.forgetClient(id);
+				}
+				return [gone, []];
+			},
+			dnr: async (command) => [await (await server).dnr.command(command), []],
 			cookies: async (command) => {
 				const { cookies } = await server;
 				switch (command.op) {

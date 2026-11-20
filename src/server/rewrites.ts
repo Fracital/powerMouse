@@ -27,6 +27,7 @@ import {
 	type Policy,
 	type ScriptFacts,
 } from '../csp';
+import type { DnrOutcome } from '../extensions/dnr';
 import { freshFrameDocument } from '../freshFrame';
 import { sourceKey } from '../functionSource';
 import { rewriteLinkHeader } from '../headers';
@@ -297,6 +298,12 @@ import {
 	timingAllowed,
 	unsafeHeaderNames,
 } from './cors';
+import {
+	headerLinesOf,
+	splitHeaderLines,
+	type DnrFlow,
+	type DnrHost,
+} from './dnr';
 import {
 	documentEncodingOf,
 	rememberDocumentEncoding,
@@ -1200,6 +1207,8 @@ interface Rewriter {
 	blockerAsked?: boolean;
 	/** the per-site shields the controller set (src/server/shields.ts) */
 	shields?: ShieldsStore;
+	/** the extensions' declarativeNetRequest rules (src/server/dnr.ts) */
+	dnr?: DnrHost;
 	/** the scope's localStorage and sessionStorage (Clear-Site-Data) */
 	storage?: StorageHosts;
 	/**
@@ -2835,6 +2844,93 @@ function genericForward(
 			url.url = stripped;
 		}
 
+		// the extensions' declarativeNetRequest rules (src/server/dnr.ts), on
+		// the real request, as Chrome's network stack asks them before it
+		// sends one: a block is the content blocker's network error, a
+		// redirect or upgrade the internal redirect Chrome makes (a 307 the
+		// browser follows, here again), and the header changes wait for the
+		// headers as they go out and come in. A request of the worker's own
+		// (an emulated service worker's script) is the browser's, which DNR
+		// never sees
+		const dnrStep =
+			context?.internal || !rewriter.dnr?.active
+				? null
+				: rewriter.dnr.beforeRequest({
+						url: url.url.href,
+						method: serverRequest.method,
+						destination: serverRequest.destination,
+						navigation,
+						topLevel,
+						source: blockerSource,
+						ping:
+							serverRequest.headers.has('ping-to') ||
+							(!serverRequest.destination &&
+								serverRequest.keepalive &&
+								serverRequest.mode === 'no-cors' &&
+								serverRequest.method === 'POST'),
+						clientId: context?.clientId,
+						resultingClientId: context?.resultingClientId,
+					});
+		const dnrFlow: DnrFlow | null = dnrStep?.flow ?? null;
+		const dnrAnswer = async (outcome: DnrOutcome): Promise<Response> => {
+			const by = outcome.action
+				? `extension ${outcome.action.extensionId}, rule ${outcome.action.ruleId}`
+				: 'an extension';
+			if (outcome.type === 'redirect') {
+				rewriter.log?.({
+					url: reportURL(url),
+					method: serverRequest.method,
+					destination: serverRequest.destination || 'fetch',
+					status: 307,
+					ms: Date.now() - started,
+					cached: false,
+					bytes: 0,
+					error: `redirected by ${by}`,
+					client: context?.clientId,
+				});
+				return new Response(null, {
+					status: 307,
+					headers: {
+						location: routeHTML(
+							new StompURL(new URL(outcome.redirectUrl!), url),
+							url,
+							rewriter.config,
+							false,
+							nestedMarkOf(oURL.pathname, rewriter.directory, rewriter.codec) ??
+								false,
+						),
+						'cache-control': 'no-store',
+					},
+				});
+			}
+			// ERR_BLOCKED_BY_CLIENT, as the built-in blocker's (a collapse is
+			// the same error: the element it hides is the page's to hide)
+			const page =
+				navigation && topLevel
+					? await hostErrorPage(rewriter, {
+							url: reportURL(url),
+							status: 403,
+							error: `blocked by ${by}`,
+							kind: 'blocked',
+						})
+					: null;
+			rewriter.log?.({
+				url: reportURL(url),
+				method: serverRequest.method,
+				destination: serverRequest.destination || 'fetch',
+				status: 0,
+				ms: Date.now() - started,
+				cached: false,
+				bytes: null,
+				error: `blocked by ${by}`,
+				kind: 'blocked',
+				...(page ? {} : { client: context?.clientId }),
+			});
+			return page ?? Response.error();
+		};
+		if (dnrStep && dnrStep.outcome.type !== 'none')
+			return dnrAnswer(dnrStep.outcome);
+
 		// the host's rules, on the real request as it would go out: the first
 		// match blocks, answers, redirects or edits headers. Before the cache
 		// (a blocked or redirected request never touches it) and logged as such
@@ -2922,6 +3018,9 @@ function genericForward(
 				);
 			applyHeaderRule(requestHeaders, rule.action.requestHeaders);
 		}
+		// the extensions' request header changes, on the headers as they go
+		// out (onBeforeSendHeaders: the jar's Cookie among them)
+		if (dnrFlow) rewriter.dnr!.sendHeaders(dnrFlow, requestHeaders);
 		// the origin the CORS protocol speaks for: the initiator's, unless a
 		// host's rule sent the site another Origin (the host's own, for a site
 		// that only answers it): the site's answer names that one, and the
@@ -3851,6 +3950,43 @@ function genericForward(
 			edited.rawHeaders = response.rawHeaders;
 			response = edited;
 		}
+
+		// the extensions' rules on the response's headers (onHeadersReceived:
+		// the rules with response header conditions, then the header
+		// changes), before the jar takes its Set-Cookie lines and the
+		// rewriter reads the rest; a navigation's document then commits in
+		// its frame, which its subresources' allowAllRequests read
+		if (dnrFlow && !fromWorker) {
+			const lines = headerLinesOf(response.headers, response.rawHeaders);
+			const received = rewriter.dnr!.receiveHeaders(dnrFlow, lines);
+			if (received.outcome.type !== 'none') {
+				await response.body?.cancel().catch(() => {});
+				return dnrAnswer(received.outcome);
+			}
+			if (received.lines) {
+				const { headers, cookies } = splitHeaderLines(received.lines);
+				const edited: typeof response = new Response(response.body, {
+					status: response.status,
+					statusText: response.statusText,
+					headers,
+				});
+				edited.rawHeaders = [
+					...(response.rawHeaders ?? []).filter(
+						([name]) => name.toLowerCase() !== 'set-cookie',
+					),
+					...cookies,
+				];
+				response = edited;
+			}
+			if (
+				navigation &&
+				!(
+					REDIRECT_STATUSES.includes(response.status) &&
+					response.headers.has('location')
+				)
+			)
+				rewriter.dnr!.committed(dnrFlow, received.lines ?? lines);
+		} else if (dnrFlow && navigation) rewriter.dnr!.committed(dnrFlow, null);
 
 		// the page gave up on this request while the origin was answering: the
 		// body is cancelled (the transport stops reading) and the request is
@@ -6301,6 +6437,8 @@ export function registerRewrites(
 	askBlobProbe?: () => Promise<string | null>,
 	tellIsolationWanted?: (client: string) => void,
 	tellApartServed?: () => void,
+	/** the extensions' declarativeNetRequest rules */
+	dnr?: DnrHost,
 ) {
 	// (the newest controller's: an older one may be gone)
 	if (askBlobProbe) askBlobURL = askBlobProbe;
@@ -6357,6 +6495,7 @@ export function registerRewrites(
 		blocker,
 		blockerAsked,
 		shields,
+		dnr,
 		storage,
 		isolated: !!init.isolated,
 		isolationWanted: tellIsolationWanted,
