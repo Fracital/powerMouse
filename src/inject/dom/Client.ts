@@ -1198,6 +1198,8 @@ export default class DocumentClient extends Client {
 	declare keptFor?: string | null;
 	/** @internal this document, of another origin than keptFor, leaves for a fresh browsing context (IFrame) */
 	declare leaveKept?: () => void;
+	/** @internal its localStorage's first read, asked for now (Storage); what settles once it is in or not coming */
+	declare primeStore?: () => Promise<void> | undefined;
 	/** the mark its shell gave, and the document it was given for */
 	#cacheMark: { document: Document; mark: string } | null = null;
 	/**
@@ -4168,7 +4170,8 @@ export default class DocumentClient extends Client {
 	 */
 	loadHTMLStream(url: string) {
 		const feed = this.#startPage();
-		void readMarkup(url, (markup, table, sizes, end, told) => {
+		const primed = this.primeStore?.();
+		void readMarkup(url, primed, (markup, table, sizes, end, told) => {
 			// the sizes the body had, for the document's navigation timing
 			// (ResourceTiming): the shell's are the browser's count
 			if (sizes) this.documentSizes = sizes;

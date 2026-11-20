@@ -21,6 +21,9 @@
 //              frames)
 //     slowhead the start of the head at once, then the rest of it: a meta
 //              CSP that requires Trusted Types, scripts that test it
+//     store    at once: a head whose script reads localStorage, then a body
+//              of a 2.5 MB inline script (CNN's is 2.46 MB), which keeps
+//              the worker busy while the head runs
 //     trickle  a head whose inline script of 768 KB comes 64 KB at a time,
 //              20 ms apart (YouTube's is 780 KB), then the start of the
 //              body, and the rest after `wait`; with `split`, the
@@ -112,6 +115,13 @@ export function stream(req, res) {
 				),
 			);
 		});
+		return true;
+	}
+	if (name === 'store') {
+		res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+		res.end(
+			`<!doctype html><html><head><meta charset="utf-8"><title>stream store</title>${PAD}<script>window.__store = [localStorage.getItem('stream-store'), localStorage.getItem('stream-none')];</script></head><body><h1 id="early">early</h1><script>window.__big = '${'x'.repeat(2.5 * 1024 * 1024)}';</script><script>window.__done = true;</script></body></html>`,
+		);
 		return true;
 	}
 	if (name === 'trickle') {

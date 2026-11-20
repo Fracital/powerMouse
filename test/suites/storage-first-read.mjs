@@ -6,7 +6,12 @@
 // at once. A new document that writes a key and removes it before it reads
 // (YouTube's availability check) takes the store whole all the same: its
 // sixty reads were sixty round trips. Compared with the page loaded
-// natively; both demo modes.
+// natively; both demo modes. A streamed document whose head reads the
+// store while the worker is busy with its 2.5 MB body
+// (test/stream-server.mjs `store`) asks the bridge nothing: its first read
+// came with its markup (Client.primeStore), where the read spun until the
+// worker was free. It reads the value a document before it wrote, and
+// another frame's write after.
 import {
 	bridgeRequests,
 	done,
@@ -97,6 +102,74 @@ for (const [mode, base] of [
 		calls.written.length > 0 && calls.written.length <= 3,
 		JSON.stringify(calls.written),
 	);
+	await page.close();
+}
+
+{
+	const page = await openDemo(browser, PROXY);
+	const sent = [];
+	let watching = false;
+	page.context().on('request', (request) => {
+		if (watching && /\/xhr$/.test(new URL(request.url()).pathname))
+			sent.push(request);
+	});
+	const frameWith = async (read) => {
+		for (let i = 0; i < 120; i++) {
+			for (const frame of page.frames()) {
+				const value = await frame.evaluate(read).catch(() => null);
+				if (value !== null && value !== undefined) return [frame, value];
+			}
+			await sleep(100);
+		}
+		return [null, null];
+	};
+	// a document before writes the key
+	await submitLanding(page, `${FIXTURE}stream/sizes?wait=0`);
+	const [writer] = await frameWith(() =>
+		window.__done ? localStorage.setItem('stream-store', 'one') || 1 : null,
+	);
+	watching = true;
+	await page.evaluate((url) => {
+		const form = document.getElementById('omni');
+		form.url.value = url;
+		form.requestSubmit();
+	}, `${FIXTURE}stream/store`);
+	const [frame, head] = await frameWith(() =>
+		window.__done && window.__store ? window.__store : null,
+	);
+	watching = false;
+	const routes = (await bridgeRequests(page, sent))
+		.map((request) => request?.data?.url)
+		.map((url) => url && new URL(url).pathname.split('/').at(-1))
+		.filter((route) => READS.includes(route));
+	ok(
+		"a streamed document's head reads the value a document before it wrote, and a missing key",
+		!!writer && JSON.stringify(head) === JSON.stringify(['one', null]),
+		JSON.stringify(head),
+	);
+	ok(
+		'its head asked the bridge for none of its reads while the worker read its body',
+		head !== null && routes.length === 0,
+		JSON.stringify(routes),
+	);
+	// another frame of the origin writes; the document reads it
+	const after = frame
+		? await frame
+				.evaluate(
+					() =>
+						new Promise((resolve) => {
+							const other = document.createElement('iframe');
+							other.src = '/stream/sizes?wait=0';
+							other.onload = () => {
+								other.contentWindow.localStorage.setItem('stream-store', 'two');
+								resolve(localStorage.getItem('stream-store'));
+							};
+							document.body.append(other);
+						}),
+				)
+				.catch((error) => String(error))
+		: null;
+	ok("and then another frame's write", after === 'two', JSON.stringify(after));
 	await page.close();
 }
 
