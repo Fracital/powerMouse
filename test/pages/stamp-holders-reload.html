@@ -1,0 +1,38 @@
+<!doctype html>
+<title>STAMP HOLDERS RELOAD</title>
+<body>
+	<script>
+		// A page whose pagehide listener reads localStorage and its cookies, as
+		// YouTube's does, loaded and then reloaded. Each load writes the store
+		// alone (an availability check, a setItem and a removeItem of one key,
+		// a few times) and reads it back; the suite counts, through the proxy,
+		// the realms on the stamps' lists after the reload and the synchronous
+		// round trips the reloaded page's writes took.
+		const out = { steps: [] };
+		window.__shr = out;
+		addEventListener('pagehide', () => {
+			localStorage.getItem('shr-left');
+			sessionStorage.getItem('shr-left');
+			void document.cookie;
+		});
+		const loads = Number(sessionStorage.getItem('shr-loads') ?? 0) + 1;
+		sessionStorage.setItem('shr-loads', String(loads));
+		console.log(`STEP load${loads}`);
+		for (let i = 0; i < 10; i++) {
+			localStorage.setItem('__sak', '__sak');
+			localStorage.removeItem('__sak');
+			localStorage.setItem('shr-n', String(i));
+		}
+		out.steps.push([
+			'the page reads its own writes',
+			[
+				localStorage.getItem('__sak'),
+				localStorage.getItem('shr-n'),
+				sessionStorage.getItem('shr-loads'),
+			],
+		]);
+		out.loads = loads;
+		console.log(`STEP read${loads}`);
+		out.done = true;
+	</script>
+</body>

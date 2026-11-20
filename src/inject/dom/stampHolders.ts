@@ -16,6 +16,13 @@
  * from the back/forward cache to stamps it never heard. A realm that never
  * left (a crash) stays on the list, which only costs the stamps it always
  * cost; past MOST realms the list says MANY for good.
+ *
+ * A realm that left stays off until its document shows again (pageshow, from
+ * the back/forward cache): the page's own pagehide and unload listeners run
+ * after the realm's and read the store, and a read that put the realm back
+ * on the list left it there for good. Every reload of YouTube added one, so
+ * the next document's every localStorage write was a synchronous round trip
+ * (unheld). Until it shows, it keeps no copy (`hold` says false).
  */
 
 import { LazyMap, LazySet } from '../ownCollections';
@@ -47,8 +54,11 @@ const read = (store: StampStore, key: string) =>
 		string | null) ?? '';
 
 let leaving = false;
+/** this realm left the lists and its document has not shown again */
+let gone = false;
 /** off every list, every copy dropped */
 const leave = () => {
+	gone = true;
 	for (const [key, store] of held.entries())
 		try {
 			const value = read(store, key);
@@ -78,6 +88,11 @@ export function onLeave(drop: () => void) {
 	const listen = () => {
 		try {
 			Reflect.apply(nativeAddListener, globalThis, ['pagehide', leave, true]);
+			Reflect.apply(nativeAddListener, globalThis, [
+				'pageshow',
+				() => (gone = false),
+				true,
+			]);
 		} catch (error) {
 			// no window
 		}
@@ -86,15 +101,19 @@ export function onLeave(drop: () => void) {
 	addDocumentOpenListener(globalThis, listen);
 }
 
-/** this realm is about to take a copy of what `key` versions */
-export function hold(store: StampStore, key: string) {
-	if (held.has(key)) return;
+/**
+ * This realm is about to take a copy of what `key` versions: false when it
+ * may not keep one (it left, see `gone`)
+ */
+export function hold(store: StampStore, key: string): boolean {
+	if (gone) return false;
+	if (held.has(key)) return true;
 	try {
 		const value = read(store, key);
 		held.set(key, store);
-		if (value === MANY) return;
+		if (value === MANY) return true;
 		const ids = value ? value.split(' ') : [];
-		if (ids.includes(REALM)) return;
+		if (ids.includes(REALM)) return true;
 		ids.push(REALM);
 		Reflect.apply(store.setItem, store.storage, [
 			listOf(key),
@@ -104,6 +123,7 @@ export function hold(store: StampStore, key: string) {
 		// no storage: the stamps are written whatever the list says
 		held.delete(key);
 	}
+	return true;
 }
 
 /** whether a realm other than this one may hold a copy of what `key` versions */

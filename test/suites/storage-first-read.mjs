@@ -3,7 +3,10 @@
 // values in one synchronous round trip, not one each, and read what native
 // Chrome reads: present, missing, empty and large values, the length, the
 // keys, and two frames' writes, removals and a clear seen by the other frame
-// at once. Compared with the page loaded natively; both demo modes.
+// at once. A new document that writes a key and removes it before it reads
+// (YouTube's availability check) takes the store whole all the same: its
+// sixty reads were sixty round trips. Compared with the page loaded
+// natively; both demo modes.
 import {
 	bridgeRequests,
 	done,
@@ -38,7 +41,7 @@ const native = await report(nativePage);
 await nativePage.close();
 ok(
 	'natively, the page ran to the end',
-	native?.done && !native.error && native.steps.length === 12,
+	native?.done && !native.error && native.steps.length === 13,
 	JSON.stringify(native),
 );
 
@@ -49,23 +52,26 @@ for (const [mode, base] of [
 	const page = await openDemo(browser, base);
 	// the synchronous bridge's calls while the new frame reads, by route
 	let step = '';
-	const calls = [];
+	const calls = { reads: [], written: [] };
 	page.on('console', (message) => {
 		if (message.text().startsWith('STEP ')) step = message.text().slice(5);
 	});
 	const sent = [];
 	page.context().on('request', (request) => {
-		if (step !== 'reads' || !/\/xhr$/.test(new URL(request.url()).pathname))
-			return;
-		sent.push(request);
+		if (!calls[step] || !/\/xhr$/.test(new URL(request.url()).pathname)) return;
+		sent.push([step, request]);
 	});
 	await submitLanding(page, target);
 	const proxied = await report(page);
 	// the bridge's request rides in the beacon's URL, sealed, or in its body
-	for (const request of await bridgeRequests(page, sent)) {
+	const carried = await bridgeRequests(
+		page,
+		sent.map(([, request]) => request),
+	);
+	for (const [at, request] of carried.entries()) {
 		const url = request?.data?.url;
 		const route = url && new URL(url).pathname.split('/').at(-1);
-		if (READS.includes(route)) calls.push(route);
+		if (READS.includes(route)) calls[sent[at][0]].push(route);
 	}
 	ok(
 		`${mode}: the page ran to the end`,
@@ -83,8 +89,13 @@ for (const [mode, base] of [
 	// one for the keys and small values, one for the large value
 	ok(
 		`${mode}: a new frame's sixty reads of the store take at most three round trips`,
-		calls.length > 0 && calls.length <= 3,
-		JSON.stringify(calls),
+		calls.reads.length > 0 && calls.reads.length <= 3,
+		JSON.stringify(calls.reads),
+	);
+	ok(
+		`${mode}: and those of a frame that wrote first, at most three`,
+		calls.written.length > 0 && calls.written.length <= 3,
+		JSON.stringify(calls.written),
 	);
 	await page.close();
 }
