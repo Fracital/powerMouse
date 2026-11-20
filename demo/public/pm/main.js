@@ -266,7 +266,17 @@ const transports = {
 		module: CFG.testTransport
 			? `${proxyBase()}/test/mixed-transport.mjs`
 			: `${proxyBase()}${transportPath('epoxy')}index.mjs`,
-		options: [{ wisp: wispURL(), ...(ECH_DNS && { ech_dns: ECH_DNS }) }],
+		// Wisp v2: a relay that offers stream credit (0xE2) then holds back a
+		// body read slowly on its own stream alone, as a socket's receive
+		// window does (docs/webtransport.md, "Stream credit"); v1 has no
+		// INFO to agree on it in
+		options: [
+			{
+				wisp: wispURL(),
+				wisp_v2: true,
+				...(ECH_DNS && { ech_dns: ECH_DNS }),
+			},
+		],
 		// stomp-h3 is looked for next to the transport module, and the test
 		// transport is not next to epoxy's
 		...(HTTP3 && {

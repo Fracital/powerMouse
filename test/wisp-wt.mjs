@@ -91,6 +91,12 @@
 // (`creditNamed`), the connections it was emulated on (`creditEmulated`),
 // the CREDITs (`credits`), and the most the relay held back at once
 // (`creditHeldMost`, bytes).
+// On the WebSocket fallback `wsDelayMs` holds each message that long each
+// way (a round trip of twice it, the handshake left out), and
+// `earlyContinue` sends a v2 opening's CONTINUE for stream 0 right after
+// the wisp server's INFO, dropping the server's own, which comes only after
+// the client's INFO (as holyWisp does on a lane 0 it opens): a v2 client's
+// first CONNECT then waits no longer than a v1 client's.
 import { createSocket } from 'node:dgram';
 import { createServer } from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -245,6 +251,10 @@ export async function startWispWebTransport(upstream) {
 		maxStreams: 0,
 		/** stream credit (0xE2): true passes on what the wisp server does, 'emulate' adds it, false takes it out */
 		streamCredit: true,
+		/** the WebSocket fallback: each message held this long each way (ms) */
+		wsDelayMs: 0,
+		/** the WebSocket fallback: a v2 opening's CONTINUE comes with the INFO, as on a server-opened lane 0 */
+		earlyContinue: false,
 		/** the leaf's SPKI hash, for --ignore-certificate-errors-spki-list (a dial without hashes) */
 		get spki() {
 			return server.spki;
@@ -344,19 +354,42 @@ export async function startWispWebTransport(upstream) {
 		const up = new WebSocket(upstream, protocols);
 		sockets.add(client).add(up);
 		const queued = [];
-		const credit = streamCredit(
-			relay,
-			stats,
-			(p) => client.readyState === 1 && client.send(p),
-		);
+		/** each way after `wsDelayMs` (one delay for all keeps them in order) */
+		const later = (go) =>
+			relay.wsDelayMs ? setTimeout(go, relay.wsDelayMs) : go();
+		// `earlyContinue`: a v2 opening's CONTINUE for stream 0 right after
+		// the INFO, the wisp server's own (after the client's INFO) dropped
+		let early = 0;
+		const toClient = (p) => {
+			if (relay.earlyContinue && protocols.length && p[0] === INFO && !early) {
+				early = 1;
+				const opening = Buffer.alloc(9);
+				opening[0] = CONTINUE;
+				opening.writeUInt32LE(relay.window, 5);
+				later(() => {
+					if (client.readyState !== 1) return;
+					client.send(p);
+					client.send(opening);
+				});
+				return;
+			}
+			if (early === 1 && p[0] === CONTINUE && p.length >= 5 && !idOf(p)) {
+				early = 2;
+				return;
+			}
+			later(() => client.readyState === 1 && client.send(p));
+		};
+		const credit = streamCredit(relay, stats, toClient);
 		up.on('open', () => {
 			for (const m of queued.splice(0)) up.send(m);
 		});
 		client.on('message', (m) => {
 			m = credit.fromClient(Buffer.isBuffer(m) ? m : Buffer.from(m));
 			if (!m) return;
-			if (up.readyState === WebSocket.OPEN) up.send(m);
-			else queued.push(m);
+			later(() => {
+				if (up.readyState === WebSocket.OPEN) up.send(m);
+				else queued.push(m);
+			});
 		});
 		up.on('message', (m) =>
 			credit.fromServer(Buffer.isBuffer(m) ? m : Buffer.from(m)),
