@@ -56,10 +56,14 @@ const nativeRequestReferrer = Reflect.getOwnPropertyDescriptor(
 	Request.prototype,
 	'referrer',
 )!.get!;
+// (a realm of Firefox's has it or not: Firefox 160 makes a fresh profile's
+// first page natively, and often the first proxied document of a tab, with
+// a Request that has neither body nor duplex, so no request streams, and
+// the documents after it with both)
 const nativeRequestBody = Reflect.getOwnPropertyDescriptor(
 	Request.prototype,
 	'body',
-)!.get!;
+)?.get;
 const nativeRequestKeepalive = Reflect.getOwnPropertyDescriptor(
 	Request.prototype,
 	'keepalive',
@@ -748,8 +752,10 @@ export default class FetchModule extends Module<Client> {
 				// A Request handed on as the init gives the browser its body as
 				// a stream, which a no-cors or keepalive request may not have
 				// (natively its body keeps its bytes, and goes): such a body goes
-				// as its bytes (npr.org's GeoEdge reports, a no-cors POST Request)
+				// as its bytes (npr.org's GeoEdge reports, a no-cors POST Request);
+				// a realm with no request streams hands on no stream
 				if (
+					nativeRequestBody &&
 					isRequest(init) &&
 					(mode === 'no-cors' ||
 						Reflect.apply(nativeRequestKeepalive, init, [])) &&
