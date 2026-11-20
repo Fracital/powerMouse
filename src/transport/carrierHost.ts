@@ -60,6 +60,7 @@ import {
 	type PoolLine,
 	type SocketPass,
 } from './socketPool';
+import { StreamCreditWatch } from './streamCredit';
 import { watchTransportNotes, wispNote } from './transportLog';
 import {
 	Chooser,
@@ -109,9 +110,15 @@ const NETWORK_ERROR = 0x03;
  * the relay back again while its readers still take some (they read
  * slower than the relay sends: a decrypting shard on a busy machine), and
  * once they took nothing for STALLED_MS the stream that holds the most of
- * it is reset, as a socket is reset under memory pressure. (Per-stream
- * credit, Wisp's 0xE2 extension, is the fix of record: the relay would
- * hold back that stream alone.)
+ * it is reset, as a socket is reset under memory pressure.
+ *
+ * A relay connection with stream credit (Wisp's 0xE2, streamCredit.ts)
+ * holds back each stream alone at the relay, as its reader in epoxy grants:
+ * the host never pauses it for a rider then, behind or over, since that
+ * would hold every stream of the profile for one. What waits for a rider is
+ * bounded by what its epoxy granted; one whose readers took nothing for
+ * STALLED_MS with more than RIDER_QUEUE_MAX waiting (a relay that sent past
+ * its grants) still has its largest stream reset.
  */
 const PAUSE_MAX_MS = 50;
 const KEEPING_UP_MS = 100;
@@ -391,6 +398,8 @@ class Relay {
 	#v1 = false;
 	/** the first rider's INFO, the one the relay heard */
 	#clientInfo: Uint8Array | null = null;
+	/** whether the relay's INFO and the first rider's named stream credit */
+	#streamCredit = new StreamCreditWatch();
 	#riders = new Set<Rider>();
 	/** the relay connection's stream ids, to the rider and its own id */
 	#routes = new Map<number, [Rider, number]>();
@@ -537,6 +546,18 @@ class Relay {
 
 	/** a rider far behind holds the relay back, PAUSE_MAX_MS at most, while no other stream would wait for it */
 	async #pace() {
+		if (this.#streamCredit.on) {
+			// the relay holds back each stream itself: nothing waits here
+			for (const rider of this.#riders)
+				while (
+					rider.over &&
+					!rider.ended &&
+					performance.now() - rider.tookAt > STALLED_MS &&
+					rider.largestQueued() !== null
+				)
+					this.shed(rider);
+			return;
+		}
 		// a queue past its cap: the relay waits while its readers take some
 		for (const rider of this.#riders)
 			while (rider.over && !rider.ended) {
@@ -602,6 +623,7 @@ class Relay {
 		if (id === 0) {
 			if (type === INFO && !this.#serverInfo) {
 				this.#serverInfo = bytes.slice();
+				this.#streamCredit.fromServer(bytes);
 				for (const rider of this.#riders) this.#greet(rider);
 			} else if (type === CONTINUE) {
 				if (!this.#serverInfo) this.#v1 = true;
@@ -660,6 +682,7 @@ class Relay {
 			if (type === INFO && !rider.ready) {
 				if (!this.#clientInfo) {
 					this.#clientInfo = bytes.slice();
+					this.#streamCredit.fromClient(bytes);
 					this.#send(bytes);
 				} else if (!same(bytes, this.#clientInfo)) {
 					// another epoxy, another handshake: it opens a carrier of its own

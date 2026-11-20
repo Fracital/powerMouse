@@ -100,14 +100,32 @@ export function windowOpen(
 		}
 		// a javascript: URL runs in the opened window: rewritten, like a
 		// javascript: link (routeHTML rewrites its body)
-		if (destination !== null && destination.protocol === 'javascript:')
-			args[0] = routeHTML(
-				new StompURL(destination, client.url),
-				client.url,
-				client.config,
-				false,
-				aimed ? aimed.client.nestedRoute : client.nestedRoute,
-			);
+		if (destination !== null && destination.protocol === 'javascript:') {
+			// judged as it starts, by this document's policies (a new window's
+			// twice, measured): refused now, to a route that only judges it
+			let judged: string | undefined;
+			try {
+				judged = deferred('policyChecks').jsStarts(
+					client,
+					name,
+					destination.href,
+					undefined,
+					undefined,
+					true,
+				);
+			} catch (error) {
+				// the window judges it as it runs
+			}
+			args[0] =
+				judged ??
+				routeHTML(
+					new StompURL(destination, client.url),
+					client.url,
+					client.config,
+					false,
+					aimed ? aimed.client.nestedRoute : client.nestedRoute,
+				);
+		}
 		// a new tab: the host's to open, when it said so (then the page
 		// sees null, as with a popup blocker). Not for a sandboxed
 		// document's popup that keeps its sandbox: the browser refuses it
@@ -194,6 +212,14 @@ export function windowOpen(
 
 		const opened = Reflect.apply(target, that, args);
 		rememberOpened(opened);
+		// (the violations of its initial document, which this bundle runs, are
+		// its console's)
+		if (opened)
+			try {
+				deferred('policyChecks').openedConsole(opened);
+			} catch (error) {
+				// none
+			}
 		return opened;
 	};
 }

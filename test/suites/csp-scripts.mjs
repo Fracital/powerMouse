@@ -68,7 +68,6 @@ const PATHS = [
 ].flatMap((path) => [`script-path-${path}-late`, `script-path-${path}-none`]);
 // those that differ from native (EXPECTED)
 const COPIED = [
-	'script-path-write-late',
 	'script-path-adoptNode-late',
 	'script-path-importNode-late',
 	'script-path-importNode-none',
@@ -194,6 +193,31 @@ const CASES = {
 			'style-data',
 		],
 	},
+	// a list that takes nonces judges a stylesheet by its element (the
+	// worker cannot: ../../src/cspJudge.ts hostsApply), and its hosts still
+	// let one through, by the DOM and in the markup
+	'styles by host where the list also takes nonces': {
+		p: "style-src 'self' 'nonce-probes'",
+		sl: true,
+		probes: ['style-self', 'style-other', 'style-inline', 'markup-sheet'],
+	},
+	'styles by host where the list also takes nonces, style-src-elem': {
+		p: "script-src 'nonce-probes'; style-src-elem 'self' 'nonce-probes'",
+		h: 'nonce',
+		s: true,
+		sl: true,
+		probes: ['style-self', 'style-other', 'markup-styles', 'markup-sheet'],
+	},
+	'a markup stylesheet by host where the list also takes nonces, report-only': {
+		ro: "style-src 'self' 'nonce-probes'",
+		sl: true,
+		probes: ['style-self', 'style-other', 'markup-sheet'],
+	},
+	'a markup stylesheet refused where the list takes nonces': {
+		p: "style-src 'nonce-probes' https://elsewhere.invalid",
+		sl: true,
+		probes: ['style-self', 'markup-sheet'],
+	},
 	'nonce styles in the markup': {
 		p: "style-src 'nonce-probes'",
 		s: true,
@@ -236,11 +260,13 @@ const CASES = {
 // policy refused before it connected keeps no src, so its markup, a copy of
 // it, and one judged in another document load nothing
 const EXPECTED = {
+	'a markup stylesheet refused where the list takes nonces': {
+		'markup-sheet':
+			'a refused stylesheet link keeps no href, so it has no sheet (natively an empty one)',
+	},
 	'a script refused before it connects, copied': {
 		violations:
 			'the copies fire no violation (natively each is judged as it connects), and the scripts of another document fire theirs as their src is set',
-		'script-path-write-late':
-			'a refused script keeps no src (it loads nothing), and the inject judged this one before it had its nonce: the markup the page reads back and writes carries no src, so the written script loads nothing (natively it runs)',
 		'script-path-adoptNode-late':
 			'a script of another document is judged as its src is set there, without the nonce it is given later, and stays refused when it is adopted and connected (natively it loads)',
 		'script-path-importNode-late':
@@ -276,8 +302,91 @@ const IDENTITY = {
 	},
 };
 
+// Where each refusal of code made from a string and of a handler says the
+// code was (sourceFile, lineNumber, columnNumber): the call of eval,
+// Function or the timer, in the probes' script file or, inlined, in the
+// page's markup, and the handler's place in the markup it was written in,
+// each read through the map of the rewrite of the code that made the call
+// (docs/rust-plan.md, position maps)
+const PLACED = {
+	'where code from a string is refused, in a script file': {
+		p: "script-src 'nonce-probes'",
+		h: 'nonce',
+		probes: ['eval', 'function', 'timeout-string', 'handler-attribute'],
+	},
+	// a script the page's code inserts: its violation names the inserting
+	// call, in the markup (the inline script's map places it) or in the
+	// script file, as Chrome judges it as it connects (one that never
+	// connects fires nothing)
+	'where an inserted script is refused, from the markup': {
+		p: `script-src ${probesHash}`,
+		h: 'inline-hash',
+		probes: [
+			'script-inline',
+			'script-other',
+			'script-self',
+			'script-unconnected',
+		],
+	},
+	'where an inserted script is refused, from a script file': {
+		p: "script-src 'nonce-probes'",
+		h: 'nonce',
+		probes: [
+			'script-inline',
+			'script-other',
+			'script-self',
+			'script-unconnected',
+		],
+	},
+	'where an inserted script is reported, from a script file': {
+		ro: "script-src 'nonce-probes'",
+		h: 'nonce',
+		probes: [
+			'script-inline',
+			'script-other',
+			'script-self',
+			'script-unconnected',
+		],
+	},
+	'where code from a string is refused, in the markup': {
+		p: `script-src ${probesHash} ${insertedHash}`,
+		h: 'inline-hash',
+		probes: ['eval', 'function', 'timeout-string'],
+	},
+};
+
+// What a policy's report-uri endpoint receives (the probe `reports`): one
+// POST of application/csp-report a violation, as Chrome sends it, for the
+// browser's violations and the inject's, none again for one that reads the
+// same, with the cookies, Referer and Sec-Fetch- headers Chrome sends to an
+// endpoint of the document's origin and of another
+const REPORTED = [
+	'report-cookie',
+	'img-other',
+	'eval',
+	'eval-twice',
+	'script-inline',
+	'reports',
+];
+const REPORTS = {
+	"a policy's report-uri": {
+		p: `img-src 'self'; script-src 'nonce-probes' 'report-sample'; report-uri /csp/report?k=reports`,
+		h: 'nonce',
+		probes: REPORTED,
+	},
+	"a report-only policy's report-uri of another origin": {
+		ro: `img-src 'self'; script-src 'nonce-probes'; report-uri ${other}/csp/report?k=reports`,
+		h: 'nonce',
+		probes: REPORTED,
+	},
+};
+
 const browser = await launch();
+await compareCases(browser, REPORTS);
 await compareCases(browser, CASES, { expected: EXPECTED });
+await compareCases(browser, PLACED, {
+	fields: [...FIELDS, 'sourceFile', 'lineNumber', 'columnNumber'],
+});
 await compareCases(browser, IDENTITY, {
 	fields: [...FIELDS, 'isTrusted', 'windowEvent', 'methods', 'alike'],
 });

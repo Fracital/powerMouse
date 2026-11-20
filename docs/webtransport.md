@@ -551,7 +551,21 @@ docs/webtransport.md, "Wisp on the session" and "Certificates"):
 - **Wisp v2** (`wisp_v2` in epoxy's options) is epoxy's own INFO
   exchange on lane 0, the relay's INFO passed on without 0xE1; holyWisp
   opens v2 with INFO for any protocol offered, as it does for a WebSocket
-  with a subprotocol.
+  with a subprotocol. The demo runs epoxy in v2, for stream credit. A v2
+  client waits for the CONTINUE for stream 0 before its first CONNECT, and
+  a relay that sends it only after the client's INFO costs v2 a round
+  trip over v1, where the carrier's own INFO costs none: holyWisp sends it
+  with its INFO on a lane 0 it opens (`wisp-v2-server-stream`), and on a
+  WebSocket from 0.5.4+78095bf on, when no `password-user` is set.
+  Through the test relay at 100 ms RTT (Chrome 157, 2026-11-19, median of seven fresh
+  profiles, to the end of a first 1000-byte response), v1 against v2:
+  313 and 413 ms on a WebSocket whose CONTINUE waits, 315 and 313 when it
+  comes early; 571 and 572 ms over a session whose lane 0 the relay
+  opened, 671 and 776 over one the client opened. Against the edge
+  (wss://holywisp.fracit.al/, 0.5.4+78095bf, about 17 ms away; 24 fresh
+  profiles each, to the end of a GET of https://example.com/) v1 and v2
+  took 277 and 282 ms on the WebSocket and 272 and 277.5 over a session,
+  within the noise and under a round trip.
 - **Choosing: UDP first, the WebSocket the fallback.** UDP is often
   blocked, and a network that drops it looks like a handshake that never
   ends (Chrome gives up after 4 s). What each relay did is remembered by
@@ -740,6 +754,26 @@ that is up already (<n> s, <n> transports on it)` (with its lanes and
   session took 65 to 87. A cold start is unchanged (685 and 695 ms against
   691 and 734 in the two quiet rounds): it opens the host's session as it
   opened its own.
+- **Stream credit.** A body read slowly holds back the stream it comes
+  on, and only that one, when the relay's INFO offers Wisp extension 0xE2
+  (holyWisp's `stream-credit`) and epoxy runs Wisp v2 (`wisp_v2`, as the
+  demo's does; v1 has no INFO, and the INFO the carrier says for a v1
+  epoxy names none, since a v1 epoxy grants nothing): each
+  TCP stream's reader in epoxy grants the relay what it consumed plus a
+  window (256 KiB, doubled while the reader drains it, to 16 MiB; patch
+  epoxy-tls 0084), and the relay reads that origin no further, as a
+  native socket's receive window holds back its remote. A CREDIT rides
+  its stream's lane like any of its packets. Without it, a reader that
+  falls behind is held back where the packets wait: a rider hands epoxy
+  its packets at the pace of its realm's body readers
+  (`src/transport/riderPace.ts`, 8 MiB ahead at most) and the host stops
+  reading the relay while a rider is far behind, which held every stream
+  of the connection behind the slowest. With credit on both are only a
+  backstop (128 MiB ahead; the host never pauses the relay for a rider,
+  and still resets the largest stream of one that took nothing for 2 s
+  with more than 64 MiB waiting: a relay that sent past its grants), and
+  the `stream-credit` suite reads 128 MB at 8 MB/s beside a fast download
+  and a WebSocket's echoes over each carrier.
 
 It rests on epoxy-tls's `deploy/epoxy` patch 0075 (in the pinned build),
 which makes a function transport's writes never wait, as the WebSocket's

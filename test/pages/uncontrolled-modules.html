@@ -1,0 +1,192 @@
+<!doctype html>
+<title>UNCONTROLLED MODULES</title>
+<body>
+	<script>
+		// Module scripts in documents no service worker controls
+		// (uncontrolled-modules suite): an about:blank frame this page writes
+		// into, an about:blank it navigates the child of a frame of another
+		// origin (`?other=`) to, and an about:blank popup it opens. In each it
+		// runs module scripts with static imports (test/pages/um-*.js: inline
+		// and external, relative, path-absolute and absolute, two cycles, a
+		// directory up, a JSON module, an import map's bare specifier, a
+		// missing import) and dynamic ones, and keeps what each reported, or
+		// how it failed, in `window.__umReport`: { written, navigated, popup,
+		// markup }, the last an about:blank frame whose markup the page writes
+		// with document.write, module scripts and an import map in it; and
+		// srcdoc, about:srcdoc frames under this page and under an
+		// about:blank frame.
+		const query = new URLSearchParams(location.search);
+		const other = query.get('other');
+		const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+		const cut = (url) => String(url).split('?')[0];
+		const origin = location.origin;
+		const inline = {
+			importMap: `import { b } from 'um-b'; self.__um('importMap', b);`,
+			inline: `import { a, aURL, bURL } from '/pages/um-a.js'; self.__um('inline', { a, aURL: aURL.split('?')[0], bURL: bURL.split('?')[0], meta: import.meta.url.split('?')[0] });`,
+			relative: `import { b } from './um-b.js'; self.__um('relative', b);`,
+			absolute: `import { b } from '${origin}/pages/um-b.js'; self.__um('absolute', b);`,
+			cycle: `import { both } from '/pages/um-cycle-a.js'; self.__um('cycle', both());`,
+			linked: `import { report } from '/pages/um-link-a.js'; self.__um('linked', report());`,
+			dynamic: `import('/pages/um-a.js').then((module) => self.__um('dynamic', module.a), (error) => self.__um('dynamic', error.name));`,
+		};
+		const external = {
+			external: '/pages/um-entry.js',
+			missing: '/pages/um-missing.js',
+			json: '/pages/um-json.js',
+		};
+		/** every case in `win`'s document, and what each reported */
+		const battery = async (win) => {
+			const results = {};
+			win.__um = (name, value) => {
+				results[name] = value;
+			};
+			const doc = win.document;
+			const into = doc.body ?? doc.documentElement;
+			const script = (type, text, src) => {
+				const element = doc.createElement('script');
+				if (type) element.type = type;
+				if (text) element.textContent = text;
+				if (src) element.src = src;
+				return element;
+			};
+			// (the map before any module of the document)
+			into.append(
+				script(
+					'importmap',
+					JSON.stringify({ imports: { 'um-b': '/pages/um-b.js' } }),
+				),
+			);
+			for (const text of Object.values(inline))
+				into.append(script('module', text));
+			// an inline module whose import does not load fires error
+			const missing = script(
+				'module',
+				`import './um-not-there.js'; self.__um('inlineMissingRan', 'ran');`,
+			);
+			missing.onload = () => (results.inlineMissingEvent = 'load');
+			missing.onerror = () => (results.inlineMissingEvent = 'error');
+			into.append(missing);
+			into.append(
+				script(
+					'',
+					`import('/pages/um-b.js').then((module) => self.__um('classicDynamic', module.b), (error) => self.__um('classicDynamic', error.name));`,
+				),
+			);
+			for (const [name, src] of Object.entries(external)) {
+				const element = script('module', '', src);
+				element.onload = () => (results[`${name}Event`] = 'load');
+				element.onerror = () => (results[`${name}Event`] = 'error');
+				into.append(element);
+			}
+			await sleep(4000);
+			return results;
+		};
+		const read = (get) => {
+			try {
+				return get();
+			} catch (error) {
+				return error.name;
+			}
+		};
+		const written = async () => {
+			const frame = document.createElement('iframe');
+			document.body.append(frame);
+			return battery(frame.contentWindow);
+		};
+		const navigated = () =>
+			new Promise((resolve) => {
+				if (!other) return resolve('no other origin');
+				const frame = document.createElement('iframe');
+				const inner = () => frame.contentWindow.frames[0];
+				const timer = setTimeout(() => resolve('timeout'), 14000);
+				addEventListener('message', async (event) => {
+					if (event.source !== frame.contentWindow) return;
+					if (event.data?.coiInner === 1) inner().location.href = 'about:blank';
+					else if (event.data?.coiInner === 2) {
+						// (the document it settles on: Firefox replaces the first)
+						await sleep(400);
+						const win = inner();
+						const reachable = read(() => win.document.URL);
+						const result =
+							reachable === 'about:blank' ? await battery(win) : reachable;
+						clearTimeout(timer);
+						resolve(result);
+					}
+				});
+				frame.src = `${other}/coi/doc?script=/pages/coi-engines.js&inner=1`;
+				document.body.append(frame);
+			});
+		const markup = async () => {
+			const frame = document.createElement('iframe');
+			document.body.append(frame);
+			const results = {};
+			window.__umMarkup = (name, value) => {
+				results[name] = value;
+			};
+			const doc = frame.contentWindow.document;
+			const end = '</' + 'script>';
+			doc.open();
+			doc.write(
+				[
+					`<!doctype html><script>self.__um = parent.__umMarkup;${end}`,
+					`<script type="importmap">{"imports":{"um-b":"/pages/um-b.js"}}${end}`,
+					`<script type="module">import { b } from 'um-b'; import { a } from './um-a.js'; self.__um('markupInline', a + ' ' + b);${end}`,
+					`<script type="module">import { both } from './um-cycle-a.js'; self.__um('markupCycle', both());${end}`,
+					`<script type="module">import { report } from './um-link-a.js'; self.__um('markupLinked', report());${end}`,
+					`<script type="module" src="/pages/um-entry.js" onload="self.__um('markupExternalEvent', 'load')" onerror="self.__um('markupExternalEvent', 'error')">${end}`,
+					`<script type="module" src="/pages/um-missing.js" onload="self.__um('markupMissingEvent', 'load')" onerror="self.__um('markupMissingEvent', 'error')">${end}`,
+					`<script type="module" onload="self.__um('markupInlineMissingEvent', 'load')" onerror="self.__um('markupInlineMissingEvent', 'error')">import './um-not-there.js'; self.__um('markupInlineMissingRan', 'ran');${end}`,
+				].join(''),
+			);
+			doc.close();
+			await sleep(4000);
+			return results;
+		};
+		// about:srcdoc frames, under this page and under an about:blank frame:
+		// a module with a static import, a fetch, a dynamic import (WebKit
+		// reports a srcdoc document's message to its worker as its parent's)
+		const srcdoc = async () => {
+			const results = {};
+			const report = (name, value) => {
+				results[name] = value;
+			};
+			const end = '</' + 'script>';
+			const markupOf = (name) =>
+				[
+					`<!doctype html><script type="module">import { b } from '/pages/um-b.js'; parent.__umSrcdoc('${name}Module', b);${end}`,
+					`<script>fetch('/pages/um-data.json').then((response) => response.json()).then((json) => parent.__umSrcdoc('${name}Fetch', json.value), (error) => parent.__umSrcdoc('${name}Fetch', error.name));`,
+					`import('./um-a.js').then((module) => parent.__umSrcdoc('${name}Dynamic', module.a), (error) => parent.__umSrcdoc('${name}Dynamic', error.name));${end}`,
+				].join('');
+			const add = (win, name) => {
+				win.__umSrcdoc = report;
+				const frame = win.document.createElement('iframe');
+				frame.srcdoc = markupOf(name);
+				win.document.body.append(frame);
+			};
+			add(window, 'top');
+			const blank = document.createElement('iframe');
+			document.body.append(blank);
+			add(blank.contentWindow, 'underBlank');
+			await sleep(4000);
+			return results;
+		};
+		const popup = async () => {
+			const win = open('', 'um-popup');
+			if (!win) return 'blocked';
+			try {
+				return await battery(win);
+			} finally {
+				win.close();
+			}
+		};
+		(async () => {
+			const report = {};
+			report.written = await written();
+			report.navigated = await navigated();
+			report.popup = await popup();
+			report.markup = await markup();
+			report.srcdoc = await srcdoc();
+			window.__umReport = report;
+		})();
+	</script>
+</body>

@@ -47,7 +47,8 @@
 // document the page makes in a frame whose shell is a part
 // (src/htmlShell.ts: an srcdoc, a javascript: URL's markup; a data: frame, src/inject/dom/rareAttributes.ts) is never given
 // to the frame, unrewritten or at all, an <object>'s HTML document (its
-// copy's shell is that part too) fails as a failed fetch does natively, an
+// load is a part, src/inject/dom/objectLoads.ts, and its copy's shell that
+// part too) fails as a failed fetch does natively, an
 // error and no document, and a refresh meta has no content
 // for the browser; a base a report-only base-uri refuses is refused, its
 // report being a part. A part is made synchronously within the call that
@@ -193,7 +194,13 @@ const REFUSING = [
  * the documents a frame of the child is given whose code is a part, asked
  * on their own (each waits a while for what does not come)
  */
-const DOCUMENTS = ['srcdoc', 'javascriptDocument', 'dataFrame', 'refresh'];
+const DOCUMENTS = [
+	'srcdoc',
+	'javascriptDocument',
+	'dataFrame',
+	'refresh',
+	'freshFrame',
+];
 /**
  * an <object>'s HTML document, untyped and typed, in a child of its own (it
  * waits a while for each object)
@@ -407,6 +414,7 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			'loginStatus',
 			'execCommand',
 			'contextualFragment',
+			'animatedHref',
 			'blankSetHTML',
 			'open',
 			// (before the policed calls: their policy refuses frames)
@@ -471,6 +479,12 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		'with the parts, a refresh meta a script inserts refreshes its frame',
 		documents.out?.refresh?.refreshed === true,
 		JSON.stringify(documents.out?.refresh),
+	);
+	ok(
+		'with the parts, a frame of this origin sent to another lands there, in a fresh context',
+		documents.out?.freshFrame?.landed?.join() === '?first,?fresh' &&
+			documents.out.freshFrame.threw === null,
+		JSON.stringify(documents.out?.freshFrame),
 	);
 	const based = await top.evaluate(() => window.__baseIn());
 	ok(
@@ -575,6 +589,12 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			contextualFragment: answer.out?.contextualFragment,
 			reached: answer.reached,
 		}),
+	);
+	ok(
+		"with the parts, an SVG animation of a link's href animates it to its value, read as the page wrote it",
+		answer.out?.animatedHref?.animVal === 'https://animated.example/to' &&
+			answer.out.animatedHref.to === 'https://animated.example/to',
+		JSON.stringify(answer.out?.animatedHref),
 	);
 	// (the default sanitizer leaves the <b>; setHTMLUnsafe the <b> and the
 	// <img>. The frame's initial about:blank gets no counting stand-ins: the
@@ -734,6 +754,7 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		'notFunction',
 		'blankCopy',
 		'xmlLoad',
+		'animatedHref',
 		'blankSetHTML',
 		'cspOpaque',
 		...POLICED,
@@ -853,6 +874,12 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		JSON.stringify(objectNavigations),
 	);
 	ok(
+		"without the parts, an SVG animation of a link's href animates it to nothing, and the page reads its value as it wrote it",
+		out.animatedHref?.animVal === '' &&
+			out.animatedHref.to === 'https://animated.example/to',
+		JSON.stringify(out.animatedHref),
+	);
+	ok(
 		'without the parts, setHTML, setHTMLUnsafe and getHTML on an element of a frame on its initial about:blank throw, and nothing is parsed',
 		out.blankSetHTML?.setHTML?.threw === 'no parts' &&
 			out.blankSetHTML.setHTMLUnsafe?.threw === 'no parts' &&
@@ -864,6 +891,12 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		'without the parts, a refresh meta is refused: its frame stays',
 		out.refresh?.stayed === true,
 		JSON.stringify(out.refresh),
+	);
+	ok(
+		'without the parts, a frame of this origin sent to another is refused: it is not navigated',
+		out.freshFrame?.landed?.join() === '?first' &&
+			out.freshFrame.threw === null,
+		JSON.stringify(out.freshFrame),
 	);
 	// as an enforced base-uri refuses it: the browser refuses its refusal
 	// URL, and nothing reports the page's own base

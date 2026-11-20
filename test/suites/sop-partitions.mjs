@@ -14,7 +14,9 @@
 // in both modes. Then where a partition's site ends, with names under a
 // private suffix of the public suffix list (test/private-sites.mjs): the
 // storage a frame shares with its own name's top-level page, and the HTTP
-// cache's key.
+// cache's key. And an about:blank that one site's page navigates a frame of
+// the other's to: natively the navigating page's, with the partition of a
+// frame of that site under another site (test/pages/sop-part-blank.html).
 import {
 	done,
 	FIXTURE,
@@ -23,6 +25,7 @@ import {
 	ok,
 	openDemo,
 	PROXY,
+	RUN,
 	sleep,
 	submitLanding,
 } from '../lib.mjs';
@@ -34,7 +37,7 @@ const B = new URL(FIXTURE.replace('127.0.0.1', 'localhost')).origin;
 const C = B.replace('localhost', 'c.localhost');
 /** the page in `role` on `site` (B's), under the run's tag `t` (`c`: site A's cached resource) */
 const part = (role, t, phase = 'before', site = B) =>
-	`${site}/pages/sop-part.html?role=${role}&phase=${phase}&t=${t}&c=${encodeURIComponent(A)}`;
+	`${site}/pages/sop-part.html?role=${role}&phase=${phase}&t=${t}${RUN}&c=${encodeURIComponent(A)}`;
 /** a page of `site` framing `src` */
 const framing = (site, src) =>
 	`${site}/pages/sop-part-a.html?src=${encodeURIComponent(src)}`;
@@ -55,11 +58,22 @@ const steps = (t) => [
 	['third/before', framing(A, part('third', t, 'before', C))],
 	// B framed by A again: does it see the cookie B set for A's own request?
 	['frame/after', framing(A, part('frame', t, 'after'))],
+	// an about:blank A navigates a frame of B's to: A's (Chrome), under
+	// another site (last: it writes A's cookies)
+	[
+		'blank/before',
+		`${A}/pages/sop-part-blank.html?b=${encodeURIComponent(B)}&t=${t}${RUN}&c=${encodeURIComponent(A)}`,
+	],
 ];
 
 // Cases known to differ from Chrome, by why (docs/same-origin-policy.md). A
 // case on the list that now reads as natively fails too: take it off.
-const KNOWN_BY_REASON = {};
+const KNOWN_BY_REASON = {
+	// (the about:blank's fetch of site A's resource carries other cookies of
+	// A than A's top-level page's, whose entry it is: docs/http-cache.md)
+	'an entry made for a request with credentials is confirmed with the origin before a request with other credentials is given it, where Chrome hands it over':
+		['blank/before: http cache'],
+};
 const KNOWN = new Map(
 	Object.entries(KNOWN_BY_REASON).flatMap(([why, names]) =>
 		names.map((name) => [name, why]),
@@ -130,7 +144,7 @@ for (const [mode, base] of [
 	for (const [key] of steps(mode)) {
 		const want = native[key] ?? {};
 		const got = proxied[key] ?? {};
-		for (const field of ['heard', 'workerCount', 'error'])
+		for (const field of ['heard', 'workerCount', 'error', 'register'])
 			check(mode, `${key}: ${field}`, want[field], got[field]);
 		// how many loads of site A's cacheable resource reached it so far: with
 		// fetch (the HTTP cache) and as an image (the memory cache first)

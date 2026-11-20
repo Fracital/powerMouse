@@ -1,0 +1,127 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>sop-kept-b</title>
+<script>
+	// The other site's document in a frame whose initial about:blank its
+	// parent (test/pages/sop.js) read before this document loaded, and
+	// marked: an expando, an Array.prototype member, and a non-enumerable
+	// `sopKeptParent` on the parent's own Object.prototype. Natively this
+	// document gets a window of its own, so it reaches none of them: no
+	// global, prototype member, constructor or error it can be handed has
+	// the parent's realm in its prototype chain.
+	const leaks = [];
+	const check = (name, value) => {
+		try {
+			if (
+				value !== null &&
+				(typeof value === 'object' || typeof value === 'function') &&
+				'sopKeptParent' in value
+			)
+				leaks.push(name);
+		} catch (error) {
+			// a value of another origin
+		}
+	};
+	const SKIP = new Set([
+		'alert',
+		'confirm',
+		'prompt',
+		'print',
+		'close',
+		'stop',
+		'open',
+		'focus',
+		'blur',
+		'postMessage',
+		'requestFullscreen',
+	]);
+	const owners = {
+		window: self,
+		Window: Window.prototype,
+		Document: Document.prototype,
+		Node: Node.prototype,
+		Element: Element.prototype,
+		HTMLElement: HTMLElement.prototype,
+		EventTarget: EventTarget.prototype,
+		History: History.prototype,
+		Navigator: Navigator.prototype,
+		HTMLIFrameElement: HTMLIFrameElement.prototype,
+		HTMLAnchorElement: HTMLAnchorElement.prototype,
+		HTMLScriptElement: HTMLScriptElement.prototype,
+		MessageEvent: MessageEvent.prototype,
+		Storage: Storage.prototype,
+		Function: Function.prototype,
+		Object: Object.prototype,
+	};
+	for (const [label, owner] of Object.entries(owners))
+		for (const key of Reflect.ownKeys(owner)) {
+			if (SKIP.has(key)) continue;
+			let descriptor;
+			try {
+				descriptor = Reflect.getOwnPropertyDescriptor(owner, key);
+			} catch (error) {
+				continue;
+			}
+			if (!descriptor) continue;
+			const name = `${label}.${String(key)}`;
+			for (const value of [descriptor.value, descriptor.get, descriptor.set]) {
+				check(name, value);
+				if (typeof value !== 'function') continue;
+				check(`${name} constructor`, value.constructor);
+				check(`${name} prototype`, Object.getPrototypeOf(value));
+			}
+			// what a member throws for a receiver that is no such object
+			const call = descriptor.get ?? descriptor.value;
+			if (typeof call === 'function' && owner !== self)
+				try {
+					Reflect.apply(call, Symbol('receiver'), []);
+				} catch (error) {
+					check(`${name} error`, error);
+				}
+		}
+	// what hooked calls hand back
+	const handed = [];
+	try {
+		handed.push(['fetch', fetch('data:,kept')]);
+	} catch (error) {
+		check('fetch error', error);
+	}
+	try {
+		handed.push(['storage.estimate', navigator.storage.estimate()]);
+	} catch (error) {
+		check('storage.estimate error', error);
+	}
+	try {
+		handed.push(['hasStorageAccess', document.hasStorageAccess()]);
+	} catch (error) {
+		check('hasStorageAccess error', error);
+	}
+	try {
+		new Worker(Symbol());
+	} catch (error) {
+		check('Worker error', error);
+	}
+	try {
+		history.pushState(null, '', 'https://example.com/');
+	} catch (error) {
+		check('pushState error', error);
+	}
+	for (const [name, value] of handed) {
+		check(name, value);
+		value.catch?.((error) => check(`${name} rejection`, error));
+	}
+	setTimeout(() => {
+		parent.postMessage(
+			{
+				sopKept: {
+					expando: typeof self.sopKeptExpando,
+					arrayMark: typeof Array.prototype.sopKeptMark,
+					heldObject: typeof self.sopKeptObject,
+					parentRealm: leaks.length ? leaks.slice(0, 8) : 'none',
+					parentRealmCount: leaks.length,
+				},
+			},
+			'*',
+		);
+	}, 300);
+</script>

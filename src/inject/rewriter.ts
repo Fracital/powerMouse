@@ -47,6 +47,7 @@ import {
 	LIGHT_FACTORY,
 	PASSKEYS_FACTORY,
 } from '../version';
+import { keepCode, MAPPED } from './positionParts';
 import { knownSite } from './sites';
 import { trustedFunction } from './trusted';
 
@@ -554,7 +555,7 @@ function library(): RewriterLib {
  * call is made again. A frame's rewrite adopts into its top's shared library,
  * so one fetch serves the frames too.
  */
-function ask<T>(work: (lib: RewriterLib) => T): [RewriterLib, T] {
+export function ask<T>(work: (lib: RewriterLib) => T): [RewriterLib, T] {
 	const lib = library();
 	const result = work(lib);
 	if (lib.needs() !== true) return [lib, result];
@@ -640,6 +641,9 @@ function checked<T>(value: unknown, kind: 'string' | 'boolean'): T {
 	return value as T;
 }
 
+/** the map the last rewrite asked for apart handed over */
+export let apartMap = '';
+
 export function modifyJS(
 	script: string,
 	url: StompURL,
@@ -661,7 +665,12 @@ export function modifyJS(
 	settle(lib, result === null);
 	for (let i = 0, count = Number(lib.keptCount()); i < count; i++)
 		keepSource(text(lib.keptKey(i)), text(lib.keptText(i)));
-	return checked<string>(result, 'string');
+	const output = checked<string>(result, 'string');
+	// (its positions read as its own: the light library asks for the map
+	// apart, ScriptSource.apart)
+	apartMap = text(lib.positions());
+	if (source !== MAPPED) keepCode(apartMap, source, output);
+	return output;
 }
 
 export function modifyCSS(

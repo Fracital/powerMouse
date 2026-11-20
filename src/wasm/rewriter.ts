@@ -34,6 +34,10 @@ const FLAG_REVISION = 32;
 const FLAG_PARSES = 64;
 const FLAG_SINGLE = 128;
 const FLAG_PRINT = 256;
+// the output carries the map of itself to the script's text (rust/rwjs/src/positions.rs)
+export const FLAG_POSITIONS = 512;
+/** the map comes beside the output, which carries none (rust/core-module/src/rewriter.rs) */
+const FLAG_APART = 1024;
 const STATUS_INVALID = 7;
 const ROUTE_IMPORT = 1;
 const ROUTE_SOURCE_MAP = 2;
@@ -44,6 +48,20 @@ interface Source {
 	text?: string | null;
 	shifts?: number[];
 	embed?: boolean;
+	positions?: boolean;
+	apart?: boolean;
+}
+
+/**
+ * The map of the last rewrite asked for apart (`Source.apart`,
+ * rust/core-module/src/rewriter.rs FLAG_APART), '' when there is none
+ */
+let apart = '';
+/** the map of the last rewrite asked for apart, once */
+export function takeApart(): string {
+	const taken = apart;
+	apart = '';
+	return taken;
 }
 
 /**
@@ -83,7 +101,7 @@ export function rewriterRevision(): string | null {
  * the page wrote it, and a revision 1 module takes the flags of the parse
  * questions for a rewrite.
  */
-export const REVISION = '18';
+export const REVISION = '20';
 
 /** whether an instance answered REVISION, asked once of each */
 const speaks = new WeakMap<BufferInstance, boolean>();
@@ -226,6 +244,30 @@ export function printInWasm(
 }
 
 /**
+ * The modules of an import cycle (`modules`, apart by NUL) merged into one
+ * by this thread's module (rust/rwjs/src/link.rs): `{ linked }` with the
+ * merged module and each one's facade apart by NUL, or null for modules
+ * that do not link; null when the thread holds no module or another
+ * revision's.
+ */
+export function linkInWasm(modules: string): { linked: string | null } | null {
+	if (!hasModule(REWRITER)) return null;
+	return withInstance(REWRITER, (instance) => {
+		const cross = crossingOf(modules);
+		if (!cross || !sameRevision(instance)) return null;
+		const answered = instance.call(
+			cross.out(modules),
+			// FLAG_LINK (rust/core-module/src/rewriter.rs), a literal here so
+			// that a bundle without this function keeps its flags as they were
+			2048,
+		);
+		return {
+			linked: 'output' in answered ? cross.back(answered.output) : null,
+		};
+	});
+}
+
+/**
  * What a script that cannot be rewritten is answered with: itself. The
  * browser may still parse it (and rejects it the same way when it cannot),
  * while a `throw` in its place would silently kill every script with that
@@ -284,6 +326,11 @@ export function rewriteWith(
 	const loose = !script.isWellFormed();
 	if (loose) key ??= sourceKey(script);
 	let flags = isModule ? FLAG_MODULE : 0;
+	if (source?.positions) flags |= FLAG_POSITIONS;
+	// (a text with a lone surrogate crosses as stand-ins, which a map
+	// would count)
+	apart = '';
+	if (source?.apart && !loose) flags |= FLAG_APART;
 	if (source?.text === undefined) {
 		// the script's own text is the one kept: written into the output by
 		// the module when a function of it is marked, or kept in this realm
@@ -338,12 +385,13 @@ export function rewriteWith(
 					'SyntaxError: no browser runs this script',
 				)
 			: null;
-	if (here && source?.text === undefined) {
+	if ((here && source?.text === undefined) || flags & FLAG_APART) {
 		const meta = instance.call('', FLAG_META);
 		if (!('output' in meta)) return null;
-		const tab = meta.output.indexOf('\t');
-		if (+meta.output.slice(0, tab) > 0)
-			keepSource(meta.output.slice(tab + 1), script);
+		const [marks, key, map] = meta.output.split('\t');
+		if (here && source?.text === undefined && +marks! > 0)
+			keepSource(key!, script);
+		apart = map ?? '';
 	}
 	return cross.back(result.output);
 }

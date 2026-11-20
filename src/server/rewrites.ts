@@ -28,6 +28,7 @@ import {
 	type ScriptFacts,
 } from '../csp';
 import { freshFrameDocument } from '../freshFrame';
+import { sourceKey } from '../functionSource';
 import { rewriteLinkHeader } from '../headers';
 import { helperNames } from '../helperNames';
 import { modifyHTML, modifyHTMLStreamed } from '../htmlShell';
@@ -44,11 +45,15 @@ import {
 	isolationFacts,
 	isolationHeaders,
 	isolationResponseHeaders,
+	loadsPolicy,
 	nestedIsolation,
 	SERVED_EMBEDDER_POLICY,
+	servedIsolationPolicy,
 	topLevelIsolation,
 	type DocumentIsolation,
+	type EmbedderPolicy,
 	type IsolationEngine,
+	type IsolationPolicy,
 } from '../isolation';
 import { MARK_DIRECTIVES, MARKED_KINDS, OPAQUE_MARK } from '../memoryMark';
 import {
@@ -71,6 +76,8 @@ import {
 	workerKindUnisolated,
 } from '../partition';
 import {
+	handlerPreamble,
+	handlerSources,
 	hasBase,
 	inlineSources,
 	packRewrite,
@@ -97,7 +104,13 @@ import {
 	routeHTML,
 	setDocumentShells,
 } from '../rewriteHTML';
-import { modifyJS, RewrittenBy, routeJS, ScriptType } from '../rewriteJS';
+import {
+	modifyJS,
+	RewrittenBy,
+	routeJS,
+	SCRIPT_FILE,
+	ScriptType,
+} from '../rewriteJS';
 import {
 	formQuery,
 	linkRouteURL,
@@ -139,6 +152,7 @@ import {
 	AWAY_MARKER,
 	BLOB_ASK,
 	CACHED_MARKER,
+	CONNECTION_MARKER,
 	CORS_MARKER,
 	CREDENTIALS_HEADER,
 	ENCODING_MARKER,
@@ -156,6 +170,7 @@ import {
 	OPAQUE_HEADER,
 	OPAQUE_MARKER,
 	PREFLIGHT_HEADER,
+	PROTOCOL_MARKER,
 	RESPONSE_TYPE_HEADER,
 	REVALIDATED_MARKER,
 	SEALER_ROUTE,
@@ -176,12 +191,25 @@ import {
 	REQUEST_QUEUE,
 	SEEN_URGENCY,
 } from '../transport/requestQueue';
+import {
+	connectionMark,
+	factsOf,
+	notingFacts,
+	type EncodedBytes,
+	type ResponseFacts,
+} from '../transport/responseFacts';
 import { fragmentOf, queryOf, withQuery } from '../urlShape';
 import { BUILD, REWRITE_GENERATION } from '../version';
 import { contextText, isLinkRoute, LINK_SEGMENT, linkRoute } from '../visited';
 import { rewriteBytesInWasm } from '../wasm/rewriteBytes';
 import { scanMarkup, scannerSettled } from '../wasm/scanner';
 import { modifyXML, xmlShellEncoding } from '../xmlShell';
+import {
+	anyApartClient,
+	APART_AGENT_PATH,
+	apartAgentResponse,
+	rememberApartClient,
+} from './apartAgent';
 import { badPort } from './badPorts';
 import {
 	knownMinterOf,
@@ -531,6 +559,9 @@ const LOAD_DESTINATIONS = [
 	// place; the destination makes Sec-Fetch-Dest: webidentity go to the IdP
 	// (src/inject/dom/modules/Credentials.ts)
 	'webidentity',
+	// a violation's report to the page's policy's report-uri, which the
+	// inject sends in the browser's place (src/inject/dom/violationDelivery.ts)
+	'report',
 ];
 // (`same-origin`: an SVG <use>'s external document, which Chrome loads as
 // an image of the document's own origin only)
@@ -1063,8 +1094,10 @@ type BodyTransform = (
 interface Note {
 	/** the emulated registration that controls the document (docs/service-workers.md) */
 	serviceWorker?: ControlInfo;
-	/** the document's isolation, when the host's page is isolated (src/isolation.ts isolationFacts) */
+	/** the document's isolation, when the host's page is isolated or `apart` (src/isolation.ts isolationFacts) */
 	isolation?: string;
+	/** the Document-Isolation-Policy of the proxy's own the document is served with, under a host that is not isolated */
+	apart?: IsolationPolicy;
 	/** what the document's Origin-Agent-Cluster asked for: ?0 a cluster keyed by site, ?1 one keyed by origin */
 	agentCluster?: 'site' | 'origin';
 	rewriteCache?: RewriteCacheOutcome;
@@ -1084,6 +1117,11 @@ interface Note {
 	rewriteBy?: 'wasm' | 'js';
 	/** how many bytes the origin's body was, when the transform read it (SIZE_MARKER) */
 	bytes?: number;
+	/**
+	 * how many bytes the origin's body came as before the transport decoded
+	 * its Content-Encoding, once the body has ended (responseFacts.ts)
+	 */
+	encodedBytes?: EncodedBytes;
 }
 
 interface Rewriter {
@@ -1108,7 +1146,7 @@ interface Rewriter {
 	rules: CompiledRule[];
 	/** the built-in blocker, unless the host turned it off (docs/adblock.md) */
 	blocker?: BlockerLike;
-	/** the host asked for the blocker: the first navigation waits for its lists (on by default, none does) */
+	/** the host asked for the blocker: the first navigation waits for its lists (on by default, for the snapshot alone) */
 	blockerAsked?: boolean;
 	/** the per-site shields the controller set (src/server/shields.ts) */
 	shields?: ShieldsStore;
@@ -1129,6 +1167,14 @@ interface Rewriter {
 	 * and kept; Chrome's rules when it cannot say
 	 */
 	isolationEngine: () => Promise<IsolationEngine>;
+	/**
+	 * a top-level page that is isolated natively is shown to the client
+	 * `client` without isolation (a host that is not isolated, in a browser
+	 * without Document-Isolation-Policy): the controller says so in its
+	 * navigate event (NavigateInfo.isolation), so the host may offer it a
+	 * window of its own
+	 */
+	isolationWanted?: (client: string) => void;
 }
 
 /** how long a decision waits for the controller to say what the browser makes of isolation (then Chrome's rules) */
@@ -1543,7 +1589,7 @@ function genericForward(
 						serverRequest.referrer,
 						serverRequest.url,
 					)?.grant;
-		const granted =
+		const grant =
 			serverRequest.mode === 'navigate'
 				? null
 				: earlierGrant
@@ -1555,6 +1601,11 @@ function genericForward(
 							context?.clientId,
 							serverRequest.url,
 						);
+		// (`^`: a document's its client makes it for, in the partition its
+		// site has with another site above it, LoadGrantMessage; the load
+		// after it, if any, is what the grant names)
+		const crossGranted = grant?.[0] === '^';
+		const granted = crossGranted ? grant!.slice(1) || null : grant;
 		let internal = granted !== null || (!!context?.internal && !context.cors);
 		const load = loadOf(granted);
 		// a navigation of a window that another document started, which the
@@ -2122,7 +2173,7 @@ function genericForward(
 		// site, as Chrome's cookie partition key has the ancestor chain bit
 		// (measured: B framed by A reads what B set for A's own request, and B
 		// framed by A framed by B none of B's top-level page's)
-		const contextPartition = navigation
+		const clientPartition = navigation
 			? topLevel
 				? ''
 				: kindPartition(resource, url.url.origin, publicSuffix, rewriter.codec)
@@ -2136,6 +2187,16 @@ function genericForward(
 							rewriter.codec,
 						)
 					: '';
+		// a grant's `^` moves a first-party client's request into the
+		// partition its site has under itself with another site between
+		// (Chrome's ancestor chain bit), and no other
+		const contextPartition =
+			crossGranted &&
+			clientPartition === '' &&
+			client &&
+			client.origin !== 'null'
+				? `^${siteOf(client, publicSuffix)}`
+				: clientPartition;
 		const partitionKey =
 			partitionSite(contextPartition) ??
 			(topSite !== null && topSite !== siteOf(url.url, publicSuffix)
@@ -2199,12 +2260,14 @@ function genericForward(
 		// looks same-origin to the browser, so this is decided here; an
 		// unknown initiator is given the benefit), `include` always
 		// The embedder policy of the document or worker that makes the request
-		// (src/isolation.ts), when the host's page is isolated: the browser
-		// has the proxy's for every document there, so the page's own is
-		// applied here. A `credentialless` one sends its no-cors requests to
-		// another origin without credentials, and keeps none from the answer.
+		// (src/isolation.ts), when the host's page is isolated, or the
+		// document is one the proxy isolates with its own
+		// Document-Isolation-Policy (./apartAgent.ts): the browser has the
+		// proxy's for every such document, so the page's own is applied
+		// here. A `credentialless` one sends its no-cors requests to another
+		// origin without credentials, and keeps none from the answer.
 		const ownerPolicy =
-			rewriter.isolated && !navigation
+			(rewriter.isolated || anyApartClient()) && !navigation
 				? embedderPolicyOf(context?.clientId, clientRoute, referrer)
 				: null;
 		const credentialless =
@@ -2566,8 +2629,13 @@ function genericForward(
 		// off for the site would not. STomp's rewriting is untouched
 		const blocks = !rewriter.shields || rewriter.shields.blocks(shieldsHost);
 		// the first navigation after a start waits for the engine: the stored
-		// one, and, when the host asked for the blocker, a first fetch of the
-		// lists, bounded
+		// one or, on by default, the directory's snapshot (a second at the
+		// most), and, when the host asked for the blocker, a first fetch of
+		// the lists, bounded. A document that loads before it is unfiltered
+		// for as long as it is open: its scriptlets run before its first
+		// script or never, and an app's in-app navigations are that
+		// document's (a YouTube watch page played the pre-roll ads of every
+		// related video it went on to)
 		if (blocker && blocks && navigation && !blocker.ready)
 			await blocker.settled(!!rewriter.blockerAsked);
 		const decision = blocks
@@ -2848,7 +2916,10 @@ function genericForward(
 			cache: serverRequest.cache,
 			pageLanguage,
 		};
+		// what the transport said of the origin's last answer (responseFacts.ts)
+		let upstreamFacts: ResponseFacts | null = null;
 		const fetchUpstream = (headers: Headers) => {
+			upstreamFacts = null;
 			const id = queueName();
 			const image = !shape.navigation && shape.destination === 'image';
 			const raise = () => requeue(id, 'raise');
@@ -2869,19 +2940,24 @@ function genericForward(
 			if (first) urgency = Math.min(urgency, FIRST_IMAGES_URGENCY);
 			if (image && seenLately(page)) urgency = Math.min(urgency, SEEN_URGENCY);
 			const upstream = upload.then((body) =>
-				rewriter.bare.fetch(url.toString(), {
-					method: serverRequest.method,
-					redirect: 'manual',
-					// redirect: serverRequest.redirect,
-					body,
-					headers: queued(
-						partitioned(chromeOrderedHeaders(headers, shape)),
-						urgency,
-						credentials,
-						id,
-						image,
-					),
-				}),
+				rewriter.bare
+					.fetch(url.toString(), {
+						method: serverRequest.method,
+						redirect: 'manual',
+						// redirect: serverRequest.redirect,
+						body,
+						headers: queued(
+							partitioned(chromeOrderedHeaders(headers, shape)),
+							urgency,
+							credentials,
+							id,
+							image,
+						),
+					})
+					.then((response) => {
+						upstreamFacts = factsOf(response.rawHeaders) ?? null;
+						return response;
+					}),
 			);
 			// a start's list downloads wait for the first navigation's answer
 			if (shape.navigation) navigationUpstream(upstream);
@@ -3746,7 +3822,7 @@ function genericForward(
 		// (a worker's script's policy as the browser reads it: WebKit has no
 		// credentialless, src/isolation.ts IsolationEngine)
 		const workerScript =
-			rewriter.isolated &&
+			(rewriter.isolated || !!ownerPolicy) &&
 			fromNetwork &&
 			(serverRequest.destination === 'worker' ||
 				serverRequest.destination === 'sharedworker') &&
@@ -3844,6 +3920,17 @@ function genericForward(
 		// and that sent none, or that another origin's embedder may not have,
 		// does not load, as natively.
 		let isolation: (DocumentIsolation & { topLevel: boolean }) | null = null;
+		// the Document-Isolation-Policy of the proxy's own the document is
+		// served with, when the host's page is not isolated (src/isolation.ts
+		// servedIsolationPolicy): a top-level document isolated natively, and
+		// every document nested in one, are put in an agent cluster of their
+		// own, isolated by it, and judged as under an isolated host. A nested
+		// one's route says its embedder is such a document (its group: only a
+		// document with the host's isolation, or this policy, names one)
+		let apart: IsolationPolicy | null = null;
+		// the embedder policy the document's own loads are judged by (its
+		// Document-Isolation-Policy's, when it sent no embedder policy)
+		let loads: EmbedderPolicy = 'unsafe-none';
 		// the document is a credentialless frame's that sent no embedder policy
 		// of its own: Chrome starts its worker whose script has none either
 		// (measured, Chrome 157: isolated, as the frame is)
@@ -3856,25 +3943,63 @@ function genericForward(
 			response.headers.has('location');
 		// (each by the rules of the browser this runs in where engines differ:
 		// src/isolation.ts IsolationEngine)
-		if (rewriter.isolated && navigation) {
+		const nestedEmbedder = () => {
+			const mark = nestedMarkOf(
+				oURL.pathname,
+				rewriter.directory,
+				rewriter.codec,
+			);
+			return (mark !== null ? parseNestedMark(mark) : null)?.embedder ?? null;
+		};
+		if (
+			navigation &&
+			(rewriter.isolated ||
+				// (a policy Chrome ignores where the origin is not potentially
+				// trustworthy, as it ignores the headers that isolate natively)
+				(trustworthy(url.url.origin) &&
+					(topLevel || !!nestedEmbedder()?.apart)))
+		) {
 			const real = isolationHeaders(response.headers);
 			const origin = url.url.origin;
 			if (topLevel) {
-				if (!navigationRedirect)
-					isolation = {
-						...(await byEngine(rewriter.isolationEngine, (engine) =>
-							topLevelIsolation(real, origin, engine),
-						)),
-						topLevel: destination === 'document',
-					};
+				if (!navigationRedirect) {
+					const decided = await byEngine(rewriter.isolationEngine, (engine) => {
+						const isolation = topLevelIsolation(real, origin, engine);
+						return {
+							isolation,
+							loads: loadsPolicy(isolation, real, engine),
+							// (not with the site pool, whose agents would not reach
+							// such a document: src/controller/site.ts)
+							apart:
+								!rewriter.isolated &&
+								!rewriter.config.sites &&
+								engine.dip &&
+								isolation.isolated
+									? servedIsolationPolicy(real, engine)
+									: null,
+						};
+					});
+					// a host that is not isolated: a page that is not isolated
+					// natively is served as before (one that is, where the
+					// browser has no such policy, as before too: the host is told)
+					if (
+						!rewriter.isolated &&
+						!decided.apart &&
+						decided.isolation.isolated &&
+						context?.clientId
+					)
+						rewriter.isolationWanted?.(context.clientId);
+					if (rewriter.isolated || decided.apart) {
+						isolation = {
+							...decided.isolation,
+							topLevel: destination === 'document',
+						};
+						loads = decided.loads;
+						apart = decided.apart;
+					}
+				}
 			} else {
-				const mark = nestedMarkOf(
-					oURL.pathname,
-					rewriter.directory,
-					rewriter.codec,
-				);
-				const embedder = (mark !== null ? parseNestedMark(mark) : null)
-					?.embedder ?? {
+				const embedder = nestedEmbedder() ?? {
 					origin: '',
 					coep: false,
 					group: false,
@@ -3882,6 +4007,7 @@ function genericForward(
 					origins: [],
 					credentialless: false,
 					later: false,
+					apart: false,
 				};
 				let sameSite = false;
 				try {
@@ -3890,23 +4016,36 @@ function genericForward(
 				} catch (error) {
 					// an embedder without an origin: another site
 				}
-				const decided = await byEngine(rewriter.isolationEngine, (engine) => ({
-					refused: embedderRefuses(
-						response.headers,
-						origin,
-						embedder,
-						sameSite,
-						navigationRedirect,
-						engine,
-					),
-					isolation: nestedIsolation(real, origin, embedder, engine),
-				}));
+				const decided = await byEngine(rewriter.isolationEngine, (engine) => {
+					const isolation = nestedIsolation(real, origin, embedder, engine);
+					return {
+						refused: embedderRefuses(
+							response.headers,
+							origin,
+							embedder,
+							sameSite,
+							navigationRedirect,
+							engine,
+						),
+						isolation,
+						loads: loadsPolicy(isolation, real, engine),
+						// (one that is not isolated natively is in the cluster all
+						// the same, where its embedder reaches it: its inject
+						// answers as a document that is not, `n`)
+						apart: rewriter.isolated
+							? null
+							: servedIsolationPolicy(real, engine),
+					};
+				});
 				if (decided.refused) {
 					await response.body?.cancel().catch(() => {});
 					return refuse('blocked by Cross-Origin-Embedder-Policy');
 				}
-				if (!navigationRedirect)
+				if (!navigationRedirect) {
 					isolation = { ...decided.isolation, topLevel: false };
+					loads = decided.loads;
+					apart = decided.apart;
+				}
 				frameCredentialless =
 					embedder.credentialless &&
 					embedderPolicy(real.coep) === 'unsafe-none';
@@ -3918,18 +4057,35 @@ function genericForward(
 		// the registration that controls the document this navigation makes:
 		// its shell says so before the page's first script
 		const note: Note = control ? { serviceWorker: control } : {};
+		// what the transport said of the origin's answer, when the network
+		// gave it (responseFacts.ts; the cast: the compiler does not follow
+		// fetchUpstream's assignment)
+		const answerFacts =
+			cached || revalidated || fromWorker
+				? null
+				: (upstreamFacts as ResponseFacts | null);
+		// the bytes its body came as, which its end says (SIZE_MARKER)
+		if (answerFacts?.encodedBytes) note.encodedBytes = answerFacts.encodedBytes;
 		// what the document's shell tells its client of its isolation, and
 		// its own embedder policy for the loads it makes
 		if (isolation) {
-			note.isolation = isolationFacts(isolation);
+			note.isolation = isolationFacts(isolation, !!apart);
+			if (apart) {
+				note.apart = apart;
+				rememberApartClient(context?.clientId);
+			}
 			rememberEmbedderPolicy(
 				serverRequest.url,
 				context?.clientId,
-				isolation.coep === 'unsafe-none'
+				loads === 'unsafe-none'
 					? null
 					: {
-							policy: isolation.coep,
-							...(frameCredentialless ? { frame: true as const } : {}),
+							policy: loads,
+							// (a Document-Isolation-Policy asks nothing of the
+							// document's workers)
+							...(frameCredentialless || isolation.coep === 'unsafe-none'
+								? { frame: true as const }
+								: {}),
 						},
 			);
 		}
@@ -4014,7 +4170,8 @@ function genericForward(
 				const value = response.headers.get(name);
 				if (value !== null) responseHeaders.set(name, value);
 			}
-		if (isolation)
+		if (apart) responseHeaders.set('document-isolation-policy', apart);
+		else if (isolation)
 			isolationResponseHeaders(responseHeaders, {
 				...isolation,
 				// a popup's document that natively leaves its opener's browsing
@@ -4247,6 +4404,19 @@ function genericForward(
 			responseHeaders.append('server-timing', REVALIDATED_MARKER);
 		if (memory && !redirect)
 			responseHeaders.append('server-timing', MEMORY_MARKER);
+		// the protocol the origin's answer came over, which the browser has
+		// as none for the worker's answer (PROTOCOL_MARKER), and when the
+		// steps of its connection happened (CONNECTION_MARKER)
+		if (!redirect && answerFacts?.protocol)
+			responseHeaders.append(
+				'server-timing',
+				`${PROTOCOL_MARKER};desc="${answerFacts.protocol}"`,
+			);
+		if (!redirect && answerFacts?.connection)
+			responseHeaders.append(
+				'server-timing',
+				`${CONNECTION_MARKER};desc=${connectionMark(answerFacts.connection)}`,
+			);
 		// an XMLHttpRequest's entry names its initiator (XHR_MARKER)
 		if (requestTypeOf(serverRequest) === 'XMLHttpRequest endpoint' && !redirect)
 			responseHeaders.append('server-timing', XHR_MARKER);
@@ -4283,8 +4453,8 @@ function genericForward(
 						? { unauthorized: true }
 						: {}),
 					...(timingDenied ? { timingDenied: true } : {}),
-					...(granted !== null && loadToken !== null
-						? { grant: { token: loadToken, load: granted } }
+					...(grant !== null && loadToken !== null
+						? { grant: { token: loadToken, load: grant } }
 						: {}),
 					first: previousHop?.first ?? serverRequest.url,
 					// (filled below, when this hop's cookies are stored)
@@ -4454,6 +4624,10 @@ function genericForward(
 				isolated: false,
 				topLevel: false,
 			});
+			// (in the cluster of a document the proxy isolates, whose frame
+			// element it reaches)
+			if (!rewriter.isolated && nestedEmbedder()?.apart)
+				headers.set('document-isolation-policy', 'isolate-and-credentialless');
 			return new Response(freshFrameDocument(to), { headers });
 		}
 
@@ -4675,6 +4849,7 @@ function genericForward(
 					: sizeMark(
 							response.headers,
 							transformed !== false ? (note.bytes ?? null) : null,
+							note.encodedBytes,
 						);
 			if (sizes !== null) responseHeaders.append('server-timing', sizes);
 			const kept = encoded ?? (output instanceof Blob ? output : null);
@@ -5156,23 +5331,34 @@ const hasMark = (value: string | null, mark: string) =>
  * body had (SIZE_MARKER), or null when the browser's own count of the
  * answer is the origin's already. `headers` are the origin's and `read` the
  * bytes of the body a transform read (null for a body passed through).
- * A body that came encoded is as long as its Content-Length says; without
- * one (a chunked answer) nothing says how long it was before the transport
- * decoded it, and it counts as its decoded bytes.
+ * A body that came encoded was as long as the transport counted before it
+ * decoded it (`counted`, read once the body has ended: responseFacts.ts),
+ * else as its Content-Length says; with neither (a chunked answer through
+ * a transport that does not count) it counts as its decoded bytes. A body
+ * passed through goes before its end, and only its Content-Length says.
  */
-function sizeMark(headers: Headers, read: number | null): string | null {
+function sizeMark(
+	headers: Headers,
+	read: number | null,
+	counted?: EncodedBytes,
+): string | null {
 	if (read === null) {
 		const told = encodedLength(headers);
 		return told !== null ? `${SIZE_MARKER};dur=${told}` : null;
 	}
-	const [encoded, decoded] = documentSizes(headers, read);
+	const [encoded, decoded] = documentSizes(headers, read, counted);
 	return `${SIZE_MARKER};dur=${encoded};desc=${decoded}`;
+}
+
+/** whether a body came with a Content-Encoding */
+function isEncoded(headers: Headers): boolean {
+	const encoding = (headers.get('content-encoding') ?? '').trim().toLowerCase();
+	return encoding !== '' && encoding !== 'identity';
 }
 
 /** how long an encoded body was by its Content-Length, or null when it came as it is or nothing says */
 function encodedLength(headers: Headers): number | null {
-	const encoding = (headers.get('content-encoding') ?? '').trim().toLowerCase();
-	const encoded = encoding !== '' && encoding !== 'identity';
+	const encoded = isEncoded(headers);
 	const told = headers.get('content-length');
 	const length =
 		told !== null && /^\d+$/.test(told.trim()) ? Number(told.trim()) : null;
@@ -5180,8 +5366,13 @@ function encodedLength(headers: Headers): number | null {
 }
 
 /** the sizes a body of `read` decoded bytes had: [encoded, decoded] (sizeMark) */
-function documentSizes(headers: Headers, read: number): [number, number] {
-	return [encodedLength(headers) ?? read, read];
+function documentSizes(
+	headers: Headers,
+	read: number,
+	counted?: EncodedBytes,
+): [number, number] {
+	const before = isEncoded(headers) ? counted?.() : undefined;
+	return [before ?? encodedLength(headers) ?? read, read];
 }
 
 /** what the forward sets itself on a rewritten body, whatever the origin said */
@@ -5450,7 +5641,11 @@ const TOKEN_ALPHABET =
 function streamMarkup(
 	read: HeadRead,
 	first: string,
-	prewrite: (segment: string) => {
+	/** `at`: where the piece starts in the document (the lines before, the column) */
+	prewrite: (
+		segment: string,
+		at: [number, number],
+	) => {
 		finish: () => Promise<Prewritten>;
 	} | null,
 	meta: ((segment: string) => void) | null,
@@ -5478,6 +5673,9 @@ function streamMarkup(
 			let based = false;
 			let later = false;
 			let head = told !== null && !BODY_START.test(first);
+			// where the next piece starts in the document: the lines before
+			// (line feeds) and its column
+			const at: [number, number] = [0, 0];
 			const send = (segment: string, end: boolean) => {
 				let said: HeadTold | null = null;
 				if (later) {
@@ -5489,7 +5687,18 @@ function streamMarkup(
 				}
 				later = true;
 				if (!based && hasBase(segment)) based = true;
-				const job = based ? null : prewrite(segment);
+				const job = based ? null : prewrite(segment, [at[0], at[1]]);
+				const last = segment.lastIndexOf('\n');
+				if (last < 0) at[1] += segment.length;
+				else {
+					for (
+						let i = segment.indexOf('\n');
+						i >= 0;
+						i = segment.indexOf('\n', i + 1)
+					)
+						at[0]++;
+					at[1] = segment.length - last - 1;
+				}
 				order = order.then(async () => {
 					let table: Prewritten | null = null;
 					if (job)
@@ -5788,6 +5997,7 @@ export function registerRewrites(
 	askIsolationEngine?: () => Promise<IsolationEngine | null>,
 	/** asks the controller's document for a blob: URL it minted (learnBlobsReadable) */
 	askBlobProbe?: () => Promise<string | null>,
+	tellIsolationWanted?: (client: string) => void,
 ) {
 	// (the newest controller's: an older one may be gone)
 	if (askBlobProbe) askBlobURL = askBlobProbe;
@@ -5843,6 +6053,7 @@ export function registerRewrites(
 		shields,
 		storage,
 		isolated: !!init.isolated,
+		isolationWanted: tellIsolationWanted,
 		// kept once the controller said; asked again after a failure, by
 		// Chrome's rules meanwhile
 		isolationEngine() {
@@ -5864,7 +6075,8 @@ export function registerRewrites(
 		directory: init.directory,
 		errorPage: init.errorPage,
 		names: init.names,
-		bare: new BareCompatibleClient(transport),
+		// (what the transport says of each answer is noted: responseFacts.ts)
+		bare: new BareCompatibleClient(notingFacts(transport)),
 	};
 
 	// binary:set is a srcset candidate (routeImageSet), loaded the same way.
@@ -5933,7 +6145,7 @@ export function registerRewrites(
 		note.rewriteIn = pooled === null ? 'service-worker' : 'pool';
 		const output =
 			pooled ??
-			modifyJS(text, url, rewriter.config, type, preamble, undefined, told);
+			modifyJS(text, url, rewriter.config, type, preamble, SCRIPT_FILE, told);
 		// the wasm module made it (the only rewriter), or it was handed back
 		// where no shipped syntax could be rewritten
 		note.rewriteBy = told.by ?? 'wasm';
@@ -5974,6 +6186,7 @@ export function registerRewrites(
 				rewriter.config,
 				type,
 				preamble,
+				SCRIPT_FILE,
 			)
 		);
 	};
@@ -6012,6 +6225,8 @@ export function registerRewrites(
 		markup: string,
 		url: StompURL,
 		partition: string | null,
+		/** where `markup` starts in the document: the lines before, the column */
+		at: [number, number] = [0, 0],
 	): {
 		dispatched: Promise<void>;
 		finish: () => Promise<Prewritten>;
@@ -6025,20 +6240,131 @@ export function registerRewrites(
 		const scanned = scanMarkup(markup);
 		if (scanned ? scanned.base : hasBase(markup)) return null;
 		const { scripts, styles } = inlineSources(markup, scanned ?? undefined);
-		if (!scripts.length && !styles.length) return null;
+		const handlers = handlerSources(markup);
+		if (!scripts.length && !styles.length && !handlers.length) return null;
 		const rewrites = partition !== null ? rewriter.rewrites : undefined;
 		const encoder = new TextEncoder();
 		const dispatches: Promise<void>[] = [];
 		const access = helperNames(config).access;
-		const outputs = scripts.map(
-			async ([kind, source, start, end]): Promise<
-				Prewritten['scripts'][number] | null
+		// where each script's text starts in the document, as V8 counts a
+		// script of the document from (its frames' lines are the document's):
+		// the lines before (line feeds; a carriage return alone ends none,
+		// measured) and its column (rewriteJS.ts ScriptSource.place)
+		let [lines, lineStart] = [at[0], -at[1]];
+		let counted = 0;
+		const places = scripts.map(([, , start]): [number, number] => {
+			for (
+				let end = markup.indexOf('\n', counted);
+				end >= 0 && end < start;
+				end = markup.indexOf('\n', end + 1)
+			) {
+				lines++;
+				lineStart = end + 1;
+			}
+			counted = Math.max(counted, start);
+			return [lines, start - lineStart];
+		});
+		// where each handler's start tag ends, which V8 counts its positions
+		// from (the place handlerPlace finds in the page)
+		const ends = [
+			...new Set(
+				handlers.flatMap(([, , , places]) => places.map(([, e]) => e)),
+			),
+		].sort((a, b) => a - b);
+		const tagPlaces = new Map<number, [number, number]>();
+		{
+			let [lines, lineStart] = [at[0], -at[1]];
+			let counted = 0;
+			for (const tagEnd of ends) {
+				for (
+					let end = markup.indexOf('\n', counted);
+					end >= 0 && end < tagEnd;
+					end = markup.indexOf('\n', end + 1)
+				) {
+					lines++;
+					lineStart = end + 1;
+				}
+				counted = Math.max(counted, tagEnd);
+				tagPlaces.set(tagEnd, [lines, tagEnd - lineStart]);
+			}
+		}
+		const handlerOutputs = handlers.map(
+			async ([source, start, end, places]): Promise<
+				NonNullable<Prewritten['handlers']>[number] | null
 			> => {
-				const entry = (output: string): Prewritten['scripts'][number] => [
+				const entry = (
+					output: string,
+					map: string,
+				): NonNullable<Prewritten['handlers']>[number] => [
+					start,
+					end,
+					output,
+					map,
+					places.map(([name, tagEnd]) => [name, ...tagPlaces.get(tagEnd)!]),
+				];
+				let sent!: () => void;
+				dispatches.push(new Promise((resolve) => (sent = resolve)));
+				try {
+					const preamble = handlerPreamble(access, sourceKey(source));
+					const key = rewrites
+						? await rewrites.key(
+								[
+									CACHE_GENERATION,
+									url.toString(),
+									'generic',
+									'handler',
+									cacheConfig(config, 'generic', (name) =>
+										source.includes(name),
+									),
+									url.codec.key,
+									partition!,
+								],
+								encoder.encode(source),
+							)
+						: null;
+					const kept = key !== null ? await rewrites!.match(key) : null;
+					if (kept !== null)
+						return entry(
+							await kept.text(),
+							(await (await rewrites!.match(`${key}m`))?.text()) ?? '',
+						);
+					const told: RewrittenBy = {};
+					const rewriting = pool.rewriteHandler(
+						source,
+						url,
+						config,
+						preamble,
+						told,
+					);
+					sent();
+					const output = await rewriting;
+					if (output === null) return null;
+					if (key !== null) {
+						void rewrites!.put(key, output);
+						if (told.map) void rewrites!.put(`${key}m`, told.map);
+					}
+					return entry(output, told.map ?? '');
+				} finally {
+					sent();
+				}
+			},
+		);
+		for (const output of handlerOutputs) output.catch(() => {});
+		const outputs = scripts.map(
+			async (
+				[kind, source, start, end],
+				index,
+			): Promise<Prewritten['scripts'][number] | null> => {
+				const entry = (
+					output: string,
+					map: string,
+				): Prewritten['scripts'][number] => [
 					kind,
 					start,
 					end,
 					...packRewrite(kind, source, output, access),
+					map,
+					places[index]!,
 				];
 				let sent!: () => void;
 				dispatches.push(new Promise((resolve) => (sent = resolve)));
@@ -6059,20 +6385,30 @@ export function registerRewrites(
 								encoder.encode(source),
 							)
 						: null;
+					// (the map the rewrite handed over apart is kept beside it)
 					const kept = key !== null ? await rewrites!.match(key) : null;
-					if (kept !== null) return entry(await kept.text());
+					if (kept !== null)
+						return entry(
+							await kept.text(),
+							(await (await rewrites!.match(`${key}m`))?.text()) ?? '',
+						);
+					const told: RewrittenBy = {};
 					const rewriting = pool.rewriteInline(
 						source,
 						url,
 						config,
 						type,
 						preamble,
+						told,
 					);
 					sent();
 					const output = await rewriting;
 					if (output === null || output === source) return null;
-					if (key !== null) void rewrites!.put(key, output);
-					return entry(output);
+					if (key !== null) {
+						void rewrites!.put(key, output);
+						if (told.map) void rewrites!.put(`${key}m`, told.map);
+					}
+					return entry(output, told.map ?? '');
 				} finally {
 					sent();
 				}
@@ -6096,12 +6432,17 @@ export function registerRewrites(
 					},
 				);
 				const done = await Promise.all(outputs);
+				const handled = (await Promise.all(handlerOutputs)).filter(
+					(entry): entry is NonNullable<Prewritten['handlers']>[number] =>
+						entry !== null,
+				);
 				return {
 					url: url.toString(),
 					scripts: done.filter(
 						(entry): entry is Prewritten['scripts'][number] => entry !== null,
 					),
 					styles: styleOutputs,
+					...(handled.length ? { handlers: handled } : {}),
 				};
 			},
 		};
@@ -6300,10 +6641,35 @@ export function registerRewrites(
 	// answered here with the embedder policy (and the
 	// Document-Isolation-Policy) its kind names. Only to a worker or a
 	// navigation: no page learns of the browser's answer by loading it
+	// the agent of the documents the proxy isolates with a
+	// Document-Isolation-Policy (./apartAgent.ts): once, for the controller
+	router.routes.set(APART_AGENT_PATH, async (request, path) => {
+		const token = APART_AGENT_PATH.exec(path)?.[1];
+		return (
+			(request.mode === 'navigate' &&
+				request.destination === 'iframe' &&
+				token &&
+				apartAgentResponse(token)) ||
+			Response.error()
+		);
+	});
 	router.routes.set(
-		new RegExp(`^/${ISOLATION_PROBE}/[cpd]$`),
-		(request, path) => {
+		new RegExp(`^/${ISOLATION_PROBE}/[cpdb]$`),
+		async (request, path) => {
 			const kind = path.slice(-1);
+			// the browser's about:blank rule (src/isolation.ts IsolationEngine
+			// `blank`), which the inject asks for: no more than the browser
+			// tells any page of itself
+			if (kind === 'b')
+				return new Response(
+					JSON.stringify((await rewriter.isolationEngine()).blank),
+					{
+						headers: {
+							'content-type': 'application/json',
+							'cache-control': 'no-store',
+						},
+					},
+				);
 			if (kind === 'c')
 				return request.destination === 'worker'
 					? new Response('postMessage(crossOriginIsolated)', {
@@ -6646,8 +7012,15 @@ export function registerRewrites(
 			if (request.referrerPolicy)
 				headers['referrer-policy'] = request.referrerPolicy;
 			// and a blob: document its creator's embedder policy: isolated as
-			// its creator is (an inline document of markup never is)
-			if (entry.blob && entry.isolated) {
+			// its creator is (an inline document of markup never is). Under a
+			// host that is not isolated, a document a creator in the cluster of
+			// the proxy's Document-Isolation-Policy registered is served with it
+			// too, as natively such a document inherits its creator's
+			// (src/server/apartAgent.ts)
+			const apartEntry = !rewriter.isolated && !!entry.apart;
+			if (apartEntry)
+				headers['document-isolation-policy'] = 'isolate-and-credentialless';
+			else if (entry.blob && entry.isolated) {
 				const isolation = new Headers();
 				isolationResponseHeaders(isolation, {
 					isolated: true,
@@ -6699,7 +7072,9 @@ export function registerRewrites(
 						modifyXML(
 							decodeDocument(bytes, blob.type),
 							url,
-							rewriter.config,
+							apartEntry
+								? { ...rewriter.config, isolated: true }
+								: rewriter.config,
 							mime,
 							undefined,
 							shellSites(url),
@@ -6726,7 +7101,7 @@ export function registerRewrites(
 				modifyHTML(
 					markup,
 					url,
-					rewriter.config,
+					apartEntry ? { ...rewriter.config, isolated: true } : rewriter.config,
 					true,
 					undefined,
 					undefined,
@@ -7133,13 +7508,20 @@ export function registerRewrites(
 						: undefined;
 				// under a list's policy the document's realm compiles no codec
 				// module: the policy may refuse it, and would tell the page
+				// (a document the proxy isolates under a host that is not is
+				// told it as under one that is: its inject says whom its frames
+				// are embedded by, and answers as what it is natively)
 				const shellConfig: Config =
-					listCsp || fingerprintOn || fingerprintSeed !== undefined
+					listCsp ||
+					fingerprintOn ||
+					fingerprintSeed !== undefined ||
+					note.apart
 						? {
 								...rewriter.config,
 								...(listCsp ? { codecModule: false } : {}),
 								...(fingerprintOn ? { fingerprintOn } : {}),
 								...(fingerprintSeed !== undefined ? { fingerprintSeed } : {}),
+								...(note.apart ? { isolated: true } : {}),
 							}
 						: rewriter.config;
 				const partition =
@@ -7153,17 +7535,20 @@ export function registerRewrites(
 					embedded !== 'apply'
 						? request.partition
 						: null;
+				// the client the navigation makes, which its shell hands over
+				// (DocumentClient.servedClient)
+				const served = request.navigation ? request.clientId : undefined;
 				// the rest of the markup is still to come: the shell goes out now,
 				// and the markup to the client as it comes (streamMarkup)
 				if (read?.rest) {
 					const token = streamMarkup(
 						read,
 						markup,
-						(segment) => prewrite(segment, url, partition),
+						(segment, at) => prewrite(segment, url, partition, at),
 						request.navigation && hints
 							? (segment) => applyMeta(hints, segment)
 							: null,
-						(read) => documentSizes(response.headers, read),
+						(read) => documentSizes(response.headers, read, note.encodedBytes),
 						request.clientId,
 						told,
 					);
@@ -7187,6 +7572,7 @@ export function registerRewrites(
 							`${rewriter.directory}${MARKUP_ROUTE}-${token}`,
 							request.routed,
 						).href,
+						served,
 					);
 					return encodeShell(shell.head + shell.tail(null), encoding);
 				}
@@ -7211,6 +7597,7 @@ export function registerRewrites(
 						facts,
 						syncBlocked,
 						true,
+						served,
 					);
 					return encoding === 'utf-8' ? shell : encodeShell(shell, encoding);
 				}
@@ -7238,6 +7625,8 @@ export function registerRewrites(
 					policies.texts,
 					facts,
 					syncBlocked,
+					undefined,
+					served,
 				);
 				const first = encodeShell(head, encoding);
 				return new ReadableStream<Uint8Array>({

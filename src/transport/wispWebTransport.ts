@@ -1148,7 +1148,11 @@ function pipeOf(
 	let state: 'info' | 'continue' | 'open' = 'info';
 	let offered = 1;
 	let infoSaid = false;
-	/** the carrier's own INFO, for an epoxy in v1: Wisp 2.0 with UDP */
+	/**
+	 * the carrier's own INFO, for an epoxy in v1: Wisp 2.0 with UDP. Never
+	 * stream credit (0xE2), even when the relay offers it: a v1 epoxy grants
+	 * nothing, and each TCP stream would stop at its initial window.
+	 */
 	const sayInfo = () => {
 		if (infoSaid || opening.v2) return;
 		infoSaid = true;
@@ -1821,6 +1825,21 @@ export class CarrierTransport implements ProxyTransport {
 
 	get fieldSupport(): unknown {
 		return (this.#base as { fieldSupport?: unknown } | null)?.fieldSupport;
+	}
+
+	/** the transport's answer for `host`'s HTTPS record (RevivingTransport's httpsAnswer) */
+	async httpsAnswer(
+		host: string,
+		headers?: RawHeaders,
+	): Promise<ArrayBuffer | null> {
+		await this.init();
+		const base = this.#base as {
+			httpsAnswer?: (
+				host: string,
+				headers?: RawHeaders,
+			) => Promise<ArrayBuffer | null>;
+		} | null;
+		return (await base?.httpsAnswer?.(host, headers)) ?? null;
 	}
 
 	init(): Promise<void> {

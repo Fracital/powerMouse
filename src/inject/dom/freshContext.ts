@@ -1,7 +1,5 @@
 import { LazyWeakSet } from '../ownCollections';
 import type DocumentClient from './Client';
-import { appliedAttribute } from './modules/DOMHooks';
-import { hiddenMutation } from './modules/MutationObserver';
 
 /**
  * A fresh browsing context for a frame whose next document is of another
@@ -31,7 +29,13 @@ import { hiddenMutation } from './modules/MutationObserver';
  * page's `src` setter (DOMAttributes), its location setters (Location),
  * `window.open` by name (DOMHooks) and links and forms aimed at it
  * (IFrame); a redirect to another origin is answered by the worker with a
- * document that asks for the swap (src/freshFrame.ts).
+ * document that asks for the swap (src/freshFrame.ts). A frame or popup
+ * whose first document (its src, window.open's URL) is of another origin
+ * needs none: the page reads its about:blank as a stand-in from the start
+ * and nothing injects it (ContextModule pendingForeign), so the window the
+ * browser keeps for that document is as fresh as a new one. A document
+ * that still finds a client of another origin in its window leaves it
+ * here before any of it runs (DocumentClient keptFor, leaveKept).
  *
  * The element keeps every attribute the page sees: the page's `src` and
  * `srcdoc` stay what it wrote (their markers), the browser's `src` is the
@@ -41,7 +45,7 @@ import { hiddenMutation } from './modules/MutationObserver';
  */
 
 // taken when the bundle loads, before any of the page's script
-const natives = (() => {
+export const natives = (() => {
 	try {
 		const getter = (from: object, name: string) =>
 			Reflect.getOwnPropertyDescriptor(from, name)!.get!;
@@ -99,7 +103,7 @@ export function frameWindow(element: Element): Window | null {
 }
 
 const NativeWeakRef = WeakRef;
-const weakDeref = WeakRef.prototype.deref;
+export const weakDeref = WeakRef.prototype.deref;
 
 /**
  * What the browsing context group keeps of the fresh contexts its frames
@@ -109,7 +113,7 @@ const weakDeref = WeakRef.prototype.deref;
  * every navigation of an ad frame from one site to another. The refs are
  * made by the registry's realm: an object keeps the realm that made it.
  */
-function registry(client: DocumentClient) {
+export function registry(client: DocumentClient) {
 	const group = client.groupClient;
 	return (group.freshRegistry ??= {
 		frames: new WeakMap(),
@@ -126,77 +130,6 @@ function liveWindows(record: { windows: WeakRef<object>[] }): object[] {
 		if (window) live[live.length] = window;
 	}
 	return live;
-}
-
-/**
- * A frame was given a fresh context for `destination` (the page's URL): the
- * window it showed (`old`) stays the frame's to every realm that held it.
- * Natively that object is the frame's window still, now of another origin,
- * so the realm's `contentWindow`, `frames[i]` and `event.source` of the
- * frame are it (Context), and what may be done to a window of another
- * origin through it (a message, a location set, `closed`, `length`, focus)
- * is done to the frame's window (the access API, and the members below).
- * The rest of it is its old document, of the realm's own origin: nothing
- * of the next one.
- */
-export function recordFresh(
-	client: DocumentClient,
-	element: Element,
-	old: object | null,
-	destination: string,
-	wrap: (native: Function, hook: (args: unknown[]) => unknown) => Function,
-) {
-	const { frames, elements, weakRef } = registry(client);
-	let record = frames.get(element);
-	if (!record) frames.set(element, (record = { windows: [], destination }));
-	record.destination = destination;
-	if (!old || elements.has(old)) return;
-	const made = registry(client);
-	made.held = (made.held ?? 0) + 1;
-	// (the refs of windows nothing holds any more go)
-	const kept: WeakRef<object>[] = [];
-	for (const ref of record.windows)
-		if (Reflect.apply(weakDeref, ref, []) !== undefined)
-			kept[kept.length] = ref;
-	kept[kept.length] = Reflect.construct(weakRef, [old]) as WeakRef<object>;
-	record.windows = kept;
-	elements.set(old, element);
-	const live = () => frameWindow(element);
-	const own = (name: string) => {
-		try {
-			return Reflect.getOwnPropertyDescriptor(old, name);
-		} catch (error) {
-			return undefined;
-		}
-	};
-	const define = (name: string, descriptor: PropertyDescriptor) => {
-		try {
-			Reflect.defineProperty(old, name, descriptor);
-		} catch (error) {
-			// a window being torn down
-		}
-	};
-	for (const [name, read] of [
-		['closed', () => live()?.closed ?? true],
-		['length', () => live()?.length ?? 0],
-	] as const) {
-		const descriptor = own(name);
-		if (descriptor?.get && descriptor.configurable)
-			define(name, {
-				...descriptor,
-				get: wrap(descriptor.get, () => read()) as () => unknown,
-			});
-	}
-	for (const name of ['focus', 'blur'] as const) {
-		const descriptor = own(name);
-		if (typeof descriptor?.value === 'function' && descriptor.configurable)
-			define(name, {
-				...descriptor,
-				value: wrap(descriptor.value, () => {
-					live()?.[name]();
-				}),
-			});
-	}
 }
 
 /** the page's URL the fresh context of `element` is on its way to, else its src */
@@ -308,103 +241,4 @@ export function destinationURL(destination: object): string | null {
 	} catch (error) {
 		return null;
 	}
-}
-
-/**
- * Give `element` (an iframe or a frame) a fresh browsing context navigated
- * to `routed`, a route the page's navigation already made; `formData`, when
- * the navigation is a POST, is its body. With no route the context is left
- * on its initial about:blank, for a navigation the browser is about to make
- * by the frame's name. Whether it was done.
- */
-export function freshFrame(
-	element: Element,
-	routed: string | null,
-	formData?: FormData | null,
-): boolean {
-	if (!natives) return false;
-	const parent = Reflect.apply(natives.parentNode, element, []) as Node | null;
-	if (!parent) return false;
-	const next = Reflect.apply(natives.nextSibling, element, []) as Node | null;
-	const document = Reflect.apply(
-		natives.ownerDocument,
-		element,
-		[],
-	) as Document;
-	// a POST: a form of the frame's document, aimed at the new context by a
-	// name it is made with for this submission alone
-	const name =
-		formData && routed !== null
-			? `$stomp$fresh${Math.random().toString(36).slice(2)}`
-			: null;
-	const previous = Reflect.apply(natives.getAttribute, element, ['name']) as
-		string | null;
-	hiddenMutation(() => {
-		Reflect.apply(natives.removeChild, parent, [element]);
-		// the real src: the route, where the context starts (a GET); the
-		// page's own value is its marker's, which the hooks read back. A POST
-		// starts on about:blank and is submitted there
-		if (name || routed === null) {
-			if (Reflect.apply(natives.hasAttribute, element, ['src']))
-				Reflect.apply(natives.removeAttribute, element, ['src']);
-			if (name) Reflect.apply(natives.setAttribute, element, ['name', name]);
-			swappingFrames.add(element);
-		} else Reflect.apply(natives.setAttribute, element, ['src', routed]);
-		// a srcdoc would be the new context's document: the page's value is
-		// its marker's still
-		if (Reflect.apply(natives.hasAttribute, element, ['srcdoc']))
-			Reflect.apply(natives.removeAttribute, element, ['srcdoc']);
-		Reflect.apply(natives.insertBefore, parent, [element, next]);
-	});
-	// the src STomp wrote is the one its hooks applied: one at work on the
-	// element (the page's own src set) writes nothing over it, and a later
-	// run of them (the element moved) starts again from the page's
-	appliedAttribute(element, 'src', name ? null : routed);
-	appliedAttribute(element, 'srcdoc', null);
-	if (!name || !formData || routed === null) return true;
-	hiddenMutation(() => {
-		const form = Reflect.apply(natives.createElement, document, [
-			'form',
-		]) as HTMLFormElement;
-		Reflect.apply(natives.setAttribute, form, ['method', 'post']);
-		Reflect.apply(natives.setAttribute, form, ['action', routed]);
-		Reflect.apply(natives.setAttribute, form, ['target', name]);
-		let files = false;
-		for (const [key, value] of formData.entries()) {
-			const input = Reflect.apply(natives.createElement, document, [
-				typeof value === 'string' ? 'textarea' : 'input',
-			]) as HTMLTextAreaElement | HTMLInputElement;
-			Reflect.apply(natives.setAttribute, input, ['name', key]);
-			if (typeof value === 'string')
-				(input as HTMLTextAreaElement).value = value;
-			else {
-				files = true;
-				Reflect.apply(natives.setAttribute, input, ['type', 'file']);
-				const transfer = new DataTransfer();
-				transfer.items.add(value);
-				(input as HTMLInputElement).files = transfer.files;
-			}
-			Reflect.apply(natives.appendChild, form, [input]);
-		}
-		if (files)
-			Reflect.apply(natives.setAttribute, form, [
-				'enctype',
-				'multipart/form-data',
-			]);
-		Reflect.apply(
-			natives.appendChild,
-			document.body ?? document.documentElement,
-			[form],
-		);
-		Reflect.apply(natives.submit, form, []);
-		Reflect.apply(
-			natives.removeChild,
-			Reflect.apply(natives.parentNode, form, []) as Node,
-			[form],
-		);
-		if (previous === null)
-			Reflect.apply(natives.removeAttribute, element, ['name']);
-		else Reflect.apply(natives.setAttribute, element, ['name', previous]);
-	});
-	return true;
 }

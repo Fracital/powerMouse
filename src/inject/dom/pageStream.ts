@@ -323,14 +323,19 @@ export default class PageStream {
 	#copied(): string {
 		const holder = this.#holder;
 		const root = Reflect.apply(documentElement, this.#parse, []) as Element;
+		const open = this.#open;
+		this.copyingHead = isNamed(open[open.length - 1]!, 'head');
 		Reflect.apply(appendChild, root, [holder]);
 		try {
 			return this.#copy(holder, false);
 		} finally {
+			this.copyingHead = false;
 			Reflect.apply(removeChild, root, [holder]);
 			empty(holder);
 		}
 	}
+	/** the nodes being copied (the holder's) are the head's children */
+	copyingHead = false;
 	/**
 	 * The attributes a later <html> or <body> tag added to the root or the
 	 * body, as such a tag (the written document's parser adds them too)

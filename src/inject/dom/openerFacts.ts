@@ -13,12 +13,10 @@
 // frame's navigation).
 import type { NavigationHintMessage } from '../../transport/messages';
 import type DocumentClient from './Client';
+import { SAME_FRAME } from './links';
 import { initialBlank } from './modules/Context';
 
 type Facts = NonNullable<NavigationHintMessage['coop']>;
-
-/** targets that navigate a document's own frame or an ancestor of it */
-const SAME_FRAME = ['', '_self', '_top', '_parent', '_unfencedtop'];
 
 const clientOf = (
 	client: DocumentClient,

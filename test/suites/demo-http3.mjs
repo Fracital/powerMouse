@@ -15,9 +15,11 @@
 // (test/wisp-gate.mjs), refuses UDP to the fixture's name alone, with close
 // reason 0x03 on its first datagram as the production edges' name gate does: that one origin
 // falls back and HTTP/3 stays on for the session, where one refused stream
-// used to turn it off for every origin. Refused for eight names, as by the
-// first server, the transport takes the relay to have no UDP (docs/http3.md,
-// rule 5). An origin that takes the datagrams and never answers, and
+// used to turn it off for every origin. The first server's INFO names no
+// UDP extension (the demo's epoxy is in Wisp v2), so the transport takes
+// the relay to have no UDP at once and marks no origin broken for it
+// (docs/http3.md, rule 5; a v1 client learns it from eight refused names,
+// http3-fallback's). An origin that takes the datagrams and never answers, and
 // HTTP/3 that works beside a refused origin, are the http3-fallback suite's.
 import { spawn } from 'node:child_process';
 import { createSocket } from 'node:dgram';
@@ -223,21 +225,19 @@ ok(
 		JSON.stringify(result.got),
 	);
 	ok(
-		'and the transport says the UDP stream was refused and HTTP/3 is off for the origin, not for the relay',
+		'and the transport says HTTP/3 is off for the relay, whose v2 INFO names no UDP, and marks no origin broken for it',
 		result.said.some((line) =>
-			/refused UDP to mixed\.test.*HTTP\/3 off for https:\/\/mixed\.test/.test(
-				line,
-			),
-		) && !result.said.some((line) => line.includes('relays no UDP')),
+			/HTTP\/3 is off .*relays no UDP.*ExtensionsNotSupported/.test(line),
+		) && !result.said.some((line) => /refused UDP to /.test(line)),
 		JSON.stringify(stompSaid(result)),
 	);
 }
 {
-	// with the page's own: the eight of Http3Transport's RELAY_REFUSALS
+	// with the page's own: as many as Http3Transport's RELAY_REFUSALS
 	const labels = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
 	const result = await visit(PROXY, labels.map(other));
 	ok(
-		'refused for eight names, the transport takes the relay to have no UDP and says HTTP/3 is off for it',
+		'with eight names offering h3, the transport takes the relay to have no UDP and says HTTP/3 is off for it',
 		result.said.some((line) => /HTTP\/3 is off .*relays no UDP/.test(line)),
 		JSON.stringify(stompSaid(result)),
 	);

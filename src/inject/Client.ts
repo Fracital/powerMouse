@@ -733,17 +733,8 @@ export default class Client {
 			? this.trustedCheck(value, type, sink, refuse, convert, attribute)
 			: convert(value);
 	}
-	/**
-	 * Set by the TrustedTypes module: whether a javascript: URL whose code
-	 * is `page` may navigate as its rewrite `routed` (the code the browser
-	 * hands a default policy), under the page's Trusted Types; false after
-	 * `refuse` (the native navigation to the page's URL) where it may not
-	 */
-	trustedJavascript?: (
-		page: string,
-		routed: string,
-		refuse: () => unknown,
-	) => boolean;
+	/** set by the TrustedTypes module: the page's default policy's createScript, if any */
+	defaultScript?: () => unknown;
 	/** set by the TrustedTypes module: a script text of the inject's own the page's default policy is not asked of */
 	trustedApprove?: (value: string) => void;
 	/** how a policy of this context requires Trusted Types of its sinks (src/csp.ts trustedTypesRequired) */
@@ -787,6 +778,16 @@ export default class Client {
 		_sample: string,
 	): { error: Error | null } | null {
 		return null;
+	}
+	/**
+	 * Whether the page's policy refuses a handler or a javascript: URL's
+	 * code as it runs (the access API's `csp`, which the rewrite of each
+	 * calls first; `statements`: a javascript: URL of statements, which a
+	 * refusal throws out of). Overridden by the document client; the base
+	 * never enforces.
+	 */
+	codeRuns(_that: unknown, _code: string, _statements?: 1): boolean {
+		return false;
 	}
 	/**
 	 * The URL the shell of a document the page made (a blob:, data: or
@@ -1323,6 +1324,7 @@ export default class Client {
 		referrer: string,
 		blob?: Blob | string,
 		isolated?: boolean,
+		cross?: boolean,
 	): string | null {
 		if (markup.length > INLINE_DOCUMENT_MAX) return null;
 		// registered by a routed document of this controller (the worker takes
@@ -1340,6 +1342,9 @@ export default class Client {
 					url,
 					...(blob ? { blob } : {}),
 					...(isolated ? { isolated } : {}),
+					...((cross || (this as { crossCarried?: boolean }).crossCarried) && {
+						cross: true,
+					}),
 				},
 			})
 		)
@@ -1371,8 +1376,8 @@ export default class Client {
 	 * no-referrer policy its requests carry no Referer either, so the worker
 	 * would judge them as an opaque origin's. The nearest routed ancestor,
 	 * whose route names its real origin and partition, vouches for a token
-	 * this document makes, and this document's own client claims it
-	 * (SRCDOC_VOUCH, SRCDOC_CLAIM): each load binds itself, so a frame that
+	 * this document makes, and this document's own client claims it with a
+	 * request (SRCDOC_VOUCH, SRCDOC_CLAIM): each load binds itself, so a frame that
 	 * loads again is bound again. A document with no such ancestor, or an
 	 * opaque one (sandboxed without allow-same-origin), claims nothing, which
 	 * tells the worker not to wait for it.
@@ -1399,9 +1404,11 @@ export default class Client {
 		} catch (error) {
 			// an ancestor that cannot vouch: claims nothing
 		}
-		this.postToWorker({
-			[SRCDOC_CLAIM]: { directory: this.directory, token },
-		});
+		// a request of its own: the worker reads its client from it (WebKit
+		// reports a srcdoc document's message as its parent's client's)
+		this.nativeFetch(`${this.directory}${SRCDOC_CLAIM}/${token}`, {
+			mode: 'no-cors',
+		}).catch(() => {});
 	}
 
 	/**
@@ -1701,10 +1708,7 @@ export default class Client {
 				transport,
 			]);
 		} catch (error) {
-			console.warn(
-				'Stomp: could not provision a transport for a shared worker',
-				error,
-			);
+			console.warn(`${NO_TRANSPORT}shared worker`, error);
 		}
 	}
 	provisionWorkerTransport(worker: Worker, script?: string) {
@@ -1720,10 +1724,7 @@ export default class Client {
 			transfer.push(this.requestTransportPort(script));
 			message[TRANSPORT_INIT] = true;
 		} catch (error) {
-			console.warn(
-				'Stomp: could not provision a transport for a worker',
-				error,
-			);
+			console.warn(`${NO_TRANSPORT}worker`, error);
 		}
 		let modules: HandedModules | null = null;
 		if (this.wasmRewriter)
@@ -1754,10 +1755,7 @@ export default class Client {
 					transfer,
 				);
 			} catch (failed) {
-				console.warn(
-					'Stomp: could not provision a transport for a worker',
-					failed,
-				);
+				console.warn(`${NO_TRANSPORT}worker`, failed);
 			}
 		}
 	}
@@ -1919,6 +1917,8 @@ export default class Client {
 
 /** how much of the code a violation's sample shows (measured) */
 const SAMPLE_LENGTH = 40;
+/** the start of the warning for a worker whose transport could not be handed over */
+const NO_TRANSPORT = 'Stomp: could not provision a transport for a ';
 
 export function createClientFactory<T>(
 	Client: {

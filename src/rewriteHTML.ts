@@ -1,7 +1,7 @@
 import type GenericCodec from './Codecs';
 import { Config } from './config';
 import type { ScriptFacts } from './csp';
-import { helperNames } from './helperNames';
+import { accessExpression, helperNames } from './helperNames';
 import type { modifyHTML } from './htmlShell';
 import { rewriter } from './rewriters';
 import { createDataURI, parseDataURI, routeURL } from './routeURL';
@@ -22,16 +22,14 @@ import type { modifyXML } from './xmlShell';
  * same trust boundary as every rewriting decision.
  */
 /**
- * The rewritten expression of a javascript: URL body that is one expression
- * (`'<p>markup'`, `void 0`, `f()`), or null for statements, several
- * expressions or anything that does not parse: those keep their own
- * completion value as written.
+ * The expression of the rewrite of a javascript: URL body that is one
+ * expression (`'<p>markup'`, `void 0`, `f()`), or null where the rewrite is
+ * not one: statements, several expressions and anything that does not
+ * parse keep their own completion value as written.
  */
-function javascriptExpression(body: string, rewritten: string): string | null {
-	const single = rewriter('singleExpression');
-	if (!single(body)) return null;
+function javascriptExpression(rewritten: string): string | null {
 	const expression = rewritten.trim().replace(/;$/, '');
-	return single(`(${expression})`) ? expression : null;
+	return rewriter('singleExpression')(`(${expression})`) ? expression : null;
 }
 
 /**
@@ -58,6 +56,13 @@ export function routeHTML(
 	config: Config,
 	form = false,
 	nested: string | false = false,
+	/**
+	 * a javascript: URL the policies of the document that navigates to it
+	 * refuse (src/inject/dom/policyChecks.ts jsStarts): it only judges its
+	 * code, which never compiles, so none of its declarations is made, as
+	 * natively (a script that throws has declared its let)
+	 */
+	judged = false,
 ) {
 	if (resource.url.protocol === 'data:') {
 		const { mime, data, attributes } = parseDataURI(
@@ -106,8 +111,8 @@ export function routeHTML(
 		// when it rewrites the URL, otherwise they read as rewritten
 		const kept = { embed: false };
 		const modifyJS = rewriter('modifyJS');
-		const rewritten = modifyJS(body, url, config, 'generic', '', kept);
-		const client = JSON.stringify(helperNames(config).client);
+		const names = helperNames(config);
+		const client = JSON.stringify(names.client);
 		// The body runs in the window it navigates: in a fresh iframe that is
 		// the frame's initial about:blank, which nothing injected, and the
 		// rewritten code would throw on the access helper. The parent's client
@@ -122,12 +127,34 @@ export function routeHTML(
 		// its scripts raw. For a single-expression body the string goes through
 		// the client (the frame's own, else its parent's), which wraps it in
 		// the shell like a blob document; other values pass through untouched.
-		const expression = javascriptExpression(body, rewritten);
+		// (the code's positions read as its own: the map of its rewrite, kept
+		// by the script it is a part of, rewriteJS.ts ScriptSource.apart)
+		//
+		// The page's policy judges the code as it runs, as Chrome judges a
+		// javascript: URL as its navigation starts and runs, and its Trusted
+		// Types: the access API's `csp` (src/inject/dom/Client.ts codeRuns),
+		// handed the URL as the page wrote it, decoded (the violation's
+		// sample, the default policy's value; percent-encoded here, the
+		// browser decodes the URL before it runs it). Refused, nothing of the
+		// code runs
+		const csp = `${accessExpression(names.access)}.csp(0,${encodeURIComponent(JSON.stringify(`javascript:${body}`))}`;
+		const refused = `${csp})`;
+		if (judged) return `javascript:void (${inject},${refused})`;
+		const head = `((r,c)=>typeof r==='string'&&c?c.javascriptDocument(r,document.URL):r)((${inject},${refused}?void 0:(`;
+		const tail = `)),self[${client}]||(()=>{try{return ${creator}}catch(e){}})())`;
+		const expression = rewriter('singleExpression')(body)
+			? javascriptExpression(
+					modifyJS(body, url, config, 'generic', '', { ...kept, head, tail }),
+				)
+			: null;
 		if (expression === null)
 			// statements: injected after their directive prologue, so a
-			// 'use strict' stays one
-			return `javascript:${modifyJS(body, url, config, 'generic', `void (${inject});`, kept)}`;
-		return `javascript:((r,c)=>typeof r==='string'&&c?c.javascriptDocument(r,document.URL):r)((${inject},(${expression})),self[${client}]||(()=>{try{return ${creator}}catch(e){}})())`;
+			// 'use strict' stays one, and the rest stays the script's own (its
+			// let and const the window's, its value the URL's): refused, `csp`
+			// throws what the inject's listener takes before any of the page's
+			// (DocumentClient codeRefusal)
+			return `javascript:${modifyJS(body, url, config, 'generic', `void (${inject});${csp},1);`, kept)}`;
+		return `javascript:${head}${expression}${tail}`;
 	}
 
 	return routeURL(

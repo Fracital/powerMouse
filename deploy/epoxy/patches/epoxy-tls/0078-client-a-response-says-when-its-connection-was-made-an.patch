@@ -1,0 +1,378 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Thu, 19 Nov 2026 06:30:00 -0500
+Subject: [PATCH] client: a response says when its connection was made and how
+ many bytes its body came as
+
+Each response carries `connection`, in this realm's performance.now(): over
+a kept connection `{ reused: true, requestStart }`; over a fresh one
+`connectStart` (the wisp stream asked for), `secureStart` (the ClientHello
+written), `connectEnd` (the handshake done), `requestStart` and, when the
+connection waited on our HTTPS-record lookup for ECH, `dnsStart` and
+`dnsEnd`. The connector puts the times in `Connected::extra`, which every
+response over the connection gets. And `encoded.bytes` counts the body's
+bytes before a Content-Encoding is decoded, the whole body's once its
+stream has ended: a host can tell a page's resource timing what Chrome
+does (connectStart equal to fetchStart on a kept connection, a TLS
+handshake on a new one, an encodedBodySize smaller than the decoded one).
+---
+diff --git a/client/src/lib.rs b/client/src/lib.rs
+--- a/client/src/lib.rs
++++ b/client/src/lib.rs
+@@ -232,6 +232,53 @@
+ 	Redirect((Response<Incoming>, http::Request<StreamingBody>)),
+ }
+ 
++/// When the request that a response answers was handed to the client
++/// (`performance.now()`), in the response's extensions
++#[derive(Clone, Copy)]
++struct RequestAt(f64);
++
++/// A response's connection as a browser's resource timing tells it, in this
++/// realm's `performance.now()`: `{ reused: true, requestStart }` over a kept
++/// connection (an HTTP/2 one still being made when the request came counts
++/// as kept, its `requestStart` when it was up); over a fresh one `connectStart`, `secureStart` (TLS),
++/// `connectEnd`, `requestStart` and, when the connection waited on a lookup
++/// of ours (the HTTPS record, for ECH), `dnsStart` and `dnsEnd`. The wisp
++/// server looks up the addresses and connects TCP: those are inside the
++/// time from `connectStart` to the server's first answer to the
++/// ClientHello.
++fn connection_timing(response: &Response<Incoming>) -> Object {
++	let out = Object::new();
++	let set = |key: &str, at: f64| object_set(&out, key, at.into());
++	let reused = response.extensions().get::<ReusedConnection>().is_some();
++	object_set(&out, "reused", reused.into());
++	let asked = response.extensions().get::<RequestAt>().map(|at| at.0);
++	let timing = response.extensions().get::<stream_provider::ConnectTiming>();
++	match timing {
++		Some(timing) if !reused => {
++			if let (Some(start), Some(end)) = (timing.dns_start, timing.dns_end) {
++				set("dnsStart", start);
++				set("dnsEnd", end);
++			}
++			set("connectStart", timing.connect_start);
++			if let Some(at) = timing.secure_start {
++				set("secureStart", at);
++			}
++			set("connectEnd", timing.connect_end);
++			// the head goes out as soon as the connection is up
++			set("requestStart", asked.map_or(timing.connect_end, |at| at.max(timing.connect_end)));
++		}
++		// a kept connection takes the head at once; an HTTP/2 one another
++		// request was still making (the pool hands it out shared) takes it
++		// once it is up
++		_ => {
++			if let Some(at) = asked {
++				set("requestStart", timing.map_or(at, |timing| at.max(timing.connect_end)));
++			}
++		}
++	}
++	out
++}
++
+ /// Chrome's kMaxRetryAttempts: how many times a refused HTTP/2 stream is
+ /// sent again (net/http/http_network_transaction.cc HasExceededMaxRetries)
+ const MAX_REFUSED_RESENDS: usize = 2;
+@@ -677,7 +724,11 @@
+ 				None
+ 			};
+ 
+-			let resp = self.client.request(req).await;
++			let at = stream_provider::now();
++			let mut resp = self.client.request(req).await;
++			if let Ok(resp) = &mut resp {
++				resp.extensions_mut().insert(RequestAt(at));
++			}
+ 			match again {
+ 				Some(again) if should_resend(&resp, resends) => {
+ 					resends += 1;
+@@ -889,6 +940,21 @@
+ 			_ => "",
+ 		};
+ 
++		let connection = connection_timing(&response);
++		// the body's bytes as they came, before a Content-Encoding is
++		// decoded (a browser's encodedBodySize): `bytes` grows as they
++		// arrive and is the whole body's once the stream has ended
++		let encoded = Object::new();
++		object_set(&encoded, "bytes", 0.into());
++		let counted = {
++			let encoded = encoded.clone();
++			let mut total = 0f64;
++			move |chunk: &Bytes| {
++				total += chunk.len() as f64;
++				object_set(&encoded, "bytes", total.into());
++			}
++		};
++
+ 		let response_builder = ResponseInit::new();
+ 		response_builder.set_headers(&response_headers);
+ 		response_builder.set_status(response.status().as_u16());
+@@ -930,7 +996,7 @@
+ 						compression
+ 					};
+ 
+-					let response_body = BodyDataStream::new(response.into_body()).map_err(std::io::Error::other).into_async_read();
++					let response_body = BodyDataStream::new(response.into_body()).inspect_ok(counted).map_err(std::io::Error::other).into_async_read();
+ 					let decompressed_body = match compression {
+ 						Some(alg) => Either::Left(match alg {
+ 							EpoxyCompression::Gzip => {
+@@ -961,7 +1027,7 @@
+ 				};
+ 			} else {
+ 				let response_stream = if !is_null_body(response.status().as_u16()) {
+-					let response_body = BodyDataStream::new(response.into_body()).map_err(std::io::Error::other).into_async_read();
++					let response_body = BodyDataStream::new(response.into_body()).inspect_ok(counted).map_err(std::io::Error::other).into_async_read();
+ 					Some(asyncread_to_readablestream(Box::pin(response_body), self.buffer_size))
+ 				} else {
+ 					None
+@@ -978,6 +1044,8 @@
+ 		utils::define_property(&resp, "url", response_uri.to_string().into());
+ 		utils::define_property(&resp, "redirected", redirected.into());
+ 		utils::define_property(&resp, "httpVersion", http_version.into());
++		utils::define_property(&resp, "connection", connection.into());
++		utils::define_property(&resp, "encoded", encoded.into());
+ 
+ 		let raw_headers = Object::new();
+ 		for (k, v) in &response_headers_raw {
+diff --git a/client/src/stream_provider.rs b/client/src/stream_provider.rs
+--- a/client/src/stream_provider.rs
++++ b/client/src/stream_provider.rs
+@@ -68,6 +68,34 @@
+ 		.unwrap_or(host)
+ }
+ 
++#[wasm_bindgen::prelude::wasm_bindgen]
++extern "C" {
++	#[wasm_bindgen(js_namespace = performance, js_name = now)]
++	fn performance_now() -> f64;
++}
++
++/// This realm's `performance.now()`, the clock a connection's steps are
++/// told in
++pub fn now() -> f64 {
++	performance_now()
++}
++
++/// When a connection's steps happened, in this realm's `performance.now()`,
++/// as a browser's resource timing tells them: a lookup the connection waited
++/// on (the HTTPS record, for ECH: the addresses are the wisp server's to
++/// look up), the wisp stream asked for, the ClientHello written and the
++/// handshake done. Every response over the connection carries it in its
++/// extensions (`Connected::extra`); one over a kept connection also has
++/// hyper-util's `ReusedConnection`.
++#[derive(Clone, Copy, Debug, Default)]
++pub struct ConnectTiming {
++	pub dns_start: Option<f64>,
++	pub dns_end: Option<f64>,
++	pub connect_start: f64,
++	pub secure_start: Option<f64>,
++	pub connect_end: f64,
++}
++
+ pub struct StreamProvider {
+ 	wisp_generator: Arc<ProviderWispTransportGenerator>,
+ 
+@@ -367,6 +395,30 @@
+ 		port: u16,
+ 		alpn: TlsAlpn,
+ 	) -> Result<ProviderTlsAsyncRW, EpoxyError> {
++		self.get_tls_stream_timed(host, port, alpn, &mut ConnectTiming::default())
++			.await
++	}
++
++	/// `get_tls_stream`, telling `timing` when each step happened
++	pub async fn get_tls_stream_timed(
++		&self,
++		host: String,
++		port: u16,
++		alpn: TlsAlpn,
++		timing: &mut ConnectTiming,
++	) -> Result<ProviderTlsAsyncRW, EpoxyError> {
++		let ret = self.tls_stream(host, port, alpn, timing).await;
++		timing.connect_end = now();
++		ret
++	}
++
++	async fn tls_stream(
++		&self,
++		host: String,
++		port: u16,
++		alpn: TlsAlpn,
++		timing: &mut ConnectTiming,
++	) -> Result<ProviderTlsAsyncRW, EpoxyError> {
+ 		let config = match alpn {
+ 			TlsAlpn::Http => &self.h2_config,
+ 			TlsAlpn::WebSocket => &self.ws_config,
+@@ -378,25 +430,33 @@
+ 		// runs while the wisp stream opens
+ 		#[cfg(feature = "full")]
+ 		{
++			let lookup = now();
+ 			let ech = match alpn {
+ 				TlsAlpn::None => None,
+-				_ => Some(self.ech_config(&host)),
++				_ => self.ech_config(&host),
+ 			};
+-			let (stream, ech) = futures_util::future::join(
++			timing.connect_start = now();
++			if ech.is_some() {
++				timing.dns_start = Some(lookup);
++			}
++			let (stream, (ech, looked_up)) = futures_util::future::join(
+ 				self.get_asyncread(StreamType::Tcp, host.clone(), port),
+ 				async move {
+ 					match ech {
+-						Some(ech) => ech.await,
+-						None => None,
++						Some(ech) => (ech.await, Some(now())),
++						None => (None, None),
+ 					}
+ 				},
+ 			)
+ 			.await;
++			timing.dns_end = looked_up;
+ 			let Some(ech) = ech else {
+-				return self.handshake(stream?, &host, config.clone()).await;
++				return self
++					.handshake(stream?, &host, config.clone(), timing)
++					.await;
+ 			};
+ 			let ret = self
+-				.handshake(stream?, &host, with_ech(config, ech))
++				.handshake(stream?, &host, with_ech(config, ech), timing)
+ 				.await;
+ 			// a server that rejects ECH sends configs to retry with once
+ 			// (Chrome does, then fails), or none when ECH is off there, and
+@@ -429,23 +489,28 @@
+ 						EchRejection::Retry(ech) => with_ech(config, ech),
+ 						EchRejection::Disabled => config.clone(),
+ 					};
+-					self.handshake(stream, &host, config).await
++					self.handshake(stream, &host, config, timing).await
+ 				}
+ 			}
+ 		}
+ 		#[cfg(not(feature = "full"))]
+ 		{
++			timing.connect_start = now();
+ 			let stream = self
+ 				.get_asyncread(StreamType::Tcp, host.clone(), port)
+ 				.await?;
+-			self.handshake(stream, &host, config.clone()).await
++			self.handshake(stream, &host, config.clone(), timing).await
+ 		}
+ 	}
+ 
+ 	/// The host's ECH config list from `ech_resolver`, when it gives one
+-	/// this build can use
++	/// this build can use; None when no lookup was asked for (no resolver,
++	/// or an address, which has no HTTPS record)
+ 	#[cfg(feature = "full")]
+-	fn ech_config(&self, host: &str) -> impl Future<Output = Option<EchConfig>> + use<> {
++	fn ech_config(
++		&self,
++		host: &str,
++	) -> Option<impl Future<Output = Option<EchConfig>> + use<>> {
+ 		use futures_rustls::rustls::{
+ 			crypto::ring::hpke::ALL_SUPPORTED_SUITES, pki_types::EchConfigListBytes,
+ 		};
+@@ -455,13 +520,13 @@
+ 				resolver.call1(&JsValue::NULL, &JsValue::from_str(host)).ok()
+ 			}
+ 			_ => None,
+-		};
+-		let call = call.map(|x| SendWrapper::new(JsFuture::from(Promise::resolve(&x))));
+-		async move {
+-			let list = call?.await.ok()?;
++		}?;
++		let call = SendWrapper::new(JsFuture::from(Promise::resolve(&call)));
++		Some(async move {
++			let list = call.await.ok()?;
+ 			let list = list.dyn_into::<Uint8Array>().ok()?.to_vec();
+ 			EchConfig::new(EchConfigListBytes::from(list), ALL_SUPPORTED_SUITES).ok()
+-		}
++		})
+ 	}
+ 
+ 	async fn handshake(
+@@ -469,9 +534,12 @@
+ 		stream: ProviderUnencryptedAsyncRW,
+ 		host: &str,
+ 		config: Arc<ClientConfig>,
++		timing: &mut ConnectTiming,
+ 	) -> Result<ProviderTlsAsyncRW, EpoxyError> {
+ 		let connector = TlsConnector::from(config);
+ 		let name = ServerName::try_from(bare_host(host).to_string())?;
++		// (the first ClientHello's, when ECH makes it connect again)
++		timing.secure_start.get_or_insert_with(now);
+ 		let ret = connector.connect(name, stream).into_fallible().await;
+ 		match ret {
+ 			Ok(stream) => {
+@@ -511,6 +579,7 @@
+ 	pub struct HyperIo {
+ 		#[pin]
+ 		inner: ProviderAsyncRW,
++		timing: ConnectTiming,
+ 	}
+ }
+ 
+@@ -570,7 +639,8 @@
+ 
+ impl Connection for HyperIo {
+ 	fn connected(&self) -> Connected {
+-		let conn = Connected::new();
++		// every response over the connection says when it was made
++		let conn = Connected::new().extra(self.timing);
+ 		if let Either::Left(tls_stream) = &self.inner {
+ 			if tls_stream.h2_negotiated {
+ 				conn.negotiated_h2()
+@@ -598,24 +668,27 @@
+ 			},
+ 			Ok,
+ 		)?;
+-		Ok(HyperIo {
+-			inner: match scheme {
+-				"https" => Either::Left(
+-					self.0
+-						.get_tls_stream(host, port, TlsAlpn::Http)
+-						.await?,
+-				),
+-				"wss" => Either::Left(
+-					self.0
+-						.get_tls_stream(host, port, TlsAlpn::WebSocket)
+-						.await?,
+-				),
+-				"http" | "ws" => {
+-					Either::Right(self.0.get_asyncread(StreamType::Tcp, host, port).await?)
+-				}
+-				_ => return Err(EpoxyError::InvalidUrlScheme(Some(scheme.to_string()))),
+-			},
+-		})
++		let mut timing = ConnectTiming::default();
++		let inner = match scheme {
++			"https" => Either::Left(
++				self.0
++					.get_tls_stream_timed(host, port, TlsAlpn::Http, &mut timing)
++					.await?,
++			),
++			"wss" => Either::Left(
++				self.0
++					.get_tls_stream_timed(host, port, TlsAlpn::WebSocket, &mut timing)
++					.await?,
++			),
++			"http" | "ws" => {
++				timing.connect_start = now();
++				let stream = self.0.get_asyncread(StreamType::Tcp, host, port).await?;
++				timing.connect_end = now();
++				Either::Right(stream)
++			}
++			_ => return Err(EpoxyError::InvalidUrlScheme(Some(scheme.to_string()))),
++		};
++		Ok(HyperIo { inner, timing })
+ 	}
+ }
+ 
+-- 
+2.54.0
+

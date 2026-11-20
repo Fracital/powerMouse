@@ -9,7 +9,10 @@
 // By default (the option left out) the blocker is on with the default lists,
 // which are asked of the transport and of nothing else; lists that cannot be
 // had and a module the host does not serve leave the proxy working without
-// it, said once on the console, and no navigation waits for the lists.
+// it, said once on the console. With no engine stored, a navigation waits
+// for the directory's engine snapshot (a second at the most) and not for the
+// lists, which replace it once fetched and built; with no snapshot either, it
+// does not wait.
 //
 // On: a blocked request never reaches the fixture server (its hit counters
 // stay where they were) and is a network error to the page, as a content
@@ -28,8 +31,47 @@
 // the browser could not connect does (measured in the suite, natively) and
 // never reaches the fixture's /ws-echo, from a window, a dedicated worker,
 // a shared worker and a service worker alike.
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { done, FIXTURE, HOST, launch, ok, PROXY, sleep } from '../lib.mjs';
+import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
+import { done, FIXTURE, HOST, launch, ok, OUT, PROXY, sleep } from '../lib.mjs';
+
+// an engine snapshot of a fixture list (adblock-yt-spa.txt), compiled and
+// serialized as scripts/adblock-snapshot.mjs makes the directory's, and not
+// gzipped (as a host that answered the file with Content-Encoding: gzip
+// hands it to the worker): the controller is told it is the directory's
+// (assets.adblockSnapshot), and the fixture serves it (/out/)
+const root = fileURLToPath(new URL('../../', import.meta.url));
+mkdirSync(OUT, { recursive: true });
+writeFileSync(
+	`${OUT}adblock-snapshot-entry.mjs`,
+	`export { BlockerInstance, OP, FLAG_TRUSTED } from ${JSON.stringify(`${root}src/blocker/instance.ts`)};\n` +
+		`export { compileModule } from ${JSON.stringify(`${root}src/wasm/module.ts`)};\n`,
+);
+await build({
+	entryPoints: [`${OUT}adblock-snapshot-entry.mjs`],
+	bundle: true,
+	format: 'esm',
+	platform: 'node',
+	target: 'es2022',
+	outfile: `${OUT}adblock-snapshot-engine.mjs`,
+	logLevel: 'silent',
+});
+{
+	const { BlockerInstance, OP, FLAG_TRUSTED, compileModule } = await import(
+		`${OUT}adblock-snapshot-engine.mjs`
+	);
+	const builder = new BlockerInstance(
+		await compileModule(readFileSync(`${root}dist/blocker.wasm`)),
+	);
+	builder.call(
+		readFileSync(`${root}test/pages/adblock-yt-spa.txt`, 'utf8'),
+		OP.addList | FLAG_TRUSTED,
+	);
+	builder.call('', OP.build);
+	writeFileSync(`${OUT}adblock-snapshot-spa.dat`, builder.bytes());
+}
 
 const browser = await launch();
 const page = await browser.newPage();
@@ -43,6 +85,18 @@ page.on('console', (message) =>
 const contextRequested = [];
 page.context().on('request', (request) => contextRequested.push(request.url()));
 const policies = [];
+// what the directory's engine snapshot was answered with, by its URL
+const snapshotAnswers = [];
+page.context().on('response', (response) => {
+	if (/\/adblock-snapshot\.dat/.test(response.url()))
+		snapshotAnswers.push([
+			response.url(),
+			response.status(),
+			response.headers()['cache-control'],
+			response.headers()['content-type'],
+			response.headers()['content-encoding'] ?? null,
+		]);
+});
 page.on('response', (response) => {
 	const policy = response.headers()['content-security-policy'];
 	if (policy) policies.push(policy);
@@ -672,6 +726,8 @@ const everything = (report) =>
 const said = (type, pattern) =>
 	consoleLines.filter(([kind, text]) => kind === type && pattern.test(text));
 const unservedAssets = { blocker: 'adblock-unserved.wasm' };
+/** a directory that does not serve the engine snapshot (a host that copies the files it always copied) */
+const noSnapshot = { adblockSnapshot: 'adblock-unserved.dat' };
 
 // a host that does not serve the module (one that took the package's new
 // version and copies the files it always copied)
@@ -709,16 +765,20 @@ ok(
 	JSON.stringify([consoleLines, refused.config.adblock, refused.reports]),
 );
 
-// no list to be had (the resources come first, and without them nothing is
-// built): the page loads unfiltered, at once
+// no list to be had and no snapshot (the resources come first, and without
+// them nothing is built): the page loads unfiltered, at once
 const workerLines = [];
 for (const worker of page.context().serviceWorkers())
 	worker.on('console', (message) =>
 		workerLines.push([message.type(), message.text()]),
 	);
-const listless = await visit(undefined, { page: site }, { mirror: {} });
+const listless = await visit(
+	undefined,
+	{ page: site },
+	{ mirror: {}, assets: noSnapshot },
+);
 ok(
-	'default, no list to be had: asked of the transport, and the page loads unfiltered without a wait',
+	'default, no list to be had and no snapshot: asked of the transport, and the page loads unfiltered without a wait',
 	listless.config.adblock === true &&
 		listless.asked.includes(EASYLIST) &&
 		!listless.asked.includes(RESOURCES) &&
@@ -727,9 +787,13 @@ ok(
 	JSON.stringify([listless.asked, listless.ms, listless.reports]),
 );
 await sleep(300);
-const listlessAgain = await visit(undefined, { page: site }, { mirror: {} });
+const listlessAgain = await visit(
+	undefined,
+	{ page: site },
+	{ mirror: {}, assets: noSnapshot },
+);
 ok(
-	'default, no list to be had: the next controller tries again, and the worker says once that the blocker is off',
+	'default, no list to be had and no snapshot: the next controller tries again, and the worker says once that the blocker is off',
 	listlessAgain.asked.includes(EASYLIST) &&
 		workerLines.filter(
 			([kind, text]) =>
@@ -740,11 +804,51 @@ ok(
 	JSON.stringify([listlessAgain.asked, workerLines]),
 );
 
-// the lists three seconds away each (the resources, then the lists): the
-// first navigation does not wait for them (one asked for waits five
-// seconds), and the engine serves from the moment it is built
+// no list to be had, the directory's snapshot served (assets/adblock-
+// snapshot.dat.gz, uBlock Origin's lists, gzipped): the worker reads it from
+// its own origin by its hash, as the bytes it is (no Content-Encoding), and
+// the host lets the browser keep it for good; the worker gunzips it, the
+// page waits for it alone, and the snapshot serves (nothing says the blocker
+// is off, as it would once the lists failed with no snapshot loaded)
+const snapshotted = await visit(undefined, { page: site }, { mirror: {} });
+console.log('INFO snapshot:', JSON.stringify(snapshotted.reports.page));
+ok(
+	"default, no list to be had: the directory's gzipped snapshot is read from its own origin by its hash, as bytes, kept for good, and the page does not wait for the lists",
+	snapshotted.config.adblock === true &&
+		snapshotted.asked.includes(EASYLIST) &&
+		snapshotted.reports.page?.ran?.includes('allowed') &&
+		snapshotted.ms.page < 4000 &&
+		snapshotAnswers.length >= 1 &&
+		snapshotAnswers.every(
+			([url, status, cache, type, encoding]) =>
+				/\/stomp\/adblock-snapshot\.dat\.gz\?[0-9a-f]{16}$/.test(url) &&
+				url.startsWith(PROXY) &&
+				status === 200 &&
+				/immutable/.test(cache ?? '') &&
+				type === 'application/octet-stream' &&
+				encoding === null,
+		),
+	JSON.stringify([snapshotted.ms, snapshotAnswers, snapshotted.reports]),
+);
+ok(
+	'default, no list to be had: the snapshot is gunzipped and serves, and nothing more says the blocker is off',
+	workerLines.filter(([, text]) => /content blocker is off/.test(text))
+		.length === 1 && !workerLines.some(([kind]) => kind === 'warning'),
+	JSON.stringify(workerLines),
+);
+
+// the lists a second and a half away each, with no engine stored yet (a
+// first visit), and the directory's snapshot one of a fixture list:
+// the first navigation waits for the snapshot (a second at the most) and not
+// for the lists, whose engine replaces it once built. A page that loaded
+// before an engine served runs none of the scriptlets for as long as it is
+// open, and a YouTube watch page is open for every video after it: a related
+// video is the player's fetch of the next one's data (adblock-yt-spa.html,
+// the player's fetch taken from a frame of its own), so its pre-roll ads
+// played on every in-app navigation
 const mirror = {
 	[`${UBLOCK}filters.min.txt`]: `${FIXTURE}pages/adblock-list.txt`,
+	[`${UBLOCK}quick-fixes.min.txt`]: `${FIXTURE}pages/adblock-yt-spa.txt`,
 	[EASYLIST]: `${FIXTURE}pages/adblock-untrusted.txt`,
 };
 const listServers = (url) =>
@@ -755,16 +859,30 @@ const beforeDefault = await hits();
 consoleLines.length = 0;
 const first = await visit(
 	undefined,
-	{ page: site },
-	{ mirror, delay: 3000, until: 'blocked' },
+	{ spa: `${FIXTURE}pages/adblock-yt-spa.html`, page: site },
+	{
+		mirror,
+		delay: 1500,
+		assets: { adblockSnapshot: `${FIXTURE}out/adblock-snapshot-spa.dat` },
+		until: 'blocked',
+	},
 );
 const built = first.reports.built;
 ok(
-	'default: the first navigation does not wait for the lists and loads unfiltered',
+	"default: the first navigation waits for the snapshot, not the lists, and the player's next video comes without its ad slots (trusted-prevent-dom-bypass, trusted-rpfr)",
 	first.config.adblock === true &&
-		everything(first.reports.page) &&
-		first.ms.page < 4000,
-	JSON.stringify([first.ms, first.reports]),
+		first.reports.spa?.grabbed === true &&
+		JSON.stringify(first.reports.spa.keys) ===
+			JSON.stringify([
+				'playabilityStatus',
+				'playerAds',
+				'adPlacements',
+				'no_ads',
+				'videoDetails',
+			]) &&
+		first.reports.spa.video === 'stompNext' &&
+		first.ms.spa < 2000,
+	JSON.stringify([first.ms, first.reports.spa]),
 );
 const afterDefault = await hits();
 ok(

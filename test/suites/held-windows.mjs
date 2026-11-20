@@ -19,6 +19,7 @@ import {
 	ok,
 	openDemo,
 	PROXY,
+	RUN,
 	sleep,
 	submitLanding,
 } from '../lib.mjs';
@@ -64,7 +65,7 @@ for (const name of SCENARIOS) {
 	const page = await browser.newPage();
 	await page.goto(target);
 	native[name] = await page
-		.evaluate(([name, tag]) => window.__run(name, tag), [name, 'native'])
+		.evaluate(([name, tag]) => window.__run(name, tag), [name, `native-${RUN}`])
 		.catch((error) => ({ error: String(error).split('\n')[0] }));
 	await page.close();
 	ok(`natively: ${name}`, !native[name]?.error, JSON.stringify(native[name]));
@@ -84,7 +85,7 @@ for (const [mode, base] of [
 			? await frame
 					.evaluate(
 						([name, tag]) => window.__run(name, tag),
-						[name, `${mode}-${++serial}`],
+						[name, `${mode}-${RUN}-${++serial}`],
 					)
 					.catch((error) => ({ error: String(error).split('\n')[0] }))
 			: { error: 'no page' };

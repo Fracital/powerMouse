@@ -60,6 +60,15 @@ export const OUT = fileURLToPath(new URL('./out/', import.meta.url));
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
+ * This run's own tag (letters and digits), for the keys a suite files what
+ * the fixture saw under (its /sop/log, /coi/log, /hdr/log): those stores
+ * are the runner process's, one for every suite of it, and a suite that
+ * failed runs again (test/run.mjs RERUN) beside what its first run left
+ * there
+ */
+export const RUN = `${process.pid.toString(36)}${Date.now().toString(36)}`;
+
+/**
  * The controller options of the run's rewriter, for a suite that builds its
  * own controllers. The wasm core is the only rewriter now, selected with no
  * option, so this is empty; it is kept (spread into a controller's options)

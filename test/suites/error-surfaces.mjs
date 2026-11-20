@@ -14,9 +14,15 @@
 // and the suite compares every case with the page loaded natively, along with
 // the uncaught errors the console shows. Both demo modes.
 //
-// Source positions (line and column numbers) are compared apart: the
-// rewriter regenerates a script's code, so they differ for every rewritten
-// script (a known gap, printed as a measurement). The proxy does not forward
+// Source positions (line and column numbers) are compared apart, and each
+// (a frame, an eval's origin, an error event's place) stands where
+// natively. In a script file of the page's
+// (test/pages/error-surfaces-columns.js has a case of code the rewriter
+// writes around) the service worker's rewrite of the file carries the map
+// of itself to the page's text, which the stack's formatter reads; in code
+// the inject rewrote (a script of the page's markup, eval, new Function, a
+// string timer) the map its rewrite handed over, found by the hash of the
+// script V8 ran. The few places EXPECTED_PLACES lists stand elsewhere. The proxy does not forward
 // a page's CSP, so a violation never fires through it: measured, not
 // compared. A resource the page's markup loads is listed twice through the
 // proxy (Chrome fetches what its preload scanner found in a written document
@@ -70,18 +76,36 @@ const positionless = (value) =>
 		if (typeof field === 'string') return field.replace(/:\d+:\d+\b/g, ':L:C');
 		return field;
 	});
-const positions = (value) => {
+// each place a case names, in order: a stack frame's or an eval origin's
+// `url:line:column`, an error event's filename with its lineno and colno
+const places = (value) => {
 	const found = [];
 	JSON.stringify(value, (key, field) => {
-		if (POSITION_KEYS.includes(key) && typeof field === 'number')
-			found.push(field);
+		if (
+			field &&
+			typeof field === 'object' &&
+			typeof field.filename === 'string' &&
+			typeof field.lineno === 'number'
+		)
+			found.push([field.filename, field.lineno, field.colno]);
 		else if (typeof field === 'string')
-			for (const match of field.matchAll(/:(\d+):(\d+)\b/g))
-				found.push(Number(match[1]), Number(match[2]));
+			for (const match of field.matchAll(/([^\s(]+):(\d+):(\d+)\b/g))
+				found.push([match[1], Number(match[2]), Number(match[3])]);
 		return field;
 	});
-	return found.join(',');
+	return found;
 };
+// the places that stand elsewhere, and why
+const EXPECTED_PLACES = [
+	[
+		/^(functionStack|dedicatedWorker|moduleWorker|sharedWorker): error-surfaces-(lib|worker)\.js:(11|50):3 /,
+		"a function the page made with new Function names the place of the page's frame below it as where it was made, natively the `new Function` itself",
+	],
+	[
+		/^workerTerminatedImport: error-surfaces-slowimport\.js:3:1 proxied 0:0$/,
+		'a worker terminated during an importScripts the service worker was answering reports its error event at no place',
+	],
+];
 const distinct = (report) => {
 	const timing = report.cases.serverTiming;
 	if (Array.isArray(timing?.value))
@@ -107,7 +131,7 @@ const native = distinct(await measure(() => nativePage.mainFrame()));
 await nativePage.close();
 ok(
 	'natively: every case ran',
-	Object.keys(native.cases).length === 48,
+	Object.keys(native.cases).length === 49,
 	Object.keys(native.cases).join(','),
 );
 console.log(`natively: cases tried again: ${tries(native)}`);
@@ -143,7 +167,9 @@ for (const [mode, base] of [
 			`${DUMP}/${mode}.json`,
 			JSON.stringify({ ...proxied, console: consoleErrors }, null, 2),
 		);
-	const moved = [];
+	// a place stands where natively: the map of its script's rewrite says
+	const misplaced = [];
+	let counted = 0;
 	for (const name of Object.keys(native.cases)) {
 		const got = JSON.stringify(proxied.cases[name]);
 		ok(`${mode}: ${name} names no proxy URL`, !leaks(got ?? ''), got);
@@ -158,14 +184,27 @@ for (const [mode, base] of [
 			have === want,
 			`native ${want} proxied ${have}`,
 		);
-		if (
-			have === want &&
-			positions(native.cases[name]) !== positions(proxied.cases[name])
-		)
-			moved.push(name);
+		if (have !== want) continue;
+		const nativePlaces = places(native.cases[name]);
+		const proxiedPlaces = places(proxied.cases[name]);
+		nativePlaces.forEach(([url, line, column], i) => {
+			const [, ...at] = proxiedPlaces[i] ?? [];
+			counted++;
+			if (at[0] !== line || at[1] !== column)
+				misplaced.push(
+					`${name}: ${url.replace(/.*\//, '')}:${line}:${column} proxied ${at.join(':')}`,
+				);
+		});
 	}
-	console.log(
-		`${mode}: measured source positions that differ (rewritten code): ${moved.join(', ') || 'none'}`,
+	const unexplained = misplaced.filter((place) => {
+		const expected = EXPECTED_PLACES.find(([pattern]) => pattern.test(place));
+		if (expected) console.log(`${mode}: expected: ${place} (${expected[1]})`);
+		return !expected;
+	});
+	ok(
+		`${mode}: every place stands where natively (${counted})`,
+		counted > 0 && unexplained.length === 0,
+		unexplained.join(' | '),
 	);
 	const shown = consoleErrors.filter((stack) => !/registerPaint/.test(stack));
 	ok(

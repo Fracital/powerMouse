@@ -6,7 +6,8 @@
 // (MARK becomes POLICY), return null or throw; the probes after it see it.
 // `window.__csp` holds the outcomes and the securitypolicyviolation events
 // the document saw, once every probe the query names is done (`name~2`
-// runs a probe again).
+// runs a probe again; `reports`, the csp-violation reports a
+// ReportingObserver was handed by then).
 (() => {
 	const query = new URLSearchParams(location.search);
 	const names = (query.get('probes') ?? '').split(',').filter(Boolean);
@@ -27,6 +28,27 @@
 			});
 		});
 	listen(document, 'document');
+	// the csp-violation reports a ReportingObserver is handed (`reports`)
+	const reports = [];
+	if (names.includes('reports'))
+		new ReportingObserver(
+			(list) => {
+				for (const { type, body } of list)
+					reports.push(
+						JSON.stringify({
+							type,
+							blockedURL: body.blockedURL,
+							effectiveDirective: body.effectiveDirective,
+							originalPolicy: body.originalPolicy,
+							disposition: body.disposition,
+							documentURL: body.documentURL,
+							statusCode: body.statusCode,
+							sample: body.sample,
+						}),
+					);
+			},
+			{ types: ['csp-violation'], buffered: true },
+		).observe();
 	const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 	const error = (e) => `${e?.name}: ${e?.message}`;
 	const calls = [];
@@ -356,6 +378,7 @@
 	(async () => {
 		const results = {};
 		for (const name of names) {
+			if (name === 'reports') continue;
 			try {
 				// (`name~2`: the probe again)
 				const probe = PROBES[name.split('~')[0]];
@@ -366,6 +389,8 @@
 		}
 		// the violation events of the last probes are queued as tasks
 		await wait(500);
+		if (names.includes('reports'))
+			results.reports = JSON.stringify(reports.sort());
 		window.__csp = { done: true, case: query.get('case'), results, events };
 	})();
 })();

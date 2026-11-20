@@ -51,6 +51,14 @@ export const CORE: string =
 	(process.env.STOMP_CORE as string | undefined) || BUILD;
 
 /**
+ * What the built-in blocker's engine snapshot (assets/adblock-snapshot.dat,
+ * docs/adblock.md) is asked for by, after a `?`: the hash of its bytes
+ * (build.js), so a host may let browsers keep the file for good.
+ */
+export const ADBLOCK_SNAPSHOT: string =
+	(process.env.STOMP_ADBLOCK_SNAPSHOT as string | undefined) || BUILD;
+
+/**
  * Where the controller leaves the core module it compiled, on its own
  * window, for the proxied documents of its agent cluster to read
  * synchronously (src/controller/index.ts publishCore): under a name of the

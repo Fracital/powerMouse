@@ -817,6 +817,10 @@ if (existsSync(handlerDir))
  * wpt-fetch-metadata, read 0 or 1 of their 2 requests).
  */
 const fixtures = new Map();
+/** a fixture's server closed: its state goes (a later one may get its port) */
+export function wptForget(port) {
+	fixtures.delete(port);
+}
 function fixtureOf(port) {
 	let fixture = fixtures.get(port);
 	if (fixture) return fixture;

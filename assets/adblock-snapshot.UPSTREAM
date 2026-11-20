@@ -1,0 +1,12 @@
+list https://ublockorigin.github.io/uAssets/filters/filters.min.txt sha256 f52fc10b558ca0dbdab5f69fd817d4db8c8a7a9cc533b2a030d3660d53b9d1e4
+list https://ublockorigin.github.io/uAssets/filters/unbreak.min.txt sha256 6ba6d2f146afc25c46f0911567f3038ed94e03d03c9bd0a1805acc2c52bcdb2d
+list https://ublockorigin.github.io/uAssets/filters/badware.min.txt sha256 efdaff62b66704b7e7534c6aaf3debe37f0603770d16b2b88f73e5be9e0d6483
+list https://ublockorigin.github.io/uAssets/filters/privacy.min.txt sha256 ccad8855035133f4d6cfa73174684825e95062ae050bb0be46e313a120c8ef5f
+list https://ublockorigin.github.io/uAssets/filters/resource-abuse.txt sha256 ed8c1fe1a0c36c951365fb5bd94320de361d735a09515abf0178efb0a964a8d6
+list https://ublockorigin.github.io/uAssets/filters/quick-fixes.min.txt sha256 628deb436eb4d7d81bef9ddabce36e928deb802a2efc0c33cda906094777712c
+blocker.wasm sha256 a6d65ffe059205378dc40b7d1f236a7f9ef871f23bc07a9b4e724e7cded5aaec
+bytes 2533701
+gzip 1101538
+sha256 f1db61101cbaef482d0f69c0ea0d3b0b488ba5a76a997d2172d2b5e57fb13dff
+fetched 2026-11-19
+built by scripts/adblock-snapshot.mjs
