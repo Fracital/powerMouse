@@ -1015,10 +1015,11 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					// held refused, and judged again as it connects, as Chrome
 					// judges it (with the nonce it has then: DOMContentHooks). One of
 					// markup the parser runs (a copy made of it) is the parser's:
-					// a document.write's is judged now; the page's markup is
-					// judged here by the policies in force (more policies refuse
-					// no less), and what they let through again as the parser
-					// prepares it, by the policies in force then (judgeParsed)
+					// a document.write's is judged now; the page's markup gets no
+					// src here where the policies in force refuse it (more
+					// policies refuse no less), and is judged and reported as the
+					// parser prepares it, by the policies in force then
+					// (judgeParsed), in its order
 					const parser =
 						isParsed(element) &&
 						getGlobalParsingState(realm) === 'parsingBeforeWrite';
@@ -1033,7 +1034,15 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						moduleClient.holdScript(element, url, src);
 						return;
 					}
-					if (moduleClient.refuseExternalScript(element, url, parser)) {
+					if (parser && moduleClient.markupCopy)
+						moduleClient.quietRefusal = true;
+					let refused: boolean;
+					try {
+						refused = moduleClient.refuseExternalScript(element, url, parser);
+					} finally {
+						moduleClient.quietRefusal = false;
+					}
+					if (refused) {
 						// the parser's keeps the page's src and gets an empty one,
 						// for which the browser fires its error as it prepares it
 						if (parser) {

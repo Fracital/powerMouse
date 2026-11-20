@@ -220,6 +220,7 @@ import {
 	dispatchViolation,
 	evalError,
 	markupBaseSite,
+	markupScriptSite,
 	noteBaseSite,
 	noteFormSite,
 	refusedTrustedPolicy,
@@ -347,6 +348,8 @@ export const parts = {
 	noteBaseSite,
 	noteFormSite,
 	markupBaseSite,
+	// where a script of the markup a violation names is (./policyChecks.ts)
+	markupScriptSite,
 	// the page's own policy's checks of its code and of the loads no worker
 	// sees, at the first a document with a policy needs (./policyChecks.ts;
 	// Client.ts), and a data: URL's integrity, which shares their digests

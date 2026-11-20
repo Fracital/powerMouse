@@ -1728,6 +1728,15 @@ export default class DocumentClient extends Client {
 	 */
 	markupCopy = false;
 	/**
+	 * @internal judge without reporting: a copy of the page's markup, whose
+	 * scripts are reported as the parser prepares them (judgeParsed)
+	 */
+	quietRefusal = false;
+	/** @internal the page's text of the script of its markup judged now (judgeParsed), which a violation places */
+	parsedSource: string | null = null;
+	/** @internal the page's markup so far, until it is parsed (./violations.ts markupScriptSite) */
+	markupSoFar = '';
+	/**
 	 * Judge a script of the page's markup the parser inserted in the written
 	 * page (the copy marked it, rewriteInlineScripts) before the parser
 	 * prepares it, as Chrome judges a parser's script then: by the policies
@@ -1756,9 +1765,14 @@ export default class DocumentClient extends Client {
 			if (src === null) {
 				const text = Reflect.apply(nativeScriptText.get!, script, []) as string;
 				const source = sources.get(text) ?? text;
-				if (this.refuseInlineScript(script, source, true))
-					Reflect.apply(nativeScriptText.set!, script, [trustedScript('')]);
-				else this.giveCodeNonce(script, null, source, true);
+				this.parsedSource = source;
+				try {
+					if (this.refuseInlineScript(script, source, true))
+						Reflect.apply(nativeScriptText.set!, script, [trustedScript('')]);
+					else this.giveCodeNonce(script, null, source, true);
+				} finally {
+					this.parsedSource = null;
+				}
 				return;
 			}
 			let url: URL;
@@ -1934,7 +1948,10 @@ export default class DocumentClient extends Client {
 			]);
 			Reflect.apply(nativeAddEventListener, document, [
 				'DOMContentLoaded',
-				() => Reflect.apply(nativeDisconnect, observer, []),
+				() => {
+					Reflect.apply(nativeDisconnect, observer, []);
+					this.markupSoFar = '';
+				},
 				{ once: true },
 			]);
 		} catch (error) {
@@ -3410,14 +3427,13 @@ export default class DocumentClient extends Client {
 			// made (a style's stand-in, DOMContentHooks: ownScripts holds the
 			// copy's element, the written page's is another), which the page's
 			// policy does not judge, as the browser's never sees it
-			// (one the policies in force refused as it was copied is refused:
+			// (one the policies in force refused as it was copied has no src:
 			// DOMAttributes)
 			const judgedThere =
 				this.markupCopy &&
 				isHTMLScript &&
 				!ownScripts.has(script) &&
-				shouldRewriteScript(script) &&
-				this.#codeVerdict.get(script) !== true;
+				shouldRewriteScript(script);
 			if (judgedThere) {
 				Reflect.apply(nativeSetAttribute, script, [PARSED_MARK(), '']);
 				this.#holdParsed(script);
@@ -4241,6 +4257,7 @@ export default class DocumentClient extends Client {
 					// not a table: everything is rewritten here
 				}
 			job.received += markup;
+			this.markupSoFar = job.received;
 			const stream = job.stream;
 			if (stream) stream.add(markup, end);
 			else if (end) {
