@@ -1,0 +1,1 @@
+{ "content-security-policy": "frame-ancestors http://allowed.invalid" }
