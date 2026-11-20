@@ -422,7 +422,7 @@ statement's (4,012 scripts), and `core.wasm` is 1,605 bytes bigger
 (728,387). A markup script's lines are the document's and its first
 line's column is where its text starts (measured, Chrome 157); the service
 worker finds that place for a prewritten script (`prewrite`, each piece's place in the document counted as it streams),
-the inject for one it rewrites (`violations.ts` `codePlace`). A handler of
+the inject for one it rewrites (`markupPlaces.ts` `codePlace`). A handler of
 the markup counts from where its start tag ends (`handlerPlace`). A long
 animation frame's script has no hash: a markup script's is the kept map
 of this document's markup whose output is long enough and puts the

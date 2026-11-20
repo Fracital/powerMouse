@@ -1755,7 +1755,7 @@ export default class DocumentClient extends Client {
 	quietRefusal = false;
 	/** @internal the page's text of the script of its markup judged now (judgeParsed), which a violation places */
 	parsedSource: string | null = null;
-	/** @internal the page's markup so far, until it is parsed (./violations.ts markupScriptSite) */
+	/** @internal the page's markup so far, until it is parsed (./markupPlaces.ts markupScriptSite) */
 	markupSoFar = '';
 	/**
 	 * Judge a script of the page's markup the parser inserted in the written
