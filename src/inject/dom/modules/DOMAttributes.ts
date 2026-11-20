@@ -4,9 +4,9 @@ import {
 	routeCSS,
 } from '../../../cssURLs';
 import { handlerMark, keepSource, sourceKey } from '../../../functionSource';
-import { accessExpression, helperNames } from '../../../helperNames';
+import { helperNames } from '../../../helperNames';
 import type { modifyHTML } from '../../../htmlShell';
-import { JS_MIME_TYPES } from '../../../prewrite';
+import { handlerPreamble, JS_MIME_TYPES } from '../../../prewrite';
 import { isXMLDocumentMime, routeHTML } from '../../../rewriteHTML';
 import {
 	proxyBlobURL,
@@ -32,6 +32,7 @@ import MixedContentModule from '../../modules/MixedContent';
 import ProxyModule, { usePrototype } from '../../modules/Proxy';
 import { computedURL, scopePrefix, unrouteCSS } from '../../modules/Unroute';
 import { LazyMap, LazyWeakMap, LazyWeakSet } from '../../ownCollections';
+import { keepCode } from '../../positionParts';
 import { modifyCSS, modifyJS } from '../../rewriter';
 import { isParsed } from '../../trusted';
 import DocumentClient, {
@@ -633,12 +634,35 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					// the browser compiles the code as a function's body: marked,
 					// so the function reads back with the page's code in it
 					// (its positions read as its own, as natively: of its tag in the
-					// page's markup, ../markupPlaces.ts handlerPlace). The page's
-					// policy judges it again as it first runs, by the policies in
-					// force then (DocumentClient.codeRuns)
+					// page's markup). The page's policy judges it again as it first
+					// runs, by the policies in force then (DocumentClient.codeRuns).
+					// What the worker made of it already, with where an attribute
+					// of the markup stands (../../../prewrite.ts), else made and
+					// placed here (../markupPlaces.ts handlerPlace). V8 knows a
+					// handler's script by its text, and two attributes of one text
+					// were one script whose frames all read the first one's place:
+					// a placed one's head ends with its place (the mark's readback
+					// drops all of the head, functionSource.ts originalSource)
 					const key = sourceKey(source);
 					keepSource(key, source);
-					const head = handlerMark(key);
+					const placed = moduleClient.markupCopy;
+					const prewritten = moduleClient.prewrittenHandler(
+						name,
+						source,
+						placed,
+					);
+					const place = prewritten
+						? prewritten[2]
+						: placed
+							? deferred('handlerPlace')(moduleClient, name, source)
+							: undefined;
+					const head =
+						handlerMark(key) + (place ? `/*${place[0]}.${place[1]}*/` : '');
+					if (prewritten) {
+						keepCode(prewritten[1], { head, place }, prewritten[0]);
+						element.setAttribute(name, head + prewritten[0]);
+						return;
+					}
 					element.setAttribute(
 						name,
 						head +
@@ -647,13 +671,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 								moduleClient.baseURL,
 								moduleClient.config,
 								'generic',
-								`if(${accessExpression(helperNames(moduleClient.config).access)}.csp(this,"${key}"))return;`,
-								{
-									head,
-									place: moduleClient.markupCopy
-										? deferred('handlerPlace')(moduleClient, name, source)
-										: undefined,
-								},
+								handlerPreamble(helperNames(moduleClient.config).access, key),
+								{ head, place },
 							),
 					);
 				}

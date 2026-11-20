@@ -29,6 +29,16 @@ frame of 150 links, a frame that loads a 190 KB script by URL).
   element through createElement and setAttribute, as the inject makes it,
   add about 300 KB of RSS and 57 KB of Oilpan heap to each frame of that
   markup; the copy alone is 50 to 200 KB of the RSS.
+- **A handler attribute, about 3.5 KB.** A frame whose markup has one
+  `onclick` costs about 3.5 KB more than the same frame without it
+  (frame-cost gates the difference at 6 KB): the getters of the name
+  (handlerGetters, about 2 KB) and the handler's map. The service worker
+  rewrites the markup's handlers with its inline scripts and sends each
+  place, where its start tag ends (src/prewrite.ts handlerSources), so the
+  frame neither rewrites nor places one. Rewritten and placed in the page
+  (a handler the worker could not read as the parser does, a page with no
+  rewrite worker) it is about 11 KB: the rewrite's calls and the markup
+  scan's code (src/inject/dom/markupPlaces.ts).
 - **Links, a little more.** Each routed link carries the page's own value
   in a marker attribute (`s_o:href`) as well as the routed URL, in the
   copy and in the live page, and the link hook makes two attribute writes

@@ -357,7 +357,10 @@ ${blocked}
 							: markup()
 					}`
 		}${
-			prewritten && (prewritten.scripts.length || prewritten.styles.length)
+			prewritten &&
+			(prewritten.scripts.length ||
+				prewritten.styles.length ||
+				prewritten.handlers?.length)
 				? `, ${escapeText(JSON.stringify(JSON.stringify(prewritten)))}`
 				: ''
 		});
