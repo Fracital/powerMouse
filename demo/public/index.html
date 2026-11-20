@@ -13,9 +13,12 @@
 		<script>
 			// a page named in the fragment (a reload, a restored session, a link
 			// to a tab) opens in the browser view from the first paint: the home
-			// screen below is never drawn before it (pm/main.js takes it over)
+			// screen below is never drawn before it (pm/main.js takes it over),
+			// and the address bar is never empty with its placeholder: it shows
+			// the page's address (the script after it) or nothing until
+			// pm/main.js has read the fragment (.restoring)
 			if (location.hash.length > 1)
-				document.documentElement.classList.add('opening');
+				document.documentElement.classList.add('opening', 'restoring');
 		</script>
 		<script src="/config.js"></script>
 		<script>
@@ -175,6 +178,19 @@
 						type="text"
 						placeholder="Search or enter a web address"
 					/>
+					<script>
+						// a page named in the fragment: the bar has its address from
+						// the first paint, as the bar showed it when the fragment was
+						// written (pm/main.js keepBarText), where Chrome's tab opened
+						// on an address never shows the empty bar
+						if (document.documentElement.classList.contains('restoring'))
+							try {
+								const kept = JSON.parse(localStorage.getItem('stomp-demo:bar'));
+								const page = kept.find((entry) => entry[0] === location.hash);
+								if (page)
+									document.querySelector('#omni .omnibox').value = page[1];
+							} catch {}
+					</script>
 					<!-- at the right end of the address box: the service worker's
 					     status, then whether the active tab's page is bookmarked
 					     (Tango star) -->

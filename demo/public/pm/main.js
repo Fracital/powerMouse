@@ -2300,6 +2300,40 @@ async function writeHash(url) {
 	if (write !== hashWrites || browser.classList.contains('hidden')) return;
 	if (location.hash !== hashed.hash)
 		history.replaceState(null, '', hashed.hash);
+	keepBarText(location.hash, barUrl(url));
+}
+
+// What the address bar showed for each fragment written, so a load at one
+// (a reload, a restored session, the link in a new tab) has the page's
+// address in the bar from the first paint (index.html), before the
+// controller can read the fragment. Kept beside the history (omnibox:visits)
+// in this browser alone, the newest BAR_KEPT fragments only.
+const BAR_KEY = 'stomp-demo:bar';
+const BAR_KEPT = 32;
+let barKept = { hash: '', text: '' };
+function keepBarText(hash, text) {
+	if (!hash || (barKept.hash === hash && barKept.text === text)) return;
+	barKept = { hash, text };
+	editBarTexts((kept) => [
+		...kept.filter((entry) => entry[0] !== hash).slice(1 - BAR_KEPT),
+		[hash, text],
+	]);
+}
+function editBarTexts(edit) {
+	try {
+		const kept = JSON.parse(localStorage.getItem(BAR_KEY));
+		localStorage.setItem(
+			BAR_KEY,
+			JSON.stringify(edit(Array.isArray(kept) ? kept : [])),
+		);
+	} catch {}
+}
+/** forget the fragments whose bar showed `text` (a page forgotten from the history), or the fragment `hash` */
+function forgetBarText({ text, hash }) {
+	barKept = { hash: '', text: '' };
+	editBarTexts((kept) =>
+		kept.filter((entry) => entry[0] !== hash && entry[1] !== text),
+	);
 }
 
 /** the page the fragment names, '' for none */
@@ -2466,9 +2500,10 @@ function attachOmniboxes(Omnibox) {
 			typedOnly: addressBar,
 			local: (text) => [
 				...Omnibox.tabRows(text, otherTabs()),
-				...Omnibox.historyRows(text, visits(), (url) =>
-					visitHistory.forget(url),
-				),
+				...Omnibox.historyRows(text, visits(), (url) => {
+					visitHistory.forget(url);
+					forgetBarText({ text: barUrl(url) });
+				}),
 				...Omnibox.bookmarkRows(text, bookmarks),
 			],
 			complete: (text, signal) =>
@@ -7093,6 +7128,7 @@ PMTheme.addEventListener('change', () => {
 // here, and the tab comes as soon as the controller can read the fragment,
 // in the view a press before Ready shows (navigate)
 const opening = document.documentElement.classList.contains('opening');
+const openedAt = location.hash;
 if (opening) {
 	showBrowser();
 	syncToolbar(); // no tab yet: nothing to go back to
@@ -7120,11 +7156,18 @@ booted
 		)
 			showLanding(); // the fragment named no page it can open
 		else if (browser.classList.contains('hidden')) mainForm.url.focus();
+		if (opening && !restore) {
+			// the address index.html put in the bar was of a page it cannot open
+			forgetBarText({ hash: openedAt });
+			if (!activeTab && !pressedEarly) omni.url.value = '';
+		}
+		document.documentElement.classList.remove('restoring');
 		askCommits();
 	})
 	.catch((error) => {
 		badge('Error', error.message, 'red');
 		console.error(error);
 		setStatus(`Error: ${error.message}`, true);
+		document.documentElement.classList.remove('restoring');
 		askCommits();
 	});

@@ -1116,6 +1116,12 @@ html.opening #browser {
 	display: flex !important;
 }
 
+/* and its address bar never shows the placeholder: it has the page's address
+   (index.html) or nothing until pm/main.js has read the fragment */
+html.restoring .omnibox::placeholder {
+	color: transparent;
+}
+
 .frames {
 	flex: 1 1 auto;
 	position: relative;

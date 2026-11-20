@@ -10,7 +10,10 @@
 //    full screen were all over the opening page);
 //  - a page the fragment names is in the browser view from the document's
 //    first frame on, the home screen never drawn, and its tab comes once the
-//    controller is up.
+//    controller is up; the address bar has the page's address from that
+//    first frame (no frame with the empty bar's placeholder, no jump to it
+//    later), and a browser that kept nothing for the fragment shows a blank
+//    bar, never the placeholder, until it goes home.
 // Each frame is read in a requestAnimationFrame callback, which runs after
 // the press's task and before that frame's paint: the checks are on frame
 // order, never on milliseconds, so a loaded machine only makes them slower.
@@ -65,10 +68,25 @@ function recorder() {
 			: element.id
 				? `#${element.id}`
 				: `${element.localName}.${[...element.classList].join('.')}`;
+	// the bar's text, and whether its placeholder is drawn (empty, in view,
+	// and not made transparent)
+	const bar = () => {
+		const input = document.querySelector('#omni input');
+		if (!input) return { bar: null, placeholder: false };
+		const colour = getComputedStyle(input, '::placeholder').color;
+		return {
+			bar: input.value,
+			placeholder:
+				input.value === '' &&
+				visible(input) &&
+				!/^rgba\(.*,\s*0\)$|^transparent$/.test(colour),
+		};
+	};
 	const tick = () => {
 		if (document.body && log.length < 2000) {
 			const frame = document.querySelector('#frames .frame:not(.hidden)');
 			log.push({
+				...bar(),
 				after: window.__pressed,
 				home: visible(document.getElementById('landing')),
 				browser: visible(document.getElementById('browser')),
@@ -195,6 +213,21 @@ async function close(page) {
 // the home box: typed, then Enter
 {
 	const page = await demo();
+	// a load with no fragment: both address boxes show their placeholder
+	ok(
+		'with no fragment, the address boxes have their placeholders',
+		await page.evaluate(() =>
+			['#mainForm input', '#omni input'].every((selector) => {
+				const input = document.querySelector(selector);
+				const colour = getComputedStyle(input, '::placeholder').color;
+				return (
+					input.value === '' &&
+					input.placeholder === 'Search or enter a web address' &&
+					!/^rgba\(.*,\s*0\)$|^transparent$/.test(colour)
+				);
+			}),
+		),
+	);
 	await page.focus('#mainForm input');
 	await page.keyboard.insertText(PAGE);
 	await arm(page);
@@ -264,6 +297,52 @@ async function close(page) {
 			(await shown.inputValue('#omni input').catch(() => '')) === OTHER,
 			await shown.inputValue('#omni input').catch(() => ''),
 		);
+		const notPage = frames.find((f) => f.bar !== OTHER);
+		ok(
+			`${name}: the address bar has the page's address from the first frame`,
+			frames.length > 0 && !notPage,
+			notPage &&
+				`frame ${frames.indexOf(notPage)} of ${frames.length}: ${JSON.stringify(notPage.bar)}${notPage.placeholder ? ' with the placeholder' : ''}`,
+		);
+		ok(
+			`${name}: the bar's placeholder is back once the fragment is read`,
+			await shown.evaluate(() => {
+				const input = document.querySelector('#omni input');
+				const colour = getComputedStyle(input, '::placeholder').color;
+				return (
+					!document.documentElement.classList.contains('restoring') &&
+					!/^rgba\(.*,\s*0\)$/.test(colour)
+				);
+			}),
+		);
+	}
+
+	// the link in a browser that kept nothing (its own storage, so its own
+	// codec too): the fragment names no page it can open, and the bar is
+	// blank, never the placeholder, until home shows
+	{
+		const context = await browser.newContext({
+			viewport: { width: 1280, height: 800 },
+		});
+		await context.addInitScript(recorder);
+		const fresh = await context.newPage();
+		fresh.on('pageerror', (error) => errors.push(error.message));
+		await fresh.goto(deepLink);
+		await fresh.waitForFunction(
+			() => window.__frames?.some((f) => f.home),
+			null,
+			{ timeout: 60000 },
+		);
+		const frames = await fresh.evaluate(() => window.__frames);
+		const placeholder = frames.find((f) => f.placeholder);
+		ok(
+			'the link with nothing kept: no frame shows the empty bar with its placeholder',
+			frames.length > 0 && !placeholder,
+			placeholder
+				? `frame ${frames.indexOf(placeholder)} of ${frames.length}`
+				: `${frames.length} frames`,
+		);
+		await context.close();
 	}
 	await close(page);
 }
