@@ -189,6 +189,8 @@ export type {
 	RemoteControllerInit,
 	RemotePasskeyRequest,
 	RemotePasskeysInit,
+	RemotePermissionRequest,
+	RemoteRequestEvent,
 } from './remote';
 export type {
 	PasskeyAnswer,
@@ -200,7 +202,12 @@ export type {
 	AdblockApplied,
 	AdblockList,
 	AdblockOptions,
+	ShieldsMode,
+	SiteShields,
 } from '../blocker/types';
+export type { Shields } from './shields';
+export type { SitePoolInit } from './sitePool';
+export type { ShardsOption } from '../transport/ShardedTransport';
 export { default as Http3Transport } from '../transport/http3/Http3Transport';
 export type {
 	DatagramChannel,
@@ -216,6 +223,7 @@ export type {
 export type {
 	NavigateInfo,
 	CookieRecord,
+	RequestErrorKind,
 	RequestInfo,
 } from '../transport/messages';
 
@@ -361,10 +369,15 @@ export interface ControllerInit {
 		focused?: (client: string) => Promise<boolean>;
 	};
 	/**
-	 * HTTP cache in the service worker, on by default: GET/HEAD responses
-	 * with explicit freshness (max-age, Expires) are kept in a Cache API
-	 * store and revalidated when stale; `clearCache()` drops it. `false`
-	 * turns it off.
+	 * HTTP cache in the service worker, on by default: it keeps and asks the
+	 * origin as Chrome's HTTP cache does (docs/http-cache.md is the measured
+	 * table). A response is kept in a Cache API store by its explicit
+	 * freshness (max-age, Expires) or, with neither, by the Last-Modified
+	 * heuristic (a tenth of its age), and a stale or `no-cache` entry is
+	 * confirmed with its validator; a request's cache mode and a reload of
+	 * the host's tab are honoured, a 206 is kept as a part, and an entry made
+	 * with one set of credentials is confirmed before a request with others
+	 * gets it. `clearCache()` drops it. `false` turns it off.
 	 */
 	cache?: boolean;
 	/**
@@ -603,7 +616,6 @@ export interface CookieJar {
 	clear(origin?: string): Promise<void>;
 }
 
-/** @internal a CookieJar over a command function */
 /** the host's view of the service worker's passkeys, over `run` (see StompController.passkeys) */
 export function passkeyManager(
 	run: (command: PasskeyCommand) => Promise<PasskeyInfo[] | boolean | null>,
@@ -622,6 +634,7 @@ export function passkeyManager(
 	};
 }
 
+/** @internal a CookieJar over a command function */
 export function cookieJar(
 	run: (command: CookieCommand) => Promise<CookieResult>,
 ): CookieJar {

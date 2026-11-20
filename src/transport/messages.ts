@@ -1436,8 +1436,12 @@ export type CookieCommand =
 
 export type CookieResult = string | CookieRecord[] | undefined;
 
-/** a failure the proxy produced: the transport could not reach the origin, the worker's timeout, a routing error, a blocked rule */
-/** `controller`: the address names a controller that is gone and no live one of its codec can take over */
+/**
+ * a failure the proxy produced: the transport could not reach the origin, the
+ * worker's timeout, a routing error, a blocked rule; `controller`: the
+ * address names a controller that is gone and no live one of its codec can
+ * take over
+ */
 export type RequestErrorKind =
 	'transport' | 'timeout' | 'routing' | 'blocked' | 'controller';
 

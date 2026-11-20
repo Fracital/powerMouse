@@ -3,19 +3,22 @@
 The plan for giving a proxied page real WebRTC (data channels, audio, video,
 with real peers on the internet) while every packet travels through the wisp
 tunnel and nothing leaves from the user's machine. Written 2026-11-10 against
-master a8a457b, after the leak fix in docs/webrtc.md (which keeps the
-browser's own `RTCPeerConnection` and sends it nowhere). This document
+master a8a457b, after the leak fix in docs/webrtc.md, which then kept the
+browser's own `RTCPeerConnection` and sent it nowhere. This document
 replaces that design's "no peer outside the browser" limit with a WebRTC
 stack of STomp's own, in wasm, in a worker next to the page, fed by wisp UDP
-and TCP streams.
+and TCP streams. That stack is what a proxied page's `RTCPeerConnection`
+runs on now (`src/inject/dom/modules/WebRTC.ts`), and docs/webrtc.md keeps
+the browser's measured behaviour it is held to.
 
 Nothing here lands at once: the phases in section 11 each pass the full
 suite set and the `webrtc` suite's leak checks, which stay strict
 throughout.
 
-Phase 1 (data channels with real peers) is built. Sections 1 to 14 are the
-plan as it was written; section 15 says what Phase 1 is, what was measured,
-and where it differs from the plan.
+Phase 1 (data channels with real peers) is built, and so are audio and
+video. Sections 1 to 14 are the plan as it was written; section 15 says
+what Phase 1 is, what was measured, and where it differs from the plan, and
+section 16 is the media as built.
 
 ## 1. Why not the browser's stack, and why not an operator TURN server
 
@@ -24,8 +27,9 @@ address, to whatever the page names; a service worker or a page can neither
 carry those packets nor see them. docs/webrtc.md measured it: a STUN server
 hears the user's address, a TURN server gets allocations, a remote candidate
 gets connectivity checks, and with media access the page reads the LAN
-addresses. The fix there makes the browser behave as on a network that
-drops UDP, so today a proxied page connects to nothing outside this browser.
+addresses. The fix there made the browser behave as on a network that
+drops UDP, so a proxied page connected to nothing outside this browser
+until the stack of this document replaced the browser's (section 15).
 
 The operator TURN server (option 1 in docs/webrtc.md) keeps the browser's
 stack and points it, relay-only, at a TURN server the host runs. It cannot be
@@ -507,8 +511,9 @@ stand-in's code is a file of its own too (section 15).
   with UDP off leaves TURN over TCP and TLS.
 - **Adjacent, out of scope here:** `WebTransport` is another API that
   sends from the network service. A proxied page has a stand-in for it
-  that connects nowhere yet; carrying its sessions over wisp UDP (the QUIC
-  stack of docs/http3.md is most of it) is planned in docs/webtransport.md.
+  (`src/inject/modules/WebTransport.ts`) whose sessions the transport
+  carries as QUIC on a wisp UDP stream, with stomp-h3's WebTransport client
+  (docs/webtransport.md).
 
 ## 11. Phases
 
