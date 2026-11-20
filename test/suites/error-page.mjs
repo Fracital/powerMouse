@@ -92,8 +92,8 @@ const result = await page.evaluate(
 			...(await show('http://127.0.0.1:9/down.html')),
 			element: undefined,
 		};
-		// the host's page never reports a client id, so the worker reports the
-		// failure without one and the controller does not hold it
+		// the host's page tells the host its client id, so the controller
+		// holds the report only until it did
 		await new Promise((resolve) => setTimeout(resolve, 500));
 		out.kinds = log
 			.filter((info) => info.kind)
@@ -119,8 +119,9 @@ const shows = (shown, kind, status) =>
 ok(
 	'a blocked navigation shows the host page with stompError naming the real URL',
 	shows(result.blocked, 'blocked', 403) &&
-		// the host page is not an injected page: frame.url has nothing to read
-		result.blocked.url === null &&
+		// the host page is not an injected page: frame.url is what its
+		// report said (error-page-reports)
+		result.blocked.url === `${FIXTURE}pages/hist-1.html` &&
 		result.blocked.error.url === `${FIXTURE}pages/hist-1.html`,
 	JSON.stringify(result.blocked),
 );

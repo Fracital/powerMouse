@@ -77,8 +77,10 @@
 				timeout: 'The site took too long',
 				routing: 'Something went wrong',
 				blocked: 'Blocked by this host',
+				controller: 'This proxy session has ended',
 			};
-			document.getElementById('title').textContent =
+			// the heading and the tab's title (the host hears the title)
+			document.title = document.getElementById('title').textContent =
 				titles[info.kind] || 'Page unavailable';
 			document.getElementById('url').textContent = info.url || location.href;
 			document.getElementById('detail').textContent = info.error

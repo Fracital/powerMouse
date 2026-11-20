@@ -45,7 +45,7 @@ import {
 import { warmClientHints } from './clientHints';
 import Cookies, { openCookies, openJarDB, registerCookies } from './Cookies';
 import { DnrHost } from './dnr';
-import { hostErrorPage } from './errorPage';
+import { errorReportScript, hostErrorPage } from './errorPage';
 import { extensionRegistry } from './extensions/registry';
 import { extensionTransport } from './extensions/serve';
 import { registerIntegrityLoads } from './integrityLoads';
@@ -529,13 +529,19 @@ export default async function createServer(
 		}
 	});
 	// a routing error on a document: the host's page when it has one
-	router.errorPage = (request, status, message) =>
-		hostErrorPage(init, {
-			url: realURL(request.url),
-			status,
-			error: message,
-			kind: 'routing',
-		});
+	router.errorPage = (request, status, message, context) =>
+		hostErrorPage(
+			init,
+			{
+				url: realURL(request.url),
+				status,
+				error: message,
+				kind: 'routing',
+			},
+			{ client: context?.clientId },
+		);
+	router.errorReport = (request, context) =>
+		errorReportScript(realURL(request.url), context?.clientId);
 
 	const cookies = registerCookies(router, stores.cookies);
 	const cache = config.cache === false ? undefined : stores.cache;

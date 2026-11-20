@@ -1484,7 +1484,15 @@ export interface RequestInfo {
 	method: string;
 	/** the request's destination; `fetch` for fetch, XHR and beacons (the browser's empty string) */
 	destination: string;
-	/** 0 when the transport failed; see `error` */
+	/**
+	 * the status of the site's answer (or a host's rule's); 0 when there is
+	 * none: the transport failed, or the request was blocked by the content
+	 * blocker (see `error` and `kind`). A document the worker answered with
+	 * an error page reports 0 all the same, not the status that page is
+	 * served with (502 for a transport failure, 504 for the worker's
+	 * timeout): that status is the proxy's, and the page has it as
+	 * `stompError.status` (ControllerInit.errorPage)
+	 */
 	status: number;
 	/** wall time in the service worker, from routing to the response headers */
 	ms: number;
@@ -1503,7 +1511,10 @@ export interface RequestInfo {
 	error?: string;
 	/** what failed, when the proxy itself produced the failure (see ControllerInit.errorPage) */
 	kind?: RequestErrorKind;
-	/** the service worker client that made it; the controller maps it to a frame */
+	/**
+	 * the service worker client that made it (a navigation's: the document
+	 * it makes, an error page too); the controller maps it to a frame
+	 */
 	client?: string;
 	/**
 	 * when a worker made it: the document that made the worker (through the

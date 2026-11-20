@@ -159,7 +159,8 @@ for (const id of ['once-1', 'once-2']) {
 }
 ok(
 	'an inline token is single-use: the document loads once, the same route again gets the error page',
-	twice[0] === 'ONCE' && twice[1] === 'Page unavailable',
+	// (the demo's error page titles itself by the kind: routing)
+	twice[0] === 'ONCE' && twice[1] === 'Something went wrong',
 	JSON.stringify([route?.slice(-40), twice]),
 );
 
@@ -204,7 +205,7 @@ async function show(urls) {
 	);
 }
 const errorPage = (seen) =>
-	/unknown, used or expired|Page unavailable/.test(
+	/unknown, used or expired|Something went wrong/.test(
 		`${seen?.title} ${seen?.text}`,
 	);
 const register = (markup, referrer) =>
