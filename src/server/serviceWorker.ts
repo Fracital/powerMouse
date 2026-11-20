@@ -2738,7 +2738,13 @@ self.addEventListener('activate', (event: ExtendableEvent) => {
 });
 
 // This script only runs again when the worker was terminated and restarted.
-// Nothing in `controllers` survived, so ask every client to re-register.
+// Nothing in `controllers` survived, so ask every client to re-register, as
+// soon as the script has run: whatever woke the worker (a navigation, a
+// host's call) waits for that handshake. A controller whose own handshake
+// woke the worker takes the revive while it waits for that handshake's
+// hello and finds it is the same run (src/controller/index.ts), so an early
+// revive asks nothing twice. (It went out 100 ms later, and every load
+// after Chrome stopped an idle worker waited for it.)
 setTimeout(async () => {
 	for (const client of await self.clients.matchAll({
 		includeUncontrolled: true,
@@ -2746,4 +2752,4 @@ setTimeout(async () => {
 		client.postMessage({
 			[SW_REVIVE]: { instance: INSTANCE } satisfies ReviveMessage,
 		});
-}, 100);
+}, 0);
