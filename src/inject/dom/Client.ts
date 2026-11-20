@@ -1177,6 +1177,13 @@ export default class DocumentClient extends Client {
 	 * page runs)
 	 */
 	agentCluster: 'site' | 'origin' | null = null;
+	/**
+	 * the document's service worker client id, which the worker that served
+	 * its navigation knows (FetchEvent.resultingClientId) and its shell
+	 * hands over before the client applies (Navigate). Not there for a shell
+	 * of an earlier worker, which leaves the document to ask (`whoami`)
+	 */
+	declare servedClient?: string;
 	/** the mark its shell gave, and the document it was given for */
 	#cacheMark: { document: Document; mark: string } | null = null;
 	/**

@@ -1706,10 +1706,7 @@ export default class Client {
 				transport,
 			]);
 		} catch (error) {
-			console.warn(
-				'Stomp: could not provision a transport for a shared worker',
-				error,
-			);
+			console.warn(`${NO_TRANSPORT}shared worker`, error);
 		}
 	}
 	provisionWorkerTransport(worker: Worker, script?: string) {
@@ -1725,10 +1722,7 @@ export default class Client {
 			transfer.push(this.requestTransportPort(script));
 			message[TRANSPORT_INIT] = true;
 		} catch (error) {
-			console.warn(
-				'Stomp: could not provision a transport for a worker',
-				error,
-			);
+			console.warn(`${NO_TRANSPORT}worker`, error);
 		}
 		let modules: HandedModules | null = null;
 		if (this.wasmRewriter)
@@ -1759,10 +1753,7 @@ export default class Client {
 					transfer,
 				);
 			} catch (failed) {
-				console.warn(
-					'Stomp: could not provision a transport for a worker',
-					failed,
-				);
+				console.warn(`${NO_TRANSPORT}worker`, failed);
 			}
 		}
 	}
@@ -1924,6 +1915,8 @@ export default class Client {
 
 /** how much of the code a violation's sample shows (measured) */
 const SAMPLE_LENGTH = 40;
+/** the start of the warning for a worker whose transport could not be handed over */
+const NO_TRANSPORT = 'Stomp: could not provision a transport for a ';
 
 export function createClientFactory<T>(
 	Client: {
