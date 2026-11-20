@@ -39,7 +39,8 @@ rewritten inline script by them too, and a nonce or hash on the real
 injected element does not hold on the live proxy origin. The inject enforces
 those against the page's own code instead (Scripts and styles, below).
 report-uri and report-to are left out (the browser would post the proxy's
-URLs). A report-only policy goes to the browser as one. A meta's content is
+URLs): the inject sends a document's reports to its report-uri itself
+(Reports, below). A report-only policy goes to the browser as one. A meta's content is
 replaced by the browser policy for it (the inject's attribute hook; the page
 reads its own content back), and it applies when the meta is inserted, as
 natively. A meta outside the head is ignored, as natively: the browser gets
@@ -435,7 +436,8 @@ host, and the browser refuses it as natively (even under `form-action *`).
 
 `SecurityPolicyViolationEvent`'s getters (`src/inject/dom/modules/ContentSecurity.ts`)
 name the page's URLs (documentURI, blockedURI without its fragment,
-referrer, sourceFile; the inject's own bundle as no URL) and the page's
+sourceFile; the inject's own bundle as no URL), the document's referrer
+as the page reads it and the page's
 policy as it wrote it (originalPolicy). A base-uri or form-action
 violation, the browser's (which names the inject's hook, or the shell's
 markup) or the inject's (which names nothing), names where Chrome does: the
@@ -448,6 +450,22 @@ part). A report body
 (`ReportingObserver`) the same (`Unroute`). A fetch or XMLHttpRequest
 reads a response's policy headers as natively (the browser applies none
 of them to such a response).
+
+## Reports
+
+A document's policy's report-uri gets what Chrome sends it (measured,
+Chrome 157), for the inject's violations as they are made
+(`policyChecks.ts` makeReport) and for the browser's as the page sees them
+(`violations.ts` violationShows): one POST of `application/csp-report`
+(`{"csp-report": {...}}`, Chrome's members in its order, the place only
+where there is one) to each endpoint, at once, none again for a report
+that reads as one the document sent, and none where the policy has
+report-to. It is a request of the document's
+(`src/inject/dom/violationDelivery.ts`, a deferred part) the service
+worker sends as a `report` load (Sec-Fetch-Dest: report, no-cors), with
+the cookies of an endpoint of the document's origin only and the Referer
+the document's policy gives it. csp-scripts compares what the fixture's
+endpoint receives, of its origin and of another.
 
 ## Sandbox
 
@@ -575,9 +593,9 @@ refuses fires a violation, natively either.
   nonces, hashes or 'strict-dynamic' judges none of its imports. A
   worker's violation's lineNumber and columnNumber are 0, and its
   sourceFile is the worker's script even for a script it imported.
-- No report goes to a policy's report-uri or report-to endpoint, a
-  document's or a worker's (the site never sees one; the page sees every
+- No report goes to a policy's report-to endpoint, nor to a worker's
+  policy's report-uri (the site never sees one; the page sees every
   violation, as natively; csp-worker-requests lists a worker's as an
-  expected difference).
+  expected difference). A document's report-uri gets its reports (Reports).
 - An `<object>` of a page-made `blob:` URL does not load through the proxy,
   with or without a policy.

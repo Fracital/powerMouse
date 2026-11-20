@@ -355,7 +355,34 @@ const PLACED = {
 	},
 };
 
+// What a policy's report-uri endpoint receives (the probe `reports`): one
+// POST of application/csp-report a violation, as Chrome sends it, for the
+// browser's violations and the inject's, none again for one that reads the
+// same, with the cookies, Referer and Sec-Fetch- headers Chrome sends to an
+// endpoint of the document's origin and of another
+const REPORTED = [
+	'report-cookie',
+	'img-other',
+	'eval',
+	'eval-twice',
+	'script-inline',
+	'reports',
+];
+const REPORTS = {
+	"a policy's report-uri": {
+		p: `img-src 'self'; script-src 'nonce-probes' 'report-sample'; report-uri /csp/report?k=reports`,
+		h: 'nonce',
+		probes: REPORTED,
+	},
+	"a report-only policy's report-uri of another origin": {
+		ro: `img-src 'self'; script-src 'nonce-probes'; report-uri ${other}/csp/report?k=reports`,
+		h: 'nonce',
+		probes: REPORTED,
+	},
+};
+
 const browser = await launch();
+await compareCases(browser, REPORTS);
 await compareCases(browser, CASES, { expected: EXPECTED });
 await compareCases(browser, PLACED, {
 	fields: [...FIELDS, 'sourceFile', 'lineNumber', 'columnNumber'],

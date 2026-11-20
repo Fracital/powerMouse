@@ -624,6 +624,24 @@
 		// allow-same-origin
 		'self-origin': () => self.origin,
 		eval: () => evaluated(() => eval('1 + 1')),
+		// two violations of one place, whose reports read the same
+		'eval-twice': () =>
+			[0, 1].map(() => evaluated(() => eval('1 + 1'))).join(', '),
+		// a cookie of the document's origin, which a report to an endpoint
+		// of that origin carries
+		'report-cookie': () => {
+			document.cookie = 'csp-report=1; path=/';
+			return document.cookie.includes('csp-report=1') ? 'set' : 'not set';
+		},
+		// what reached the fixture's report endpoint (the case's policy's
+		// report-uri of /csp/report?k=reports, of this origin or the
+		// other) for the probes before it, a moment after
+		reports: () =>
+			wait(800).then(() =>
+				fetch('/csp/reports?k=reports&clear').then((response) =>
+					response.text(),
+				),
+			),
 		function: () => evaluated(() => new Function('return 2')()),
 		'timeout-string': () =>
 			settle(
