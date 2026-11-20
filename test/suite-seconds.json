@@ -235,6 +235,7 @@
 	"shields-unit": 1,
 	"site-facts": 59,
 	"sloppy-globals": 2,
+	"slow-body-close": 20,
 	"sop-escapes": 88,
 	"sop-partitions": 84,
 	"split-rewrite": 7,

@@ -1,0 +1,109 @@
+From e1b454f8f03fdb10b6ab84a33b746ae2c6934000 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Thu, 19 Nov 2026 10:35:41 -0500
+Subject: [PATCH] wisp: a stream's reads end after every packet received before
+ its CLOSE
+
+MuxStreamRead::poll_next returned None as soon as the stream's channel
+was disconnected, before it looked at what the channel still held. The
+actor puts each DATA packet in the channel as it comes and drops the
+channel's sender on the stream's CLOSE, so every packet received but
+not yet read was dropped. Wisp has no flow control toward the client: a
+server writes a whole response as fast as the relay takes it, and an
+HTTP/1.1 server then closes its idle keep-alive connection (node's
+default after 5 s), the relay sends CLOSE, and a body the page was still
+reading slowly ended short (hyper IncompleteBody about 5 s after the
+server finished). Chrome's TCP socket holds the server back and the
+same read completes, whatever the keep-alive.
+
+flume hands out what a channel holds before it reports the disconnect,
+so the read now goes on to the channel's end: a CLOSE ends the stream
+after the packets that came before it, in order, as a FIN ends a TCP
+stream after its data. get_close_reason says the reason only once
+nothing is left to read, close_stream sets the reason before it drops
+the sender (a reader woken by the drop read Unknown otherwise), and a
+closed stream sends no CONTINUE for what it still reads.
+---
+ wisp/src/mux/inner.rs  |  4 +++-
+ wisp/src/stream/mod.rs | 32 ++++++++++++++++++++++++++------
+ 2 files changed, 29 insertions(+), 7 deletions(-)
+
+diff --git a/wisp/src/mux/inner.rs b/wisp/src/mux/inner.rs
+index c05ead6..e7ca312 100644
+--- a/wisp/src/mux/inner.rs
++++ b/wisp/src/mux/inner.rs
+@@ -384,9 +384,11 @@ impl<R: TransportRead, W: TransportWrite, M: MultiplexorActor<W>> MuxInner<R, W,
+ 		MuxStream::new(data_rx, self.actor_tx.clone(), self.tx.clone(), info)
+ 	}
+ 
++	// The reason is set before the sender is dropped, so a reader that sees
++	// the stream end reads the reason it ended with, not Unknown.
+ 	fn close_stream(stream: StreamMapValue, close: ClosePacket) {
+-		drop(stream.stream);
+ 		stream.info.set_reason(close.reason);
++		drop(stream.stream);
+ 	}
+ 
+ 	fn handle_packet(&mut self, packet: Packet<'static>) -> Result<bool, WispError> {
+diff --git a/wisp/src/stream/mod.rs b/wisp/src/stream/mod.rs
+index ba97b67..dc39d69 100644
+--- a/wisp/src/stream/mod.rs
++++ b/wisp/src/stream/mod.rs
+@@ -102,8 +102,18 @@ impl<W: TransportWrite> MuxStreamRead<W> {
+ 		self.info.id
+ 	}
+ 
++	/// The reason the stream closed with, once its read side has ended: the
++	/// stream is closed and every packet received before its CLOSE has been
++	/// read. None while any of them is still to be read.
+ 	pub fn get_close_reason(&self) -> Option<CloseReason> {
+-		self.inner.is_disconnected().then(|| self.info.get_reason())
++		self.ended().then(|| self.info.get_reason())
++	}
++
++	/// Whether nothing is left to read: the actor has dropped the stream's
++	/// sender (a CLOSE came, the stream was closed from this side, or the
++	/// connection ended) and the channel holds no packet received before.
++	fn ended(&self) -> bool {
++		self.chunk.is_none() && self.inner.is_disconnected() && self.inner.is_empty()
+ 	}
+ 
+ 	pub fn into_async_read(self) -> MuxStreamAsyncRead<W> {
+@@ -114,11 +124,17 @@ impl<W: TransportWrite> MuxStreamRead<W> {
+ impl<W: TransportWrite> Stream for MuxStreamRead<W> {
+ 	type Item = Result<Payload, WispError>;
+ 
++	// A CLOSE ends the stream after the packets that came before it, as a
++	// FIN ends a TCP stream after its data: the actor puts each DATA packet
++	// in the channel as it comes and drops the channel's sender on the
++	// CLOSE, and flume hands out what the channel holds before it reports
++	// the disconnect. This returned None as soon as the sender was gone,
++	// dropping every packet received but not yet read: a server that wrote
++	// a whole response and closed its idle keep-alive connection (wisp has
++	// no flow control toward the client, so it could write all of it long
++	// before the page read it) cut a slowly read body short, where Chrome's
++	// TCP socket holds the server back and reads it whole.
+ 	fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+-		if self.inner.is_disconnected() {
+-			return Poll::Ready(None);
+-		}
+-
+ 		let was_reading = self.chunk.is_some();
+ 		let chunk = if let Some(chunk) = self.chunk.take() {
+ 			chunk
+@@ -141,7 +157,11 @@ impl<W: TransportWrite> Stream for MuxStreamRead<W> {
+ 			};
+ 		}
+ 
+-		if self.info.flow_status == FlowControl::EnabledSendMessages {
++		// no CONTINUE for a stream that is closed: its id is gone on both
++		// sides, and what is still read is only what it held
++		if self.info.flow_status == FlowControl::EnabledSendMessages
++			&& !self.inner.is_disconnected()
++		{
+ 			if !was_reading {
+ 				self.read_cnt += 1;
+ 			}
+-- 
+2.56.1
+
