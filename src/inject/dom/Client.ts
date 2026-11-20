@@ -57,7 +57,12 @@ import {
 } from '../../scriptRoutes';
 import { IMPORT_MAP_ROUTE } from '../../sri';
 import StompURL from '../../StompURL';
-import { HOOK_ERROR, OPEN_TAB, SHELL_END } from '../../transport/messages';
+import {
+	HOOK_ERROR,
+	LOAD_HEADER,
+	OPEN_TAB,
+	SHELL_END,
+} from '../../transport/messages';
 import { queryOf } from '../../urlShape';
 import { BUILD, coreModuleKey } from '../../version';
 import { contextText, linkRoute, opaqueContext } from '../../visited';
@@ -2449,14 +2454,16 @@ export default class DocumentClient extends Client {
 	 * blob: document and a `javascript:` URL's (whose URL is about:blank),
 	 * which the worker serves at an `inline:` route, and an about:blank or
 	 * srcdoc document such a document makes (measured in Chrome 152; a plain
-	 * about:blank frame of an http page reads its parent's cookies). Their
-	 * requests carry cookies as any other's. A data: document is an opaque
-	 * origin, and stays as it is.
+	 * about:blank frame of an http page reads its parent's cookies), and an
+	 * about:blank a page of another origin navigated a frame to under a frame
+	 * of another site (navigatorOf). Their requests carry cookies as any
+	 * other's. A data: document is an opaque origin, and stays as it is.
 	 */
 	get cookieAverse(): boolean {
 		try {
 			const location = this.global.location;
 			if (location.protocol === 'about:') {
+				if (this.navigatorOf(this.global)) return this.#crossAncestor();
 				if (!this.nested) return false;
 				const parent = (this.parent as Record<string, any>)[
 					this.names.client
@@ -3058,6 +3065,134 @@ export default class DocumentClient extends Client {
 	 * code needs the access helper before it runs
 	 */
 	injectChild?: (context: typeof globalThis) => void;
+	/**
+	 * @internal inject this page's bundle into a window it navigated to an
+	 * about:blank of its own origin (navigatorOf; IFrame sets it), whatever
+	 * that window's parent is
+	 */
+	injectNavigated?: (context: typeof globalThis) => void;
+	/**
+	 * The child windows of this document another origin's page navigated to
+	 * about:blank, where the browser makes that document the navigating
+	 * page's (src/isolation.ts IsolationEngine `blank`): the page's client,
+	 * the document the window showed when it was navigated, and the
+	 * about:blank document it holds for (the first other one the window
+	 * shows: natively the navigation commits a moment later)
+	 */
+	#navigatedBlanks = new LazyWeakMap<
+		object,
+		{ creator: DocumentClient; before: unknown; document?: unknown }
+	>();
+	/** @internal `creator` navigated this document's child `window` to about:blank (null: as the window's parent's, the default) */
+	navigatedBlank(window: object, creator: DocumentClient | null) {
+		if (!creator) {
+			this.#navigatedBlanks.delete(window);
+			return;
+		}
+		let before: unknown;
+		try {
+			before = Reflect.get(window, 'document');
+		} catch (error) {
+			// a window of another real origin
+		}
+		this.#navigatedBlanks.set(window, { creator, before });
+	}
+	/** @internal the client of the page whose about:blank this document's child `window` shows (navigatedBlank), if one does */
+	blankCreator(window: object): DocumentClient | null {
+		const entry = this.#navigatedBlanks.get(window);
+		if (!entry) return null;
+		try {
+			const document = Reflect.get(window, 'document');
+			if (document === entry.before) return null;
+			const { href } = Reflect.get(window, 'location') as Location;
+			// (its next document, once it shows another than that one)
+			if (
+				entry.document !== undefined
+					? entry.document !== document
+					: !/^about:blank([?#]|$)/.test(href)
+			) {
+				this.#navigatedBlanks.delete(window);
+				return null;
+			}
+			entry.document = document;
+			// (while the creator's window still shows the creator's document)
+			const { creator } = entry;
+			return (creator.global as unknown as Record<string, unknown>)[
+				this.names.client
+			] === creator
+				? creator
+				: null;
+		} catch (error) {
+			return null;
+		}
+	}
+	/**
+	 * The nearest controlled client: for an about:blank another origin's
+	 * page navigated this window to (navigatorOf; a document no worker
+	 * controls in Chrome), that page's, so its requests are made and judged
+	 * as its own origin's, not by the parent's realm, which is of another
+	 */
+	override controlledClient(): Client | null {
+		if (!this.controlled) {
+			const navigator = this.navigatorOf(this.global);
+			if (navigator && navigator !== this) return navigator.controlledClient();
+		}
+		return super.controlledClient();
+	}
+	/**
+	 * Whether this document's requests, which another realm makes
+	 * (controlledClient), are in a partition that realm's are not: such an
+	 * about:blank under a frame of another site, navigated by a page in none,
+	 * and a document under it (LoadGrantMessage `^`)
+	 */
+	get crossCarried(): boolean {
+		const carrier = this.controlledClient();
+		return (
+			!!carrier &&
+			carrier !== this &&
+			carrier.partition === '' &&
+			this.partition !== ''
+		);
+	}
+	override routedFetch(
+		input: RequestInfo | URL,
+		init?: RequestInit,
+	): Promise<Response> {
+		if (!this.crossCarried) return super.routedFetch(input, init);
+		// a grant names the partition (a no-cors request drops the header,
+		// and stays its navigator's)
+		const request = new Request(input as RequestInfo, init);
+		const token = loadSource()?.announce(request.url, '^');
+		if (token) request.headers.set(LOAD_HEADER, token);
+		return super.routedFetch(request);
+	}
+	/** the nearest routed client: for such an about:blank, its navigator's (controlledClient) */
+	override routedClient(): Client | null {
+		const routed = super.routedClient();
+		if (routed === this) return routed;
+		const navigator = this.navigatorOf(this.global);
+		return navigator && navigator !== this ? navigator.routedClient() : routed;
+	}
+	/** @internal the client of `context`'s parent, as the browser has the parent, if it is a document of ours */
+	parentClientOf(context: object): DocumentClient | null {
+		try {
+			const parent = Reflect.apply(
+				nativeParentGet,
+				context,
+				[],
+			) as unknown as Record<string, DocumentClient | undefined> | null;
+			if (!parent || parent === context) return null;
+			const client = parent[this.names.client];
+			return client?.isDOM ? client : null;
+		} catch (error) {
+			// a parent of another real origin
+			return null;
+		}
+	}
+	/** @internal the client of the page whose about:blank `context` shows, as its parent recorded it (navigatedBlank) */
+	navigatorOf(context: object): DocumentClient | null {
+		return this.parentClientOf(context)?.blankCreator(context) ?? null;
+	}
 	/** @internal a child window has this name (Context module): reads of it by name are restricted like `frames[i]` */
 	exposeChild?: (name: string) => void;
 	/**
@@ -3178,6 +3313,8 @@ export default class DocumentClient extends Client {
 	 * could not reach it, and it read no cookie)
 	 */
 	#creatorClient(): DocumentClient | null {
+		const navigator = this.navigatorOf(this.global);
+		if (navigator && navigator !== this) return navigator;
 		for (const get of [nativeParentGet, nativeOpenerGet])
 			try {
 				const window = Reflect.apply(get, this.global, []) as Record<

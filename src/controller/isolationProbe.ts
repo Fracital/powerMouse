@@ -17,6 +17,14 @@
 //   own where the browser has the policy (Chrome: its document is out of
 //   reach, and it says it is isolated in a message), and an ordinary frame
 //   elsewhere.
+// - a data: frame's child, which its document made (an about:blank of the
+//   data: document's opaque origin), navigated to about:blank by this
+//   document, is reachable from here where the browser gives such a
+//   document the origin of the page that navigated it (Chrome, Firefox),
+//   and stays out of reach where it keeps the parent's (WebKit), as with a
+//   parent of any other origin; decided at the child's second load, some
+//   30 ms on (measured in Chrome 157, Firefox 160 and WebKitGTK 2.52.4,
+//   with and without COEP require-corp).
 // The first two say something only in a page that is isolated; the service
 // worker asks them only of one (Rewriter.isolationEngine).
 import { ISOLATION_PROBE, type IsolationEngine } from '../isolation';
@@ -108,6 +116,48 @@ function probeFrame(directory: string, kind: 'p' | 'd'): Promise<Probed> {
 	});
 }
 
+/** the data: document of probeBlank: a child frame, whose every load it tells its parent of */
+const BLANK_PROBE = `data:text/html,${encodeURIComponent(
+	`<!doctype html><body><script>const c = document.createElement('iframe'); let n = 0; c.onload = () => parent.postMessage({ ${JSON.stringify(ISOLATION_PROBE)}: ++n }, '*'); document.body.append(c);</script>`,
+)}`;
+
+/** whether an about:blank this document navigates a frame of another origin's to is of this document's origin; null when it did not tell in time */
+function probeBlank(): Promise<boolean | null> {
+	return new Promise((resolve) => {
+		const frame = document.createElement('iframe');
+		frame.hidden = true;
+		frame.style.display = 'none';
+		const done = (answer: boolean | null) => {
+			clearTimeout(timer);
+			removeEventListener('message', heard);
+			frame.remove();
+			resolve(answer);
+		};
+		const heard = (event: MessageEvent) => {
+			const loads =
+				event.source === frame.contentWindow
+					? (event.data as Record<string, unknown> | null)?.[ISOLATION_PROBE]
+					: undefined;
+			if (typeof loads !== 'number') return;
+			const child = frame.contentWindow?.frames[0];
+			if (!child) return done(null);
+			if (loads === 1) {
+				child.location.href = 'about:blank';
+				return;
+			}
+			try {
+				return done(!!child.document);
+			} catch (error) {
+				return done(false);
+			}
+		};
+		const timer = setTimeout(() => done(null), PROBE_MS);
+		addEventListener('message', heard);
+		frame.src = BLANK_PROBE;
+		(document.body ?? document.documentElement).append(frame);
+	});
+}
+
 /**
  * What this browser makes of cross-origin isolation, by frames of this
  * document under `directory` (the controller's address); null when it could
@@ -120,12 +170,14 @@ export async function probeIsolation(
 ): Promise<IsolationEngine | null> {
 	const isolated = globalThis.crossOriginIsolated === true;
 	const skip = Promise.resolve('skip' as const);
-	const [credentialless, permission, dip] = await Promise.all([
+	const [credentialless, permission, dip, blank] = await Promise.all([
 		isolated ? probeWorker(directory) : skip,
 		isolated ? probeFrame(directory, 'p') : skip,
 		probeFrame(directory, 'd'),
+		probeBlank(),
 	]);
 	if (
+		blank === null ||
 		credentialless === null ||
 		permission === null ||
 		permission === 'refused' ||
@@ -137,5 +189,6 @@ export async function probeIsolation(
 		credentialless: credentialless !== false,
 		permission: permission === 'skip' || !permission.isolated,
 		dip: dip.apart && dip.isolated,
+		blank,
 	};
 }

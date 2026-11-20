@@ -1037,16 +1037,17 @@ function handleMessage(event: ExtendableMessageEvent) {
 		)
 			return;
 		// its partition is its creator's, read from the creator's route
-		// (never from the message)
+		// (never from the message, but for a first-party creator's `^`,
+		// LoadGrantMessage)
 		const route = controllers.get(message.directory)?.ready?.routeOf(source);
 		let partition = '';
 		try {
-			if (route)
-				partition = routePartition(
-					route.resource,
-					new URL(route.url).origin,
-					route.codec,
-				);
+			if (route) {
+				const origin = new URL(route.url).origin;
+				partition = routePartition(route.resource, origin, route.codec);
+				if (message.cross === true && partition === '')
+					partition = `^${schemefulSite(origin, publicSuffix)}`;
+			}
 		} catch (error) {
 			// not a URL: first-party
 		}
@@ -1168,13 +1169,20 @@ function handleMessage(event: ExtendableMessageEvent) {
 			// and its partition, from its route: the worker started from it
 			// is in it too
 			const route = ready.routeOf(source);
+			const partition = route
+				? routePartition(route.resource, origin, route.codec)
+				: null;
 			recordBlobOrigin(
 				message.url,
 				origin,
 				(event.source as Client).id,
-				route
-					? partitionSite(routePartition(route.resource, origin, route.codec))
-					: null,
+				// (one a document the client's realm made minted, in the
+				// partition a load grant's `^` names: only from a first-party one)
+				message.cross === true && partition === ''
+					? schemefulSite(origin, publicSuffix)
+					: partition === null
+						? null
+						: partitionSite(partition),
 			);
 		} catch (error) {
 			// not a URL: nothing to record

@@ -1323,6 +1323,7 @@ export default class Client {
 		referrer: string,
 		blob?: Blob | string,
 		isolated?: boolean,
+		cross?: boolean,
 	): string | null {
 		if (markup.length > INLINE_DOCUMENT_MAX) return null;
 		// registered by a routed document of this controller (the worker takes
@@ -1340,6 +1341,9 @@ export default class Client {
 					url,
 					...(blob ? { blob } : {}),
 					...(isolated ? { isolated } : {}),
+					...((cross || (this as { crossCarried?: boolean }).crossCarried) && {
+						cross: true,
+					}),
 				},
 			})
 		)
