@@ -352,6 +352,7 @@ import {
 	orbSniff,
 	peekBody,
 } from './orb';
+import { queueReport, reportingEndpoints } from './reportUploads';
 import { blobCreatorOf, creatorOf, requestOwner } from './requestClients';
 import type { RewriteCache, RewriteCacheOutcome } from './rewriteCache';
 import type { RewritePool } from './rewritePool';
@@ -574,6 +575,9 @@ const LOAD_DESTINATIONS = [
 	// a violation's report to the page's policy's report-uri, which the
 	// inject sends in the browser's place (src/inject/dom/violationDelivery.ts)
 	'report',
+	// and one to its report-to endpoint, which the inject hands to this
+	// worker to deliver (reportUploads.ts): never forwarded as it is
+	'reports',
 ];
 // (`same-origin`: an SVG <use>'s external document, which Chrome loads as
 // an image of the document's own origin only)
@@ -1635,6 +1639,29 @@ function genericForward(
 		const granted = crossGranted ? grant!.slice(1) || null : grant;
 		let internal = granted !== null || (!!context?.internal && !context.cors);
 		const load = loadOf(granted);
+		// a report for the page's report-to endpoint (the request's URL), which
+		// this worker delivers as Chrome's Reporting API does, outliving the
+		// document (reportUploads.ts)
+		if (load?.destination === 'reports') {
+			const delivered = queueReport(
+				{
+					bare: rewriter.bare,
+					cookie: async (target) =>
+						(
+							await rewriter.cookies.get(target, {
+								site: 'same-origin',
+								navigation: false,
+								method: 'POST',
+							})
+						).header(),
+				},
+				url.url,
+				await serverRequest.text(),
+				context?.clientId,
+			);
+			context?.waitUntil?.(delivered);
+			return new Response(null, { status: 204 });
+		}
 		// a navigation of a window that another document started, which the
 		// inject made from that window's realm (NavigationInitiator): that
 		// document is its initiator
@@ -7454,6 +7481,13 @@ export function registerRewrites(
 				// what later ones say as their piece of the markup reaches it)
 				const metas = metaPolicies(decoded);
 				const facts = factsOf(metas);
+				// its report-to endpoints, which the inject hands its reports
+				// to this worker for (reportUploads.ts)
+				const reportTo = reportingEndpoints(
+					response.headers.get('reporting-endpoints'),
+					url.url,
+				);
+				if (reportTo) facts.reportTo = reportTo;
 				// a top-level document's opener policy, which the browser never
 				// gets as the page sent it: a popup's window leaves its browsing
 				// context group when Chrome's rule says it does, by a policy of

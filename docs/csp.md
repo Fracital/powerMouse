@@ -39,8 +39,8 @@ rewritten inline script by them too, and a nonce or hash on the real
 injected element does not hold on the live proxy origin. The inject enforces
 those against the page's own code instead (Scripts and styles, below).
 report-uri and report-to are left out (the browser would post the proxy's
-URLs): the inject sends a document's reports to its report-uri itself
-(Reports, below). A report-only policy goes to the browser as one. A meta's content is
+URLs): the inject sends a document's reports to its report-uri itself,
+and hands those for its report-to to the service worker (Reports, below). A report-only policy goes to the browser as one. A meta's content is
 replaced by the browser policy for it (the inject's attribute hook; the page
 reads its own content back), and it applies when the meta is inserted, as
 natively. A meta outside the head is ignored, as natively: the browser gets
@@ -467,6 +467,29 @@ the cookies of an endpoint of the document's origin only and the Referer
 the document's policy gives it. csp-scripts compares what the fixture's
 endpoint receives, of its origin and of another.
 
+A policy's report-to sends to the endpoint its first token names in the
+document's Reporting-Endpoints (an https document's only, an endpoint of
+a potentially trustworthy URL only; the legacy Report-To header's groups
+are none, as natively). The service worker reads the header with the
+document's response (`src/server/reportUploads.ts` reportingEndpoints,
+into its ScriptFacts) and the shell gives the client them as `reportTo`
+(`src/htmlShell.ts` reportEndpoints). The inject hands each report (once
+per document, the place only where there is one) to the service worker as
+a `reports` load, and the worker delivers it as Chrome's Reporting API
+does (measured, Chrome 157): the first report at once, the ones queued
+after it together about a minute after the last upload, or at once when
+their document is gone (the worker looks for the documents of waiting
+reports every second, `clients.get`); each document's reports for one
+endpoint in one POST of `application/reports+json` (a list of `{age,
+body, type, url, user_agent}`, every member in alphabetical order), with
+Origin, User-Agent and Accept-Language and no Referer or Sec-Fetch-
+headers; an endpoint of another origin asked first by a CORS preflight
+(each upload, no cache) and sent no cookies, one of the document's origin
+sent them. A report outlives its document (the fetch event that handed it
+over waits until it is delivered), and one that failed goes with the next
+upload, up to five times. csp-reports compares what the endpoints of an
+https fixture receive, natively and in both modes.
+
 ## Sandbox
 
 A header policy's `sandbox` directive sandboxes its document as a frame's
@@ -593,9 +616,9 @@ refuses fires a violation, natively either.
   nonces, hashes or 'strict-dynamic' judges none of its imports. A
   worker's violation's lineNumber and columnNumber are 0, and its
   sourceFile is the worker's script even for a script it imported.
-- No report goes to a policy's report-to endpoint, nor to a worker's
-  policy's report-uri (the site never sees one; the page sees every
-  violation, as natively; csp-worker-requests lists a worker's as an
-  expected difference). A document's report-uri gets its reports (Reports).
+- No report goes to a worker's policy's report-uri (the site never sees
+  one; the page sees every violation, as natively; csp-worker-requests
+  lists it as an expected difference). A document's report-uri and
+  report-to get their reports (Reports).
 - An `<object>` of a page-made `blob:` URL does not load through the proxy,
   with or without a policy.

@@ -832,6 +832,13 @@ export interface ScriptFacts {
 	 * origins of its ancestors, nearest first (ancestorOrigins)
 	 */
 	framed?: { policies: HopPolicy[]; ancestors?: string[] };
+	/**
+	 * The document's report-to endpoints by name (its Reporting-Endpoints,
+	 * src/server/reportUploads.ts reportingEndpoints), which the shell gives
+	 * the client as `reportTo` (htmlShell.ts reportEndpoints); the client's
+	 * own facts never carry them
+	 */
+	reportTo?: Record<string, string>;
 }
 
 /**

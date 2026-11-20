@@ -101,6 +101,20 @@ export function scriptFacts(facts: ScriptFacts | undefined): string {
 }
 
 /**
+ * The shell's statement that gives the client its document's report-to
+ * endpoints (src/csp.ts ScriptFacts reportTo), which the inject's
+ * deferred delivery reads (src/inject/dom/violationDelivery.ts): a member
+ * of the client the bundle itself never names
+ */
+export function reportEndpoints(
+	client: string,
+	facts: ScriptFacts | undefined,
+): string {
+	if (!facts?.reportTo) return '';
+	return `\n\t${client}.reportTo = ${JSON.stringify(facts.reportTo).replace(/</g, '\\u003c')};`;
+}
+
+/**
  * The shell's statement that hands the facts to a client the window kept
  * from its initial document (a frame the parent injected before it
  * navigated, whose Window the browser keeps for a document of its origin):
@@ -353,7 +367,7 @@ ${leftKept(names.client, url)}} else {
 		delete document.URL; delete document.documentURI; delete document.baseURI; delete document.referrer; delete document.domain;`
 				: ''
 		}
-	}${keptFacts(names.client, facts)}${marked(names.client, url)}${
+	}${keptFacts(names.client, facts)}${reportEndpoints(names.client, facts)}${marked(names.client, url)}${
 		clientId
 			? `
 	${names.client}.servedClient = ${JSON.stringify(clientId).replace(/</g, '\\u003c')};`
