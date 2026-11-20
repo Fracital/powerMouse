@@ -823,6 +823,23 @@ export default class FetchModule extends Module<Client> {
 		const proto = global.Response.prototype;
 		const emptyHeaders = new LazyWeakMap<Response, Headers>();
 		const shownHeaders = new LazyWeakMap<Response, Headers>();
+		// the headers shown for an answer are immutable as its own are: a
+		// change throws once its arguments are good (they are checked on a
+		// throwaway, which throws as the browser does for bad ones)
+		const fixed = new LazyWeakSet<Headers>();
+		const headersProto = global.Headers.prototype;
+		for (const name of ['append', 'set', 'delete'] as const)
+			headersProto[name] = proxyModule.wrapFunction(
+				headersProto[name],
+				(target, that, args) => {
+					if (!fixed.has(that as Headers))
+						return Reflect.apply(target, that, args);
+					Reflect.apply(target, new global.Headers(), args);
+					throw new global.TypeError(
+						`Failed to execute '${name}' on 'Headers': Headers are immutable`,
+					);
+				},
+			) as never;
 		const opaque: Record<string, (that: Response) => unknown> = {
 			status: () => 0,
 			ok: () => false,
@@ -834,6 +851,7 @@ export default class FetchModule extends Module<Client> {
 				let headers = emptyHeaders.get(that);
 				if (!headers) {
 					headers = new global.Headers();
+					fixed.add(headers);
 					emptyHeaders.set(that, headers);
 				}
 				return headers;
@@ -873,6 +891,7 @@ export default class FetchModule extends Module<Client> {
 						while (i < bytes.length && bytes[i] !== key) i += 2;
 						shown.append(key, i < bytes.length ? bytes[i + 1] : value);
 					}
+					fixed.add(shown);
 					shownHeaders.set(that as Response, shown);
 				}
 				return shown;
