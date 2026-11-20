@@ -18,7 +18,6 @@ import { routeJS, ScriptType } from '../../../scriptRoutes';
 import { parseAcceptCH } from '../../../server/hintNames';
 import { parseSrcset, stringifySrcset } from '../../../srcset';
 import {
-	dataURLBytes,
 	INTEGRITY_MARK,
 	markIntegrity,
 	NO_INTEGRITY,
@@ -349,24 +348,24 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			const metadata = element.hasAttribute('integrity')
 				? element.getAttribute('integrity')
 				: element.getAttributeOG('integrity');
-			// a data: URL's bytes are here, and checked now: ones that do not
-			// match go to the browser as they are, with the page's metadata on
-			// the element, and it refuses them itself as natively (its error,
-			// its message, a stylesheet with no sheet). Nothing of them runs, so
-			// nothing needs rewriting. The digests are a deferred part
+			// a data: URL's bytes are checked now: ones that do not match go to
+			// the browser as they are, with the page's metadata on the element,
+			// and it refuses them itself as natively (its error, its message, a
+			// stylesheet with no sheet). Nothing of them runs, so nothing needs
+			// rewriting. The bytes and their digests are a deferred part
 			// (src/sriDigest.ts): without it the browser is given an empty
 			// data: URL to check instead, which runs nothing (and fails a
 			// digest), so the page's own never runs unrewritten
 			if (original?.protocol === 'data:' && metadata) {
-				const bytes = dataURLBytes(original.href);
 				let href = original.href;
-				let holds = false;
+				let holds: boolean | null;
 				try {
-					holds = !!bytes && deferred('integrityHoldsSync')(bytes, metadata);
+					holds = deferred('dataIntegrity')(original.href, metadata);
 				} catch (error) {
+					holds = false;
 					href = 'data:,';
 				}
-				if (bytes && !holds) {
+				if (holds === false) {
 					givenIntegrity.add(element);
 					element.setAttribute('integrity', metadata);
 					element.removeAttributeOG('integrity');
