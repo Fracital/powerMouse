@@ -17,10 +17,13 @@ import {
 	ok,
 	PROXY,
 	recordRequests,
+	RUN,
 	sleep,
 } from '../lib.mjs';
 
 const page = (run) => `${FIXTURE}pages/adv-css-decls.html?p=${run}`;
+/** the native run's name (each run's ends in lib.mjs RUN) */
+const NATIVE = `native${RUN}`;
 const fixtureHost = new URL(FIXTURE).host;
 /** the case keys of `run` among these URLs */
 const keysOf = (urls, run) =>
@@ -45,13 +48,13 @@ const native = await (async () => {
 	const context = await browser.newContext();
 	const recorder = await recordRequests(context);
 	const tab = await context.newPage();
-	await tab.goto(page('native'));
+	await tab.goto(page(NATIVE));
 	await tab.waitForFunction(() => window.__cssDeclsDone);
 	await sleep(1500);
 	const written = await tab.evaluate(() => window.__cssDecls);
 	const loaded = keysOf(
 		recorder.log.map((entry) => entry.url),
-		'native',
+		NATIVE,
 	);
 	await context.close();
 	return { written, loaded };
@@ -65,7 +68,7 @@ ok(
 );
 
 for (const mode of ['same-origin', 'isolated']) {
-	const run = mode === 'isolated' ? 'iso' : 'so';
+	const run = `${mode === 'isolated' ? 'iso' : 'so'}${RUN}`;
 	const context = await browser.newContext();
 	const recorder = await recordRequests(context);
 	const tab = await context.newPage();
@@ -114,7 +117,7 @@ for (const mode of ['same-origin', 'isolated']) {
 	const differ = Object.keys(native.written).filter(
 		(key) =>
 			JSON.stringify(written[key]).replaceAll(`k=${run}-`, 'k=-') !==
-			JSON.stringify(native.written[key]).replaceAll('k=native-', 'k=-'),
+			JSON.stringify(native.written[key]).replaceAll(`k=${NATIVE}-`, 'k=-'),
 	);
 	ok(
 		`${mode}: each block reads back what the page wrote, as natively`,

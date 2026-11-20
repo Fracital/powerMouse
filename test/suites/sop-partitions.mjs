@@ -25,6 +25,7 @@ import {
 	ok,
 	openDemo,
 	PROXY,
+	RUN,
 	sleep,
 	submitLanding,
 } from '../lib.mjs';
@@ -36,7 +37,7 @@ const B = new URL(FIXTURE.replace('127.0.0.1', 'localhost')).origin;
 const C = B.replace('localhost', 'c.localhost');
 /** the page in `role` on `site` (B's), under the run's tag `t` (`c`: site A's cached resource) */
 const part = (role, t, phase = 'before', site = B) =>
-	`${site}/pages/sop-part.html?role=${role}&phase=${phase}&t=${t}&c=${encodeURIComponent(A)}`;
+	`${site}/pages/sop-part.html?role=${role}&phase=${phase}&t=${t}${RUN}&c=${encodeURIComponent(A)}`;
 /** a page of `site` framing `src` */
 const framing = (site, src) =>
 	`${site}/pages/sop-part-a.html?src=${encodeURIComponent(src)}`;
@@ -61,7 +62,7 @@ const steps = (t) => [
 	// another site (last: it writes A's cookies)
 	[
 		'blank/before',
-		`${A}/pages/sop-part-blank.html?b=${encodeURIComponent(B)}&t=${t}&c=${encodeURIComponent(A)}`,
+		`${A}/pages/sop-part-blank.html?b=${encodeURIComponent(B)}&t=${t}${RUN}&c=${encodeURIComponent(A)}`,
 	],
 ];
 

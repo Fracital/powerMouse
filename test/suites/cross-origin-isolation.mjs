@@ -25,6 +25,7 @@ import {
 	ok,
 	openDemo,
 	PROXY,
+	RUN,
 	sleep,
 	waitForServer,
 } from '../lib.mjs';
@@ -136,7 +137,7 @@ const C = `http://localhost:${second.address().port}`;
 
 let run = 0;
 const pageURL = ({ headers, parts, redirects }) => {
-	const url = `${A}/coi/doc?parts=${parts}&b=${encodeURIComponent(B)}&c=${encodeURIComponent(C)}&k=r${++run}${headers
+	const url = `${A}/coi/doc?parts=${parts}&b=${encodeURIComponent(B)}&c=${encodeURIComponent(C)}&k=r${RUN}x${++run}${headers
 		.map((header) => `&h=${encodeURIComponent(header)}`)
 		.join('')}`;
 	// reached through a redirect of another site, then one of its own

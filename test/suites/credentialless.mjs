@@ -21,6 +21,7 @@ import {
 	ok,
 	openDemo,
 	PROXY,
+	RUN,
 	sleep,
 	submitLanding,
 } from '../lib.mjs';
@@ -29,7 +30,7 @@ const A = new URL(FIXTURE).origin;
 const B = new URL(FIXTURE.replace('127.0.0.1', 'localhost')).origin;
 /** the page in `role` on B, under the run's tag `t` (`c`: A's cached resource) */
 const part = (role, t, phase = 'before') =>
-	`${B}/pages/sop-part.html?role=${role}&phase=${phase}&t=${t}&c=${encodeURIComponent(A)}&popup=1`;
+	`${B}/pages/sop-part.html?role=${role}&phase=${phase}&t=${t}${RUN}&c=${encodeURIComponent(A)}&popup=1`;
 /** a page of `site` framing each of `sources` in turn, credentialless when `cl` */
 const framing = (site, sources, cl = true) =>
 	`${site}/pages/sop-part-a.html?${cl ? 'cl=1&' : ''}${sources
@@ -107,7 +108,8 @@ async function run(open, t) {
 
 // The run's tags are this suite's own: sop-partitions loads the same pages,
 // and what the fixture counts (its /sop/log, one store for every suite of a
-// runner) and the sites' cookies (whatever the port) are kept by tag
+// runner) and the sites' cookies (whatever the port) are kept by tag (and
+// by lib.mjs RUN, for a run that comes again)
 const tagOf = (mode) => `cl${mode.replace('-', '')}`;
 
 let nativePage = null;
