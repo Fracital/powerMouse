@@ -1126,12 +1126,18 @@ async function boot() {
 		await startController(name);
 	}
 	// a deploy can leave an older service worker in charge for a moment: the
-	// controller keeps working on it and rebinds when the new one activates
-	controller.addEventListener('stale', () =>
-		setStatus('Ready (service worker updating)'),
-	);
-	controller.addEventListener('rebind', () => setStatus('Ready'));
-	setStatus(controller.stale ? 'Ready (service worker updating)' : 'Ready');
+	// controller keeps working on it and rebinds when the new one activates.
+	// A tab open during a deploy is the other way round: its page is the
+	// older build, and only a reload brings the two together
+	const readyStatus = () =>
+		!controller.stale
+			? 'Ready'
+			: controller.stale.newer === 'worker'
+				? 'Ready (STomp was updated: reload the page)'
+				: 'Ready (service worker updating)';
+	controller.addEventListener('stale', () => setStatus(readyStatus()));
+	controller.addEventListener('rebind', () => setStatus(readyStatus()));
+	setStatus(readyStatus());
 	badge('Controller', `ready, codec ${controller.config.codec}`, 'green');
 }
 

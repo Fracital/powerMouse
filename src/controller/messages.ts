@@ -299,8 +299,20 @@ export type FrameBound = {
 
 /** the two builds in a mismatch, as the host sees them on `controller.stale` */
 export interface StaleInfo {
+	/** the controller bundle's build (the page's) */
 	controller: string;
+	/** the service worker's build */
 	worker: string;
+	/**
+	 * Which build is the newer one. `worker`: an update check found nothing
+	 * newer than the worker, so the page loaded before a deploy (a tab that
+	 * stayed open); no `rebind` comes, and only a reload of the page runs
+	 * the worker's build. `controller`: a newer worker is installing, and the
+	 * controller switches to it and fires `rebind` when it activates. Null
+	 * when neither could be told (no registration, an update check that
+	 * failed or did not finish in time).
+	 */
+	newer: 'worker' | 'controller' | null;
 }
 
 /** implemented by the host, called by the controller frame */
