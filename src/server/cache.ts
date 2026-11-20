@@ -310,7 +310,17 @@ export interface CacheHit {
 }
 
 /** a body this long at most (by its Content-Length) is read whole for a store whatever the page does */
-const FINISHED_LENGTH = 64 * 1024;
+export const FINISHED_LENGTH = 64 * 1024;
+
+/**
+ * Responses whose body is all of a Blob the worker holds: a short image's
+ * or font's, read whole as it came (src/server/rewrites.ts wholeResponse),
+ * or an entry of the memory cache. Each store keeps that Blob and the page
+ * is given it, where each used to read a branch of the body (a tee per
+ * store, every chunk through this thread for each) and the memory cache
+ * copied what it read into a Blob of its own.
+ */
+export const wholeBodies = new WeakMap<Response, Blob>();
 
 /**
  * A response body for a store that keeps it (this cache, the memory cache)
@@ -538,14 +548,15 @@ export class HttpCache {
 		return pending;
 	}
 	/**
-	 * store the upstream response (its body stream is consumed); one the
-	 * store does not take is not kept, and that is all
+	 * store the upstream response (its body stream is consumed, or its
+	 * whole body as a Blob); one the store does not take is not kept, and
+	 * that is all
 	 */
 	put(
 		url: string,
 		requestHeaders: Headers,
 		response: Response,
-		body: ReadableStream<Uint8Array> | null,
+		body: ReadableStream<Uint8Array> | Blob | null,
 		part?: Part,
 	): Promise<void> {
 		const write = this.write(url, requestHeaders, response, body, part)
@@ -560,7 +571,7 @@ export class HttpCache {
 		url: string,
 		requestHeaders: Headers,
 		response: Response,
-		body: ReadableStream<Uint8Array> | null,
+		body: ReadableStream<Uint8Array> | Blob | null,
 		part?: Part,
 	): Promise<void> {
 		const headers = new Headers(response.headers);
@@ -569,10 +580,14 @@ export class HttpCache {
 		for (const name of OWN) headers.delete(name);
 		if (part) headers.set(PART, `${part.from}-${part.to}/${part.size}`);
 		let size = Number(headers.get('content-length')) || 0;
-		let kept: ReadableStream<Uint8Array> | ArrayBuffer | null = body;
+		let kept: ReadableStream<Uint8Array> | ArrayBuffer | Blob | null = body;
+		if (body instanceof Blob) {
+			if (body.size > ENTRY_LIMIT) return;
+			size = body.size;
+		}
 		// a body that does not say its length is read first: the budget counts
 		// what it is, and one over the entry limit is not kept
-		if (body && !headers.has('content-length')) {
+		else if (body && !headers.has('content-length')) {
 			kept = await wholeBody(body);
 			if (kept === null) return;
 			size = kept.byteLength;
@@ -926,11 +941,13 @@ export class MemoryCache {
 		this.#entries.delete(key);
 		this.#entries.set(key, entry);
 		headers.set('age', String(Math.max(0, Math.round(age))));
-		return new Response(entry.body, {
+		const response = new Response(entry.body, {
 			status: entry.status,
 			statusText: entry.statusText,
 			headers,
 		});
+		wholeBodies.set(response, entry.body);
+		return response;
 	}
 	/** whether a response is one to keep: a fresh 200 of a size it takes */
 	static keeps(status: number, headers: Headers): boolean {
@@ -962,7 +979,17 @@ export class MemoryCache {
 			}
 			chunks.push(value);
 		}
-		const bytes = new Blob(chunks as Uint8Array<ArrayBuffer>[]);
+		this.keep(
+			key,
+			requestHeaders,
+			response,
+			new Blob(chunks as Uint8Array<ArrayBuffer>[]),
+		);
+	}
+	/** keep `bytes`, the whole body of `response`, under `key` */
+	keep(key: string, requestHeaders: Headers, response: Response, bytes: Blob) {
+		const size = bytes.size;
+		if (size > Math.min(MEMORY_ENTRY_LIMIT, this.#budget)) return;
 		const headers = new Headers(response.headers);
 		headers.delete('set-cookie');
 		const old = this.#entries.get(key);
