@@ -27,6 +27,19 @@
 			'<\/script></template></div>',
 	);
 </script>
+<!-- a declarative shadow root's script of the page's own markup runs as the
+parser makes it -->
+<div>
+	<template shadowrootmode="open">
+		<script>
+			__advHit(
+				'markup declarative script',
+				top === window ? 'self' : 'OTHER-WINDOW',
+				location.href,
+			);
+		</script>
+	</template>
+</div>
 <script>
 	// Every route by which text becomes running script: script element text
 	// setters and text-node mutations, script src from data:/blob:, inline

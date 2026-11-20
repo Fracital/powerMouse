@@ -495,8 +495,10 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 		// the kind is read natively: an HTML script gets the script prototype,
 		// an SVG one (inline SVG, an SVG document) the element's
 		const rewriteAnyScript = (node: Node, willConnect: boolean) => {
-			// (rewritten by the copy's own pass next, with what markup's take)
-			if (client.copyingMarkup) return;
+			// (rewritten by the copy's own pass next, with what markup's take;
+			// not one in a template's content, which that pass never reads and
+			// which runs where it is a declarative shadow root's)
+			if (client.copyingMarkup && !inertClones.has(node)) return;
 			const namespace = Reflect.apply(namespaceGet, node, []);
 			if (namespace === HTML_NAMESPACE)
 				usePrototype(node, nativeHTMLScriptElement, (script) =>

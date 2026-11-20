@@ -537,7 +537,10 @@ export function inertHTMLDocument(like: Document): Document | null {
  * document.currentScript (a declarative shadow root), never runs (a plain
  * template) or is text (a noscript, with scripting on), so markup that
  * replaces itself from a script (DOMContentHooks' parsed <style>) must land
- * as itself there.
+ * as itself there. A script among them is rewritten as it is copied, even
+ * in a copy of markup (DocumentClient.copyingMarkup): the copy's own pass
+ * (rewriteInlineScripts) reads no template's content, and a declarative
+ * shadow root's script runs in the written page.
  */
 export const inertClones = new LazyWeakSet<Node>();
 
@@ -646,6 +649,7 @@ export default function cloneRawNode(
 							d[0],
 						]) as Element;
 						startedScripts.add(script);
+						if (d[3]) inertClones.add(script);
 						// attributes first, on an empty element (the type hook reads the
 						// text), then the source back, like a fresh clone would
 						const children = [...script.childNodes];
