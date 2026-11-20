@@ -174,6 +174,39 @@ export const REMOTE_RPC = 'stomp-remote';
  */
 export const STORAGE_BLOCKED = 'StorageBlockedError';
 
+/**
+ * The `name` of the error RemoteController.wait() rejects with when the
+ * controller frame refuses the page that embeds it: its
+ * `stomp-allowed-origins` meta does not list the page's origin, or the
+ * page's origin is opaque (a sandboxed document, a data: URL), which the
+ * frame can neither check nor answer.
+ */
+export const EMBEDDER_REFUSED = 'EmbedderRefusedError';
+
+/**
+ * Posted by a controller frame that cannot read its embedder's origin at
+ * load (the host page's Referrer-Policy is `no-referrer` or `same-origin`,
+ * in a browser without `location.ancestorOrigins`), to any origin: the host
+ * answers with the same message, and the browser's `event.origin` of that
+ * answer is the embedder's origin.
+ */
+export const FRAME_HELLO = '$stomp$frameHello';
+
+/**
+ * Posted by a controller frame that refused its embedder, to any origin
+ * (it carries the reason and the origin the frame saw, both the page's own
+ * to know): the host's `wait()` rejects with an EmbedderRefusedError.
+ */
+export const FRAME_REFUSED = '$stomp$frameRefused';
+
+/** why a controller frame refused its embedder (FRAME_REFUSED) */
+export interface FrameRefusal {
+	/** `listed`: the meta lists origins and not this one; `opaque`: the page's origin is opaque */
+	reason: 'listed' | 'opaque';
+	/** the embedder's origin as the frame saw it */
+	origin: string;
+}
+
 /** implemented by the controller frame, called by the host */
 export type FrameBound = {
 	init: [

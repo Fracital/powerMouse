@@ -68,9 +68,13 @@ import {
 	REPORT_GRACE_MS,
 } from './index';
 import {
+	EMBEDDER_REFUSED,
+	FRAME_HELLO,
+	FRAME_REFUSED,
 	FrameBound,
 	FrameCommand,
 	FrameInfo,
+	FrameRefusal,
 	HostBound,
 	REMOTE_RPC,
 	StaleInfo,
@@ -220,6 +224,17 @@ export interface RemoteRequestEvent extends RequestInfo {
 
 /** how long the host has to start the navigation a page's open request asked for (RemoteController.openerSlot) */
 const OPENED_TTL_MS = 10000;
+
+/** the error `wait()` rejects with when the controller frame refused this page (FRAME_REFUSED) */
+function refusalError(refusal: FrameRefusal, proxyOrigin: string): Error {
+	const error = new Error(
+		refusal.reason === 'opaque'
+			? `The controller frame at ${proxyOrigin} refuses this page: the page's origin is opaque (a sandboxed document or a data: URL), so the frame cannot check it against its stomp-allowed-origins or answer it. Embed the controller from a page with an origin of its own.`
+			: `The controller frame at ${proxyOrigin} refuses this page: its stomp-allowed-origins meta does not list ${String(refusal.origin)}. Add the origin to the meta in controllerFrame.html on the proxy origin.`,
+	);
+	error.name = EMBEDDER_REFUSED;
+	return error;
+}
 
 export const DEFAULT_SANDBOX =
 	'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock allow-presentation allow-orientation-lock allow-storage-access-by-user-activation';
@@ -403,9 +418,17 @@ export class RemoteController extends EventTarget {
 		this.element.title = 'Stomp controller';
 
 		let frameReady!: () => void;
-		const frameReadyPromise = new Promise<void>(
-			(resolve) => (frameReady = resolve),
-		);
+		let frameFailed!: (error: Error) => void;
+		const frameReadyPromise = new Promise<void>((resolve, reject) => {
+			frameReady = resolve;
+			frameFailed = reject;
+		});
+		// a page of an opaque origin is one no controller frame serves (and a
+		// sandboxed one makes its frames opaque too, which then cannot say so)
+		if (self.origin === 'null')
+			frameFailed(
+				refusalError({ reason: 'opaque', origin: 'null' }, this.proxyOrigin),
+			);
 
 		this.#rpc = new RpcHelper<HostBound, FrameBound>(
 			{
@@ -556,6 +579,21 @@ export class RemoteController extends EventTarget {
 			)
 				return;
 			if (event.source === this.element.contentWindow) {
+				const data = event.data as Record<string, unknown> | null;
+				// a frame that could not read this page's origin at load asks
+				// for it: the browser tells it with this answer
+				if (data?.[FRAME_HELLO] === true) {
+					this.element.contentWindow?.postMessage(
+						{ [FRAME_HELLO]: true },
+						this.proxyOrigin,
+					);
+					return;
+				}
+				const refused = data?.[FRAME_REFUSED] as FrameRefusal | undefined;
+				if (refused && typeof refused === 'object') {
+					frameFailed(refusalError(refused, this.proxyOrigin));
+					return;
+				}
 				this.#rpc.receive(event.data);
 				return;
 			}

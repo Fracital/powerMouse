@@ -407,11 +407,11 @@ What the isolated mode consists of:
   module (which must also live on the proxy origin) and runs the real
   controller. Its `<meta name="stomp-allowed-origins">` lists the host
   origins allowed to drive it, space separated; left empty, it trusts the
-  page that embedded it. Set it for a real deployment. Either way the frame
-  reads the host's origin from `document.referrer` once, at load, so the
-  host page must send its origin as the referrer (the default
-  `strict-origin-when-cross-origin` does; `no-referrer` and `same-origin`
-  leave the frame with no host, and it does not start the controller).
+  page that embedded it (the parent's origin, read once at load; a page
+  that sends no referrer is asked, and the browser names the origin of its
+  answer). Set it for a real deployment: a page of an origin it does not
+  list, or of an opaque origin, gets an `EmbedderRefusedError` from
+  `wait()`.
 - Proxied frames get `DEFAULT_SANDBOX`:
   `sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock allow-presentation allow-orientation-lock allow-storage-access-by-user-activation"`
   (the same list in the same-origin mode).
