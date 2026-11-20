@@ -1468,8 +1468,22 @@ export default class DocumentClient extends Client {
 		}
 		return this.#policyCreator()?.pagePolicyText(text) ?? null;
 	}
+	/**
+	 * Whether this document has no policy: none from its headers, none made
+	 * of a meta (metaPolicy) and none inherited (it is not a local
+	 * document). Most frames have none, and the hooks ask for the policies
+	 * at every script and handler of the markup
+	 */
+	#noPolicies(): boolean {
+		return (
+			this.#policyTexts.length === 0 &&
+			this.#metaPolicies.size === 0 &&
+			!this.#local
+		);
+	}
 	/** the browser policies of this document, its own and those it inherited */
 	browserPolicies(): string[] {
+		if (this.#noPolicies()) return [];
 		return [
 			...[...this.policyTexts, ...this.#metaTexts()]
 				.map(([browser]) => browser)
@@ -1483,6 +1497,12 @@ export default class DocumentClient extends Client {
 	 * (the real URL of the document whose policy it is)
 	 */
 	pagePolicies(): { policy: Policy; browser: string; self: URL }[] {
+		// (the work is a function of its own: V8 makes a function's feedback
+		// once it ran a few times, and a handler attribute's judgement made
+		// every frame with one carry that one's, about 0.7 KB, frame-cost)
+		return this.#noPolicies() ? [] : this.#pagePolicies();
+	}
+	#pagePolicies(): { policy: Policy; browser: string; self: URL }[] {
 		const texts = [...this.policyTexts, ...this.#metaTexts()];
 		if (this.#parsedPolicies?.count !== texts.length) {
 			const own: { policy: Policy; browser: string; self: URL }[] = [];
