@@ -1,5 +1,1 @@
-{
-	"/cookies/ordering/ordering.sub.html": {
-		"Cookies with longer paths are listed before cookies with shorter paths": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Failed to fetch\""
-	}
-}
+{}

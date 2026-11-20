@@ -809,12 +809,12 @@ that Chrome 157 run:
 | `wpt-encoding-api`               | 94        | 2            | 12             |
 | `wpt-encoding-legacy`            | 27        | 10           | 428            |
 | `wpt-csp`                        | 53        | 6            | 25             |
-| `wpt-cookies`                    | 29        | 1            | 1              |
+| `wpt-cookies`                    | 29        | 0            | 0              |
 | `wpt-cookies-more`               | 24        | 2            | 10             |
 | `wpt-referrer-policy`            | 276       | 0            | 0              |
 | `wpt-history`                    | 65        | 4            | 87             |
 | `wpt-location`                   | 66        | 6            | 12             |
-| `wpt-windows`                    | 48        | 3            | 3              |
+| `wpt-windows`                    | 48        | 2            | 2              |
 | `wpt-script-element`             | 74        | 8            | 11             |
 | `wpt-script-timing`              | 156       | 10           | 17             |
 | `wpt-modules`                    | 109       | 16           | 25             |

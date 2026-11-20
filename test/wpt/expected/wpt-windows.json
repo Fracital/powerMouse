@@ -1,7 +1,4 @@
 {
-	"/html/browsers/windows/browsing-context-names/choose-_parent-002.html": {
-		"choosing _parent context: multiple nested contexts": "FAIL: assert_equals: expected (string) \"iframeParent\" but got (undefined) undefined"
-	},
 	"/html/browsers/windows/embedded-opener-remove-frame.html": {
 		"(harness)": "TIMEOUT: "
 	},

@@ -42,14 +42,9 @@ The list is empty. Two gaps no kept test measures, from reading the code:
 
 ## wpt-cookies
 
-- `cookies/ordering/ordering.sub.html` (1: "Cookies with longer paths are
-  listed before cookies with shorter paths"): the popup's
-  `fetch('/cookies/resources/cookie.py?set=...&location=...')`, a redirect
-  whose response sets cookies, fails with `TypeError: Failed to fetch` where
-  Chrome follows it. Cause not yet known; seen only in a browser popup of
-  another site opened by the proxied page. The next step is a worker-side log
-  of that fetch (the redirect handling for a client that is a top-level popup
-  rather than a frame of the host).
+No failures listed. `cookies/ordering/ordering.sub.html` passes since a
+popup opened on another origin started using its own client. Its fetch
+follows the redirect and the longer-path cookie comes first.
 
 ## wpt-cookies-more
 
@@ -881,11 +876,6 @@ workers, webstorage, IndexedDB).
   either because the blob: document is the opener's origin (so the hold
   rightly stays and the read goes to the stale about:blank realm) or because
   the read is of the window's old Location. Not narrowed.
-- `html/browsers/windows/browsing-context-names/choose-_parent-002.html` (1):
-  `undefined` for `"iframeParent"`, in a popup only (the same tree in frames
-  of the page passes). Inference, not traced: a message other than the
-  page's own, probably one of the proxy's, reaches the popup page's `message`
-  listener, which relays it to the opener.
 - `html/browsers/windows/embedded-opener-remove-frame.html` (1: the harness
   TIMEOUT): timing dependent, cause not yet known. It also fails alone at
   8d040b33 and at 5bd9c474 with this harness, where the sub-streams' own
@@ -894,6 +884,10 @@ workers, webstorage, IndexedDB).
 Cleared on the combined tree: `frameElement.sub.html` (`frames[0]`, an
 about:blank iframe, read as cross-origin; the lead's about:blank origin
 fix).
+
+`html/browsers/windows/browsing-context-names/choose-_parent-002.html`
+passes since a frame stopped sending host messages to its popup. The popup
+relays the child frame's message to the opener, which reads `iframeParent`.
 
 ## wpt-workers-basics
 
