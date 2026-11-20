@@ -344,6 +344,11 @@ else if (window === window.parent || !origins.length) {
 					controller.addEventListener('rebind', () => {
 						rpc.call('stale', null);
 					});
+					// and every takeover of a newer service worker: the host's
+					// frames send again a navigation it may have lost
+					controller.onHandover(() => {
+						rpc.call('handover', undefined);
+					});
 					// and `carrier`, with its event
 					controller.addEventListener('carrier', (event) => {
 						rpc.call('carrier', (event as CustomEvent<CarrierInfo>).detail);

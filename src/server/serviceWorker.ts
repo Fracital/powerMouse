@@ -989,7 +989,7 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
 	if (
 		address !== null &&
 		!controllers.has(address) &&
-		Date.now() - STARTED_AT < REVIVE_HOLD_MS
+		Date.now() - reviveFrom < REVIVE_HOLD_MS
 	) {
 		event.waitUntil(
 			registered(() => controllers.has(address)).then(() =>
@@ -2143,6 +2143,16 @@ function originKeyed(response: Response): Response {
 
 /** when this worker (re)started: its first moments are the revive window */
 const STARTED_AT = Date.now();
+/**
+ * When the revive window began: the start, and again the activation. A new
+ * build's worker starts when it installs and may wait long before it
+ * activates (Chrome activates it once the old one has no event in
+ * progress); from then on every controller's address is its, and none has
+ * shaken hands with it yet. The window from its start was long over, and
+ * what the pages asked before their controller's handshake reached it went
+ * to the host's server (a frame's whoami, its scripts, its storage calls).
+ */
+let reviveFrom = STARTED_AT;
 /** this run of the worker, to its controllers (ReviveMessage) */
 const INSTANCE = `${STARTED_AT.toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 /**
@@ -2204,7 +2214,7 @@ async function heldForRevive(
 
 /** resolves once `there()` holds (looked at with every registration), or when the revive window ends */
 async function registered(there: () => boolean): Promise<void> {
-	const deadline = STARTED_AT + REVIVE_HOLD_MS;
+	const deadline = reviveFrom + REVIVE_HOLD_MS;
 	while (!there() && Date.now() < deadline)
 		await new Promise<void>((resolve) => {
 			const wake = () => {
@@ -2254,7 +2264,7 @@ async function answerLink(event: FetchEvent, scope: string): Promise<Response> {
 			status: 307,
 			headers: { location: back, 'cache-control': 'no-store' },
 		});
-	const deadline = STARTED_AT + REVIVE_HOLD_MS;
+	const deadline = reviveFrom + REVIVE_HOLD_MS;
 	while (!scopeControllers(scope).length && Date.now() < deadline)
 		await new Promise<void>((resolve) => {
 			const wake = () => {
@@ -2645,18 +2655,45 @@ self.addEventListener('fetch', (event: FetchEvent) => {
 	if (
 		!controllerFor(pathname) &&
 		!closedFor(event.request, pathname) &&
-		Date.now() - STARTED_AT < REVIVE_HOLD_MS &&
+		Date.now() - reviveFrom < REVIVE_HOLD_MS &&
 		addressShaped(pathname)
 	) {
 		event.respondWith(heldForRevive(event, pathname));
 		return;
 	}
 	const answer = answerFor(event, pathname);
-	if (answer) event.respondWith(answer);
+	if (answer)
+		event.respondWith(
+			event.request.mode === 'navigate' ? lasting(event, answer) : answer,
+		);
 	// the site pool: a slot's navigation whose agent is gone
 	else if (event.request.mode === 'navigate' && addressShaped(pathname))
 		event.respondWith(unclaimed(event.request, pathname));
 });
+
+/**
+ * A navigation's answer, whose body this worker goes on writing once it is
+ * handed over (the rewriter streams the document): the event lasts until
+ * the body is written. Chrome activates a waiting worker the moment the
+ * active one has no event in progress, and stops the old one there and
+ * then: a document it was still writing never ended, and its frame showed
+ * nothing for good.
+ */
+function lasting(
+	event: FetchEvent,
+	answer: Promise<Response>,
+): Promise<Response> {
+	return answer.then((response) => {
+		if (!response.body || response.type !== 'default') return response;
+		const { readable, writable } = new TransformStream<Uint8Array>();
+		event.waitUntil(response.body.pipeTo(writable).catch(() => {}));
+		return new Response(readable, {
+			status: response.status,
+			statusText: response.statusText,
+			headers: response.headers,
+		});
+	});
+}
 
 self.addEventListener('install', () => {
 	self.skipWaiting();
@@ -2671,6 +2708,7 @@ self.addEventListener('install', () => {
 // not be trusted): the cache falls back to the build in its key and is
 // dropped on every activation, as it was before.
 self.addEventListener('activate', (event: ExtendableEvent) => {
+	reviveFrom = Date.now();
 	event.waitUntil(
 		Promise.all([
 			self.clients.claim(),

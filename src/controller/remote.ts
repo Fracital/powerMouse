@@ -43,6 +43,7 @@ import { hostReload } from './hostReload';
 import { controllerId, forgetControllerIds, keptControllerId } from './id';
 import {
 	activatedReport,
+	arrival,
 	clientReport,
 	CookieJar,
 	cookieJar,
@@ -239,6 +240,13 @@ export class RemoteController extends EventTarget {
 	/** the inner controller's `carrier` (see StompController), with its `carrier` event */
 	carrier: CarrierInfo | null = null;
 	frames: RemoteFrame[] = [];
+	/** the handover listeners (StompController.onHandover, relayed by the controller frame) */
+	#handovers = new Set<() => void>();
+	/** @internal see StompController.onHandover */
+	onHandover(listener: () => void): () => void {
+		this.#handovers.add(listener);
+		return () => this.#handovers.delete(listener);
+	}
 	/**
 	 * The host's browser window as its frames' documents see it
 	 * (./geometry.ts), kept by the controller frame (and its slots' agents)
@@ -425,6 +433,9 @@ export class RemoteController extends EventTarget {
 				},
 				// the transport's notes are this page's console's
 				transportNote: async (note) => printNote(note),
+				handover: async () => {
+					for (const listener of [...this.#handovers]) listener();
+				},
 				stale: async (info) => {
 					const was = this.stale;
 					this.stale = info;
@@ -1001,10 +1012,21 @@ export class RemoteFrame extends EventTarget {
 				.catch(() => {});
 		// where the frame is, for its first document's first script
 		await this.controller.measureGeometry();
+		const before = this.element.contentDocument;
 		this.element.src = routed;
 		this.#keepFocusAcrossCommit();
 		this.url = url;
-		await reported;
+		// a navigation a new service worker's takeover lost is sent again
+		// (see Frame.#arrival)
+		await arrival(
+			this.element,
+			routed,
+			reported,
+			(listener) => this.controller.onHandover(listener),
+			() => this.#nextReport(),
+			before,
+			() => this.#keepFocusAcrossCommit(),
+		);
 	}
 	/**
 	 * A focused frame still showing a document of the host's origin (its
