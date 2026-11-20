@@ -30,11 +30,7 @@
 // - in Firefox (headless, over WebDriver BiDi), where it is installed and
 //   not on CI; FIREFOX names another binary.
 // A part that cannot run says SKIP. A difference left is on KNOWN, with why.
-import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
-import { createServer } from 'node:net';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { proxiedGo, withFirefox, withWebKit } from '../engines.mjs';
 import {
 	done,
 	FIXTURE,
@@ -188,28 +184,7 @@ for (const [name, kind] of Object.entries(KINDS)) {
 	}
 }
 
-const which = (name) =>
-	(process.env.PATH ?? '')
-		.split(':')
-		.map((dir) => join(dir, name))
-		.find((path) => existsSync(path));
-
-function freePort() {
-	return new Promise((resolve, reject) => {
-		const probe = createServer();
-		probe.unref();
-		probe.on('error', reject);
-		probe.listen(0, '127.0.0.1', () => {
-			const { port } = probe.address();
-			probe.close(() => resolve(port));
-		});
-	});
-}
-
-const LANDING_READY = "document.getElementById('logMsg')?.textContent || ''";
-const submitScript = (url) =>
-	`const form = document.getElementById('mainForm'); form.url.value = ${JSON.stringify(url)}; form.requestSubmit();`;
-const REPORT = 'window.__coiEngine ? JSON.stringify(window.__coiEngine) : null';
+const REPORT = 'window.__coiEngine';
 
 /**
  * Every kind natively and through the demo in both modes, in a browser
@@ -250,13 +225,7 @@ async function compareEngine(engine, open) {
 			const proxied = await open();
 			let got;
 			try {
-				await proxied.go(base);
-				for (let i = 0; i < 90; i++) {
-					const text = await proxied.evaluate(LANDING_READY);
-					if (/^(Ready|Error)/.test(text)) break;
-					await sleep(500);
-				}
-				await proxied.evaluate(`(() => { ${submitScript(url)} })()`);
+				await proxiedGo(proxied, base, url);
 				got = await proxied.report();
 			} finally {
 				await proxied.close();
@@ -266,223 +235,13 @@ async function compareEngine(engine, open) {
 	}
 }
 
-// ---- WebKit ----
+// ---- WebKit and Firefox (test/engines.mjs) ----
 
-const MINIBROWSERS = [
-	process.env.WEBKIT_MINIBROWSER,
-	'/usr/libexec/webkit2gtk-4.1/MiniBrowser',
-	'/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/MiniBrowser',
-	'/usr/libexec/webkitgtk-6.0/MiniBrowser',
-].filter(Boolean);
-const miniBrowser = MINIBROWSERS.find((path) => existsSync(path));
-const driverBinary = which('WebKitWebDriver');
-const westonBinary = which('weston');
-const runtimeDir = process.env.XDG_RUNTIME_DIR;
-
-if (!miniBrowser || !driverBinary || !westonBinary || !runtimeDir)
-	console.log(
-		`SKIP coi-engines WebKit part: needs WebKitWebDriver, a WebKitGTK MiniBrowser, weston and XDG_RUNTIME_DIR (${JSON.stringify({ miniBrowser, driverBinary, westonBinary, runtimeDir })})`,
-	);
-else {
-	// a compositor of the suite's own with no output: nothing reaches a display
-	const socket = `stomp-coi-engines-${process.pid}`;
-	const weston = spawn(
-		westonBinary,
-		['--backend=headless', `--socket=${socket}`, '--idle-time=0'],
-		{ stdio: 'ignore' },
-	);
-	const env = {
-		...process.env,
-		WAYLAND_DISPLAY: socket,
-		GDK_BACKEND: 'wayland',
-		// the MiniBrowser loads the fixture and the demo only; WebKit's own
-		// bubblewrap sandbox cannot start inside another one (a Firejail's
-		// stand-in bwrap), and its web process dies there before any page
-		WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: '1',
-	};
-	delete env.DISPLAY;
-	for (let i = 0; i < 40 && !existsSync(join(runtimeDir, socket)); i++)
-		await sleep(250);
-	const driverPort = await freePort();
-	const driver = spawn(driverBinary, [`--port=${driverPort}`], {
-		stdio: 'ignore',
-		env,
-	});
-	const call = async (method, path, body) => {
-		for (let i = 0; ; i++) {
-			try {
-				const response = await fetch(`http://127.0.0.1:${driverPort}${path}`, {
-					method,
-					headers: { 'content-type': 'application/json' },
-					body: body ? JSON.stringify(body) : undefined,
-				});
-				return (await response.json()).value;
-			} catch (error) {
-				if (i > 80) throw error;
-				await sleep(250);
-			}
-		}
-	};
-	/** a session of a fresh MiniBrowser */
-	const open = async () => {
-		const session = await call('POST', '/session', {
-			capabilities: {
-				alwaysMatch: {
-					'webkitgtk:browserOptions': {
-						binary: miniBrowser,
-						args: ['--automation'],
-					},
-				},
-			},
-		});
-		const id = session?.sessionId;
-		if (!id) throw new Error(`no WebKit session: ${JSON.stringify(session)}`);
-		const evaluate = (expression) =>
-			call('POST', `/session/${id}/execute/sync`, {
-				script: `return ${expression}`,
-				args: [],
-			});
-		const frame = (index) =>
-			call('POST', `/session/${id}/frame`, { id: index });
-		const parent = () => call('POST', `/session/${id}/frame/parent`, {});
-		/** the report of the page, or of the first frame below it that has one */
-		const look = async (depth) => {
-			const own = await evaluate(REPORT);
-			if (typeof own === 'string') return JSON.parse(own);
-			if (depth > 2) return null;
-			const count = await evaluate('window.frames.length');
-			for (let i = 0; i < count; i++) {
-				await frame(i);
-				const found = await look(depth + 1);
-				await parent();
-				if (found) return found;
-			}
-			return null;
-		};
-		return {
-			go: (url) => call('POST', `/session/${id}/url`, { url }),
-			evaluate,
-			report: async () => {
-				for (let i = 0; i < 120; i++) {
-					const found = await look(0);
-					if (found) return found;
-					await sleep(500);
-				}
-				return null;
-			},
-			close: () => call('DELETE', `/session/${id}`).catch(() => {}),
-		};
-	};
-	try {
-		await compareEngine('WebKit', open);
-	} finally {
-		driver.kill('SIGTERM');
-		weston.kill('SIGTERM');
-	}
-}
-
-// ---- Firefox ----
-
-const firefoxBinary = process.env.FIREFOX ?? which('firefox');
-
-if (!firefoxBinary || (process.env.CI && !process.env.FIREFOX))
-	console.log(
-		`SKIP coi-engines Firefox part: ${firefoxBinary ? 'CI (FIREFOX names a binary to run it there)' : 'no firefox (FIREFOX names one)'}`,
-	);
-else {
-	const port = await freePort();
-	const profile = mkdtempSync(join(tmpdir(), 'stomp-coi-engines-ff-'));
-	const firefox = spawn(
-		firefoxBinary,
-		[
-			'--headless',
-			'--no-remote',
-			'--profile',
-			profile,
-			`--remote-debugging-port=${port}`,
-			'about:blank',
-		],
-		{ stdio: 'ignore' },
-	);
-	let socket = null;
-	for (let i = 0; i < 120 && !socket; i++) {
-		await sleep(500);
-		try {
-			const attempt = new WebSocket(`ws://127.0.0.1:${port}/session`);
-			await new Promise((resolve, reject) => {
-				attempt.onopen = resolve;
-				attempt.onerror = reject;
-			});
-			socket = attempt;
-		} catch (error) {
-			// not listening yet
-		}
-	}
-	try {
-		if (!socket) throw new Error('Firefox never offered WebDriver BiDi');
-		let id = 0;
-		const pending = new Map();
-		socket.onmessage = (event) => {
-			const message = JSON.parse(event.data);
-			pending.get(message.id)?.(message);
-			pending.delete(message.id);
-		};
-		const send = (method, params = {}) =>
-			new Promise((resolve) => {
-				const n = ++id;
-				pending.set(n, resolve);
-				socket.send(JSON.stringify({ id: n, method, params }));
-			});
-		await send('session.new', { capabilities: {} });
-		const evaluateIn = async (context, expression) => {
-			const answer = await send('script.evaluate', {
-				expression,
-				target: { context },
-				awaitPromise: false,
-				resultOwnership: 'none',
-			});
-			return answer.result?.result?.value ?? null;
-		};
-		const open = async () => {
-			const created = await send('browsingContext.create', { type: 'tab' });
-			const context = created.result.context;
-			/** the report of the page, or of the first frame below it that has one */
-			const look = async (node) => {
-				const own = await evaluateIn(node.context, REPORT);
-				if (typeof own === 'string') return JSON.parse(own);
-				for (const child of node.children ?? []) {
-					const found = await look(child);
-					if (found) return found;
-				}
-				return null;
-			};
-			return {
-				go: (url) =>
-					send('browsingContext.navigate', { context, url, wait: 'complete' }),
-				evaluate: (expression) => evaluateIn(context, expression),
-				report: async () => {
-					for (let i = 0; i < 120; i++) {
-						const tree = await send('browsingContext.getTree', {
-							root: context,
-						});
-						for (const node of tree.result?.contexts ?? []) {
-							const found = await look(node);
-							if (found) return found;
-						}
-						await sleep(500);
-					}
-					return null;
-				},
-				close: () => send('browsingContext.close', { context }),
-			};
-		};
-		await compareEngine('Firefox', open);
-	} finally {
-		socket?.close();
-		firefox.kill('SIGTERM');
-		await sleep(1000);
-		rmSync(profile, { recursive: true, force: true });
-	}
-}
+await withWebKit('coi-engines', REPORT, (open) =>
+	compareEngine('WebKit', open),
+);
+await withFirefox('coi-engines', REPORT, (open) =>
+	compareEngine('Firefox', open),
+);
 
 await done(browser);
