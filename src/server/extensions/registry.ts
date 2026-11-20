@@ -23,6 +23,7 @@ import {
 import { hostPermitted, matchesAny } from '../../extensions/match';
 import {
 	cleanPath,
+	displayExtensionURL,
 	extensionOrigin,
 	extensionURL,
 } from '../../extensions/origin';
@@ -1508,7 +1509,7 @@ export class ExtensionRegistry {
 				mayDisable: !loaded.record.policy,
 				isApp: false,
 				offlineEnabled: false,
-				optionsUrl: info.optionsUrl ?? '',
+				optionsUrl: info.optionsUrl ? displayExtensionURL(info.optionsUrl) : '',
 				homepageUrl: '',
 				updateUrl: '',
 				permissions: info.permissions,

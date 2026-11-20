@@ -746,7 +746,11 @@ export class ExtensionHub {
 	 * What the host's frames did (framesAsTabs' feed): tabs' and
 	 * webNavigation's events, in Chrome's order of them
 	 */
-	async tabEvent(event: TabEvent) {
+	async tabEvent(given: TabEvent) {
+		// an extension's page is at chrome-extension:// to the extensions, as in Chrome
+		const event = { ...given } as TabEvent & { url?: string; icon?: string };
+		if (event.url) event.url = displayExtensionURL(event.url);
+		if (event.icon) event.icon = displayExtensionURL(event.icon);
 		// one at a time: a tab's events come in the order they happened
 		const run = async () => {
 			if (event.e === 'removed') {
@@ -936,10 +940,11 @@ export class ExtensionHub {
 			discarded: false,
 			autoDiscardable: true,
 			mutedInfo: { muted: false },
-			url: tab.url,
+			// an extension's page is at chrome-extension://, as Chrome lists it
+			url: displayExtensionURL(tab.url),
 			title: tab.title,
 			...(this.#tabState.get(tab.id)?.icon
-				? { favIconUrl: this.#tabState.get(tab.id)!.icon }
+				? { favIconUrl: displayExtensionURL(this.#tabState.get(tab.id)!.icon!) }
 				: {}),
 			status: this.#tabState.get(tab.id)?.status ?? tab.status ?? 'complete',
 			incognito: false,
@@ -1009,7 +1014,8 @@ export class ExtensionHub {
 				let tab: Record<string, unknown> | null = null;
 				try {
 					tab = await this.#tab(place.tabId);
-					if (place.frameId === 0 && hello.url) tab.url = hello.url;
+					if (place.frameId === 0 && hello.url)
+						tab.url = displayExtensionURL(hello.url);
 				} catch (error) {
 					// a tab that just closed
 				}
@@ -1018,7 +1024,7 @@ export class ExtensionHub {
 						ext,
 						from,
 						place,
-						hello.url,
+						displayExtensionURL(hello.url),
 						String(hello.client ?? ''),
 					);
 				return { ...place, tab };

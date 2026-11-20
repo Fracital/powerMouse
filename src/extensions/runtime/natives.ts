@@ -35,9 +35,13 @@ export const natives = {
 	Error: global.Error,
 	TypeError: global.TypeError,
 	Reflect: { apply: Reflect.apply, defineProperty: Reflect.defineProperty },
+	/** the browser's: the inject's hides its own keys from the page */
+	ownKeys: Reflect.ownKeys,
 	defineProperty: Object.defineProperty,
 	CSSStyleSheet: global.CSSStyleSheet,
 	document: global.document,
+	/** the real Location (the inject tags it with its stand-in) */
+	location: global.location,
 	documentOpen: global.Document.prototype.open,
 	documentWrite: global.Document.prototype.write,
 	getOwnPropertyDescriptor: Object.getOwnPropertyDescriptor,

@@ -93,6 +93,26 @@ controller.extensions  --RPC-->  ExtensionHub (with the controller)    Extension
   writes it as `chrome-extension://`. The worker answers those URLs from the
   package (`serve.ts`), with web_accessible_resources enforced for any other
   origin's requests. There is no second service worker.
+- **What the extension reads of its origin.** The emulated origin stays
+  STomp's own: the extension sees `chrome-extension://<id>` wherever Chrome
+  shows it (measured, 157). `runtime.getURL` answers it, as Chrome makes
+  the URL (one leading slash dropped, dot segments resolved, the query and
+  fragment kept), and so do a message sender's `url` and `origin`, a tab's
+  `url`, `pendingUrl` and `favIconUrl`, webNavigation's and `tabs.onUpdated`'s
+  URLs, `getPopup`, `getContexts`, management's `optionsUrl` and the
+  initiator webRequest and declarativeNetRequest see for an extension's
+  requests (an extension's own pages need no host permission for
+  themselves there). A `chrome-extension://` URL a page or an extension
+  writes loads from the emulated origin wherever it goes: an element, a
+  fetch, a navigation, a frame (`src/StompURL.ts`), and the page's CSP lets
+  it through. An extension document's origin, as `self.origin` reads it,
+  as its messages carry it and as a message to it names it, is
+  `chrome-extension://<id>`, in a page's realm too. In the extension's own
+  pages the runtime puts a stand-in over the inject's `location`, and
+  `document.URL`, `documentURI`, `baseURI`, `domain` and the URLs read
+  back of elements, responses and requests show `chrome-extension://`; an
+  emulated service worker's `location` is its script's, as a
+  WorkerLocation reads (`src/extensions/runtime/present.ts`).
 - **Content scripts.** When the worker serves a document that an enabled
   extension's `content_scripts` (or `scripting.registerContentScripts`, or
   `userScripts.register`) match, its shell gets a small part before the
@@ -266,12 +286,16 @@ document changes, which getMatchedRules reads.
 
 - Backgrounds share the controller document's thread and heap; an MV3
   service worker is emulated in a page, not a worker.
-- An extension's pages read their emulated origin, `https://<id>.invalid`,
-  in `location`, `runtime.getURL` and a message sender's `url` and
-  `origin`, where Chrome gives `chrome-extension://<id>`. An extension
-  that checks the scheme refuses its own pages: Tampermonkey's popup asks
-  its background for the tab's scripts, is refused as no extension page,
-  and stays empty.
+- The emulated origin still shows in a few reads: a `blob:` URL an
+  extension's page makes reads `blob:https://<id>.invalid/...`; in a web
+  page, an element's URL a content script set to `getURL()`'s reads back
+  in the emulated form; a link's `origin`, `host` and `protocol` parts in
+  an extension's page too. The getters the runtime puts over the inject's
+  in an extension's page read as natives by name and length, not by
+  their source.
+- An emulated service worker gets no `fetch` events: Violentmonkey's
+  popup and options pages ask theirs for `/get-data.js`, which is no file
+  of the package, and render without their data.
 - An isolated world shares the page's realm: its top-level declarations
   stay its own (each entry is a function), but globals and prototypes are
   the page's, and separate content_scripts entries do not share

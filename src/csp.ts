@@ -577,7 +577,8 @@ function hostSourceMatches(
 }
 
 /**
- * An extension's resource (its emulated origin, `https://<id>.invalid`,
+ * An extension's resource (`chrome-extension:` as the page wrote it, or its
+ * emulated origin, `https://<id>.invalid`,
  * src/extensions/origin.ts): Chrome lets `chrome-extension:` loads
  * through every page's policy (the scheme bypasses Content Security
  * Policy), so an extension's script a content script adds to a page runs
@@ -592,7 +593,10 @@ export function sourcesMatch(
 	self: URL,
 	redirected = false,
 ): boolean {
-	if (url.protocol === 'https:' && EXTENSION_RESOURCE.test(url.hostname))
+	if (
+		url.protocol === 'chrome-extension:' ||
+		(url.protocol === 'https:' && EXTENSION_RESOURCE.test(url.hostname))
+	)
 		return true;
 	return sources.some((source) => sourceMatches(source, url, self, redirected));
 }

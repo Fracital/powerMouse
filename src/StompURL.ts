@@ -50,6 +50,18 @@ export function sealedFragmentText(
 	}
 }
 
+/**
+ * A URL as STomp serves it: `chrome-extension://<id>/...` is the
+ * extension's emulated origin, `https://<id>.invalid/...`
+ * (src/extensions/origin.ts), so an extension URL a page or an extension
+ * writes loads where Chrome loads it
+ */
+const served = (url: URL) =>
+	url.protocol === 'chrome-extension:' && /^[a-p]{32}$/.test(url.host)
+		? // (what follows `chrome-extension://` and the id: its path, query and fragment)
+			new URL(`https://${url.host}.invalid${url.href.slice(51)}`)
+		: url;
+
 export default class StompURL {
 	codec: GenericCodec;
 	directory: string;
@@ -77,7 +89,7 @@ export default class StompURL {
 		}
 
 		if (isUrlLike(url)) {
-			this.url = new URL(url);
+			this.url = served(new URL(url));
 		} else {
 			throw new TypeError('Unknown overload');
 		}
@@ -98,7 +110,7 @@ export default class StompURL {
 		const made = Object.create(StompURL.prototype) as StompURL;
 		made.codec = codec;
 		made.directory = directory;
-		made.url = url;
+		made.url = served(url);
 		made.mark = undefined;
 		return made;
 	}

@@ -9,6 +9,7 @@
 // page has run there (Chrome's DidCreateDocumentElement point). A content
 // script runs as a function of its world's `chrome`; an extension page gets
 // `chrome` on its window.
+import { displayExtensionURL, resolveExtensionURL } from '../origin';
 import {
 	CONTENT_SCRIPT_ROUTE,
 	CONTEXT_NAME_PREFIX,
@@ -22,6 +23,7 @@ import { buildChrome } from './api';
 import { Context, copy, messageOf } from './context';
 import { receiveMessages } from './messaging';
 import { call, natives } from './natives';
+import { presentExtensionPage } from './present';
 
 type Defined = (...args: unknown[]) => unknown;
 
@@ -520,6 +522,8 @@ function pageKind(given: RuntimePayload): {
 function pageContext(given: RuntimePayload) {
 	const ext = given.page!;
 	const { kind, tabId } = pageKind(given);
+	// its origin as Chrome's, chrome-extension://, over the inject's hooks
+	presentExtensionPage(given.serviceWorker?.url);
 	const ctx = new Context(ext, kind, given.channel, given.url, undefined);
 	const chrome = buildChrome(ctx);
 	receiveMessages(ctx);
@@ -697,7 +701,7 @@ let popupWatched = false;
 
 /** a background: runtime.onInstalled once its scripts ran; an emulated service worker's events too */
 function backgroundPage(ctx: Context, given: RuntimePayload) {
-	if (given.serviceWorker) serviceWorkerShims(ctx);
+	if (given.serviceWorker) serviceWorkerShims(ctx, given.serviceWorker.url);
 	call(natives.addEventListener, global, 'load', async () => {
 		if (given.serviceWorker) {
 			const install = new Event('install');
@@ -726,7 +730,7 @@ function backgroundPage(ctx: Context, given: RuntimePayload) {
 }
 
 /** what an MV3 service worker's script expects of its global, in the page that emulates it */
-function serviceWorkerShims(ctx: Context) {
+function serviceWorkerShims(ctx: Context, script: string) {
 	const define = (name: string, value: unknown) =>
 		natives.defineProperty(global, name, {
 			value,
@@ -755,7 +759,8 @@ function serviceWorkerShims(ctx: Context) {
 			}
 		}
 		for (const given of urls) {
-			const url = new URL(String(given), ctx.url);
+			// (getURL's chrome-extension:// URL is the emulated origin's)
+			const url = new URL(resolveExtensionURL(String(given)), ctx.url);
 			const path = url.pathname.replace(/^\/+/, '');
 			if (url.origin === ctx.ext.origin && imported.includes(path)) continue;
 			const request = new XMLHttpRequest();
@@ -763,7 +768,7 @@ function serviceWorkerShims(ctx: Context) {
 			request.send();
 			if (request.status !== 200)
 				throw new DOMException(
-					`Failed to execute 'importScripts' on 'WorkerGlobalScope': The script at '${url.href}' failed to load.`,
+					`Failed to execute 'importScripts' on 'WorkerGlobalScope': The script at '${displayExtensionURL(url.href)}' failed to load.`,
 					'NetworkError',
 				);
 			imported.push(path);
@@ -774,8 +779,8 @@ function serviceWorkerShims(ctx: Context) {
 	});
 	define('skipWaiting', () => natives.Promise.resolve());
 	define('registration', {
-		scope: `${ctx.ext.origin}/`,
-		active: { state: 'activated', scriptURL: ctx.url },
+		scope: `chrome-extension://${ctx.ext.id}/`,
+		active: { state: 'activated', scriptURL: displayExtensionURL(script) },
 		showNotification: (title: string, options: unknown) =>
 			ctx.hub('notify', natives.randomUUID(), {
 				title,
