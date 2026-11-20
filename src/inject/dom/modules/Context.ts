@@ -101,12 +101,33 @@ export function standInKey(client: DocumentClient): string | null {
 
 /**
  * The stand-in every document of an origin shares for a window (kept by
- * that window's client, `standIns`), and the module of the document that
- * last reached it, which it answers as (see restrictContext)
+ * that window's client, `standIns`), the key (standInKey) of the documents
+ * it was made for, and the modules of the documents that took it, in the
+ * order they did, which its own members act for (see restrictContext)
  */
 export interface StandInEntry {
 	standIn?: WeakRef<typeof globalThis>;
-	via?: WeakRef<ContextModule>;
+	key?: string | null;
+	holders?: StandInHolder | null;
+}
+/** one document that took a shared stand-in, and the one after it */
+interface StandInHolder {
+	module: WeakRef<ContextModule>;
+	next: StandInHolder | null;
+}
+/**
+ * A new StandInEntry. Of no prototype, its members its own from the start:
+ * it is made in a page's realm, and a write of a member an object does not
+ * have yet runs any setter of that name the page put on Object.prototype,
+ * which would be handed a module (and through it the client) of a holder
+ */
+export function newStandInEntry(): StandInEntry {
+	return {
+		__proto__: null,
+		standIn: undefined,
+		key: undefined,
+		holders: null,
+	} as StandInEntry;
 }
 
 // taken before the page runs: a page may replace the global
@@ -756,6 +777,53 @@ export default class ContextModule extends Module<DocumentClient> {
 	navigateAs(context: Context, value: urlLike, member: 'replace' | 'href') {
 		this.#navigateOther(context, value, member);
 	}
+	/**
+	 * The Location of `context` (a window behind a restricted stand-in) whose
+	 * navigations are made as `as()` makes them: its `href` setter and its
+	 * `replace`, the members another origin has
+	 */
+	#locationOf(context: Context, as: () => ContextModule): object {
+		const global = this.client.global;
+		return this.restrictObject('Location', {
+			replace: {
+				// (the browser's own count check first)
+				value: this.client
+					.getModule(ProxyModule)!
+					.wrapFunction(global.location.replace, (target, that, args) => {
+						catchRequiredArguments(
+							args.length,
+							1,
+							'Location',
+							'replace',
+							global,
+						);
+						as().navigateAs(context, String(args[0]), 'replace');
+					}),
+			},
+			href: {
+				set: (value: urlLike) => {
+					as().navigateAs(context, value, 'href');
+				},
+			},
+		});
+	}
+	/** the postMessage of `context` (as #locationOf), posting as `as()` does */
+	#posterOf(context: Context, as: () => ContextModule): Function {
+		const global = this.client.global;
+		return this.client
+			.getModule(ProxyModule)!
+			.wrapFunction(global.postMessage, (target, that, args) => {
+				catchRequiredArguments(args.length, 1, 'Window', 'postMessage', global);
+				return as().postAs(context, args);
+			});
+	}
+	/**
+	 * This document's own Location and postMessage of the windows behind the
+	 * stand-ins it took, which act as this document whoever else holds the
+	 * stand-in (the page's reads of them: Access `get`), made at the first
+	 * read of each
+	 */
+	#own = new LazyWeakMap<Context, { location?: object; post?: Function }>();
 	/** post to `context` (a window behind a restricted stand-in), as this document */
 	postAs(context: Context, args: unknown[]) {
 		// the browser serializes the message before it looks at the target
@@ -807,20 +875,32 @@ export default class ContextModule extends Module<DocumentClient> {
 	restrictContext(context: Context, entry?: StandInEntry): RestrictedContext {
 		const moduleClient = this.client;
 		const global = moduleClient.global;
-		const proxyModule = moduleClient.getModule(ProxyModule)!;
-		// The stand-in is every document's of this origin (`entry`), and its
-		// windows are this module's, the one for each, but it navigates and
-		// posts as the document that reached it last (whose code uses it
-		// next: natively the incumbent), with that document's sandbox, user
-		// activation and place in the tree, and a window it hands out is
-		// that document's reach of it too
-		// (only while that document is its window's: one taken out, or
-		// navigated away, acts for nothing, as its maker did not)
+		// The stand-in is every document's of this origin (`entry`), one
+		// object, as natively every realm holds the one WindowProxy, so it
+		// cannot tell which document's code uses it. The page's own reads of
+		// its `location` and `postMessage`, and its writes of `location`, go
+		// through the caller's access API to that document's own members
+		// (standInMember), which act as it. What its own members do when
+		// they are reached past that API (Reflect.get, a descriptor's
+		// getter), and the windows it hands out, are one document's of those
+		// that took it: the first still its window's and still of the
+		// origin or domain it was made for, which reaches every other such
+		// document. Never the last to read it: a sandboxed frame's
+		// same-origin parent reading `top` had the frame's navigation of its
+		// top made as the parent's, past its sandbox, and a parent that set
+		// document.domain since (it reaches the frame no more) handed the
+		// frame the windows it reached itself (`top.name`)
 		const as = (): ContextModule => {
-			const via = entry?.via?.deref();
-			return via?.stillCurrent() ? via : this;
+			const module = entry ? this.#owner(entry) : this;
+			if (module) return module;
+			throw withStack(
+				new global.DOMException(
+					`Blocked a frame with origin "${moduleClient.origin}" from accessing a cross-origin frame.`,
+					'SecurityError',
+				),
+			);
 		};
-		const reached = (window: Context) => this.newRestricted(window, entry?.via);
+		const reached = (window: Context) => as().newRestricted(window);
 		// a child that runs no STomp yet (an iframe still on its initial
 		// about:blank) is still that child, of the frame's origin: never the
 		// top, which a walk down the tree would visit again forever
@@ -832,32 +912,10 @@ export default class ContextModule extends Module<DocumentClient> {
 				moduleClient.navigatorOf(child)?.injectNavigated?.(child);
 			return isStomp(child, moduleClient.names.client)
 				? reached(child)
-				: this.restrictOpaque(child);
+				: as().restrictOpaque(child);
 		};
 
-		const restrictedLocation = this.restrictObject('Location', {
-			replace: {
-				// (the browser's own count check first)
-				value: proxyModule.wrapFunction(
-					global.location.replace,
-					(target, that, args) => {
-						catchRequiredArguments(
-							args.length,
-							1,
-							'Location',
-							'replace',
-							global,
-						);
-						as().navigateAs(context, String(args[0]), 'replace');
-					},
-				),
-			},
-			href: {
-				set: (value: urlLike) => {
-					as().navigateAs(context, value, 'href');
-				},
-			},
-		});
+		const restrictedLocation = this.#locationOf(context, as);
 
 		const res = <any>this.restrictObject(
 			'Window',
@@ -960,19 +1018,7 @@ export default class ContextModule extends Module<DocumentClient> {
 					},
 				},
 				postMessage: {
-					value: proxyModule.wrapFunction(
-						global.postMessage,
-						(target, that, args) => {
-							catchRequiredArguments(
-								args.length,
-								1,
-								'Window',
-								'postMessage',
-								global,
-							);
-							return as().postAs(context, args);
-						},
-					),
+					value: this.#posterOf(context, as),
 				},
 			},
 			// its frames, by index: cross-origin reads of them are allowed,
@@ -1024,8 +1070,63 @@ export default class ContextModule extends Module<DocumentClient> {
 		}
 		this.restricted.set(context, restricted);
 		this.restrictedContexts.set(restricted, context);
-		if (entry) this.#entries.set(context, entry);
+		if (entry) {
+			entry.key ??= standInKey(this.client);
+			// (of no prototype, as the entry: no setter of the page's sees a
+			// holder)
+			const holder = {
+				__proto__: null,
+				module: (this.#self ??= new NativeWeakRef(this)),
+				next: null,
+			} as StandInHolder;
+			let last = entry.holders;
+			if (!last) entry.holders = holder;
+			else {
+				while (last.next) last = last.next;
+				last.next = holder;
+			}
+			this.#entries.set(context, entry);
+		}
 		return restricted;
+	}
+	/**
+	 * The document a shared stand-in (`entry`) acts for when no caller is
+	 * known (restrictContext): the first that took it still its window's and
+	 * still of the key it was made for. Null when none is: whoever uses it
+	 * is no longer of its documents, and the stand-in acts for nobody. A
+	 * holder gone for good is dropped from the list on the way.
+	 */
+	#owner(entry: StandInEntry): ContextModule | null {
+		let previous: StandInHolder | null = null;
+		for (let holder = entry.holders; holder; holder = holder.next) {
+			const module = holder.module.deref();
+			if (!module) {
+				if (previous) previous.next = holder.next;
+				else entry.holders = holder.next;
+				continue;
+			}
+			if (module.stillCurrent() && standInKey(module.client) === entry.key)
+				return module;
+			previous = holder;
+		}
+		return null;
+	}
+	/**
+	 * This module's stand-in for `context`, while it is one of the key this
+	 * document has now: a document that set document.domain, or whose
+	 * window's next document is of another origin (a popup's site after its
+	 * about:blank), no longer shares the stand-ins it took before, and makes
+	 * or takes its key's from then on. (One the page kept from before stays
+	 * its, acting for its documents.) Undefined when it has none.
+	 */
+	restrictedNow(context: Context): RestrictedContext | undefined {
+		const restricted = this.restricted.get(context);
+		if (restricted === undefined) return undefined;
+		const entry = this.#entries.get(context);
+		if (!entry || entry.key === standInKey(this.client)) return restricted;
+		this.restricted.delete(context);
+		this.#entries.delete(context);
+		return undefined;
 	}
 	/**
 	 * A window whose next document is of another site (the window
@@ -1111,15 +1212,8 @@ export default class ContextModule extends Module<DocumentClient> {
 		// never restricts the window)
 		return this.restrictOpaque(context);
 	}
-	/**
-	 * `context` as this document may hold it: itself, or its stand-in.
-	 * `via`: the document the stand-in it is read off answers as, which a
-	 * stand-in this hands out answers as too (restrictContext)
-	 */
-	newRestricted(
-		context: Context,
-		via?: WeakRef<ContextModule>,
-	): RestrictedContext {
+	/** `context` as this document may hold it: itself, or its stand-in */
+	newRestricted(context: Context): RestrictedContext {
 		// no window: the `parent` and `top` of a window whose frame was taken
 		// out, an `opener` of none. The browser answers null, and so does the
 		// page's: it read as the proxied top (the edge of the proxied world)
@@ -1128,7 +1222,6 @@ export default class ContextModule extends Module<DocumentClient> {
 		if (context === null || context === undefined) return context;
 		const restricted = this.#restrict(context);
 		if (restricted === context) return restricted;
-		this.#hand(context, via);
 		return this.#handle(context) ?? restricted;
 	}
 	/** whether this document is still its window's (not taken out, not navigated away) */
@@ -1143,14 +1236,6 @@ export default class ContextModule extends Module<DocumentClient> {
 			// a window of another real origin now
 			return false;
 		}
-	}
-	/**
-	 * The stand-in every document of this origin shares for `context`
-	 * answers as this one (or `via`), which reached it now
-	 */
-	#hand(context: Context, via?: WeakRef<ContextModule>) {
-		const entry = this.#entries.get(context);
-		if (entry) entry.via = via ?? (this.#self ??= new NativeWeakRef(this));
 	}
 	/** the shared entry of each stand-in this module holds (StandInEntry) */
 	#entries = new LazyWeakMap<Context, StandInEntry>();
@@ -1197,7 +1282,9 @@ export default class ContextModule extends Module<DocumentClient> {
 		const other = (context as any)[moduleClient.names.client] as DocumentClient;
 		// a window this realm holds a stand-in of: its own again once the two
 		// documents reach each other (both set document.domain); a stand-in
-		// the page kept from before stays one
+		// the page kept from before stays one. One of another key than this
+		// document's now (it set document.domain) is no longer this
+		// document's to share: its key's is made or taken below
 		if (this.restricted.has(context)) {
 			let reach = false;
 			try {
@@ -1209,9 +1296,12 @@ export default class ContextModule extends Module<DocumentClient> {
 			} catch (error) {
 				// a window being torn down
 			}
-			if (!reach) return this.restricted.get(context)!;
-			this.#holds().add(context);
-			return context;
+			if (reach) {
+				this.#holds().add(context);
+				return context;
+			}
+			const kept = this.restrictedNow(context);
+			if (kept !== undefined) return kept;
 		}
 
 		// an opaque origin (a document the page sandboxed without
@@ -1253,7 +1343,8 @@ export default class ContextModule extends Module<DocumentClient> {
 			)?.standIns;
 			const key = standInKey(moduleClient);
 			let entry = key === null ? undefined : standIns?.get(key);
-			if (!entry && key !== null) standIns?.set(key, (entry = {}));
+			if (!entry && key !== null)
+				standIns?.set(key, (entry = newStandInEntry()));
 			this.adopt(context, entry);
 		}
 
@@ -1440,9 +1531,7 @@ export default class ContextModule extends Module<DocumentClient> {
 			const frame = frameOfHeld(moduleClient, target);
 			if (!frame?.now || (frame.now as unknown) === target) return undefined;
 			const now = frame.now as unknown as Context;
-			const restricted = this.#restrict(now);
-			if (restricted !== now) this.#hand(now);
-			return restricted;
+			return this.#restrict(now);
 		};
 
 		// another proxied window's location, set or called by this document
@@ -1814,6 +1903,28 @@ export default class ContextModule extends Module<DocumentClient> {
 			this.#cloneCheck(args);
 			if (this.targetAllows(args, context)) this.#postFromHere(context, args);
 			return true;
+		};
+		// a stand-in this document took (any other document of its origin may
+		// hold it too): the window behind it, and this document's own
+		// `location` and `postMessage` of it, which the access API hands the
+		// page's reads and writes of them, so they act as this document
+		moduleClient.standInWindow = (value) =>
+			this.restrictedContexts.get(value as Context);
+		moduleClient.standInMember = (container, key) => {
+			const context = this.restrictedContexts.get(container as Context);
+			if (!context) return undefined;
+			let own = this.#own.get(context);
+			if (!own)
+				this.#own.set(
+					context,
+					(own = { __proto__: null, location: undefined, post: undefined } as {
+						location?: object;
+						post?: Function;
+					}),
+				);
+			return key === 'location'
+				? (own.location ??= this.#locationOf(context, () => this))
+				: (own.post ??= this.#posterOf(context, () => this));
 		};
 		moduleClient.postToWindow = (target, args) => {
 			const receiver = (target as Record<string, any>)[

@@ -811,12 +811,15 @@ export default class AccessModule extends Module<Client> {
 						// Object.assign, the descriptor's setter) writes its
 						// window's: made raw, it went to the site itself, or was
 						// refused in a sibling frame
+						// (a stand-in this document took: the window behind it,
+						// navigated as this document, whoever else holds it)
 						const navigated =
 							key === 'location' &&
 							moduleClient.navigateWindow &&
 							!foreign &&
 							theirs === undefined
-								? windowOfContainer(target)
+								? (moduleClient.standInWindow?.(target) ??
+									windowOfContainer(target))
 								: undefined;
 						const through =
 							navigated !== undefined &&
@@ -1025,9 +1028,14 @@ export default class AccessModule extends Module<Client> {
 					// gets a function of this realm for it, so a call of it later
 					// (bound, detached, handed to `call`) posts from this realm,
 					// which the browser names as the source
+					// (and a stand-in's of another origin's window: this
+					// document's own, which posts as it, whoever else of its
+					// origin holds the stand-in)
 					if (key === 'postMessage') {
 						if (container !== undefined) {
-							const own = moduleClient.postMessageOf?.(container);
+							const own =
+								moduleClient.standInMember?.(container, key) ??
+								moduleClient.postMessageOf?.(container);
 							if (own) return own;
 						}
 					} else if (key === 'top' || key === 'eval' || key === 'location') {
@@ -1036,6 +1044,12 @@ export default class AccessModule extends Module<Client> {
 						try {
 							if (key === 'top' && moduleClient.resolveTop)
 								return moduleClient.resolveTop(object, container);
+							// a stand-in's location: this document's own, which
+							// navigates as it (as postMessage above)
+							if (key === 'location' && container !== undefined) {
+								const own = moduleClient.standInMember?.(container, key);
+								if (own) return own;
+							}
 
 							if (
 								((typeof object === 'object' && object !== null) ||

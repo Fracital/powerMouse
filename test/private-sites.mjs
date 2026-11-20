@@ -17,6 +17,7 @@
 //                        four more each, `oac=0|1` sends
 //                        Origin-Agent-Cluster: ?0 or ?1
 //   /ps/ac?id=&oac=      test/pages/agent-cluster.html (agent-cluster suite)
+//   /ps/si?id=&oac=      test/pages/stand-in.html (stand-in-acting suite)
 //   /ps/echo?k=          what the request carried, as JSON (CORS, with
 //                        credentials); `set=1` sets four more, `set=n`
 //                        another four
@@ -50,6 +51,10 @@ const PAGE = fileURLToPath(
 /** what the agent-cluster suite drives (/ps/ac) */
 const AGENT_PAGE = fileURLToPath(
 	new URL('./pages/agent-cluster.html', import.meta.url),
+);
+/** what the stand-in-acting suite drives (/ps/si) */
+const STAND_IN_PAGE = fileURLToPath(
+	new URL('./pages/stand-in.html', import.meta.url),
 );
 
 /**
@@ -163,12 +168,14 @@ export async function startPrivateSites() {
 			res.end(readFileSync(PAGE));
 			return;
 		}
-		if (url.pathname === '/ps/ac') {
+		if (url.pathname === '/ps/ac' || url.pathname === '/ps/si') {
 			res.setHeader('content-type', 'text/html; charset=utf-8');
 			res.setHeader('cache-control', 'no-store');
 			if (query.has('oac'))
 				res.setHeader('origin-agent-cluster', `?${query.get('oac')}`);
-			res.end(readFileSync(AGENT_PAGE));
+			res.end(
+				readFileSync(url.pathname === '/ps/ac' ? AGENT_PAGE : STAND_IN_PAGE),
+			);
 			return;
 		}
 		if (url.pathname === '/ps/echo') {

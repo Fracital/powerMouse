@@ -17,7 +17,12 @@ import { OwnWeakMap } from '../ownCollections';
 import type DocumentClient from './Client';
 import { deferred } from './deferred';
 import type ContextModule from './modules/Context';
-import { invalidTargetOrigin, isWindow, standInKey } from './modules/Context';
+import {
+	invalidTargetOrigin,
+	isWindow,
+	newStandInEntry,
+	standInKey,
+} from './modules/Context';
 import { markerPrefix } from './modules/MutationObserver';
 import { Pool } from './pool';
 import { pageSandbox, sandboxTokens } from './sandbox';
@@ -656,7 +661,8 @@ function makeSiteWindows() {
 		module: ContextModule,
 		context: typeof globalThis,
 	): typeof globalThis {
-		if (module.restricted.has(context)) return module.restricted.get(context)!;
+		const restricted = module.restrictedNow(context);
+		if (restricted !== undefined) return restricted;
 		const domain = client.documentDomain;
 		const key = standInKey(client);
 		// the outermost document of this origin above this one
@@ -687,7 +693,7 @@ function makeSiteWindows() {
 			(pool[Pool.AcrossStandIns] ??= new Map()).set(key, kept);
 		}
 		let entry = kept?.get(context);
-		if (kept && !entry) kept.set(context, (entry = {}));
+		if (kept && !entry) kept.set(context, (entry = newStandInEntry()));
 		return module.adopt(context, entry);
 	}
 

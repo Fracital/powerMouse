@@ -487,6 +487,18 @@ export default class Client {
 	admitEntry?: (entry: object) => boolean;
 	/** @internal set by the Context module: post `args` to the window behind a restricted stand-in this context holds, from this realm; false when `target` is not one */
 	postToRestricted?: (target: unknown, args: unknown[]) => boolean;
+	/** @internal set by the Context module: the window behind a restricted stand-in this context took, else undefined */
+	standInWindow?: (value: unknown) => object | undefined;
+	/**
+	 * @internal set by the Context module: this context's own `location` or
+	 * `postMessage` of the window behind `container`, a restricted stand-in
+	 * it took, which act as this context whoever else holds the stand-in;
+	 * undefined for anything else
+	 */
+	standInMember?: (
+		container: unknown,
+		key: 'location' | 'postMessage',
+	) => unknown;
 	// pristine copies taken before modules hook them: the Navigator module
 	// removes navigator.serviceWorker from proxied pages
 	#serviceWorkerContainer?: ServiceWorkerContainer;

@@ -1,0 +1,170 @@
+<!doctype html>
+<title>STAND-IN</title>
+<body>
+	<script>
+		// What a document does through the windows it holds of other origins'
+		// documents (the stand-in-acting suite drives it; served by
+		// test/private-sites.mjs at /ps/si, `oac=0|1` sends
+		// Origin-Agent-Cluster: ?0 or ?1). A window is named by the path the
+		// page reads it by, each written out so the read is the page's own
+		// code. Every call answers a short string, an error as its name.
+		const attempt = (act) => {
+			try {
+				return act();
+			} catch (error) {
+				return error.name;
+			}
+		};
+		const query = new URLSearchParams(location.search);
+		const at = (path) =>
+			({
+				top: () => top,
+				parent: () => parent,
+				'parent.top': () => parent.top,
+				'parent.parent': () => parent.parent,
+				'top[0]': () => top[0],
+				'top[1]': () => top[1],
+				'top.frames[1]': () => top.frames[1],
+				'top.q': () => top.q,
+				'top[0][0]': () => top[0][0],
+				'top[0].parent': () => top[0].parent,
+				'top.opener': () => top.opener,
+				'Reflect.get(top, 1)': () => Reflect.get(top, 1),
+				"Reflect.get(top, 'q')": () => Reflect.get(top, 'q'),
+				// a window the page kept from an earlier read (keep)
+				kept: () => window.__kept,
+			})[path]();
+		// where in the tree a message came from, by index down from the top
+		// (`top`, `0`, `0/0`), compared with the windows this page holds
+		const sourceOf = (source) => {
+			if (source === top) return 'top';
+			for (let i = 0; i < top.length; i++) {
+				if (source === top[i]) return `${i}`;
+				for (let j = 0; j < top[i].length; j++)
+					if (source === top[i][j]) return `${i}/${j}`;
+			}
+			return 'other';
+		};
+		const heard = [];
+		addEventListener('message', (event) => {
+			if (event.data?.si !== 'hello') return;
+			heard.push({
+				form: event.data.form,
+				from: event.data.id.replace(/^.*-/, ''),
+				origin: event.origin.replace(/:\d+$/, ''),
+				source: sourceOf(event.source),
+			});
+		});
+		window.__si = {
+			id: query.get('id'),
+			setDomain: (value) =>
+				attempt(() => {
+					document.domain = value;
+					return `set, now ${document.domain}`;
+				}),
+			frame: (url, sandbox, name) =>
+				new Promise((resolve) => {
+					const element = document.createElement('iframe');
+					if (sandbox !== null) element.setAttribute('sandbox', sandbox);
+					if (name) element.name = name;
+					element.src = url;
+					element.onload = () =>
+						resolve(document.querySelectorAll('iframe').length - 1);
+					document.body.append(element);
+				}),
+			// a read of a window, as a page reads windows when it loads
+			touch: (path) => attempt(() => typeof at(path)),
+			// a window kept for later, as a page keeps `top` in a variable
+			keep: (path) =>
+				attempt(() => {
+					window.__kept = at(path);
+					return typeof window.__kept;
+				}),
+			// what this page reaches of the window
+			reach: (path) =>
+				attempt(() => {
+					const target = at(path);
+					return {
+						document: attempt(() => typeof target.document),
+						global: attempt(() => typeof target.__si),
+						href: attempt(() => typeof target.location.href),
+					};
+				}),
+			// a navigation of the window, each way a page writes one
+			navigate: (path, url, form) =>
+				attempt(() => {
+					const target = at(path);
+					if (form === 'location') target.location = url;
+					else if (form === 'href') target.location.href = url;
+					else if (form === 'replace') target.location.replace(url);
+					else if (form === 'reflect')
+						Reflect.set(Reflect.get(target, 'location'), 'href', url);
+					return 'sent';
+				}),
+			// a message to the window, each way a page posts one
+			post: (path, form) =>
+				attempt(() => {
+					const target = at(path);
+					const message = { si: 'hello', id: window.__si.id, form };
+					if (form === 'plain') target.postMessage(message, '*');
+					else if (form === 'call')
+						target.postMessage.call(target, message, '*');
+					else if (form === 'apply')
+						Reflect.apply(target.postMessage, target, [message, '*']);
+					else if (form === 'kept') {
+						const post = target.postMessage;
+						post.call(target, message, '*');
+					} else if (form === 'reflect')
+						Reflect.apply(Reflect.get(target, 'postMessage'), target, [
+							message,
+							'*',
+						]);
+					return 'sent';
+				}),
+			heard: () => heard,
+			open: (url) =>
+				attempt(() => {
+					const opened = open(url);
+					return opened ? 'opened' : 'null';
+				}),
+			storage: () => ({
+				local: attempt(() => typeof localStorage.length),
+				session: attempt(() => typeof sessionStorage.length),
+				cookie: attempt(() => typeof document.cookie),
+				parentLocal: attempt(() => typeof parent.localStorage.length),
+				parentCookie: attempt(() => typeof parent.document.cookie),
+			}),
+			// setters on Object.prototype for every name, which see any write
+			// of a name an object does not have yet: what this page's realm
+			// writes into a fresh object of its own while it reads other
+			// windows. `trapped` lists the names written there with an object,
+			// and whether one held something with a `client`
+			trap: () => {
+				const seen = (window.__trapped = []);
+				const names = ['via', 'standIn', 'key', 'holders', 'next', 'module'];
+				for (const name of names)
+					Object.defineProperty(Object.prototype, name, {
+						configurable: true,
+						set(value) {
+							Object.defineProperty(this, name, {
+								value,
+								writable: true,
+								configurable: true,
+								enumerable: true,
+							});
+							if (typeof value !== 'object' || value === null) return;
+							let client = false;
+							try {
+								client = 'client' in (value.deref?.() ?? value);
+							} catch (error) {
+								// nothing to look at
+							}
+							seen.push(`${name}${client ? ' (client)' : ''}`);
+						},
+					});
+				return 'set';
+			},
+			trapped: () => [...new Set(window.__trapped ?? [])].sort(),
+		};
+	</script>
+</body>
