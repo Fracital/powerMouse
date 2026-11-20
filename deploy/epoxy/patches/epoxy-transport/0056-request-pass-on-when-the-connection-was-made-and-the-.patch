@@ -1,0 +1,100 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Thu, 19 Nov 2026 06:30:00 -0500
+Subject: [PATCH] request: pass on when the connection was made and the bytes
+ the body came as
+
+Each response has `connection` (`{ reused, dnsStart?, dnsEnd?,
+connectStart?, secureStart?, connectEnd?, requestStart? }`, ms from the
+request call) and `encodedBytes()`, the body's bytes before its
+Content-Encoding was decoded, final once the body has ended. The
+function is not enumerable, so a host that clones or posts the response
+on (a transport worker to its service worker) drops it rather than
+failing; everything else on the response is plain data.
+`fieldSupport.timing` says a build has them.
+---
+diff --git a/src/main.ts b/src/main.ts
+--- a/src/main.ts
++++ b/src/main.ts
+@@ -84,6 +84,25 @@
+ /** partitions kept at once; past it the one used longest ago with nothing in flight is let go */
+ const PARTITIONS_KEPT = 64;
+ 
++/** epoxy's connection times (this realm's performance.now()) as ms from `from` */
++function connectionTiming(
++	told: Record<string, number | boolean> | undefined,
++	from: number
++): Record<string, number | boolean> | undefined {
++	if (!told) return undefined;
++	const out: Record<string, number | boolean> = { reused: !!told.reused };
++	for (const key of [
++		"dnsStart",
++		"dnsEnd",
++		"connectStart",
++		"secureStart",
++		"connectEnd",
++		"requestStart",
++	])
++		if (typeof told[key] === "number") out[key] = (told[key] as number) - from;
++	return out;
++}
++
+ interface Partition {
+ 	client: EpoxyClient;
+ 	inFlight: number;
+@@ -102,6 +121,10 @@
+ 		partition: PARTITION_FIELD,
+ 		// each response says which HTTP version it came over (httpVersion)
+ 		httpVersion: true,
++		// each response says when its connection was made, or that it was a
++		// kept one (connection), and how many bytes its body came as before
++		// a Content-Encoding was decoded (encodedBytes)
++		timing: true,
+ 	};
+ 	/** by name, the one used longest ago first */
+ 	private partitions = new Map<string, Partition>();
+@@ -166,6 +189,8 @@
+ 		headers: RawHeaders,
+ 		signal: AbortSignal | undefined
+ 	): Promise<TransferrableResponse> {
++		// the request's times are told from here
++		const asked = performance.now();
+ 		if (body instanceof Blob) body = await body.arrayBuffer();
+ 
+ 		let partition: Partition | null = null;
+@@ -202,7 +227,7 @@
+ 					headersEntries.push([key, value]);
+ 				}
+ 			}
+-			return {
++			const response = {
+ 				body: res.body!,
+ 				headers: headersEntries,
+ 				status: res.status,
+@@ -210,7 +235,23 @@
+ 				// "1.1", "2" and so on: a host queues HTTP/1 requests six to a
+ 				// server as a browser does, and lets HTTP/2 ones go
+ 				httpVersion: (res as any).httpVersion,
++				// { reused, dnsStart?, dnsEnd?, connectStart?, secureStart?,
++				// connectEnd?, requestStart? }: ms from this call, as a
++				// browser's resource timing tells a connection
++				connection: connectionTiming((res as any).connection, asked),
+ 			} as TransferrableResponse;
++			// the body's bytes as they came, before a Content-Encoding was
++			// decoded: the whole body's once the stream has ended. Not
++			// enumerable: a function cannot be cloned, and a host that posts
++			// the response on (to a service worker) loses it instead of
++			// failing; one that wants it reads it here
++			Object.defineProperty(response, "encodedBytes", {
++				value: () => (res as any).encoded?.bytes ?? 0,
++				enumerable: false,
++				configurable: true,
++				writable: true,
++			});
++			return response;
+ 		} catch (err) {
+ 			console.error(err);
+ 			throw err;
+-- 
+2.54.0
+

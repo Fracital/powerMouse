@@ -170,7 +170,14 @@ export async function constructTransport(
 	// stomp-h3 ships in epoxy-transport's dist/h3/ (deploy/epoxy/h3); a
 	// page's WebTransport sessions use it whether or not HTTP/3 is on
 	// (src/transport/webTransportHost.ts)
-	const h3 = http3 && http3 !== true ? http3 : {};
+	// HTTP/3 asks for HTTPS records where epoxy does (its `ech_dns`), unless
+	// `http3.dns` says otherwise (an empty string: never)
+	const named = http3 && http3 !== true ? http3 : {};
+	const resolver = (args[0] as { ech_dns?: unknown } | undefined)?.ech_dns;
+	const h3 =
+		named.dns === undefined && typeof resolver === 'string' && resolver
+			? { ...named, dns: resolver }
+			: named;
 	useWebTransportModule(
 		transport,
 		h3.module ?? new URL('h3/stomp_h3.js', module).href,
@@ -182,5 +189,7 @@ export async function constructTransport(
 		h3,
 		new URL('h3/stomp_h3.js', module).href,
 		h3Worker,
+		// epoxy's resolver is asked for the records when it can answer them
+		h3 !== named,
 	);
 }

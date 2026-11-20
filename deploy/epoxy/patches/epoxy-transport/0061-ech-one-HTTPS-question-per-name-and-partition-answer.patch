@@ -1,0 +1,229 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Thu, 19 Nov 2026 07:30:00 -0500
+Subject: [PATCH] ech: one HTTPS question per name and partition answers the
+ ECH lookup and the host's httpsAnswer
+
+`httpsAnswer(host, headers?)` gives a host the DoH answer (wire format)
+to the name's HTTPS question in the network partition its headers name
+(the partition field, as `request` reads it; "" without one): the answer
+the ECH lookup before a handshake in that partition reads. A host that
+reads the record's alpn (HTTP/3 from the first request, as Chrome) asks
+nothing twice: the resolver keeps the answer's bytes beside its ECH config
+list under the same key and TTL, a lookup out is shared by every caller in
+its partition, and another partition asks its own. The bytes go to the
+host's `ech_cache` with the entry (`answer`), so a reload asks no second
+time either; an entry that comes back without them still serves ECH, and
+the first `httpsAnswer` for it asks again. `null` without `ech_dns`, for a
+name it never asks, or when the lookup failed; a fresh ArrayBuffer each
+call. `fieldSupport.httpsAnswer` says a build has it.
+---
+diff --git a/src/ech.ts b/src/ech.ts
+--- a/src/ech.ts
++++ b/src/ech.ts
+@@ -134,11 +134,19 @@
+ 	return { ech: null, ttl: null };
+ }
+ 
+-/** one kept answer: a partition's name (`EchResolver.key`), its ECH config list or none, and when it is stale (ms since the epoch) */
++/**
++ * one kept answer: a partition's name (`EchResolver.key`), its ECH config
++ * list or none, when it is stale (ms since the epoch), and the DoH answer
++ * itself (wire format), which `httpsAnswer` gives a host. A host that keeps
++ * `answer` across a reload saves the name a second question there; an
++ * entry that comes back without it still serves ECH, and the first
++ * `httpsAnswer` for it asks again.
++ */
+ export interface EchCacheEntry {
+ 	key: string;
+ 	ech: Uint8Array | null;
+ 	until: number;
++	answer?: ArrayBuffer | null;
+ }
+ 
+ /**
+@@ -153,12 +161,24 @@
+ 
+ type Fetch = (url: string, accept: string) => Promise<ArrayBuffer>;
+ 
++/** a lookup's outcome: the ECH config list, and the answer's bytes (undefined: an entry the host kept without them) */
++interface Found {
++	ech: Uint8Array | null;
++	answer: ArrayBuffer | null | undefined;
++}
++
+ interface Kept {
+ 	until: number;
+-	value: Promise<Uint8Array | null>;
++	value: Promise<Found>;
+ }
+ 
+-/** ECH config lists by network partition and host name, from one DoH endpoint, with their TTLs */
++/**
++ * HTTPS records by network partition and host name, from one DoH endpoint,
++ * with their TTLs: one question per name and partition answers both the ECH
++ * config list epoxy-tls asks for before a handshake (`resolveIn`) and the
++ * host's own reading of the record (`answerIn`: its alpn and port), and a
++ * lookup out is shared by every caller in its partition
++ */
+ export class EchResolver {
+ 	#dns: URL;
+ 	#fetch: Fetch;
+@@ -176,9 +196,16 @@
+ 				.load()
+ 				.then((entries) => {
+ 					const now = Date.now();
+-					for (const { key, ech, until } of entries)
++					for (const { key, ech, until, answer } of entries)
+ 						if (until > now && !this.#cache.has(key))
+-							this.#cache.set(key, { until, value: Promise.resolve(ech) });
++							this.#cache.set(key, {
++								until,
++								value: Promise.resolve({
++									ech,
++									answer:
++										answer instanceof ArrayBuffer || answer === null ? answer : undefined,
++								}),
++							});
+ 				})
+ 				.catch(() => {})
+ 				.finally(() => (this.#loading = null));
+@@ -194,6 +221,27 @@
+ 
+ 	/** a lookup of `host` for the network partition `partition` (EpoxyClient.partition's resolver) */
+ 	resolveIn(partition: string, host: string): Promise<Uint8Array | null> {
++		const found = this.#lookup(partition, host, false);
++		return found ? wait(found.then((it) => it.ech)) : Promise.resolve(null);
++	}
++
++	/**
++	 * The DoH answer (wire format) to `host`'s HTTPS question in `partition`,
++	 * the one `resolveIn` reads, or null when it is not asked or the lookup
++	 * failed. Not bounded: the caller decides how long to wait. A copy each
++	 * time, so the caller may transfer it.
++	 */
++	async answerIn(partition: string, host: string): Promise<ArrayBuffer | null> {
++		const found = await this.#lookup(partition, host, true);
++		return found?.answer ? found.answer.slice(0) : null;
++	}
++
++	/**
++	 * the lookup of `host` in `partition`, asked once at a time; with
++	 * `bytes`, an entry the host kept without the answer's bytes is asked
++	 * again
++	 */
++	#lookup(partition: string, host: string, bytes: boolean): Promise<Found> | null {
+ 		const name = host.toLowerCase().replace(/\.$/, "");
+ 		// the DoH server's own name is never asked (its lookup would wait on
+ 		// itself), and neither is an address or a name that is never public
+@@ -203,38 +251,58 @@
+ 			/^[\d.]+$|:|^\[/.test(name) ||
+ 			/(^|\.)(localhost|local|internal|test|invalid)$/.test(name)
+ 		)
+-			return Promise.resolve(null);
+-		if (this.#loading) return this.#loading.then(() => this.resolveIn(partition, host));
++			return null;
++		if (this.#loading)
++			return this.#loading.then(() => this.#lookup(partition, host, bytes) ?? NONE);
+ 		const key = EchResolver.key(partition, name);
+ 		const cached = this.#cache.get(key);
+-		if (cached && cached.until > Date.now()) return wait(cached.value);
+-		// asked once at a time: the entry stands for the lookup in flight
++		if (cached && cached.until > Date.now()) {
++			if (!bytes) return cached.value;
++			return cached.value.then((found) =>
++				found.answer !== undefined ? found : this.#fresh(key, name)
++			);
++		}
++		return this.#fresh(key, name);
++	}
++
++	/** a new question for `name` under `key`; the entry stands for the lookup while it is out */
++	#fresh(key: string, name: string): Promise<Found> {
+ 		const entry: Kept = { until: Infinity, value: null! };
+ 		entry.value = this.#ask(key, name, entry);
+ 		this.#cache.set(key, entry);
+-		return wait(entry.value);
++		return entry.value;
+ 	}
+ 
+-	async #ask(key: string, name: string, entry: Kept): Promise<Uint8Array | null> {
++	async #ask(key: string, name: string, entry: Kept): Promise<Found> {
+ 		const url = new URL(this.#dns);
+ 		url.searchParams.set("dns", base64url(httpsQuery(name)));
+ 		let answer: HttpsAnswer;
++		let bytes: ArrayBuffer;
+ 		try {
+-			answer = parseHttps(await this.#fetch(url.href, "application/dns-message"));
++			bytes = await this.#fetch(url.href, "application/dns-message");
++			answer = parseHttps(bytes);
+ 		} catch {
+ 			// no answer: not kept, asked again after a while
+ 			entry.until = Date.now() + FAILED_MS;
+-			return null;
++			return NONE;
+ 		}
+ 		const now = Date.now();
+ 		entry.until =
+ 			answer.ttl === null ? now : now + Math.min(answer.ttl * 1000, MAX_TTL_MS);
+ 		if (entry.until > now && this.#cache.get(key) === entry)
+-			this.#store?.put({ key, ech: answer.ech, until: entry.until });
+-		return answer.ech;
++			this.#store?.put({
++				key,
++				ech: answer.ech,
++				until: entry.until,
++				answer: bytes.slice(0),
++			});
++		return { ech: answer.ech, answer: bytes };
+ 	}
+ }
+ 
++/** a lookup that is not asked, or got no answer */
++const NONE: Found = { ech: null, answer: null };
++
+ /** the answer, or `null` once the connection has waited long enough */
+ function wait(value: Promise<Uint8Array | null>): Promise<Uint8Array | null> {
+ 	return Promise.race([
+diff --git a/src/main.ts b/src/main.ts
+--- a/src/main.ts
++++ b/src/main.ts
+@@ -134,6 +134,9 @@
+ 		// kept one (connection), and how many bytes its body came as before
+ 		// a Content-Encoding was decoded (encodedBytes)
+ 		timing: true,
++		// httpsAnswer(host, headers): the HTTPS record answer the ECH lookup
++		// reads, one question per name and partition for both
++		httpsAnswer: true,
+ 	};
+ 	/** by name, the one used longest ago first */
+ 	private partitions = new Map<string, Partition>();
+@@ -198,6 +201,25 @@
+ 
+ 	async meta() {}
+ 
++	/**
++	 * The DoH answer (DNS wire format, the server's bytes) to `host`'s HTTPS
++	 * question in the network partition `headers` name (PARTITION_FIELD, as
++	 * `request` reads it; "" without one), the answer the ECH lookup before a
++	 * handshake in that partition reads: a request to the host there after
++	 * it, or one already looking it up, asks no second time, and another
++	 * partition asks its own. `null` without `ech_dns`, for a name that is
++	 * not asked (an address, a local name, the DoH server's own) or when the
++	 * lookup failed. A fresh ArrayBuffer each call.
++	 */
++	async httpsAnswer(host: string, headers?: RawHeaders): Promise<ArrayBuffer | null> {
++		if (!this.opts.ech_dns) return null;
++		await this.init();
++		let partition = "";
++		for (const [key, value] of headers ?? [])
++			if (key.toLowerCase() === PARTITION_FIELD) partition = value;
++		return (await this.ech?.answerIn(partition, host)) ?? null;
++	}
++
+ 	async request(
+ 		remote: URL,
+ 		method: string,
+-- 
+2.54.0
+

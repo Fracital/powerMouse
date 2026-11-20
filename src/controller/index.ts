@@ -110,11 +110,19 @@ import {
 } from '../transport/transportLog';
 import TransportWorker from '../transport/TransportWorker';
 import { watchCarrier, type CarrierInfo } from '../transport/wispWebTransport';
-import { BUILD, coreModuleKey } from '../version';
+import { BUILD } from '../version';
 import { compileModule } from '../wasm/module';
 import { drawAccountChooser } from './accountChooser';
+import {
+	APART_ROUTE,
+	ApartAgent,
+	outOfReach,
+	publishCore,
+	type ApartCommand,
+	type ApartFrameInfo,
+} from './apart';
 import { ClientFrames } from './clientFrames';
-import { GeometryWatch, shareGeometry } from './geometry';
+import { GeometryWatch, sharedGeometry, shareGeometry } from './geometry';
 import {
 	answerRun,
 	bindHistory,
@@ -528,6 +536,19 @@ export interface ControllerInit {
 	 * this origin
 	 */
 	siteHost?: string;
+	/**
+	 * @internal how many windows up from this controller's document the
+	 * window is whose frames the proxied frames are: 0 for the host's page
+	 * (the default), 1 for a RemoteController's controller frame, whose
+	 * siblings they are (./apart.ts)
+	 */
+	framesUp?: number;
+	/**
+	 * @internal the service worker said the document `client` is a page
+	 * isolated natively shown without isolation (NavigateInfo.isolation): a
+	 * RemoteController's controller frame tells the host
+	 */
+	onIsolationWanted?: (client: string) => void;
 }
 
 /**
@@ -644,6 +665,13 @@ export function frameOfSource<F extends { element: HTMLIFrameElement }>(
 }
 
 /** a navigate report posted by a proxied page, else null */
+/** keep `client` in `clients`, the oldest dropped past 64 (NavigateInfo.isolation) */
+export function keepClient(clients: Set<string>, client: string) {
+	clients.delete(client);
+	if (clients.size >= 64) clients.delete(clients.values().next().value!);
+	clients.add(client);
+}
+
 export function navigateReport(data: unknown): NavigateInfo | null {
 	if (typeof data !== 'object' || data === null) return null;
 	const info = (data as Record<string, unknown>)[NAVIGATE];
@@ -786,6 +814,50 @@ const UPDATE_FOUND_MS = 3000;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Wait for a frame's navigation to `routed` (`reported`, see
+ * Frame.#arrival); when a newer service worker takes over (`onHandover`)
+ * and, HANDOVER_GRACE_MS later, the frame has neither reported, fired its
+ * load event nor changed document (`before`, null for another origin's),
+ * the navigation is sent again, once, and the next report (`nextReport`)
+ * is waited for. By way of about:blank: Chrome drops a navigation to the
+ * URL a frame still on its first document is already on its way to
+ * (measured), and the stuck one would go on waiting.
+ */
+export async function arrival(
+	element: HTMLIFrameElement,
+	routed: string,
+	reported: Promise<void>,
+	onHandover: (listener: () => void) => () => void,
+	nextReport: () => Promise<void>,
+	before: Document | null,
+	sent: () => void = () => {},
+): Promise<void> {
+	let arrived = false;
+	const shown = () => {
+		arrived = true;
+	};
+	element.addEventListener('load', shown);
+	const settled = reported.then(shown);
+	let handedOver = () => {};
+	const handover = new Promise<void>((resolve) => (handedOver = resolve));
+	const stop = onHandover(handedOver);
+	try {
+		await Promise.race([settled, handover]);
+		if (!arrived) await Promise.race([settled, sleep(HANDOVER_GRACE_MS)]);
+		if (arrived || element.contentDocument !== before) return await reported;
+		stop();
+		const again = nextReport();
+		element.src = 'about:blank';
+		element.src = routed;
+		sent();
+		await again;
+	} finally {
+		stop();
+		element.removeEventListener('load', shown);
+	}
+}
+
 /** how long a document's request report waits for its page to say which frame it is in */
 const ATTRIBUTION_WAIT_MS = 3000;
 /** the same for a subresource fetched before the page reported (head scripts, styles) */
@@ -794,6 +866,12 @@ const SUBRESOURCE_WAIT_MS = 1500;
 export const NAVIGATION_WAIT_MS = 30000;
 /** how long after the frame's load event they wait for a report that may never come (a document nothing injected) */
 export const REPORT_GRACE_MS = 1000;
+/**
+ * How long a frame's navigation that a new service worker's takeover may
+ * have lost is given to show itself before it is sent again (see
+ * Frame.#arrival)
+ */
+const HANDOVER_GRACE_MS = 1000;
 /** how long register() and the constructor wait for a worker to activate before going on with what there is */
 export const REGISTER_WAIT_MS = 30000;
 const DOCUMENT_DESTINATIONS = new Set([
@@ -847,34 +925,6 @@ export type {
 	RequestRuleAction,
 	RequestRuleMatch,
 } from '../transport/messages';
-
-/**
- * Leave the compiled core module on this window (coreModuleKey), where a
- * proxied top of this agent cluster takes it synchronously when its client
- * is made (src/inject/dom/Client.ts #controllerModule): a top's first task
- * often rewrites (an inline script's eval, a `javascript:` link its markup
- * has) before the module it asked for (PAGE_MODULES) can arrive, and such
- * a top fetched the bytes with a synchronous request and compiled them on
- * its main thread, 10 to 12 ms on real sites. Left once, before the first
- * handshake, so no proxied page exists yet that could have put another
- * there, and for good: nothing replaces it.
- */
-function publishCore(
-	client: string | undefined,
-	module: WebAssembly.Module,
-): void {
-	if (!client) return;
-	try {
-		Reflect.defineProperty(globalThis, coreModuleKey(client), {
-			value: module,
-			enumerable: false,
-			configurable: false,
-			writable: false,
-		});
-	} catch (error) {
-		// a window that keeps nothing: its documents compile their own
-	}
-}
 
 function defaultDirectory(): URL {
 	const script =
@@ -1384,7 +1434,11 @@ export class StompController extends EventTarget {
 
 		// the host's own input gives its proxied documents no activation of
 		// their own (./hostActivation.ts)
-		watchHostInput(helperNames(this.config).client);
+		watchHostInput(helperNames(this.config).client, (now) => {
+			// (and the documents a Document-Isolation-Policy keeps out of
+			// reach, once one was shown)
+			if (this.#apart) void this.#apart.then((agent) => agent?.hostInput(now));
+		});
 		// the site pool, where the browser keeps its slots apart: only a
 		// secure context's Origin-Agent-Cluster is heard
 		if (
@@ -1478,7 +1532,9 @@ export class StompController extends EventTarget {
 			// a document of the frame got a user activation: read it now
 			const activated = activatedReport(event.data);
 			if (activated !== null) {
+				const apart = this.#sites ? null : frame.apartPath();
 				if (this.#sites) frame.siteActivated(activated, nested);
+				else if (apart) this.apartActivated(apart, activated, nested);
 				else noteActivation(frame.historyWindow(), activated, nested);
 				return;
 			}
@@ -1497,7 +1553,10 @@ export class StompController extends EventTarget {
 				// (the site pool: once the agent of the frame's slot heard)
 				if (moved && this.#sites)
 					frame.siteNested(event.source as Window, moved.entry);
-				const changed = moved && !this.#sites && frame.historyChanged();
+				const apart = moved && !this.#sites && frame.apartPath();
+				if (apart) void frame.apartChanged(apart);
+				const changed =
+					moved && !this.#sites && !apart && frame.historyChanged();
 				if (changed) this.frameNavigated(changed, frame);
 				const thrown = client || moved ? null : hookErrorReport(event.data);
 				if (thrown) this.#reportHookError(thrown, frame);
@@ -1506,6 +1565,10 @@ export class StompController extends EventTarget {
 			const navigate = navigateReport(event.data);
 			if (navigate) {
 				if (navigate.client) this.#clients.attribute(navigate.client, frame);
+				// (the controller's word, never the page's: navigateReport takes
+				// no such field from it)
+				if (navigate.client && this.#isolationWanted.has(navigate.client))
+					navigate.isolation = 'wanted';
 				// the site pool: reported once the agent of the document's slot
 				// took it (the frame's buttons are its history's)
 				if (this.#sites)
@@ -1520,6 +1583,7 @@ export class StompController extends EventTarget {
 						historyRunReport(event.data),
 					);
 				else {
+					if (!nested) frame.reportedFrom(event.source as Window);
 					frame.report(navigate);
 					this.frameNavigated(navigate, frame);
 				}
@@ -1668,6 +1732,29 @@ export class StompController extends EventTarget {
 				this.rebind(controller).catch(() => {});
 		});
 	}
+	/** the handover listeners (onHandover) */
+	#handovers = new Set<() => void>();
+	/**
+	 * @internal `listener` runs when a newer service worker of the
+	 * registration takes over, the moment the old one is stopped (Frame.go
+	 * sends again a navigation it may have lost); the returned function
+	 * removes it
+	 */
+	onHandover(listener: () => void): () => void {
+		this.#handovers.add(listener);
+		return () => this.#handovers.delete(listener);
+	}
+	/** run the handover listeners once `worker` starts activating */
+	#takingOver(worker: ServiceWorker) {
+		const changed = () => {
+			if (worker.state === 'redundant')
+				worker.removeEventListener('statechange', changed);
+			if (worker.state !== 'activating' && worker.state !== 'activated') return;
+			worker.removeEventListener('statechange', changed);
+			for (const listener of [...this.#handovers]) listener();
+		};
+		worker.addEventListener('statechange', changed);
+	}
 	/** a worker served from our directory (the host's own service worker is not) */
 	#ours(worker: ServiceWorker): boolean {
 		return worker.scriptURL.startsWith(this.directory.href);
@@ -1684,6 +1771,7 @@ export class StompController extends EventTarget {
 			if (!registration) return;
 			const adopt = (worker: ServiceWorker | null) => {
 				if (!worker) return;
+				this.#takingOver(worker);
 				activated(worker).then(
 					() => {
 						// heal() rebinds on its own once its worker is activated
@@ -2020,6 +2108,69 @@ export class StompController extends EventTarget {
 		return this.#isolationProbe;
 	}
 	#isolationProbe?: Promise<IsolationEngine | null>;
+	/** the clients the worker said show a page isolated natively without isolation (NavigateInfo.isolation) */
+	#isolationWanted = new Set<string>();
+	/**
+	 * The agent that reaches the documents a Document-Isolation-Policy of
+	 * the proxy's own isolates, out of this realm's reach (./apart.ts): made
+	 * the first time a frame shows one, null when it could not start (it is
+	 * tried again a minute later)
+	 */
+	#apart: Promise<ApartAgent | null> | null = null;
+	/** @internal the agent of the documents a Document-Isolation-Policy isolates (./apart.ts) */
+	apartAgent(): Promise<ApartAgent | null> {
+		return (this.#apart ??= (async () => {
+			await this.#ready;
+			const token = Array.from(
+				crypto.getRandomValues(new Uint8Array(16)),
+				(byte) => byte.toString(16).padStart(2, '0'),
+			).join('');
+			const agent = await this.#call('apartAgent', {
+				token,
+				script: new URL(
+					assetFile(this.config.assets, 'controllerFrameScript'),
+					this.directory,
+				).href,
+			})
+				.then(() =>
+					ApartAgent.start(new URL(`${APART_ROUTE}/${token}`, this.directory), {
+						client: helperNames(this.config).client,
+						up: (this.#init.framesUp ?? 0) + 1,
+					}),
+				)
+				.catch(() => null);
+			if (!agent) {
+				setTimeout(() => (this.#apart = null), 60_000);
+				return null;
+			}
+			// what the documents read synchronously of the controller's window
+			const geometry = sharedGeometry(window);
+			if (geometry) agent.geometry(geometry);
+			const core = this.#modules?.core;
+			if (core) agent.core(core.slice(0));
+			return agent;
+		})());
+	}
+	/**
+	 * @internal what the agent says of the frame at `path` (its indices from
+	 * the window whose frames they are), null when no agent reaches it
+	 */
+	async apartInfo(path: number[]): Promise<ApartFrameInfo | null> {
+		return (await this.apartAgent())?.info(path) ?? null;
+	}
+	/** @internal step, reload or mark the frame at `path` through the agent; null when no agent reaches it */
+	async apartCommand(
+		path: number[],
+		command: ApartCommand,
+	): Promise<boolean | null> {
+		return (await this.apartAgent())?.command(path, command) ?? null;
+	}
+	/** @internal a document of the frame at `path`, out of reach here, reported a user activation */
+	apartActivated(path: number[], token: string, nested: boolean) {
+		void this.apartAgent().then((agent) =>
+			agent?.activated(path, token, nested),
+		);
+	}
 	/**
 	 * The wasm artifacts, loaded once and compiled once, here. The rewrite
 	 * workers share this page's agent cluster and get the compiled modules,
@@ -2278,6 +2429,11 @@ export class StompController extends EventTarget {
 					rpc.abort('Controller replaced');
 				},
 				isolationEngine: async () => [await this.#isolationEngine(), []],
+				isolationWanted: async (client) => {
+					if (typeof client !== 'string') return;
+					keepClient(this.#isolationWanted, client);
+					this.#init.onIsolationWanted?.(client);
+				},
 				// (kept a while: the worker reads it at once)
 				blobProbe: async () => {
 					const url = URL.createObjectURL(new Blob([]));
@@ -3236,6 +3392,8 @@ export class StompController extends EventTarget {
 	 */
 	shareGeometry(geometry: HostGeometry): Promise<void> {
 		shareGeometry(window, geometry);
+		if (this.#apart)
+			void this.#apart.then((agent) => agent?.geometry(geometry));
 		return this.#sites?.geometry() ?? Promise.resolve();
 	}
 }
@@ -3819,6 +3977,10 @@ export class Frame extends EventTarget {
 	}
 	/** @internal */
 	report(info: NavigateInfo, settles = true) {
+		// a document out of this realm's reach (./apart.ts): what its history
+		// can do is the agent's to say, asked now and told when it differs
+		const apart = this.apartPath();
+		if (!apart) this.#apartHistory = null;
 		// where the frame's history can go is the frame's, nested frames
 		// included, not what the page's own navigable says
 		const canGoBack = this.canGoBack;
@@ -3831,6 +3993,44 @@ export class Frame extends EventTarget {
 			this.#awaitingReport.clear();
 		}
 		this.dispatchEvent(new CustomEvent('navigate', { detail: info }));
+		if (apart && !this.#askingApart) void this.apartChanged(apart);
+	}
+	/**
+	 * @internal The frame's path from the controller's window when its
+	 * document is out of this realm's reach though of its origin (a
+	 * Document-Isolation-Policy of the proxy's: ./apart.ts), else null
+	 */
+	apartPath(): number[] | null {
+		if (this.controller.siteMode || !this.#reportedApart) return null;
+		const win = this.element.contentWindow;
+		return win && outOfReach(win) ? framePath(window, win) : null;
+	}
+	/** the frame's last report came from a document out of this realm's reach (an error page, which is too, never reports) */
+	#reportedApart = false;
+	/** @internal the window the frame's document reported from */
+	reportedFrom(source: Window | null) {
+		this.#reportedApart = !!source && outOfReach(source);
+	}
+	/** what the agent last said of the history of the frame's document out of reach */
+	#apartHistory: { back: boolean | null; forward: boolean | null } | null =
+		null;
+	#askingApart = false;
+	/**
+	 * @internal ask the agent what the history of the frame's document out of
+	 * reach can do, and tell the host when that changed
+	 */
+	async apartChanged(path = this.apartPath()): Promise<void> {
+		if (!path) return;
+		const info = await this.controller.apartInfo(path);
+		if (!info) return;
+		this.#apartHistory = { back: info.canGoBack, forward: info.canGoForward };
+		this.#askingApart = true;
+		try {
+			const changed = this.historyChanged(false);
+			if (changed) this.controller.frameNavigated(changed, this);
+		} finally {
+			this.#askingApart = false;
+		}
 	}
 	/** @internal the frame's window, its history told how to read its documents */
 	historyWindow(): Window | null {
@@ -3931,6 +4131,9 @@ export class Frame extends EventTarget {
 		// is not taken for the new document's
 		const reported = this.#nextReport();
 		noteBrowserNavigation(this.historyWindow());
+		// (the document it leaves may be out of this realm's reach: ./apart.ts)
+		const apart = this.apartPath();
+		if (apart) await this.controller.apartCommand(apart, 'typed');
 		if (origin) this.#allowSlots();
 		// the site pool: the run that shows the URL's origin takes the next
 		// document for the host's, else the next run starts with it
@@ -3940,9 +4143,34 @@ export class Frame extends EventTarget {
 				await this.#ask(run, { kind: 'typed' });
 			else this.#hostNavigation = true;
 		}
+		const before = this.element.contentDocument;
 		this.element.src = routed;
-		await reported;
+		await this.#arrival(routed, reported, before);
 		if (origin) this.#bounced(origin);
+	}
+	/**
+	 * Wait for the navigation the frame was just sent on (`reported`), and
+	 * send it once more when a newer service worker takes over before the
+	 * frame shows anything of it. Chrome stops the old worker then, and a
+	 * navigation that worker was handed in that moment is never answered,
+	 * nor sent to the network or the new worker: the frame kept its old
+	 * document for good (measured, the first visit after a deploy). Sent
+	 * again, it waits for the new worker, whose revive window holds it until
+	 * this controller has shaken hands with it.
+	 */
+	async #arrival(
+		routed: string,
+		reported: Promise<void>,
+		before: Document | null,
+	): Promise<void> {
+		await arrival(
+			this.element,
+			routed,
+			reported,
+			(listener) => this.controller.onHandover(listener),
+			() => this.#nextReport(),
+			before,
+		);
 	}
 	/**
 	 * The site pool: a navigation sent to the slot `origin` reported from
@@ -3962,13 +4190,19 @@ export class Frame extends EventTarget {
 	 */
 	async back(): Promise<boolean> {
 		if (this.controller.siteMode) return this.#siteStep('back');
-		const win = this.historyWindow();
-		return win ? traverse(win, 'back') : false;
+		return this.#step('back');
 	}
 	async forward(): Promise<boolean> {
 		if (this.controller.siteMode) return this.#siteStep('forward');
+		return this.#step('forward');
+	}
+	async #step(direction: Direction): Promise<boolean> {
+		// a document out of this realm's reach is stepped by the agent
+		const apart = this.apartPath();
+		if (apart)
+			return (await this.controller.apartCommand(apart, direction)) === true;
 		const win = this.historyWindow();
-		return win ? traverse(win, 'forward') : false;
+		return win ? traverse(win, direction) : false;
 	}
 	/** whether the frame's history (nested frames included) has an entry before/after the current one; null when the browser cannot tell */
 	get canGoBack(): boolean | null {
@@ -3977,6 +4211,8 @@ export class Frame extends EventTarget {
 				this.#target('back') !== null ||
 				(!this.#runs[this.#at]?.known && this.#own.back)
 			);
+		// (a document out of reach: what the agent said, else the page's)
+		if (this.apartPath()) return this.#apartHistory?.back ?? null;
 		return canTraverse(this.historyWindow(), 'back');
 	}
 	get canGoForward(): boolean | null {
@@ -3985,6 +4221,7 @@ export class Frame extends EventTarget {
 				this.#target('forward') !== null ||
 				(!this.#runs[this.#at]?.known && this.#own.forward)
 			);
+		if (this.apartPath()) return this.#apartHistory?.forward ?? null;
 		return canTraverse(this.historyWindow(), 'forward');
 	}
 	/** reload the frame; resolves when the reloaded document first reports (false when there was no document to reload) */
@@ -4011,8 +4248,16 @@ export class Frame extends EventTarget {
 			return true;
 		}
 		const reported = this.#nextReport();
-		noteBrowserNavigation(this.historyWindow());
-		win.location.reload();
+		// a document out of this realm's reach: its location reloads only
+		// from its own cluster
+		const apart = this.apartPath();
+		if (apart) {
+			if ((await this.controller.apartCommand(apart, 'reload')) !== true)
+				return false;
+		} else {
+			noteBrowserNavigation(this.historyWindow());
+			win.location.reload();
+		}
 		await reported;
 		return true;
 	}
@@ -4029,7 +4274,9 @@ export class Frame extends EventTarget {
 				null
 			);
 		} catch {
-			return null;
+			// a document out of this realm's reach (./apart.ts) says where it
+			// is in its reports
+			return this.apartPath() ? (this.lastNavigate?.url ?? null) : null;
 		}
 	}
 }

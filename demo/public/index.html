@@ -7,6 +7,13 @@
 		<link type="image/x-icon" rel="shortcut icon" href="/favicon.ico" />
 		<title>powerMouse</title>
 		<link rel="stylesheet" href="/pm/main.css" />
+		<script>
+			// a page named in the fragment (a reload, a restored session, a link
+			// to a tab) opens in the browser view from the first paint: the home
+			// screen below is never drawn before it (pm/main.js takes it over)
+			if (location.hash.length > 1)
+				document.documentElement.classList.add('opening');
+		</script>
 		<script src="/config.js"></script>
 		<script>
 			// npm run dev only: live reload client (the server sets dev in config)
@@ -263,27 +270,6 @@
 						aria-label="New tab"
 					>
 						+
-					</button>
-					<!-- the bar's menu, which the tab manager hides with the bar -->
-					<button
-						class="recentsMore"
-						id="recentsMenu"
-						type="button"
-						title="Menu"
-						aria-label="Menu"
-						aria-haspopup="menu"
-						aria-expanded="false"
-						aria-controls="pmMenu"
-					>
-						<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
-							<path
-								d="M4 6.5h16M4 12h16M4 17.5h16"
-								fill="none"
-								stroke="currentColor"
-								stroke-width="2"
-								stroke-linecap="round"
-							/>
-						</svg>
 					</button>
 				</div>
 			</div>

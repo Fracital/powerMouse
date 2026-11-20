@@ -9,7 +9,15 @@
 // what was let through, and stops reading the relay past that: the
 // session holds the server back, as a reader holds a socket's back
 // natively. Readers that stop (a paused one) hold nothing back.
+//
+// A connection with stream credit (Wisp 0xE2, streamCredit.ts) needs none
+// of that: the relay sends each stream no more than its reader in epoxy
+// granted, so what epoxy keeps is bounded per stream, and packets held here
+// in one line would hold every stream of the realm behind one slow body.
+// Its packets go to epoxy as they come, unless PACED_AHEAD_CREDITED bytes
+// (past anything epoxy grants) are ahead of the readers: a backstop.
 import { bodiesTaken } from './bodyPort';
+import { StreamCreditWatch } from './streamCredit';
 
 /** a rider of the relay for another realm (a shard's worker), and whether the host takes its `{ took }` */
 export interface Ride {
@@ -26,11 +34,18 @@ const TOOK_STEP = 1024 * 1024;
  * of growth, and 16 here measured 14 to 18)
  */
 const PACED_AHEAD = 8 * 1024 * 1024;
+/**
+ * the same with stream credit: past what epoxy grants (64 MiB of window
+ * growth across a connection's streams, 256 KiB each before it grows), so
+ * only a relay that sends past its grants is held back here
+ */
+const PACED_AHEAD_CREDITED = 128 * 1024 * 1024;
 /** readers that took nothing for this long are not reading: nothing waits for them */
 const PACED_QUIET_MS = 250;
 const CONNECT = 0x01;
 const DATA = 0x02;
 const CLOSE = 0x04;
+const INFO = 0x05;
 /** a CONNECT's stream type: UDP */
 const UDP = 0x02;
 const streamOf = (bytes: Uint8Array) =>
@@ -62,12 +77,17 @@ export function paceRider(
 	let start = 0;
 	let untold = 0;
 	let quiet: ReturnType<typeof setTimeout> | undefined;
+	/** the relay's INFO comes through take, epoxy's through sent */
+	const credit = new StreamCreditWatch();
 	const flowing = () => {
 		if (performance.now() - bodiesTaken.at > PACED_QUIET_MS) {
 			start = delivered - bodiesTaken.bytes;
 			return true;
 		}
-		return delivered - bodiesTaken.bytes - start < PACED_AHEAD;
+		return (
+			delivered - bodiesTaken.bytes - start <
+			(credit.on ? PACED_AHEAD_CREDITED : PACED_AHEAD)
+		);
 	};
 	const hand = (packet: ArrayBuffer) => {
 		const bytes = new Uint8Array(packet);
@@ -98,6 +118,7 @@ export function paceRider(
 			for (const packet of packets) {
 				const bytes = new Uint8Array(packet, 0, Math.min(5, packet.byteLength));
 				const id = bytes.length === 5 ? streamOf(bytes) : 0;
+				if (!id && bytes[0] === INFO) credit.fromServer(new Uint8Array(packet));
 				if (id && udp.has(id)) {
 					if (bytes[0] === CLOSE) udp.delete(id);
 					hand(packet);
@@ -106,6 +127,7 @@ export function paceRider(
 			pass();
 		},
 		sent(packet) {
+			credit.fromClient(packet);
 			if (packet.length < 6) return;
 			const id = streamOf(packet);
 			if (packet[0] === CONNECT && packet[5] === UDP) udp.add(id);

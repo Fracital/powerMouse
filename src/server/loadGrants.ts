@@ -44,7 +44,7 @@ const URL_MAX = 16_384;
 export const CHANNELS_KEPT = 512;
 /** tokens remembered as taken, so that a replay is answered at once */
 const SPENT_KEPT = 1024;
-const LOAD = /^[a-z]+(?: [a-z-]+)?$/;
+const LOAD = /^(?:\^|\^?[a-z]+(?: [a-z-]+)?)$/;
 
 interface Grant {
 	client: string;

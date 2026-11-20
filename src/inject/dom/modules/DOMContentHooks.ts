@@ -553,11 +553,13 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			// runs none of it: nothing to rewrite. Asked of the library, it made
 			// a top's first task fetch and compile the wasm module synchronously
 			// when nothing else of that task needed it (15 to 30 ms)
-			const rewritten =
+			let rewritten =
 				passed === ''
 					? ''
 					: (client.prewrittenScript(type === 'genericModule', passed, true) ??
 						modifyJS(passed, client.baseURL, client.config, type));
+			if (type === 'genericModule')
+				rewritten = client.moduleText(rewritten, script);
 			// a rewrite that changed nothing leaves no mark. The mark is the
 			// rewritten text, and a script of the document's markup whose text
 			// is its own rewrite (nothing in it to rewrite, and written as the
@@ -567,8 +569,14 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			// nothing
 			if (rewritten !== script.text) rewrittenScripts.set(script, rewritten);
 			// the page's own script-src refuses this inline script: it keeps no
-			// text, so it runs nothing, and the inject reports it (src/csp.ts)
-			if (!script.hasAttribute('src')) {
+			// text, so it runs nothing, and the inject reports it (src/csp.ts).
+			// A script of markup the parser will run (a copy being made of it)
+			// is the parser's: judged with the markup (rewriteInlineScripts,
+			// DocumentClient judgeParsed), not as one the page inserts
+			if (
+				!script.hasAttribute('src') &&
+				getGlobalParsingState(realm) !== 'parsingBeforeWrite'
+			) {
 				if (client.refuseInlineScript(script, passed, false)) {
 					script.text = '';
 					return;
@@ -877,9 +885,11 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				);
 				if (passed === null) return '';
 				const type = scriptType(element);
-				const output =
+				let output =
 					client.prewrittenScript(type === 'genericModule', passed, true) ??
 					modifyJS(passed, client.baseURL, client.config, type);
+				if (type === 'genericModule')
+					output = client.moduleText(output, script);
 				client.trustedApprove?.(output);
 				return output;
 			});

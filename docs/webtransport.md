@@ -740,6 +740,25 @@ that is up already (<n> s, <n> transports on it)` (with its lanes and
   session took 65 to 87. A cold start is unchanged (685 and 695 ms against
   691 and 734 in the two quiet rounds): it opens the host's session as it
   opened its own.
+- **Stream credit.** A body read slowly holds back the stream it comes
+  on, and only that one, when the relay's INFO offers Wisp extension 0xE2
+  (holyWisp's `stream-credit`) and epoxy runs Wisp v2 (`wisp_v2`; v1 has
+  no INFO, and the INFO the carrier says for a v1 epoxy names none): each
+  TCP stream's reader in epoxy grants the relay what it consumed plus a
+  window (256 KiB, doubled while the reader drains it, to 16 MiB; patch
+  epoxy-tls 0084), and the relay reads that origin no further, as a
+  native socket's receive window holds back its remote. A CREDIT rides
+  its stream's lane like any of its packets. Without it, a reader that
+  falls behind is held back where the packets wait: a rider hands epoxy
+  its packets at the pace of its realm's body readers
+  (`src/transport/riderPace.ts`, 8 MiB ahead at most) and the host stops
+  reading the relay while a rider is far behind, which held every stream
+  of the connection behind the slowest. With credit on both are only a
+  backstop (128 MiB ahead; the host never pauses the relay for a rider,
+  and still resets the largest stream of one that took nothing for 2 s
+  with more than 64 MiB waiting: a relay that sent past its grants), and
+  the `stream-credit` suite reads 128 MB at 8 MB/s beside a fast download
+  and a WebSocket's echoes over each carrier.
 
 It rests on epoxy-tls's `deploy/epoxy` patch 0075 (in the pinned build),
 which makes a function transport's writes never wait, as the WebSocket's

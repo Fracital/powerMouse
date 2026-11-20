@@ -41,7 +41,7 @@ const MESSAGE_MAX = 1024 * 1024;
 /** sender to receiver */
 type BodyMessage =
 	| { type: 'data'; data: Uint8Array | Uint8Array[] }
-	| { type: 'end' }
+	| { type: 'end'; encoded?: number }
 	| { type: 'error'; error: unknown };
 
 /** receiver to sender */
@@ -74,6 +74,8 @@ function ownsBuffer(chunk: Uint8Array): boolean {
 
 /**
  * the sending end: reads `body` and pushes it to the port it returns.
+ * `encoded`: the transport's count of the bytes the body came as before it
+ * was decoded (responseFacts.ts), sent with the body's end.
  * `owned`: no one else holds the stream's chunks (the transport's, a
  * response the proxy fetched), so their buffers are transferred; a page's
  * own stream (a response its service worker made, or one it may have
@@ -83,6 +85,7 @@ function ownsBuffer(chunk: Uint8Array): boolean {
 export function sendBody(
 	body: ReadableStream<Uint8Array>,
 	owned: boolean,
+	encoded?: (() => number | undefined) | null,
 ): PortBody {
 	// the browser's own channel, listened to with its own methods: in a
 	// page's realm the page may have replaced them (src/transport/ports.ts)
@@ -165,7 +168,16 @@ export function sendBody(
 			}
 		}
 		flush();
-		postToPort(port, { type: 'end' } satisfies BodyMessage);
+		let count: number | undefined;
+		try {
+			count = encoded?.();
+		} catch {
+			// no count
+		}
+		postToPort(port, {
+			type: 'end',
+			...(typeof count === 'number' && { encoded: count }),
+		} satisfies BodyMessage);
 	};
 	pump().catch((error) => {
 		if (stopped) return;
@@ -186,11 +198,13 @@ export function sendBody(
 
 /**
  * the receiving end: the body as a stream. `settled` runs once, when the
- * body ended, failed or was cancelled.
+ * body ended, failed or was cancelled; `encoded` with the sender's count of
+ * the bytes it came as before decoding, before the stream ends (sendBody).
  */
 export function receiveBody(
 	{ $stompBodyPort: port }: PortBody,
-	settled?: () => void,
+	settled?: (() => void) | null,
+	encoded?: (count: number) => void,
 ): ReadableStream<Uint8Array> {
 	let open = true;
 	let received = 0;
@@ -214,6 +228,7 @@ export function receiveBody(
 							controller.enqueue(chunk);
 						}
 					} else if (data.type === 'end') {
+						if (typeof data.encoded === 'number') encoded?.(data.encoded);
 						close();
 						controller.close();
 					} else if (data.type === 'error') {
@@ -248,4 +263,23 @@ export function receiveBody(
 		},
 		{ highWaterMark: BODY_WINDOW, size: (chunk) => chunk.byteLength },
 	);
+}
+
+/**
+ * a response's body that came on a port, and the sender's count of the
+ * bytes it came as before decoding, read once it has ended (sendBody's
+ * `encoded`; responseFacts.ts)
+ */
+export function receiveCounted(
+	body: PortBody,
+	settled?: (() => void) | null,
+): {
+	body: ReadableStream<Uint8Array>;
+	encodedBytes: () => number | undefined;
+} {
+	let count: number | undefined;
+	return {
+		body: receiveBody(body, settled, (encoded) => (count = encoded)),
+		encodedBytes: () => count,
+	};
 }

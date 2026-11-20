@@ -146,7 +146,13 @@ export interface LoadChannelMessage {
  * `<destination> <mode>`, the Sec-Fetch-Dest and Sec-Fetch-Mode of the load
  * the request stands for (subresource values only, never a navigation's
  * but an object's or embed's), or `copy` (a load the worker takes no
- * metadata from) or `download`
+ * metadata from) or `download`. Led by `^` (or `^` alone, for a request
+ * that is otherwise the page's own): the request is a document's the
+ * client's realm makes it for, of the client's origin, whose partition is
+ * the one the client's site has under its own top-level site with a frame
+ * of another site above it (an about:blank the client navigated a frame of
+ * another site's to, src/isolation.ts `blank`); taken only from a client
+ * in no partition
  */
 export interface LoadGrantMessage {
 	/** 22 random characters of base64url: the LOAD_HEADER of the request */
@@ -317,6 +323,25 @@ export const CORS_MARKER = 'stomp-cors';
  */
 export const SIZE_MARKER = 'stomp-size';
 /**
+ * A Server-Timing metric whose description is the protocol the origin's
+ * answer came over, as Chrome names it (`h3`, `h2`, `http/1.1`): the
+ * browser has a service worker's answer as of no protocol, and the inject
+ * shows the page this one as the entry's `nextHopProtocol`
+ */
+export const PROTOCOL_MARKER = 'stomp-protocol';
+/**
+ * A Server-Timing metric whose description is when the steps of the
+ * connection the origin's answer came on happened, in ms after the request
+ * reached the transport (its own times, responseFacts.ts): `r_REQUEST` for
+ * a connection that had carried a request before, else the lookup's start
+ * and end, the connection's start, its TLS start, its end and the request's
+ * start, joined by `_`, a step the transport did not see as `x`. The
+ * browser has a service worker's answer as made on no connection, and the
+ * inject shows the page these as the entry's connection times, from where
+ * the page's fetch started
+ */
+export const CONNECTION_MARKER = 'stomp-connection';
+/**
  * A Server-Timing metric the worker adds to a load a style sheet of
  * another origin made, when the page loaded that sheet without cors: the
  * browser reports no resource timing entry for it (the sheet's content is
@@ -379,6 +404,8 @@ export const PROXY_METRICS: readonly string[] = [
 	TIMING_DENIED_MARKER,
 	CORS_MARKER,
 	SIZE_MARKER,
+	PROTOCOL_MARKER,
+	CONNECTION_MARKER,
 	UNREPORTED_MARKER,
 	ENCODING_MARKER,
 	WORKER_SCRIPT_MARKER,
@@ -609,6 +636,16 @@ export interface NavigateInfo {
 	icon: string | null;
 	/** the page's service worker client id, once it learned it (`whoami`) */
 	client?: string;
+	/**
+	 * `wanted`: the page is cross-origin isolated natively (it sent COOP
+	 * `same-origin` and an embedder policy, or a Document-Isolation-Policy)
+	 * and is not here: the host's page is not isolated and the browser
+	 * cannot isolate a frame of it by itself (it has no
+	 * Document-Isolation-Policy). A host may offer the page a window of its
+	 * own whose page is isolated (README, Cross-origin isolation). Set by the
+	 * controller, absent otherwise
+	 */
+	isolation?: 'wanted';
 }
 /**
  * global set by the bootstrap of a worker started from a blob: URL: the
@@ -696,6 +733,8 @@ export const BLOB_ASK = '$stomp$blobAsk';
 export interface BlobMintedMessage {
 	directory: string;
 	url: string;
+	/** minted by a document whose partition is as a load grant's `^` names */
+	cross?: boolean;
 }
 
 /**
@@ -1002,6 +1041,8 @@ export interface InlineDocumentMessage {
 	blob?: Blob | string;
 	/** that Blob's document is cross-origin isolated, as its creator is (it inherits the creator's embedder policy) */
 	isolated?: boolean;
+	/** its creator's partition is as a load grant's `^` names (LoadGrantMessage) */
+	cross?: boolean;
 }
 
 /**
@@ -1256,6 +1297,12 @@ export type HostReload = 'no-cache' | 'reload';
 export type SWbound = {
 	/** replace the request rules */
 	rules: [RequestRule[]];
+	/**
+	 * the controller starts the agent of the documents a
+	 * Document-Isolation-Policy isolates (src/controller/apart.ts): its route
+	 * answers this token once, with a document that runs `script`
+	 */
+	apartAgent: [{ token: string; script: string }];
 	/** the host page was reloaded: the pages it restores are (HostReload) */
 	hostReload: [HostReload];
 	/**
@@ -1479,6 +1526,11 @@ export type Controllerbound = {
 	 * could not tell
 	 */
 	isolationEngine: [undefined, IsolationEngine | null];
+	/**
+	 * a top-level page that is cross-origin isolated natively is shown to
+	 * this client without isolation (NavigateInfo.isolation)
+	 */
+	isolationWanted: [string];
 	/**
 	 * a blob: URL the controller's document minted, which the worker reads
 	 * to learn whether it reads its clients' (src/server/rewrites.ts

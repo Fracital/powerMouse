@@ -143,10 +143,6 @@ for (let i = 0; i < ORIGINS; i++) {
 			more();
 		},
 	);
-	// (a keep-alive that outlasts the reads: epoxy drops what a stream
-	// still holds unread when the stream's CLOSE comes, and node closes an
-	// idle connection after 5 s, which it is once it wrote the body)
-	server.keepAliveTimeout = 60 * 1000;
 	await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 	flowServers.push(`https://127.0.0.1:${server.address().port}`);
 }

@@ -105,6 +105,11 @@ async function run(open, t) {
 	return { reports, attributeReads };
 }
 
+// The run's tags are this suite's own: sop-partitions loads the same pages,
+// and what the fixture counts (its /sop/log, one store for every suite of a
+// runner) and the sites' cookies (whatever the port) are kept by tag
+const tagOf = (mode) => `cl${mode.replace('-', '')}`;
+
 let nativePage = null;
 const nativeContext = await browser.newContext();
 const native = await run(async (url) => {
@@ -113,7 +118,7 @@ const native = await run(async (url) => {
 	nativePage = await nativeContext.newPage();
 	await nativePage.goto(url);
 	return nativePage;
-}, 'native');
+}, tagOf('native'));
 await nativeContext.close();
 console.log('native', JSON.stringify(native));
 ok(
@@ -142,16 +147,13 @@ for (const [mode, base] of [
 	['isolated', HOST],
 ]) {
 	const page = await openDemo(browser, `${base}?sw`);
-	const proxied = await run(
-		async (url) => {
-			if (url !== null) {
-				await page.click('#home').catch(() => {});
-				await submitLanding(page, url);
-			}
-			return page;
-		},
-		mode.replace('-', ''),
-	);
+	const proxied = await run(async (url) => {
+		if (url !== null) {
+			await page.click('#home').catch(() => {});
+			await submitLanding(page, url);
+		}
+		return page;
+	}, tagOf(mode));
 	console.log(mode, JSON.stringify(proxied));
 	for (const [key] of steps(mode)) {
 		const want = native.reports[key] ?? {};

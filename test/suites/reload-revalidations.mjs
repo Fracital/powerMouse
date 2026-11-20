@@ -54,7 +54,8 @@ const files = {
 	blocker: named(new RegExp(`/stomp/blocker\\.wasm\\?${HASH}$`)),
 	controller: named(new RegExp(`/stomp/Controller\\.js\\?${HASH}$`)),
 	epoxy: named(new RegExp(`/epoxy/${HASH}/index\\.mjs$`)),
-	epoxyWasm: named(new RegExp(`/epoxy/${HASH}/epoxy\\.wasm$`)),
+	// epoxy-simd.wasm where Chrome has SIMD128 (deploy/epoxy epoxy-transport 0062)
+	epoxyWasm: named(new RegExp(`/epoxy/${HASH}/epoxy(-simd)?\\.wasm$`)),
 };
 ok(
 	"the controller asks for its workers and the blocker by their hashes, the page for its scripts, and epoxy and its wasm come from the package's hash",

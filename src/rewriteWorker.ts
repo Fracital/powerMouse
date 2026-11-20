@@ -9,7 +9,7 @@
 // blocker's engine from its lists when the service worker asks.
 import { buildEngine } from './blocker/build';
 import { parseConfig } from './config';
-import { modifyJS, type RewrittenBy } from './rewriteJS';
+import { modifyJS, SCRIPT_FILE, type RewrittenBy } from './rewriteJS';
 import {
 	REWRITE_READY,
 	REWRITE_RPC,
@@ -81,6 +81,7 @@ function rewriteBytes(
 			request.config,
 			request.type,
 			request.preamble ?? '',
+			SCRIPT_FILE,
 		),
 		[],
 	];

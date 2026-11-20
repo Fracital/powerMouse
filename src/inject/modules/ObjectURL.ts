@@ -27,6 +27,9 @@ import { realmOrigin } from './Unroute';
  */
 let handsBytes = true;
 
+/** the blob: URLs a document in another partition than its carrier minted (#register: LoadGrantMessage `^`) */
+const crossMinted = new Set<string>();
+
 /**
  * `URL.createObjectURL` mints a blob: URL under the origin of the realm that
  * called it, which is the proxy's: the page gets it under its real origin
@@ -89,7 +92,12 @@ export default class ObjectURLModule extends Module<Client> {
 	 * service worker cannot read a Blob posted to it in a frame of another
 	 * site's page (NotFoundError, measured)
 	 */
-	#inline(proxy: string, blob: Blob | string, isolated: boolean) {
+	#inline(
+		proxy: string,
+		blob: Blob | string,
+		isolated: boolean,
+		cross: boolean,
+	) {
 		const client = this.client;
 		const routed = client.inlineDocument(
 			'',
@@ -97,6 +105,7 @@ export default class ObjectURLModule extends Module<Client> {
 			client.url.toString(),
 			blob,
 			isolated,
+			cross,
 		);
 		const token = routed && /\/inline:([\w-]{22})\//.exec(routed)?.[1];
 		if (token && typeof blob !== 'string') this.#handBytes(proxy, token, blob);
@@ -137,8 +146,15 @@ export default class ObjectURLModule extends Module<Client> {
 				: undefined;
 		if (routedModule) routedModule.#answerAsks();
 		if (!routed || routed.url.url.origin !== this.client.url.url.origin) return;
+		// (LoadGrantMessage `^`)
+		const cross = (this.client as { crossCarried?: boolean }).crossCarried;
+		if (cross) crossMinted.add(url);
 		routed.postToWorker({
-			[BLOB_MINTED]: { directory: routed.directory, url },
+			[BLOB_MINTED]: {
+				directory: routed.directory,
+				url,
+				...(cross && { cross }),
+			},
 		});
 	}
 	apply() {
@@ -206,6 +222,7 @@ export default class ObjectURLModule extends Module<Client> {
 							blob ?? href,
 							// (a blob: document inherits its creator's embedder policy)
 							!!isolated && Reflect.apply(isolated, client.global, []) === true,
+							crossMinted.has(href),
 						);
 			if (script === 'genericModule' && !blob) {
 				const kept = modules.get(href);
@@ -262,6 +279,7 @@ export default class ObjectURLModule extends Module<Client> {
 					const url = args[0] as string;
 					forgetBlob(url);
 					mintedURLs.delete(url);
+					crossMinted.delete(url);
 					const copy = privates.get(url);
 					if (copy) {
 						privates.delete(url);

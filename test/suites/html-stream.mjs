@@ -91,9 +91,11 @@ const midway = () =>
 				order: window.__order?.join() ?? null,
 			}
 		: null;
-// the page once it is whole: its elements' names, in the isolated world
+// the page once it is whole and loaded (its last script sets __done while
+// the parser is still on it, so readyState is read once it says complete: a
+// read at the poll's moment raced the load, either way round)
 const whole = () =>
-	window.__done
+	window.__done && document.readyState === 'complete'
 		? {
 				order: window.__order?.join() ?? null,
 				readyState: document.readyState,
@@ -199,13 +201,26 @@ async function slowheadCase(proxied) {
 	}
 }
 
+// midway for the trickle page: its first heading and the script after it
+// come in one chunk, which a loaded parser may still split, so the read waits
+// for that script (`late` says whether it ran only once the rest came)
+const trickleMidway = () =>
+	document.getElementById('early') && window.__order?.includes('a')
+		? {
+				late: !!document.getElementById('late'),
+				w1: !!document.getElementById('w1'),
+				readyState: document.readyState,
+				order: window.__order?.join() ?? null,
+			}
+		: null;
+
 async function trickleCase(proxied) {
 	const { page, find } = await open(
 		`${FIXTURE}stream/trickle?wait=${WAIT}`,
 		proxied,
 	);
 	try {
-		const mid = await poll(find, midway, undefined, 400, 25);
+		const mid = await poll(find, trickleMidway, undefined, 400, 25);
 		const end = await poll(find, whole, undefined, 400, 50);
 		return { mid, end };
 	} finally {

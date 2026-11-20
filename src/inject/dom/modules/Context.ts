@@ -93,6 +93,8 @@ export const nativeOpener = Reflect.getOwnPropertyDescriptor(
 // Chrome's console message for a navigation it refuses is the browser's own:
 // printed with the console's native method, which no page hook sees
 export const nativeConsoleError = console.error;
+// (a report-only policy's is the console's info)
+export const nativeConsoleInfo = console.info;
 
 /** whether a frame's window is still on the initial about:blank its creation gave it */
 export function initialBlank(context: typeof globalThis): boolean {
@@ -741,10 +743,16 @@ export default class ContextModule extends Module<DocumentClient> {
 		// a child that runs no STomp yet (an iframe still on its initial
 		// about:blank) is still that child, of the frame's origin: never the
 		// top, which a walk down the tree would visit again forever
-		const restrictChild = (child: Context) =>
-			isStomp(child, moduleClient.names.client)
+		// (a window that runs nothing yet on an about:blank this page or
+		// another of its origin navigated it to is that page's: injected
+		// first, as reading a child's contentWindow injects it)
+		const restrictChild = (child: Context) => {
+			if (!isStomp(child, moduleClient.names.client))
+				moduleClient.navigatorOf(child)?.injectNavigated?.(child);
+			return isStomp(child, moduleClient.names.client)
 				? this.newRestricted(child)
 				: this.restrictOpaque(child);
+		};
 
 		const restrictedLocation = this.restrictObject('Location', {
 			replace: {

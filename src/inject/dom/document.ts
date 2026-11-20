@@ -10,6 +10,7 @@ import { mixedContentParts } from '../mixedContentParts';
 import Module from '../Module';
 import baseModules from '../modules';
 import { originFromParts } from '../originFromParts';
+import { positionParts } from '../positionParts';
 import { reportParts } from '../reportParts';
 import { socketParts } from '../socketParts';
 import { storageBucketParts } from '../storageBucketParts';
@@ -92,6 +93,7 @@ mixedContentParts.noticeText = () => deferred('noticeText');
 accessFailureParts.failures = () => deferred('accessFailures');
 // and the un-routing of ReportingObserver's reports, with the first
 reportParts.seen = () => deferred('reportsSeen');
+reportParts.made = () => deferred('madeReport');
 // and the codec module's bytes, which a top compiles at its first seal from
 // the parts its shell loaded (a document without them seals in JavaScript,
 // with no request: ../../wasm/codec.ts)
@@ -100,6 +102,9 @@ codecParts.bytes = () => heldPart('codecBytes')?.();
 cacheCallParts.calls = () => deferred('cacheCalls');
 // and what Origin.from() answers, with a realm's first call
 originFromParts.answer = () => deferred('originFrom');
+// and the reader of the maps of script files' rewrites, with the first
+// position of one a page reads
+positionParts.read = () => deferred('placeIn');
 // and what reads a window as an array method or a list of arguments does,
 // with a document's first such call
 windowArrayParts.make = () => deferred('windowArrays');

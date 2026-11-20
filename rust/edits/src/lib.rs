@@ -191,10 +191,54 @@ pub fn apply_range(source: &str, range: Span, edits: Vec<Edit>) -> Result<String
 fn apply_with(
 	source: &str,
 	range: Span,
-	mut edits: Vec<Edit>,
+	edits: Vec<Edit>,
 	fill_len: usize,
 	fill: &mut dyn FnMut(&mut String),
 ) -> Result<String, EditError> {
+	let edits = checked(source, range, edits)?;
+	let mut writer = Writer {
+		out: String::with_capacity(output_len(range, &edits, fill_len)),
+		fill,
+	};
+	emit(source, range, &edits, &mut writer);
+	Ok(writer.out)
+}
+
+/// [`apply_filling`], and where each stretch of the output stands in the
+/// source: the [`Positions`] of the output as it is without its fill,
+/// which `fill` is handed too (to write them into it)
+pub fn apply_mapped(
+	source: &str,
+	edits: Vec<Edit>,
+	fill_len: &dyn Fn(&Positions) -> usize,
+	utf16: &dyn Fn(u32) -> u32,
+	fill: &mut dyn FnMut(&mut String, &Positions),
+) -> Result<(String, Positions), EditError> {
+	let range = Span::new(0, source.len() as u32);
+	let edits = checked(source, range, edits)?;
+	let mut mapper = Mapper {
+		utf16,
+		out: 0,
+		anchor: 0,
+		ended: 0,
+		pending: None,
+		positions: Positions::default(),
+	};
+	emit(source, range, &edits, &mut mapper);
+	mapper.flush();
+	let positions = mapper.positions;
+	let mut write_fill = |out: &mut String| fill(out, &positions);
+	let mut writer = Writer {
+		out: String::with_capacity(output_len(range, &edits, fill_len(&positions))),
+		fill: &mut write_fill,
+	};
+	emit(source, range, &edits, &mut writer);
+	Ok((writer.out, positions))
+}
+
+/// `edits` in the order they are written, once they are known to be in
+/// bounds, on character boundaries and nested
+fn checked(source: &str, range: Span, mut edits: Vec<Edit>) -> Result<Vec<Edit>, EditError> {
 	let len = range.end;
 	if range.end < range.start || range.end as usize > source.len() {
 		return Err(EditError::OutOfBounds(range));
@@ -212,10 +256,13 @@ fn apply_with(
 	}
 	edits.sort_by(order);
 	check_nesting(&edits)?;
+	Ok(edits)
+}
 
-	// the output's length, so it is allocated once: the part, less what
-	// the replaces take out (nothing is inside one, check_nesting), plus
-	// every piece written
+/// the output's length, so it is allocated once: the part, less what the
+/// replaces take out (nothing is inside one, check_nesting), plus every
+/// piece written
+fn output_len(range: Span, edits: &[Edit], fill_len: usize) -> usize {
 	let pieces = |pieces: &[Piece]| -> usize {
 		pieces
 			.iter()
@@ -227,7 +274,7 @@ fn apply_with(
 			.sum()
 	};
 	let mut size = range.len() as usize;
-	for edit in &edits {
+	for edit in edits {
 		match &edit.kind {
 			Kind::Wrap { before, after } => size += pieces(before) + pieces(after),
 			// (the replaced spans are apart and inside the part, so what
@@ -236,43 +283,71 @@ fn apply_with(
 			Kind::Insert { text, .. } => size += pieces(text),
 		}
 	}
-	let mut out = String::with_capacity(size);
+	size
+}
+
+/// what the output is made of, in order: the source's bytes copied, text
+/// written, and the fills
+trait Sink {
+	/// what is written next is an edit's, which stands at `at` of the source
+	fn at(&mut self, _at: u32) {}
+	fn copy(&mut self, source: &str, start: u32, end: u32);
+	fn text(&mut self, text: &str);
+	fn fill(&mut self);
+}
+
+/// the sink that writes the output
+struct Writer<'f> {
+	out: String,
+	fill: &'f mut dyn FnMut(&mut String),
+}
+
+impl Sink for Writer<'_> {
+	fn copy(&mut self, source: &str, start: u32, end: u32) {
+		self.out.push_str(&source[start as usize..end as usize]);
+	}
+	fn text(&mut self, text: &str) {
+		self.out.push_str(text);
+	}
+	fn fill(&mut self) {
+		(self.fill)(&mut self.out);
+	}
+}
+
+/// The splice, in order, of the part `range` of `source` with `edits`
+/// (sorted and nested, [`checked`]) into `sink`
+fn emit(source: &str, range: Span, edits: &[Edit], sink: &mut dyn Sink) {
+	let len = range.end;
 	let mut cursor = range.start;
 	// the wraps whose `after` is still to be written, innermost last
 	let mut open: Vec<(u32, &[Piece])> = Vec::new();
-
-	let mut i = 0;
-	while i < edits.len() {
-		let edit = &edits[i];
+	for edit in edits {
 		let start = edit.span.start;
 		// wraps that end where this edit starts are closed first, unless it
 		// is an insertion there, which belongs inside them
 		let insert = matches!(edit.kind, Kind::Insert { .. });
-		close_through(source, &mut out, &mut cursor, &mut open, start, !insert, fill);
+		close_through(source, sink, &mut cursor, &mut open, start, !insert);
 		if start > cursor {
-			out.push_str(&source[cursor as usize..start as usize]);
+			sink.copy(source, cursor, start);
 			cursor = start;
 		}
+		sink.at(start);
 		match &edit.kind {
 			Kind::Wrap { before, after } => {
-				write(source, &mut out, before, fill);
+				write(source, sink, before);
 				open.push((edit.span.end, after));
 			}
 			Kind::Replace { text } => {
-				write(source, &mut out, text, fill);
+				write(source, sink, text);
 				cursor = edit.span.end;
 			}
-			Kind::Insert { text, .. } => {
-				write(source, &mut out, text, fill);
-			}
+			Kind::Insert { text, .. } => write(source, sink, text),
 		}
-		i += 1;
 	}
-	close_through(source, &mut out, &mut cursor, &mut open, len, true, fill);
+	close_through(source, sink, &mut cursor, &mut open, len, true);
 	if len > cursor {
-		out.push_str(&source[cursor as usize..len as usize]);
+		sink.copy(source, cursor, len);
 	}
-	Ok(out)
 }
 
 /// close every open wrap that ends before `at`, and those ending at `at`
@@ -280,35 +355,157 @@ fn apply_with(
 /// which belongs inside a wrap that ends there)
 fn close_through(
 	source: &str,
-	out: &mut String,
+	sink: &mut dyn Sink,
 	cursor: &mut u32,
 	open: &mut Vec<(u32, &[Piece])>,
 	at: u32,
 	inclusive: bool,
-	fill: &mut dyn FnMut(&mut String),
 ) {
 	while let Some(&(end, after)) = open.last() {
 		if end > at || (end == at && !inclusive) {
 			break;
 		}
 		if end > *cursor {
-			out.push_str(&source[*cursor as usize..end as usize]);
+			sink.copy(source, *cursor, end);
 			*cursor = end;
 		}
-		write(source, out, after, fill);
+		sink.at(end);
+		write(source, sink, after);
 		open.pop();
 	}
 }
 
-fn write(source: &str, out: &mut String, pieces: &[Piece], fill: &mut dyn FnMut(&mut String)) {
+fn write(source: &str, sink: &mut dyn Sink, pieces: &[Piece]) {
 	for piece in pieces {
 		match piece {
-			Piece::Text(text) => out.push_str(text),
-			Piece::Source(span) => {
-				out.push_str(&source[span.start as usize..span.end as usize]);
-			}
-			Piece::Fill => fill(out),
+			Piece::Text(text) => sink.text(text),
+			Piece::Source(span) => sink.copy(source, span.start, span.end),
+			Piece::Fill => sink.fill(),
 		}
+	}
+}
+
+/// Where the output of [`apply_mapped`] stands in the source, the output
+/// taken without its fill, in UTF-16 units: each stretch of it a copy of
+/// the source's (a position in it stands where the copy came from) or text
+/// written, which stands at one place of the source: where the edit that
+/// writes it stands (its span's start, or its end for a wrap's closing
+/// text), or where a copy of the source among its pieces ended
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Positions {
+	/// the stretches, in order, as base64 VLQ numbers ([`push_vlq`]): for
+	/// each its length, then its place in the source less where the stretch
+	/// before ended (zigzag), shifted left once with 1 for text
+	pub runs: String,
+	/// where the fill is in the output without it, and where it stands in
+	/// the source (None: there is none)
+	pub fill: Option<(u32, u32)>,
+}
+
+/// A base64 VLQ digit: the source map alphabet, which holds no `*`, so a
+/// map is carried in a block comment as it is
+const VLQ: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/// `value` as base64 VLQ digits, five bits each, least first, every digit
+/// but the last with its sixth bit set
+pub fn push_vlq(out: &mut String, mut value: u64) {
+	loop {
+		let digit = (value & 31) as usize;
+		value >>= 5;
+		if value == 0 {
+			out.push(VLQ[digit] as char);
+			return;
+		}
+		out.push(VLQ[digit | 32] as char);
+	}
+}
+
+/// a signed number as an unsigned one, small either way: 2n, or -2n - 1
+fn zigzag(value: i64) -> u64 {
+	((value << 1) ^ (value >> 63)) as u64
+}
+
+/// one stretch of the output: where it starts in the source (its anchor,
+/// for text), its length, and whether it is text
+#[derive(Clone, Copy)]
+struct Run {
+	src: u32,
+	len: u32,
+	text: bool,
+}
+
+/// the sink that maps the output ([`Positions`])
+struct Mapper<'u> {
+	utf16: &'u dyn Fn(u32) -> u32,
+	/// the output's length so far, in UTF-16 units
+	out: u32,
+	/// where the last copy ended in the source (text after it stands there)
+	anchor: u32,
+	/// where the last stretch encoded ended in the source
+	ended: u32,
+	/// the stretch being made, which the next may go on
+	pending: Option<Run>,
+	positions: Positions,
+}
+
+impl Mapper<'_> {
+	fn run(&mut self, run: Run) {
+		if let Some(pending) = &mut self.pending {
+			// a copy that goes on where the last ended, or text at the same
+			// place
+			let goes_on = pending.text == run.text
+				&& if run.text { pending.src == run.src } else { pending.src + pending.len == run.src };
+			if goes_on {
+				pending.len += run.len;
+				return;
+			}
+		}
+		self.flush();
+		self.pending = Some(run);
+	}
+	fn flush(&mut self) {
+		let Some(run) = self.pending.take() else {
+			return;
+		};
+		let runs = &mut self.positions.runs;
+		push_vlq(runs, u64::from(run.len));
+		push_vlq(runs, zigzag(i64::from(run.src) - i64::from(self.ended)) << 1 | u64::from(run.text));
+		self.ended = if run.text { run.src } else { run.src + run.len };
+	}
+}
+
+impl Sink for Mapper<'_> {
+	fn at(&mut self, at: u32) {
+		self.anchor = (self.utf16)(at);
+	}
+	fn copy(&mut self, _: &str, start: u32, end: u32) {
+		if start == end {
+			return;
+		}
+		let (start, end) = ((self.utf16)(start), (self.utf16)(end));
+		self.run(Run {
+			src: start,
+			len: end - start,
+			text: false,
+		});
+		self.out += end - start;
+		self.anchor = end;
+	}
+	fn text(&mut self, text: &str) {
+		let len = (if text.is_ascii() { text.len() } else { text.encode_utf16().count() }) as u32;
+		if len == 0 {
+			return;
+		}
+		self.run(Run {
+			src: self.anchor,
+			len,
+			text: true,
+		});
+		self.out += len;
+	}
+	fn fill(&mut self) {
+		self.flush();
+		self.positions.fill = Some((self.out, self.anchor));
 	}
 }
 
@@ -517,5 +714,95 @@ mod tests {
 		let edits = vec![Edit::insert(0, vec![Piece::Fill, Piece::from("\n")], -1)];
 		let mut longer = |out: &mut String| out.push_str(&"x".repeat(100));
 		assert_eq!(apply_filling("a", edits, 4, &mut longer).unwrap(), format!("{}\na", "x".repeat(100)));
+	}
+
+	/// the runs of a map read back: (out start, src start, len, text)
+	pub(crate) fn read_runs(runs: &str) -> Vec<(u32, u32, u32, bool)> {
+		let mut digits = runs.bytes().map(|b| VLQ.iter().position(|d| *d == b).unwrap() as u64);
+		let mut next = || -> Option<u64> {
+			let mut value = 0;
+			let mut shift = 0;
+			loop {
+				let digit = digits.next()?;
+				value |= (digit & 31) << shift;
+				shift += 5;
+				if digit & 32 == 0 {
+					return Some(value);
+				}
+			}
+		};
+		let mut read = Vec::new();
+		let (mut out, mut ended) = (0u32, 0i64);
+		while let Some(len) = next() {
+			let packed = next().unwrap();
+			let text = packed & 1 == 1;
+			let delta = packed >> 1;
+			let delta = (delta >> 1) as i64 ^ -((delta & 1) as i64);
+			let src = (ended + delta) as u32;
+			read.push((out, src, len as u32, text));
+			out += len as u32;
+			ended = if text { i64::from(src) } else { i64::from(src) + len as i64 };
+		}
+		read
+	}
+
+	#[test]
+	fn the_map_says_where_each_stretch_came_from() {
+		// a mark, a wrap around an edited member, a replace that copies a
+		// part of the source, and a statement replaced around a part of it
+		let src = "function f(a) { return a.b[c] }\nx = y;";
+		let edits = vec![
+			Edit::insert(10, t("/*k.0.20*/"), 0),
+			Edit::wrap(Span::new(23, 29), t("$g("), t(")")),
+			Edit::replace(Span::new(24, 29), vec![Piece::from("["), Piece::Source(Span::new(27, 28)), Piece::from("]")]),
+			Edit::replace(Span::new(32, 37), vec![Piece::from("$s(x,"), Piece::Source(Span::new(36, 37)), Piece::from(")")]),
+		];
+		let (out, positions) = apply_mapped(src, edits, &|_| 0, &|b| b, &mut |_, _| {}).unwrap();
+		assert_eq!(out, "function f/*k.0.20*/(a) { return $g(a[c]) }\n$s(x,y);");
+		assert_eq!(positions.fill, None);
+		let runs = read_runs(&positions.runs);
+		let mut covered = 0;
+		for (out_at, src_at, len, text) in &runs {
+			assert_eq!(*out_at, covered);
+			covered += len;
+			if !text {
+				assert_eq!(out[*out_at as usize..(out_at + len) as usize], src[*src_at as usize..(src_at + len) as usize]);
+			}
+		}
+		assert_eq!(covered as usize, out.len());
+		// each text stands where its edit does: the mark after the name,
+		// `$g(` at the member, `[` where `.b[c]` starts, `]` after the `c`
+		// it copied, `)` at the member's end, `$s(x,` at the statement,
+		// `)` after the `y` it copied
+		let texts: Vec<(&str, u32)> =
+			runs.iter().filter(|r| r.3).map(|r| (&out[r.0 as usize..(r.0 + r.2) as usize], r.1)).collect();
+		assert_eq!(texts, vec![("/*k.0.20*/", 10), ("$g(", 23), ("[", 24), ("]", 28), (")", 29), ("$s(x,", 32), (")", 37)]);
+		// the same output as apply's
+		let edits = vec![Edit::insert(10, t("/*k.0.20*/"), 0)];
+		assert_eq!(apply_mapped(src, edits.clone(), &|_| 0, &|b| b, &mut |_, _| {}).unwrap().0, apply(src, edits).unwrap());
+	}
+
+	#[test]
+	fn the_map_counts_utf16_and_leaves_the_fill_out() {
+		// two-byte and four-byte characters in a directive, a fill after it
+		let src = "'\u{fc}\u{1F600}'; a.b";
+		let at = |c: u32| src[..c as usize].encode_utf16().count() as u32;
+		let a = src.find("a.b").unwrap() as u32;
+		let edits = vec![
+			Edit::wrap(Span::new(0, a - 2), Vec::new(), vec![Piece::from(";"), Piece::Fill]),
+			Edit::wrap(Span::new(a, a + 3), t("W("), t(")")),
+		];
+		let mut handed = None;
+		let (out, positions) = apply_mapped(src, edits, &|_| 3, &at, &mut |out, p| {
+			out.push_str("<f>");
+			handed = Some(p.clone());
+		})
+		.unwrap();
+		assert_eq!(out, "'\u{fc}\u{1F600}';<f>; W(a.b)");
+		assert_eq!(handed.as_ref(), Some(&positions));
+		// the fill after the directive and its `;`, in UTF-16 units
+		assert_eq!(positions.fill, Some((6, 5)));
+		let runs = read_runs(&positions.runs);
+		assert_eq!(runs, vec![(0, 0, 5, false), (5, 5, 1, true), (6, 5, 2, false), (8, 7, 2, true), (10, 7, 3, false), (13, 10, 1, true)]);
 	}
 }

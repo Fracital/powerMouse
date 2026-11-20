@@ -35,6 +35,14 @@
  *   Permissions-Policy say and whatever its origin.
  * - `dip`: a Document-Isolation-Policy isolates the document that sends it
  *   (Chrome).
+ * - `blank`: an about:blank document a page navigates a frame to is of that
+ *   page's origin, which reaches it, as the frame's parent does not when it
+ *   is another origin's (Chrome, Firefox); WebKit makes it the parent's
+ *   (measured natively in Chrome 157, Firefox 160 and WebKitGTK 2.52.4).
+ *   Not an isolation rule, but asked of the browser the same way: the inject
+ *   asks the service worker for it when a page navigates such a frame
+ *   (src/inject/dom/navigateOther.ts), and the service worker asks the
+ *   controller's document.
  * The service worker asks the controller's document, which asks the browser
  * (src/controller/isolationProbe.ts), only when the answer would change what
  * it decides (byEngine).
@@ -43,6 +51,7 @@ export interface IsolationEngine {
 	credentialless: boolean;
 	permission: boolean;
 	dip: boolean;
+	blank: boolean;
 }
 
 /** Chrome's rules, by which the service worker decides when the browser could not be asked */
@@ -50,13 +59,15 @@ export const CHROMIUM: IsolationEngine = {
 	credentialless: true,
 	permission: true,
 	dip: true,
+	blank: true,
 };
 
 /** every engine IsolationEngine can describe */
-const ENGINES: IsolationEngine[] = [0, 1, 2, 3, 4, 5, 6, 7].map((bits) => ({
+const ENGINES: IsolationEngine[] = Array.from({ length: 16 }, (_, bits) => ({
 	credentialless: !!(bits & 1),
 	permission: !!(bits & 2),
 	dip: !!(bits & 4),
+	blank: !!(bits & 8),
 }));
 
 /**
@@ -82,9 +93,17 @@ export async function byEngine<T>(
  * `crossOriginIsolated`; `p` and `d` a document with require-corp (and for
  * `d` a Document-Isolation-Policy) whose title is this name and whose
  * script posts the name and its `crossOriginIsolated` to its parent
- * (`coi~probetrue`)
+ * (`coi~probetrue`); `b` the browser's `blank` rule, as JSON, for the
+ * inject (fetched, not navigated to)
  */
 export const ISOLATION_PROBE = 'coi~probe';
+
+/**
+ * The route of the agent of the documents a Document-Isolation-Policy of
+ * the proxy's own isolates (src/controller/apart.ts), under the
+ * controller's directory: `<directory>coi~probe/a/<token>`
+ */
+export const APART_ROUTE = `${ISOLATION_PROBE}/a`;
 
 /**
  * The embedder policy the host's page and every document and worker the
@@ -244,6 +263,12 @@ export interface Embedder {
 	 * of its own, and is isolated when the permission reaches it (measured)
 	 */
 	credentialless: boolean;
+	/**
+	 * the embedder is in the agent cluster the proxy isolates with a
+	 * Document-Isolation-Policy (servedIsolationPolicy), where the frame's
+	 * document is served too
+	 */
+	apart?: boolean;
 }
 
 /**
@@ -321,15 +346,21 @@ export function nestedIsolation(
 /**
  * What the shell tells a document's client of it (src/rewriteHTML.ts): `g`
  * the group, `c` an embedder policy, `p` the permission, `n` it is not
- * cross-origin isolated natively. The client says it on in the routes of the
- * frames the document makes.
+ * cross-origin isolated natively, `d` the proxy serves it with a
+ * Document-Isolation-Policy of its own (a host that is not isolated:
+ * servedIsolationPolicy), as every document its frames show. The client says
+ * it on in the routes of the frames the document makes.
  */
-export function isolationFacts(isolation: DocumentIsolation): string {
+export function isolationFacts(
+	isolation: DocumentIsolation,
+	apart = false,
+): string {
 	return (
 		(isolation.group ? 'g' : '') +
 		(isolation.coep !== 'unsafe-none' ? 'c' : '') +
 		(isolation.policy ? 'p' : '') +
-		(isolation.isolated ? '' : 'n')
+		(isolation.isolated ? '' : 'n') +
+		(apart ? 'd' : '')
 	);
 }
 
@@ -436,6 +467,52 @@ export function isolationResponseHeaders(
 	// (src/server/filterHeaders.ts): this one is the proxy's, and under it
 	// Chrome gives the document what one without isolation has
 	if (!isolated) headers.set('permissions-policy', 'cross-origin-isolated=()');
+}
+
+/** the values of a Document-Isolation-Policy that isolate */
+export type IsolationPolicy =
+	'isolate-and-require-corp' | 'isolate-and-credentialless';
+
+/**
+ * The Document-Isolation-Policy a host whose page is not cross-origin
+ * isolated serves a document with that is isolated natively (or, nested in
+ * one, is in its cluster): a frame of a page that is not isolated is
+ * isolated by that policy alone, in an agent cluster of its own (Chrome 137
+ * and later, measured in 157). The page's own policy when it sent one, else
+ * the one its embedder policy names, else `isolate-and-credentialless`,
+ * which refuses nothing the proxy loads: every load the page makes is the
+ * proxy's own, and the page's embedder policy is the service worker's to
+ * apply (src/server/embedderPolicies.ts).
+ */
+export function servedIsolationPolicy(
+	headers: IsolationHeaders,
+	engine = CHROMIUM,
+): IsolationPolicy {
+	if (documentIsolates(headers.dip, engine))
+		return tokenItem(headers.dip) as IsolationPolicy;
+	return embedderPolicy(headers.coep, engine) === 'require-corp'
+		? 'isolate-and-require-corp'
+		: 'isolate-and-credentialless';
+}
+
+/**
+ * The embedder policy a document's loads are judged by: its own, else the
+ * one its Document-Isolation-Policy brings (natively `isolate-and-require-corp`
+ * refuses a no-cors load of another origin without a resource policy, and
+ * `isolate-and-credentialless` sends it without credentials, as the
+ * embedder policies of those names do). Unlike an embedder policy, that
+ * policy asks nothing of the document's frames and workers.
+ */
+export function loadsPolicy(
+	isolation: DocumentIsolation,
+	headers: IsolationHeaders,
+	engine = CHROMIUM,
+): EmbedderPolicy {
+	if (isolation.coep !== 'unsafe-none') return isolation.coep;
+	if (!documentIsolates(headers.dip, engine)) return 'unsafe-none';
+	return tokenItem(headers.dip) === 'isolate-and-credentialless'
+		? 'credentialless'
+		: 'require-corp';
 }
 
 /**

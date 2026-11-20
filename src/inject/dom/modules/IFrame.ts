@@ -33,8 +33,15 @@ export default class IFrameModule extends Module<DocumentClient> {
 		const realm = moduleClient.global;
 		const proxyModule = moduleClient.getModule(ProxyModule)!;
 
-		const injectContext = (context: typeof globalThis) => {
+		const injectContext = (context: typeof globalThis, navigated = false) => {
 			if (moduleClient.names.client in context) return;
+			// an about:blank another page navigated this window to, which is of
+			// that page's origin: that page's bundle (src/isolation.ts `blank`)
+			const navigator = navigated ? null : moduleClient.navigatorOf(context);
+			if (navigator && navigator !== moduleClient) {
+				navigator.injectNavigated?.(context);
+				return;
+			}
 
 			// the document is its creator's, and so is its script policy
 			// (src/csp.ts): the client takes what this one was told
@@ -65,6 +72,13 @@ export default class IFrameModule extends Module<DocumentClient> {
 		// this page is its opener (whose document it is: DocumentClient url).
 		// Only a child or such a popup of this page, so a page
 		// cannot have another document's window injected with its bundle
+		moduleClient.injectNavigated = (context) => {
+			injectContext(context, true);
+			const client = (context as Record<string, any>)[
+				moduleClient.names.client
+			] as DocumentClient | undefined;
+			if (client && !client.applied) client.apply();
+		};
 		moduleClient.injectChild = (context) => {
 			const self = realm as unknown;
 			const popup =
