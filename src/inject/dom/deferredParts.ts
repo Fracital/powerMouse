@@ -79,9 +79,6 @@
 // (and the loads of an <object>'s data and an <embed>'s src,
 // ./objectLoads.ts, at a document's first object or embed with a URL)
 //
-// (and a frame's fresh browsing context, ./freshSwap.ts, at the first
-// frame of a document that is to show another origin's document)
-//
 // (and the font faces of a sheet copied for a document no service worker
 // controls, ./lazyFonts.ts, at the first such face)
 //
@@ -180,7 +177,6 @@ import {
 import { ownStoreRefusal } from './credentialStore';
 import { saveDownload } from './downloadSave';
 import { fetchLater } from './fetchLater';
-import { freshSwap } from './freshSwap';
 import { hookHandlerName } from './handlerGetters';
 import { instructionData, loadXML, xmlProlog } from './instructions';
 import { lazyFonts } from './lazyFonts';
@@ -357,10 +353,6 @@ export const parts = {
 	// an SVG animation of an href, its values routed, at a document's first
 	// (./animatedHref.ts; modules/DOMAttributes.ts)
 	animatedHref,
-	// a frame's fresh browsing context, at the first frame of a document
-	// that is to show another origin's document (./freshSwap.ts;
-	// ./freshContext.ts, modules/IFrame.ts)
-	freshSwap,
 	// a document's navigation of another window, refused as Chrome refuses
 	// it, at its first (./navigateOther.ts; modules/Context.ts)
 	navigateOther,
