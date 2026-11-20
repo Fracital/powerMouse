@@ -48,6 +48,7 @@ await frame.go(controller.extensions.resolveUrl(options.displayUrl));
 | `extensionOf(url)`                                 | the extension a URL belongs to, or null                                                                                                                                                                                                                        |
 | `menus(id)`, `clickMenu(id, info, tabId?)`         | an extension's context menu items, and telling it one was clicked                                                                                                                                                                                              |
 | `notificationEvent(id, notificationId, kind, ...)` | tell it the user clicked or closed one of its notifications                                                                                                                                                                                                    |
+| `onPrompt(handler)`                                | draw the Chrome Web Store's install and uninstall dialogs: the handler gets `{ kind, id, name, iconUrl, permissions, url, frame }` and resolves true for Add extension or Remove (see below)                                                                   |
 
 `controller.tabIdOf(frame)` is the tab id the extensions know a frame by, and
 `controller.activeTab` (a frame or null) is the tab `chrome.tabs.query({ active: true })`
@@ -60,8 +61,9 @@ to close one.
 The demo (`demo/public/pm/main.js`, its "extensions" section) is a host
 built on these calls: the bar's buttons with their badges, popups in a
 popover through `mountPopup`, each extension's menu from `menus()`, an
-Extensions page that installs from the Web Store, a file or a folder, and
-`displayUrl`/`resolveUrl` in its address bar.
+Extensions page that installs from the Web Store, a file or a folder,
+`displayUrl`/`resolveUrl` in its address bar, and the store's dialogs
+through `onPrompt`.
 
 Every call rejects with an `ExtensionError` whose `code` says what went
 wrong: `bad-source` (nothing installable was given), `bad-package` (not a
@@ -368,6 +370,78 @@ The action count badge goes to the extension's action for that tab. A click on
 an extension's button grants it activeTab for the tab until the tab's top
 document changes, which getMatchedRules reads.
 
+### The Chrome Web Store
+
+Open a listing at `https://chromewebstore.google.com` in powerMouse. If the
+store offers **Add to Chrome**, click it and review the permissions in the
+host's dialog. **Add extension** installs inside powerMouse, not in your
+browser. **Cancel** downloads nothing. To uninstall, click **Remove from
+Chrome** and confirm. The page may still recommend switching to Chrome;
+STomp does not hide that notice or enable a button the store disabled.
+
+The listing calls `chrome.webstorePrivate` and `chrome.management`.
+STomp defines them in the store's documents, from the extensions' runtime
+(`src/extensions/runtime/webstore.ts`): the worker ships the runtime to a
+store page even with no extension installed. They are on the page's own
+`chrome`, after `loadTimes`, `csi` and `app`, with `chrome.runtime` as a
+web page has it (`connect`, `sendMessage`, the enums). As in Chrome's
+bindings, every function has length 0 and reads as native, a call is
+checked against its schema (`Error in invocation of
+webstorePrivate.getExtensionStatus(string id, optional string manifest,
+optional function callback): No matching signature.`), the last argument
+may be a callback (with `chrome.runtime.lastError` set while it runs, and
+`Unchecked runtime.lastError: ...` on the console when it is not read) or
+the call returns a promise, and the enums have Chrome's sorted
+SCREAMING_CASE keys. `management.onInstalled`, `onUninstalled`, `onEnabled`
+and `onDisabled` follow the extensions' change channel in Chrome's order.
+
+Each call goes to the worker on `<directory>extapi` with `store: true`
+(`src/server/extensions/webstore.ts`). The worker looks up the calling
+document's client, checks its real origin (including the port), and verifies
+the grant it issued to that client when it served the navigation. A fetch
+of the listing cannot obtain a grant for the fetching document.
+
+- `beginInstallWithManifest3(details)` checks the id, resolves the icon URL,
+  answers `already_installed` for an installed id or one being installed,
+  parses the manifest, fetches and decodes the icon (`icon_error`, "Image
+  decode failed"), and asks the host. Add extension answers `""` and keeps
+  the approval; Cancel answers `user_cancelled`, "User cancelled install".
+- `completeInstall(id)` takes the approval ("<id> does not match a previous
+  call to beginInstallWithManifest3" without one). The registry downloads
+  the CRX3 through the controller's transport and verifies the developer and
+  Web Store publisher signatures. The signed id must be the listing's id,
+  and the manifest must match the one the user approved. A raw ZIP is not
+  a Web Store download. Installing a local file is a separate host action.
+- `getExtensionStatus(id, manifest?)` answers `force_installed` (policy),
+  `enabled`, `disabled`, `deprecated_manifest_version` (an MV2 manifest, as
+  Chrome 157 installs none) or `installable`.
+- `management.getAll()` and `get(id)` answer Chrome's `ExtensionInfo`:
+  `installType` `normal`, `development` or `admin`, `updateUrl` and the
+  store's `homepageUrl` for a store install, icons as
+  `chrome://extension-icon/<id>/<size>/0`, permissions and hosts sorted.
+- `management.uninstall(id, { showConfirmDialog: true })` asks the host and
+  answers "Extension <id> uninstall canceled by user." on Cancel.
+- `getMV2DeprecationStatus` answers `hard_disable`, `getReferrerChain` an
+  empty chain (as with Safe Browsing off), `getBrowserLogin` no account, and
+  `getFullChromeVersion` the browser's full version.
+
+The dialogs are the host's: the worker sends `extensionPrompt` to the
+controller, which hands it to `extensions.onPrompt` (the controller frame of
+a `RemoteController` relays it to its host's page). The request carries the
+name the store gave (75 characters at most), the icon as a data: URL and
+Chrome's permission warnings (`src/extensions/permissionMessages.ts`, the
+rules of `chrome_permission_message_rules.cc`, such as "Read and change
+your data on 127.0.0.1 and chromewebstore.google.com"). The demo draws
+`Add "<name>"?`, "It can:" and the warnings, with Add extension and Cancel
+(`Remove "<name>"?` with Remove and Cancel), and its buttons take a click
+only after 500 ms, as Chrome's do. After an install the store's
+`onInstalled` fires and the page shows Remove from Chrome, and the bar gets
+the extension's button from the same change.
+
+No extension's content script or injection runs in the store's pages, and
+no webRequest listener or rule sees a request for one: Chrome hides the
+store from every extension, so none can press its buttons.
+
 ## Limits
 
 - Backgrounds share the controller document's thread and heap; an MV3
@@ -423,7 +497,12 @@ document changes, which getMatchedRules reads.
   empty list for `getFontList`, `getAll` or `query`, Chrome's defaults for
   `privacy.*` and `proxy.settings` (which `set` changes for the context),
   and nothing for the rest.
-- Chrome's own pages (`chrome://`), the Web Store's install UI, native
-  messaging, `debugger`, `tabCapture` and `desktopCapture` are not there.
+- Store installs need transient user activation and focus in the requesting
+  frame. Approvals belong to that document, last two minutes, and are lost
+  if the worker restarts. Reload the listing to try again. The listing flow
+  supports MV3 extensions, not themes, apps, or items the store flags for an
+  additional safety check. A change to the listing's manifest requires a new
+  approval, even if Chrome would allow the change without one.
+- Chrome's own pages (`chrome://`), native messaging, `debugger`, `tabCapture` and `desktopCapture` are not there.
   Namespaces the extension asks for that STomp does not implement are
   stubs whose calls resolve and whose events never fire.

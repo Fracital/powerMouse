@@ -567,6 +567,14 @@ export class RemoteController extends EventTarget {
 						[],
 					];
 				},
+				// the Web Store's dialog, over the frame of the store's page
+				extensionPrompt: async (request) => [
+					await this.extensions.prompt(
+						request,
+						this.#clients.frame(request.client),
+					),
+					[],
+				],
 				// a site's FedCM account chooser, drawn here over its frame
 				identityChooser: async ({ request, port }) => [
 					await drawAccountChooser(

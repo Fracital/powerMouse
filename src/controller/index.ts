@@ -24,7 +24,12 @@ import {
 	type HostGeometry,
 } from '../config';
 import { extensionOfHost } from '../extensions/origin';
-import type { ExtensionCommand, ExtensionsChange } from '../extensions/types';
+import type {
+	ExtensionCommand,
+	ExtensionPromptAnswer,
+	ExtensionPromptRequest,
+	ExtensionsChange,
+} from '../extensions/types';
 import {
 	helperNames,
 	mintClientName,
@@ -212,6 +217,7 @@ export type {
 	ExtensionNotification,
 	ExtensionOptions,
 	ExtensionOrigin,
+	ExtensionPrompt,
 	ExtensionsChange,
 	ExtensionSource,
 	InstallOptions,
@@ -393,6 +399,10 @@ export interface ControllerInit {
 		request: IdentityChooserRequest,
 		port: MessagePort,
 	) => Promise<number>;
+	/** @internal the controller frame hands the Web Store's install and uninstall dialogs to its host's page */
+	extensionPromptRelay?: (
+		request: ExtensionPromptRequest,
+	) => Promise<ExtensionPromptAnswer>;
 	/** @internal the controller frame hands every prompt to its host, which asks the user */
 	passkeyRelay?: {
 		config: PasskeysConfig;
@@ -2795,6 +2805,10 @@ export class StompController extends EventTarget {
 					await this.#passkeyPrompt(request, port),
 					[],
 				],
+				extensionPrompt: async (request) => [
+					await this.#extensionPrompt(request),
+					[],
+				],
 				passkeyFocused: async (client) => [
 					await this.#passkeyFocused(client),
 					[],
@@ -3086,6 +3100,27 @@ export class StompController extends EventTarget {
 		return askHost(init, request, port, {
 			frame: this.#clients.frame(request.client),
 		});
+	}
+	/**
+	 * the Web Store's page asks to install or remove an extension: the host
+	 * shows Chrome's dialog, only while a click activated the page. Chrome
+	 * shows its install dialog on any call; STomp asks the user only for
+	 * one, so a page that calls on its own gets no dialog drawn over the
+	 * host. A click in the store's frame activates this document too: it
+	 * is the frame's ancestor, or (the controller frame) a frame of its
+	 * origin, which Chrome activates with it.
+	 */
+	async #extensionPrompt(
+		request: ExtensionPromptRequest,
+	): Promise<ExtensionPromptAnswer> {
+		if (
+			!navigator.userActivation?.isActive ||
+			!(await this.#passkeyFocused(request.client))
+		)
+			return 'gesture';
+		const relay = this.#init.extensionPromptRelay;
+		if (relay) return relay(request);
+		return this.extensions.prompt(request, this.#clients.frame(request.client));
 	}
 	/**
 	 * whether the focus is in the page of the frame that shows the document

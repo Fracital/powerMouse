@@ -4,7 +4,8 @@
 // ahead of the inject bundle: the runtime asset, the payload, and one
 // `<script src>` per entry whose route answers the entry's files rewritten
 // once and wrapped as a function the runtime calls at its run_at point.
-// A document no extension reaches gets none of it.
+// A document no extension reaches gets none of it, but for a page of the
+// Chrome Web Store, whose API the runtime defines (webstore.ts).
 import { scriptMatches } from '../../extensions/match';
 import {
 	cleanPath,
@@ -21,9 +22,13 @@ import {
 	type ShippedEntry,
 	type ShippedExtension,
 } from '../../extensions/types';
+import { EXTENSION_CHANGES } from '../../transport/messages';
 import type { ExtensionRegistry, Loaded, ScriptEntry } from './registry';
 import { extensionState, scriptCache } from './store';
+import { isStoreURL } from './webstore';
 import { worldModule, worldScript } from './worldSource';
+
+declare const self: ServiceWorkerGlobalScope;
 
 /** what the shell of a document is told */
 export interface ExtensionShell {
@@ -37,6 +42,8 @@ export interface ShellDocument {
 	url: string;
 	/** its service worker client */
 	client: string;
+	/** The browser-assigned resulting client of a navigation, never a fetch. */
+	navigationClient?: string;
 	/** the outermost proxied document of its frame */
 	top: boolean;
 	/** the controller's address */
@@ -149,7 +156,9 @@ export async function documentShell(
 	doc: ShellDocument,
 	deps: ShellDeps,
 ): Promise<ExtensionShell | null> {
-	if (!registry.any) return null;
+	// the Web Store's pages have its API with no extension installed (webstore.ts)
+	const store = isStoreURL(doc.url);
+	if (!registry.any && !store) return null;
 	await registry.ready();
 	const payload: RuntimePayload = {
 		channel: doc.directory,
@@ -159,6 +168,17 @@ export async function documentShell(
 		tokens: {},
 		...(doc.contentType ? { contentType: doc.contentType } : {}),
 		access: deps.access,
+		...(store && doc.navigationClient
+			? {
+					store: {
+						token: await documentToken(
+							`store:${doc.directory}`,
+							doc.navigationClient,
+						),
+						changes: `${EXTENSION_CHANGES}${new URL(self.registration.scope).pathname}`,
+					},
+				}
+			: {}),
 	};
 	const routes: string[] = [];
 	const own = extensionOfURL(doc.url);
@@ -182,7 +202,10 @@ export async function documentShell(
 	} else {
 		if (!/^https?:$/.test(new URL(doc.url).protocol)) return null;
 		const content: ShippedExtension[] = [];
-		for (const loaded of registry.enabled()) {
+		// no extension scripts the store's pages, as in Chrome ("The
+		// extensions gallery cannot be scripted"): none could press its
+		// buttons for the user
+		for (const loaded of store ? [] : registry.enabled()) {
 			const entries: ShippedEntry[] = [];
 			for (const entry of registry.entriesOf(loaded)) {
 				if (!entryMatches(entry, doc.url, doc.top)) continue;
@@ -208,8 +231,8 @@ export async function documentShell(
 					doc.client,
 				);
 		}
-		if (!content.length) return null;
-		payload.content = content;
+		if (content.length) payload.content = content;
+		else if (!store) return null;
 	}
 	const json = escapeScript(JSON.stringify(payload));
 	return {

@@ -16,6 +16,7 @@ import type {
 	WebRequestVerdict,
 } from '../../extensions/types';
 import { EXTENSION_BUS_PREFIX } from '../../transport/messages';
+import { webStoreRequest } from '../dnr';
 import { extensionState } from './store';
 
 /** how long a request waits for the blocking listeners (Chrome has no bound; a page cannot wait forever) */
@@ -178,6 +179,16 @@ export class WebRequests {
 		enabled: (extensionId: string) => boolean,
 	): Promise<WebRequestVerdict | null> {
 		if (!this.any) return null;
+		// (the Web Store's requests no extension sees, as no rule acts on them)
+		try {
+			if (
+				details.initiator === 'https://chromewebstore.google.com' ||
+				webStoreRequest(new URL(details.url))
+			)
+				return null;
+		} catch (error) {
+			return null;
+		}
 		const waits: Promise<WebRequestVerdict | null>[] = [];
 		for (const registration of [...this.#registrations.values()]) {
 			if (registration.channel !== channel) continue;

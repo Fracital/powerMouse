@@ -331,6 +331,7 @@ import {
 } from './extensions/pipeline';
 import type { ExtensionRegistry } from './extensions/registry';
 import { textDocumentBody, textDocumentKind } from './extensions/textDocument';
+import { isStoreURL } from './extensions/webstore';
 import {
 	AdditionalFilter,
 	browserBytes,
@@ -7960,6 +7961,10 @@ export function registerRewrites(
 						{
 							url: url.url.href,
 							client: request.clientId ?? '',
+							navigationClient:
+								request.mode === 'navigate'
+									? request.resultingClientId
+									: undefined,
 							top,
 							directory: rewriter.directory,
 							...(documentType ? { contentType: documentType } : {}),
@@ -8373,7 +8378,10 @@ export function registerRewrites(
 						: rewriter.config;
 				const extensionShell: ExtensionShell | null =
 					textShell ??
-					(rewriter.extensions?.any ? await extensionShellOf() : null);
+					(rewriter.extensions?.any ||
+					(rewriter.extensions && isStoreURL(url.url.href))
+						? await extensionShellOf()
+						: null);
 				const partition =
 					mayKeep({
 						method: request.method,

@@ -563,14 +563,25 @@ async function verifyUser() {
 const SHEET_GUARD_MS = 500;
 
 /**
- * One passkey sheet: a `title`, lines of `detail`, a button per entry of
- * `choices` ([label, answer, className, sub]) and one that closes it.
+ * One passkey sheet: a `title`, lines of `detail` (and `items`, a list of
+ * `{ message, details }`), a button per entry of `choices` ([label, answer,
+ * className, sub]) and one that closes it. `icon` is the image beside the
+ * title (the passkey's by default).
  * Resolves the chosen answer, or null when it was closed, Escape was
  * pressed, or `signal` aborted (the page gave up). A modal dialog: the focus
  * moves into it and stays there, and goes back where it was after.
  */
 let passkeyQueue = Promise.resolve();
-function passkeyPrompt({ title, detail = [], choices, close, signal }) {
+function passkeyPrompt({
+	title,
+	detail = [],
+	items = [],
+	icon: iconSrc = '/pm/icons/passkey.svg',
+	trustedOnly = false,
+	choices,
+	close,
+	signal,
+}) {
 	const asked = passkeyQueue.then(
 		() =>
 			new Promise((resolve) => {
@@ -594,7 +605,7 @@ function passkeyPrompt({ title, detail = [], choices, close, signal }) {
 				const head = document.createElement('div');
 				head.className = 'passkeyHead';
 				const icon = document.createElement('img');
-				icon.src = '/pm/icons/passkey.svg';
+				icon.src = iconSrc;
 				icon.alt = '';
 				const line = document.createElement('p');
 				line.id = 'passkeyPromptTitle';
@@ -609,6 +620,25 @@ function passkeyPrompt({ title, detail = [], choices, close, signal }) {
 					row.className = 'detail';
 					row.textContent = text;
 					more.append(row);
+				}
+				if (items.length) {
+					const list = document.createElement('ul');
+					list.className = 'items';
+					for (const item of items) {
+						const entry = document.createElement('li');
+						entry.textContent = item.message;
+						if (item.details?.length) {
+							const sub = document.createElement('ul');
+							for (const text of item.details) {
+								const line = document.createElement('li');
+								line.textContent = text;
+								sub.append(line);
+							}
+							entry.append(sub);
+						}
+						list.append(entry);
+					}
+					more.append(list);
 				}
 				box.append(more);
 				const buttons = document.createElement('div');
@@ -625,7 +655,9 @@ function passkeyPrompt({ title, detail = [], choices, close, signal }) {
 						element.append(small);
 					}
 					element.disabled = true;
-					element.addEventListener('click', () => settle(answer));
+					element.addEventListener('click', (event) => {
+						if (!trustedOnly || event.isTrusted) settle(answer);
+					});
 					buttons.append(element);
 					all.push(element);
 				};
@@ -668,6 +700,27 @@ function passkeyPrompt({ title, detail = [], choices, close, signal }) {
 	);
 	passkeyQueue = asked.catch(() => {});
 	return asked;
+}
+
+/**
+ * The Chrome Web Store's dialogs (controller.extensions.onPrompt), as
+ * Chrome words them: "Add "<name>"?" with what the extension can do and
+ * Add extension, or "Remove "<name>"?" with Remove. The store's page asked
+ * on a click of its button; the worker made the request and checked the
+ * page is the store's.
+ */
+function askExtension(prompt) {
+	const install = prompt.kind === 'install';
+	return passkeyPrompt({
+		trustedOnly: true,
+		title: install ? `Add "${prompt.name}"?` : `Remove "${prompt.name}"?`,
+		icon: prompt.iconUrl || '/pm/icons/extensions.svg',
+		detail: install && prompt.permissions.length ? ['It can:'] : [],
+		items: install ? prompt.permissions : [],
+		choices: [[install ? 'Add extension' : 'Remove', true, 'btn-blu']],
+		close: 'Cancel',
+		signal: new AbortController().signal,
+	}).then((answer) => answer === true);
 }
 
 /** the line a request made in a frame of another site adds */
@@ -1092,6 +1145,7 @@ async function startController(name) {
 		});
 	}
 	window.controller = controller; // handy from devtools
+	controller.extensions.onPrompt(askExtension);
 	watchCarrier(controller);
 
 	setStatus('Waiting for the service worker…');

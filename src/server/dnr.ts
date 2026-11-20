@@ -244,6 +244,15 @@ export function hostPermissionMatches(pattern: string, url: URL): boolean {
 	return hostname === wanted;
 }
 
+/** the Web Store's pages and requests, which Chrome keeps from every extension (webRequest's too) */
+export function webStoreRequest(parsed: URL): boolean {
+	const host = parsed.hostname;
+	return (
+		host === 'chromewebstore.google.com' ||
+		(host === 'chrome.google.com' && parsed.pathname.startsWith('/webstore'))
+	);
+}
+
 /** the hosts Chrome keeps from every extension (ExtensionsAPIClient::ShouldHideBrowserNetworkRequest, the Web Store) */
 function hiddenFromExtensions(
 	url: string,
@@ -256,9 +265,7 @@ function hiddenFromExtensions(
 		return true;
 	}
 	const host = parsed.hostname;
-	if (host === 'chromewebstore.google.com') return true;
-	if (host === 'chrome.google.com' && parsed.pathname.startsWith('/webstore'))
-		return true;
+	if (webStoreRequest(parsed)) return true;
 	// another extension's package (an extension origin is `https://<id>.invalid`)
 	if (
 		host.endsWith('.invalid') &&
@@ -333,6 +340,7 @@ export class DnrHost {
 		this.engine = new DnrEngine({
 			access: (id, request) => this.access(id, request),
 			hidden: (id, request) =>
+				request.initiator === 'https://chromewebstore.google.com' ||
 				hiddenFromExtensions(
 					request.url,
 					this.extensions.get(id)?.extensionBase,

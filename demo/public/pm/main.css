@@ -1966,6 +1966,16 @@ input:focus-visible {
 	font-size: 0.85em;
 	overflow-wrap: anywhere;
 }
+.passkeyPrompt ul.items {
+	margin: 0 0 4px;
+	padding-left: 20px;
+	font-size: 0.9em;
+}
+.passkeyPrompt ul.items ul {
+	padding-left: 16px;
+	color: #b6b6b6;
+	font-size: 0.9em;
+}
 .passkeyPrompt .passkeyButtons {
 	flex-wrap: wrap;
 	justify-content: flex-end;

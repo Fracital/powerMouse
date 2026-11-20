@@ -252,9 +252,11 @@ STomp runs Chrome extensions on the sites it proxies: content scripts in
 the ISOLATED, MAIN and USER_SCRIPT worlds at document_start, document_end
 and document_idle, backgrounds (MV2 pages, MV3 service workers), popups and
 options pages, chrome.storage, messaging, blocking webRequest and
-declarativeNetRequest. The service worker keeps and serves them; a page no
-extension reaches loads no extension code, and the inject bundle carries
-none.
+declarativeNetRequest. The Chrome Web Store's "Add to Chrome" installs
+them in a proxied tab, after a dialog the host draws
+(`extensions.onPrompt`). The service worker keeps and serves them; a page
+no extension reaches loads no extension code, and the inject bundle carries
+none. An install from a listing affects powerMouse only.
 
 ```js
 const info = await controller.extensions.install(file); // .crx, .zip, Web Store id, files

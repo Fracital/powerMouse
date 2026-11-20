@@ -5,7 +5,11 @@ import type {
 	SiteShields,
 } from '../blocker/types';
 import type { Assets, Config, ConfigCodec, HostGeometry } from '../config';
-import type { ExtensionsChange } from '../extensions/types';
+import type {
+	ExtensionPromptAnswer,
+	ExtensionPromptRequest,
+	ExtensionsChange,
+} from '../extensions/types';
 import type { HelperNames } from '../helperNames';
 import type { HookErrorInfo, InitHooks } from '../hooks';
 import type {
@@ -354,6 +358,8 @@ export type HostBound = {
 	];
 	/** the extensions' hub told a change (an install, an action's badge, a popup's size) */
 	extensionChange: [ExtensionsChange];
+	/** the Chrome Web Store's page installs or removes an extension: the host asks the user (Controllerbound.extensionPrompt) */
+	extensionPrompt: [ExtensionPromptRequest, ExtensionPromptAnswer];
 	/** the extensions' hub asks about the host's frames, which are the tabs (HubTabs) */
 	extensionTabs: [{ op: string; args: unknown[] }, unknown];
 };

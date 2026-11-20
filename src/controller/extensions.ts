@@ -26,6 +26,9 @@ import {
 	type ExtensionInfo,
 	type ExtensionNotification,
 	type ExtensionOptions,
+	type ExtensionPrompt,
+	type ExtensionPromptAnswer,
+	type ExtensionPromptRequest,
 	type ExtensionsChange,
 	type ExtensionSource,
 	type InstallOptions,
@@ -1565,6 +1568,8 @@ export class Extensions {
 	#backend: ExtensionsBackend;
 	#listeners = new Set<(change: ExtensionsChange) => void>();
 	#popups = new Set<PopupController>();
+	#prompt: ((prompt: ExtensionPrompt) => boolean | Promise<boolean>) | null =
+		null;
 
 	/** @internal */
 	constructor(backend: ExtensionsBackend) {
@@ -1662,6 +1667,51 @@ export class Extensions {
 	/** download it again from the Chrome Web Store (one installed from there) */
 	update(id: string): Promise<ExtensionInfo> {
 		return this.#backend.command<ExtensionInfo>({ op: 'update', id });
+	}
+
+	/**
+	 * Show Chrome's dialog when the Chrome Web Store's page asks to install
+	 * an extension ("Add to Chrome") or to remove one ("Remove from
+	 * Chrome"): the handler draws it and answers true for its accept
+	 * button (Add extension, Remove). The page asked on a click of its own
+	 * button, and the worker made the request (the name, the icon, Chrome's
+	 * permission warnings) and checked the page is the store's. Without a
+	 * handler the store's install and removal end as cancelled. Returns the
+	 * unsubscribe.
+	 */
+	onPrompt(
+		handler: (prompt: ExtensionPrompt) => boolean | Promise<boolean>,
+	): () => void {
+		this.#prompt = handler;
+		return () => {
+			if (this.#prompt === handler) this.#prompt = null;
+		};
+	}
+
+	/** @internal the store's page asked (the controller checked the user's click) */
+	async prompt(
+		request: ExtensionPromptRequest,
+		frame: unknown,
+	): Promise<ExtensionPromptAnswer> {
+		const handler = this.#prompt;
+		if (!handler) return 'cancel';
+		const { kind, id, name, iconUrl, permissions, url } = request;
+		try {
+			return (await handler({
+				kind,
+				id,
+				name,
+				iconUrl,
+				permissions,
+				url,
+				frame: frame ?? null,
+			})) === true
+				? 'accept'
+				: 'cancel';
+		} catch (error) {
+			console.error(error);
+			return 'cancel';
+		}
 	}
 
 	/** hear installs, updates, removals, action and menu changes, notifications; returns the unsubscribe */

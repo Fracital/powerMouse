@@ -5,7 +5,11 @@ import type {
 } from '@mercuryworkshop/proxy-transports';
 import type { AdblockInit, SiteShields } from '../blocker/types';
 import type { Config } from '../config';
-import type { ExtensionCommand } from '../extensions/types';
+import type {
+	ExtensionCommand,
+	ExtensionPromptAnswer,
+	ExtensionPromptRequest,
+} from '../extensions/types';
 import type { IsolationEngine } from '../isolation';
 import type {
 	PasskeyCommand,
@@ -1640,6 +1644,12 @@ export type Controllerbound = {
 	 * (src/passkeys/authenticator.ts)
 	 */
 	passkeyPrompt: [{ request: PasskeyPrompt; port: MessagePort }, unknown];
+	/**
+	 * the Chrome Web Store's page installs or removes an extension (checked
+	 * by the worker, src/server/extensions/webstore.ts): the host asks the
+	 * user, once the page's click activated the controller's document
+	 */
+	extensionPrompt: [ExtensionPromptRequest, ExtensionPromptAnswer];
 	/**
 	 * the site pool: whether the focus is in the page of the frame the
 	 * document `client` is in (a ceremony's focus check, whose top may be a

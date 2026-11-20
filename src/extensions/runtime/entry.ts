@@ -39,6 +39,7 @@ import {
 } from './natives';
 import { methodLike, presentExtensionPage } from './present';
 import { workerContainer, workerGlobal } from './serviceWorker';
+import { storePage } from './webstore';
 import type { World } from './world/index';
 import { makeWorld, pageSide } from './worlds';
 
@@ -912,6 +913,8 @@ function start(given: RuntimePayload) {
 	// now, before the page's scripts and its MAIN world's run
 	if (given.content?.some(isolates)) page.snapshot();
 	for (const ext of given.content ?? []) contentContext(given, ext);
+	if (given.store)
+		storePage(given.channel, given.store.changes, given.store.token);
 }
 
 /** whether an extension may run code in an isolated world of the document (its entries', or an injection's) */

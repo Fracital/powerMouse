@@ -115,6 +115,7 @@ import createServer, {
 import { errorReportScript, hostErrorPage } from './errorPage';
 import { extensionCommand } from './extensions/api';
 import { extensionRegistry } from './extensions/registry';
+import { webStore } from './extensions/webstore';
 import { identityDone, identityState } from './identityStates';
 import { INLINE_MAX, INLINE_TOKEN, putInline } from './inline';
 import { openLoadChannel, servedLoadClient } from './loadGrants';
@@ -775,6 +776,28 @@ serviceWorkers.setEnvironment({
 // every controller's contexts hear what the worker tells an extension's
 // (storage changes), and the controllers what changed of the extensions
 extensionRegistry.channels = () => [...controllers.keys()];
+// the Web Store page's calls ask the user through the controller of the
+// store's address, and fetch the icon and the package through its transport
+webStore.prompt = async (directory, request) => {
+	const ref = controllers.get(directory);
+	return ref ? ref.rpc.call('extensionPrompt', request) : 'cancel';
+};
+webStore.fetch = async (directory, url) => {
+	const ref = controllers.get(directory);
+	if (!ref) throw new Error('no controller');
+	const client = new BareCompatibleClient(ref.transport);
+	for (let hops = 0; hops < 20; hops++) {
+		const target = new URL(url);
+		if (target.protocol !== 'https:' || target.username || target.password)
+			break;
+		const response = await client.fetch(url, { redirect: 'manual' });
+		const location = response.headers.get('location');
+		if (!REDIRECTS.includes(response.status) || !location) return response;
+		await response.body?.cancel();
+		url = new URL(location, url).href;
+	}
+	throw new Error('Invalid Web Store download URL');
+};
 extensionRegistry.onChange((change) => {
 	try {
 		const bus = new BroadcastChannel(

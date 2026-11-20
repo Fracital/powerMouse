@@ -5,7 +5,11 @@
 // it can read their location and drive their history on the host's behalf.
 import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
 import { assetName } from '../config';
-import type { ExtensionsChange } from '../extensions/types';
+import type {
+	ExtensionPromptAnswer,
+	ExtensionPromptRequest,
+	ExtensionsChange,
+} from '../extensions/types';
 import { helperNames } from '../helperNames';
 import type { HookErrorInfo } from '../hooks';
 import type { PasskeyAnswer, PasskeyPrompt } from '../passkeys/types';
@@ -344,6 +348,14 @@ else if (window === window.parent) {
 							(await rpc.call('identityChooser', { request, port }, [
 								port,
 							])) as number,
+						// the Web Store's install and uninstall dialogs are the host page's
+						extensionPromptRelay: async (
+							request: ExtensionPromptRequest,
+						): Promise<ExtensionPromptAnswer> =>
+							(await rpc.call(
+								'extensionPrompt',
+								request,
+							)) as ExtensionPromptAnswer,
 						// a site's permission request the host asks the user about
 						...(init.permissionPrompt
 							? {

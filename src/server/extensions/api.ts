@@ -3,7 +3,7 @@
 // enable, remove, update) and the contexts' `<directory>extapi` route
 // (chrome.storage, dynamic rules, registered scripts, cookies, management,
 // webRequest listeners, a service worker's fetch handler, scripts to
-// inject). A context's call is a fetch
+// inject, and the Web Store page's calls). A context's call is a fetch
 // from its own document, so the worker knows its client: an extension page
 // is the extension's by its URL, a content document shows the token its
 // shell was given.
@@ -25,6 +25,7 @@ import { fetchEvents } from './fetchEvents';
 import type { ExtensionRegistry } from './registry';
 import { scriptCache } from './store';
 import { webRequests } from './webRequest';
+import { storeCall } from './webstore';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -164,6 +165,27 @@ export async function extensionApi(
 		call = (await request.json()) as ApiCall;
 	} catch (error) {
 		return reply(400, { error: 'The call is not JSON.' });
+	}
+	if ((call as { store?: unknown })?.store === true) {
+		// Only a navigation to the store got this grant, bound to its new client and controller.
+		if (
+			!client ||
+			typeof call.token !== 'string' ||
+			call.token !== (await documentToken(`store:${channel}`, client))
+		)
+			return reply(403, {
+				error: `This page may not call ${call.area}.${call.call}.`,
+			});
+		const answer = await storeCall(
+			registry,
+			channel,
+			client,
+			realURL,
+			String(call.area),
+			String(call.call),
+			Array.isArray(call.args) ? call.args : [],
+		);
+		return reply(answer.status, answer.body);
 	}
 	const id = String(call?.ext ?? '');
 	const standing = await standingOf(

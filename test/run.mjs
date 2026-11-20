@@ -94,6 +94,8 @@ const SUITE_ENV = {
 	'webtransport-live': { STOMP_TEST_TRANSPORT: '1' },
 	// a discord.com fixture host, so the "Sign in with token" gate matches
 	'demo-token': { STOMP_TEST_TRANSPORT: '1' },
+	// the Chrome Web Store's host with the suite's port, and its update service
+	webstore: { STOMP_TEST_TRANSPORT: '1' },
 	// and the relying party's sites (test/passkeys-rp.mjs)
 	passkeys: { STOMP_TEST_TRANSPORT: '1' },
 	'adversarial-passkeys': { STOMP_TEST_TRANSPORT: '1' },

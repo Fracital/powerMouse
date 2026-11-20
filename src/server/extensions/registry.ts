@@ -55,6 +55,7 @@ import {
 	storageAreas,
 	type StoredExtension,
 } from './store';
+import { verifyStorePackage } from './storeProof';
 
 /** a content_scripts entry, or a scripting registration, as the worker matches it */
 export interface ScriptEntry {
@@ -718,11 +719,14 @@ export class ExtensionRegistry {
 
 	/**
 	 * Install (or update in place) from a command. `download` fetches a URL
-	 * through the controller's transport (the Web Store).
+	 * through the controller's transport (the Web Store). `expect` may refuse
+	 * the package read before anything is stored (the store's approval:
+	 * webstore.ts).
 	 */
 	async install(
 		command: Extract<ExtensionCommand, { op: 'install' }>,
 		download: (url: string) => Promise<Uint8Array>,
+		expect?: (read: ReadPackage) => void,
 	): Promise<ExtensionInfo> {
 		await this.ready();
 		let read: ReadPackage;
@@ -741,15 +745,24 @@ export class ExtensionRegistry {
 			let bytes: Uint8Array;
 			try {
 				bytes = await download(webStoreDownload(storeId, chrome));
+				await verifyStorePackage(bytes, storeId);
 			} catch (error) {
-				throw new ExtensionError(
-					'webstore',
-					`The Chrome Web Store download of ${storeId} failed: ${error instanceof Error ? error.message : String(error)}`,
+				throw Object.assign(
+					new ExtensionError(
+						'webstore',
+						`The Chrome Web Store download of ${storeId} failed: ${error instanceof Error ? error.message : String(error)}`,
+					),
+					{ cause: error },
 				);
 			}
 			filename = `${storeId}.crx`;
 			source = 'webstore';
 			read = await readPackage(bytes, filename);
+			if (read.id !== storeId)
+				throw new ExtensionError(
+					'bad-package',
+					'The package id does not match the store listing.',
+				);
 		} else if (command.files) {
 			source = 'unpacked';
 			read = await readUnpacked(command.files, command.filename || 'unpacked');
@@ -757,6 +770,7 @@ export class ExtensionRegistry {
 			read = await readPackage(new Uint8Array(command.bytes), filename);
 		} else
 			throw new ExtensionError('bad-source', 'Nothing to install was given.');
+		expect?.(read);
 		return this.#store(read, {
 			source,
 			webStoreId:

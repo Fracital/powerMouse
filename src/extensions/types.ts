@@ -207,6 +207,39 @@ export interface ExtensionNotification {
 /** `clickAction()`'s answer */
 export type ClickResult = 'popup' | 'clicked' | 'disabled';
 
+/**
+ * What the host asks the user before the Chrome Web Store's page installs
+ * or removes an extension (`extensions.onPrompt`): Chrome's install dialog
+ * ("Add "<name>"?", what it can do, Add extension) or its uninstall dialog
+ * ("Remove "<name>"?", Remove). The worker made it from the store's call
+ * and checked the page is the store's; the page draws none of it.
+ */
+export interface ExtensionPromptRequest {
+	kind: 'install' | 'uninstall';
+	id: string;
+	/** its name as the store gave it (localized), or as installed */
+	name: string;
+	/** its icon as a data: URL (the store's image, or the installed extension's), null for Chrome's default */
+	iconUrl: string | null;
+	/** what it can do, in Chrome's words, each with its lines below it (the sites of a host warning) */
+	permissions: { message: string; details: string[] }[];
+	/** the real URL of the page that asked */
+	url: string;
+	/** that page's service worker client (the host finds its frame) */
+	client: string;
+}
+
+/** the user's answer: `gesture` when the page asked without a user's click, which shows no dialog */
+export type ExtensionPromptAnswer = 'accept' | 'cancel' | 'gesture';
+
+/** what `extensions.onPrompt`'s handler is asked: the request, with the frame of the page that asked (null when it is not one of the host's) */
+export interface ExtensionPrompt<F = unknown> extends Omit<
+	ExtensionPromptRequest,
+	'client'
+> {
+	frame: F | null;
+}
+
 /** why a call of the extensions API failed (ExtensionError.code) */
 export type ExtensionErrorCode =
 	| 'bad-source'
@@ -320,6 +353,8 @@ export interface RuntimePayload {
 	serviceWorker?: { url: string; module: boolean };
 	/** a text document (JSON, plain text) served as Chrome's HTML of it: the type document.contentType reads */
 	contentType?: string;
+	/** a page of the Chrome Web Store: its chrome.webstorePrivate and chrome.management, and the channel the extensions' changes come on */
+	store?: { changes: string; token: string };
 }
 
 /** the kinds of extension context */
