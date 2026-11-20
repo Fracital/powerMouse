@@ -74,6 +74,8 @@ export interface StompServer {
 	clearCache(): Promise<void>;
 	/** the host page was reloaded: what it restores takes that cache mode (rewrites.ts) */
 	hostReloaded(mode: HostReload): void;
+	/** the next navigation to this routed URL is a history step (rewrites.ts historySteps) */
+	historyStepped(url: string): void;
 	/** the cookie jar, for the host's cookies API */
 	cookies: Cookies;
 	/**
@@ -585,7 +587,7 @@ export default async function createServer(
 				pool,
 			));
 	const shields = new ShieldsStore();
-	const { route, setRules, hostReloaded } = registerRewrites(
+	const { route, setRules, hostReloaded, historyStepped } = registerRewrites(
 		router,
 		init,
 		cookies,
@@ -631,6 +633,7 @@ export default async function createServer(
 		},
 		setRules,
 		hostReloaded,
+		historyStepped,
 		realURL,
 		codec: init.codec,
 		routeOf: (routed) => {

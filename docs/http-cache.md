@@ -111,7 +111,10 @@ as `cache: 'no-cache'`, and a reloaded document's too; the forward
 (`genericForward` in `src/server/rewrites.ts`) reads the mode from both.
 A document's Back or Forward comes as `cache: 'force-cache'` (in a frame,
 which the back/forward cache never answers for, and in a tab it does not
-keep). The conditional headers Chrome adds for what its memory cache holds (a
+keep). A step the controller takes with `location.replace` (another
+frame's entries came after the frame's, `src/controller/history.ts`) is
+told to the worker before it is taken (`historyStep`), and the load
+takes the mode a traversal's has. The conditional headers Chrome adds for what its memory cache holds (a
 script, an image) are dropped before: those loads are the worker's
 MemoryCache's.
 
@@ -227,5 +230,6 @@ Content-Encoding is of the decoded bytes.
 | what a request is given  | `HttpCache.match` (`CacheHit`)                                       |
 | the request's cache mode | `genericForward`, at the HTTP cache                                  |
 | a reload of the host     | `src/controller/hostReload.ts`                                       |
+| a step taken by replace  | `tellSteps` in `src/controller/history.ts`, `historySteps`           |
 | Clear-Site-Data          | `clearsCache`, `clearOrigin`                                         |
 | the rewrite cache's rule | `mayKeep` (not this table: its own)                                  |
