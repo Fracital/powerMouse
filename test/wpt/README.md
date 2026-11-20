@@ -810,7 +810,7 @@ that Chrome 157 run:
 | `wpt-encoding-legacy`            | 27        | 10           | 428            |
 | `wpt-csp`                        | 53        | 6            | 25             |
 | `wpt-cookies`                    | 29        | 1            | 1              |
-| `wpt-cookies-more`               | 24        | 7            | 25             |
+| `wpt-cookies-more`               | 24        | 2            | 10             |
 | `wpt-referrer-policy`            | 276       | 0            | 0              |
 | `wpt-history`                    | 65        | 4            | 87             |
 | `wpt-location`                   | 66        | 6            | 12             |

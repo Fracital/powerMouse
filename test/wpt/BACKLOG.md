@@ -53,33 +53,10 @@ The list is empty. Two gaps no kept test measures, from reading the code:
 
 ## wpt-cookies-more
 
-- `cookies/samesite/window-open.https.html` (5: "Cross-site ... auxiliary
-  navigations are laxly same-site"), `cookies/samesite/form-get-blank.https.html`
-  (5: "Cross-site ... top-level form GETs are laxly same-site"): the
-  SameSite=Lax cookie is not sent. The first request of a new top-level
-  window a cross-site page opens (window.open, a form with `target=_blank`)
-  misses the top-level navigation exception: `src/server/rewrites.ts` allows
-  Lax only for `navigation && topLevel`, and for the popup's first request
-  `topLevel` is apparently false, or `nestedTopOf(referrer)` finds the
-  opener's route. Not probed beyond the suite.
-- `cookies/samesite/setcookie-lax.https.html` (1: "Cross-site window
-  shouldn't be able to set SameSite=Lax or SameSite=Strict cookies"): the
-  Strict cookie is set. The converse of the entry above: in `rewrites.ts`
-  `crossSiteSet = cookieSite === 'cross-site' && !(navigation && topLevel)`
-  lets a top-level navigation set any cookie; which request of the test sets
-  them was not probed.
 - `cookies/samesite/sandbox-iframe-nested.https.html` (1): the Lax cookie is
   sent with a navigation started inside a sandboxed frame. The initiator's
   opaque origin is lost: the nested navigation carries the sandboxed
   document's real route as referrer and is judged same-site.
-- `cookies/samesite/about-blank-subresource.https.html` (2: the harness
-  TIMEOUT and its subtest): the page writes into a `window.open("")` popup
-  and navigates a frame in it; the popup's about:blank document is not the
-  opener's to write. Still listed with the lead's popup and opener fixes and
-  the about:blank origin fix in the tree; not probed. Its sibling
-  `about-blank-toplevel.https.html` passes since the site pool series
-  (1b74600d), whose write hook opens a written popup before its scripts
-  run; that this is why was not probed.
 - `cookies/samesite/setcookie-navigation.https.html` (9: the harness TIMEOUT
   and 8 subtests MISSING): no report within 30 s. Cause not yet known (not
   triaged); a candidate is the page navigating its own top-level window away
@@ -88,6 +65,28 @@ The list is empty. Two gaps no kept test measures, from reading the code:
 Cleared on the combined tree: `about-blank-nested.https.html` (the lead's
 about:blank origin fix) and the "Subdomain redirecting to same-host fetches
 are strictly same-site" subtest of `fetch.https.html` (no fix names it).
+
+Cleared on the stack landed after 08fc18c7 (Chrome 157):
+
+- `cookies/samesite/window-open.https.html` (5: "Cross-site ... auxiliary
+  navigations are laxly same-site"), `cookies/samesite/form-get-blank.https.html`
+  (5: "Cross-site ... top-level form GETs are laxly same-site") and
+  `cookies/samesite/setcookie-lax.https.html` (1: "Cross-site window
+  shouldn't be able to set SameSite=Lax or SameSite=Strict cookies") pass
+  since a document of another origin no longer runs in a window its
+  parent's or opener's client was installed in (changes/kept-window-other-origin.md).
+  A bisect of the stack found that change; which request it fixed was not
+  probed.
+- `cookies/samesite/about-blank-subresource.https.html` (2: the harness
+  TIMEOUT and its subtest) passes since a frame of a popup no longer posts
+  the host's messages to the popup. The page relays every message its
+  `window.open("")` popup hears to itself (`child.onmessage`), and
+  `wait_for_message` listens once: the service worker client id the
+  popup's frame told its top arrived before the frame's `COOKIES` report
+  and took the listener. Its sibling `about-blank-toplevel.https.html`
+  timed out the same way once a document knew its client id from its
+  shell, at once, where the answer to `whoami` used to come after the
+  report (changes/served-client-id.md).
 
 ## wpt-csp
 
