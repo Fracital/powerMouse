@@ -156,6 +156,8 @@ export interface NestedEmbedder {
 	credentialless?: boolean;
 	/** the navigation is not the frame's first (see `b` below) */
 	later?: boolean;
+	/** the embedder is in the cluster a Document-Isolation-Policy of the proxy's isolates (`d`, src/isolation.ts isolationFacts) */
+	apart?: boolean;
 }
 
 /**
@@ -169,7 +171,9 @@ export interface NestedEmbedder {
  * frame is a credentialless one, and `b` when the navigation is not the
  * frame's first: the service worker answers a first one that will not be
  * isolated in an isolated embedder with a document that comes back with
- * `b` (src/server/rewrites.ts). With the site pool, a second path segment
+ * `b` (src/server/rewrites.ts), and `d` when the embedder is in the
+ * cluster a Document-Isolation-Policy of the proxy's isolates under a host
+ * that is not isolated. With the site pool, a second path segment
  * `~` and the sandbox tokens the frame has (without their `allow-`, joined
  * by `.`) when it is sandboxed: a frame of another slot than its parent
  * cannot read its frame element's sandbox (DocumentClient.sandboxFlags).
@@ -211,7 +215,8 @@ export function nestedMark(
 				? 'a'
 				: '') +
 		(embedder?.credentialless ? 'l' : '') +
-		(embedder?.later ? 'b' : '');
+		(embedder?.later ? 'b' : '') +
+		(embedder?.apart ? 'd' : '');
 	const origins = [
 		embedder?.origin && embedder.origin !== topOrigin ? embedder.origin : '',
 		...(embedder?.origins ?? []),
@@ -275,6 +280,7 @@ export function parseNestedMark(mark: string): {
 					.filter((origin): origin is string => origin !== null),
 				credentialless: flags.includes('l'),
 				later: flags.includes('b'),
+				apart: flags.includes('d'),
 			},
 		};
 	} catch (error) {

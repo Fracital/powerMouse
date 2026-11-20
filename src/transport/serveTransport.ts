@@ -18,6 +18,12 @@ import {
 } from './messages';
 import { NETWORK_PARTITION } from './networkPartition';
 import { REQUEST_QUEUE, SEEN_URGENCY } from './requestQueue';
+import {
+	changedResponse,
+	connectionTimes,
+	laterConnection,
+	withoutEncodedBytes,
+} from './responseFacts';
 import { resumableBody } from './resumableBody';
 import { RpcHelper } from './rpc';
 import { poolOf, reportsVersion, type SocketPass } from './socketPool';
@@ -397,6 +403,7 @@ export default function serveTransport(
 				return [undefined, []];
 			},
 			request: async ({ remote, method, body, headers }) => {
+				const arrived = performance.now();
 				const transport = await readyTransport();
 				const url = new URL(remote);
 				const sent = fitHeaders(transport, headers);
@@ -408,6 +415,7 @@ export default function serveTransport(
 						)
 					: null;
 				let response;
+				const called = performance.now();
 				try {
 					response = await transport.request(
 						url,
@@ -422,17 +430,30 @@ export default function serveTransport(
 				}
 				if (ticket) response = ticket.answered(response);
 				else if (transportLog.on) unversioned(transport, url);
+				// the connection's times are from the transport's call: from
+				// the request's arrival they take in its wait for a connection,
+				// as Chrome's do (responseFacts.ts)
+				const connection = connectionTimes(
+					(response as { connection?: unknown }).connection,
+				);
+				if (connection)
+					response = changedResponse(response, {
+						connection: laterConnection(connection, called - arrived),
+					} as Partial<typeof response>);
+				// (a function, which crosses with the body's end)
+				const [plain, encodedBytes] = withoutEncodedBytes(response);
 				// a streamed body goes on a port of its own (bodyPort.ts), and
 				// a large one the reader falls behind on is let go and resumed
 				// by range (resumableBody.ts)
-				if (response.body instanceof ReadableStream) {
+				if (plain.body instanceof ReadableStream) {
 					const pushed = sendBody(
 						resumableBody(transport, url, method, sent, response),
 						true,
+						encodedBytes,
 					);
-					return [{ ...response, body: pushed }, [pushed.$stompBodyPort]];
+					return [{ ...plain, body: pushed }, [pushed.$stompBodyPort]];
 				}
-				return [response, transferablesOf(response.body)];
+				return [plain, transferablesOf(plain.body)];
 			},
 			connect: async ({ url, protocols, requestHeaders, port: socket }) => {
 				const transport = await readyTransport();

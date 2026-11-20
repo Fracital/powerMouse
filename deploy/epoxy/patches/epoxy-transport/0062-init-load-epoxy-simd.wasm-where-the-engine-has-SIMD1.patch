@@ -1,0 +1,77 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Thu, 19 Nov 2026 13:00:00 -0500
+Subject: [PATCH] init: load epoxy-simd.wasm where the engine has SIMD128 and bulk memory
+
+The ESM bundle loads epoxy-simd.wasm (epoxy-tls's SIMD128 build of the same
+client, served by the same glue) when WebAssembly.validate takes a module
+using SIMD128 and one using bulk memory, and epoxy.wasm otherwise. The
+build copies both next to dist/index.mjs. The CJS bundle has no
+import.meta.url and keeps its inlined module. One origin's download
+through the transport worker goes from about 650 to about 870 Mbit/s on
+loopback.
+---
+ esbuild.bundle.mjs |   2 ++
+ src/main.ts        |  28 +++++++++++++++++++++++++++-
+ 2 files changed, 29 insertions(+), 1 deletion(-)
+
+diff --git a/esbuild.bundle.mjs b/esbuild.bundle.mjs
+--- a/esbuild.bundle.mjs
++++ b/esbuild.bundle.mjs
+@@ -18,6 +18,8 @@
+ function copyEpoxyWasm() {
+   const epoxyEntry = fileURLToPath(import.meta.resolve('@mercuryworkshop/epoxy-tls/epoxy'))
+   fs.copyFileSync(path.join(path.dirname(epoxyEntry), 'epoxy.wasm'), './dist/epoxy.wasm')
++  // the SIMD128 build, which src/main.ts takes where the engine has SIMD
++  fs.copyFileSync(path.join(path.dirname(epoxyEntry), 'epoxy-simd.wasm'), './dist/epoxy-simd.wasm')
+ }
+ 
+ const umdWrapperOptions = {
+diff --git a/src/main.ts b/src/main.ts
+--- a/src/main.ts
++++ b/src/main.ts
+@@ -59,6 +59,32 @@
+ 	"pem_files",
+ ];
+ 
++// epoxy-simd.wasm is the same client built for wasm SIMD128 and bulk memory
++// (ring's AES eight blocks a batch, about a third more download per worker),
++// beside epoxy.wasm and served by the same glue. It is taken where the engine
++// validates a module using both; an engine without them gets epoxy.wasm. The
++// CJS bundle has no import.meta.url and keeps its inlined module.
++const SIMD_PROBE = new Uint8Array([
++	0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0, 10, 10, 1,
++	8, 0, 65, 0, 253, 15, 253, 98, 11,
++]);
++const BULK_MEMORY_PROBE = new Uint8Array([
++	0, 97, 115, 109, 1, 0, 0, 0, 1, 4, 1, 96, 0, 0, 3, 2, 1, 0, 5, 3, 1, 0, 1, 10,
++	14, 1, 12, 0, 65, 0, 65, 0, 65, 0, 252, 10, 0, 0, 11,
++]);
++function simdModule(): { module_or_path: URL } | undefined {
++	// @ts-ignore: import.meta (the ESM bundle has it, the CJS one does not)
++	const base: string | undefined = import.meta.url;
++	if (typeof base !== "string") return undefined;
++	try {
++		if (!WebAssembly.validate(SIMD_PROBE)) return undefined;
++		if (!WebAssembly.validate(BULK_MEMORY_PROBE)) return undefined;
++	} catch {
++		return undefined;
++	}
++	return { module_or_path: new URL("epoxy-simd.wasm", base) };
++}
++
+ // wasm-bindgen's init skips instantiating only once the module has loaded,
+ // which it has not while a first call is still awaiting it: two calls in one
+ // tick instantiate twice, and the second instance replaces the glue's `wasm`
+@@ -67,7 +93,7 @@
+ // its request never answers. Load the module once per realm.
+ let epoxyLoaded: Promise<void> | null = null;
+ function loadEpoxy(): Promise<void> {
+-	epoxyLoaded ??= initEpoxy().then(
++	epoxyLoaded ??= initEpoxy(simdModule()).then(
+ 		() => {},
+ 		(error) => {
+ 			// a failed load (network, CSP) may be retried by a later init()
+-- 
+2.47.0
+

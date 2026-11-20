@@ -1,6 +1,7 @@
 import {
 	AWAY_MARKER,
 	CACHED_MARKER,
+	CONNECTION_MARKER,
 	CORS_MARKER,
 	Delivery,
 	ENCODING_MARKER,
@@ -10,6 +11,7 @@ import {
 	KeptLoad,
 	MEMORY_MARKER,
 	OPAQUE_MARKER,
+	PROTOCOL_MARKER,
 	PROXY_METRICS,
 	REVALIDATED_MARKER,
 	siteMetrics,
@@ -20,6 +22,7 @@ import {
 	WORKER_SCRIPT_MARKER,
 	XHR_MARKER,
 } from '../../transport/messages';
+import { readConnectionMark } from '../../transport/responseFacts';
 import Client from '../Client';
 import Module from '../Module';
 import { LazyMap, LazySet, LazyWeakMap, LazyWeakSet } from '../ownCollections';
@@ -446,8 +449,9 @@ export default class ResourceTimingModule extends Module<Client> {
 		// nothing; the renderer's memory cache keeps the protocol its
 		// resource came over and the HTTP cache has none (messages.ts
 		// Delivery). The worker marks the answers it gave from its own
-		// caches. No transport says which protocol the origin spoke: the
-		// entry names the scheme's usual one.
+		// caches, and the protocol the origin's answer came over when its
+		// transport says (PROTOCOL_MARKER); else the entry names the scheme's
+		// usual one.
 		const bodySize = Reflect.getOwnPropertyDescriptor(
 			proto,
 			'encodedBodySize',
@@ -727,6 +731,18 @@ export default class ResourceTimingModule extends Module<Client> {
 				}
 			return null;
 		};
+		/** the description of the worker's metric `mark` on `entry`, or null when it has none */
+		const markDescription = (entry: object, mark: string): string | null => {
+			if (!nativeServerTiming || !metricName || !metricDescription) return null;
+			for (const metric of Reflect.apply(
+				nativeServerTiming,
+				entry,
+				[],
+			) as object[])
+				if (Reflect.apply(metricName, metric, []) === mark)
+					return String(Reflect.apply(metricDescription, metric, []));
+			return null;
+		};
 		const entryType = Reflect.getOwnPropertyDescriptor(
 			global.PerformanceEntry.prototype,
 			'entryType',
@@ -790,6 +806,54 @@ export default class ResourceTimingModule extends Module<Client> {
 			'connectEnd',
 			'requestStart',
 		];
+		// The connection the origin's answer came on, as the transport saw
+		// it (CONNECTION_MARKER, from the request's arrival at the
+		// transport): from where the page's fetch started, in order and
+		// within its answer. One that had carried a request before has every
+		// step at the fetch's start, secureConnectionStart too, and the
+		// request just after (measured natively); a step the transport did
+		// not see is the next one's (no lookup: at the connection's start).
+		// secureConnectionStart is 0 for an http URL.
+		/** an entry's connection times as the transport told them, or null */
+		const toldConnection = (
+			entry: object,
+			https: boolean,
+		): Record<string, number> | null => {
+			if (!answered(entry) || delivery(entry) !== 'network') return null;
+			const text = markDescription(entry, CONNECTION_MARKER);
+			const told = text === null ? null : readConnectionMark(text);
+			if (!told) return null;
+			const start = fetchStarts(entry)[0];
+			const end = read(entry, 'responseStart');
+			let last = start;
+			// (each no earlier than the step before, none past the answer)
+			const at = (offset: number | undefined, otherwise: number) =>
+				(last = Math.min(
+					end,
+					Math.max(last, offset === undefined ? otherwise : start + offset),
+				));
+			if (told.reused)
+				return {
+					domainLookupStart: start,
+					domainLookupEnd: start,
+					connectStart: start,
+					secureConnectionStart: https ? start : 0,
+					connectEnd: start,
+					requestStart: at(told.requestStart, start),
+				};
+			const connect =
+				told.connectStart === undefined ? start : start + told.connectStart;
+			const times: Record<string, number> = {
+				domainLookupStart: at(told.dnsStart, connect),
+				domainLookupEnd: at(told.dnsEnd, connect),
+				connectStart: at(told.connectStart, connect),
+			};
+			const secure = at(told.secureStart, last);
+			times.secureConnectionStart = https ? secure : 0;
+			times.connectEnd = at(told.connectEnd, last);
+			times.requestStart = at(told.requestStart, last);
+			return times;
+		};
 
 		// one call for every time (and every string) it hooks, which reads
 		// which one it is from the native getter it wraps
@@ -811,7 +875,10 @@ export default class ResourceTimingModule extends Module<Client> {
 					? read(entry, 'startTime')
 					: result;
 			}
-			if (CONNECTION_TIMES.includes(name)) {
+			if (name === 'secureConnectionStart' || CONNECTION_TIMES.includes(name)) {
+				const told = toldConnection(entry, verdict.protocol === 'https:');
+				if (told) return told[name];
+				if (name === 'secureConnectionStart') return result;
 				if (result === 0) return 0;
 				const [page, own] = fetchStarts(entry);
 				return result === own ? page : Math.max(result as number, page);
@@ -883,11 +950,12 @@ export default class ResourceTimingModule extends Module<Client> {
 					how === 'revalidated' ||
 					!answered(entry)
 					? result
-					: verdict.protocol === 'https:'
-						? 'h2'
-						: verdict.protocol === 'http:'
-							? 'http/1.1'
-							: '';
+					: (markDescription(entry, PROTOCOL_MARKER) ??
+							(verdict.protocol === 'https:'
+								? 'h2'
+								: verdict.protocol === 'http:'
+									? 'http/1.1'
+									: ''));
 			// deliveryType: a cache's answer is the cache's, but for what the
 			// renderer revalidated; the worker's own way of answering (its
 			// Cache API entry for a kept script) is not the page's to see

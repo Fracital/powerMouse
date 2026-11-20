@@ -1,7 +1,8 @@
 // The demo's menu and the Shields panel's popover it is built on:
 //  - the menu button sits beside the address box, outside it, in the browser
-//    view, and in the tab manager (which hides the bar) a twin opens the
-//    same menu; the cards' copies of the bar carry its picture;
+//    view; the menu is the tab's, so the tab manager (which hides the bar)
+//    has no menu button, only its new-tab button, and the cards' copies of
+//    the bar carry the menu button's picture;
 //  - the menu fades in when it opens and is gone at once when it closes, by
 //    every way (its button, a click outside, Escape, an item chosen), and
 //    so is the Shields panel: no fade-out, nothing left to see or click;
@@ -129,9 +130,6 @@ const menuState = (page) =>
 			fading: getComputedStyle(panel).animationName === 'popoverIn',
 			toolExpanded: document
 				.getElementById('toolMenu')
-				.getAttribute('aria-expanded'),
-			recentsExpanded: document
-				.getElementById('recentsMenu')
 				.getAttribute('aria-expanded'),
 		};
 	});
@@ -551,11 +549,23 @@ await until(
 	5000,
 );
 await sleep(400);
-const twin = await shownSoon(page, '#recentsMenu');
+// the menu is the tab's: the tab manager has its new-tab button only
+const actions = await page.evaluate(() =>
+	[...document.querySelectorAll('#recentsPanel .recentsActions > *')].map(
+		(element) => element.id,
+	),
+);
+const plus = await shownSoon(page, '#newTab');
 ok(
-	'the tab manager shows its menu button',
-	twin?.visible,
-	JSON.stringify(twin),
+	'the tab manager has no menu button, only its new-tab button',
+	JSON.stringify(actions) === JSON.stringify(['newTab']) &&
+		plus?.visible &&
+		!(await page.evaluate(() =>
+			[
+				...document.querySelectorAll('#recentsPanel [aria-haspopup="menu"]'),
+			].some((element) => element.getClientRects().length > 0),
+		)),
+	JSON.stringify({ actions, plus }),
 );
 ok(
 	"the card's bar copy carries the menu button's picture",
@@ -564,72 +574,6 @@ ok(
 			!!document.querySelector('.cardLabel .cardChrome .menubtn img') &&
 			!document.querySelector('.cardLabel .cardChrome .menubtn.toolbtn'),
 	),
-);
-await page.click('#recentsMenu');
-await painted(page);
-menu = await menuState(page);
-const twinMenu = await shown(page, '#pmMenu');
-ok(
-	'it opens the same menu under it, fading in',
-	menu.open &&
-		menu.fading &&
-		menu.recentsExpanded === 'true' &&
-		menu.toolExpanded === 'false' &&
-		JSON.stringify(menu.items) === JSON.stringify(['Fullscreen', 'About']) &&
-		twinMenu.top >= twin.bottom &&
-		twinMenu.right <= 1280,
-	JSON.stringify({ menu, twinMenu, twin }),
-);
-// keys go to the menu, not to the switcher behind it
-await page.keyboard.press('ArrowRight');
-await page.keyboard.press('Escape');
-state = await leftover(page, 'pmMenu', 'menuScrim');
-ok(
-	'Escape closes the menu at once and leaves the tab manager open',
-	gone(state) &&
-		(await page.evaluate(() => document.body.classList.contains('recents'))) &&
-		(await page.evaluate(() => document.activeElement?.id)) === 'recentsMenu',
-	JSON.stringify(state),
-);
-await page.click('#recentsMenu');
-await painted(page);
-await page.click('#menuFullscreen');
-fullscreen = await until(
-	page,
-	() =>
-		document.fullscreenElement === document.documentElement ? 'root' : 'none',
-	(value) => value === 'root',
-	5000,
-);
-ok('Fullscreen works from the tab manager', fullscreen === 'root', fullscreen);
-await page.evaluate(() => document.exitFullscreen());
-await until(page, () => !document.fullscreenElement, Boolean, 5000);
-await page.click('#recentsMenu');
-await painted(page);
-await page.click('#menuAbout');
-await painted(page);
-dialog = await until(
-	page,
-	() => document.querySelector('#shieldsPage .aboutRow[data-fact="version"]'),
-	Boolean,
-	5000,
-).then(() => about(page));
-ok(
-	'About opens from the tab manager, the tab manager inert behind it',
-	dialog.open && dialog.recents && dialog.inert[1] && dialog.focusInside,
-	JSON.stringify(dialog),
-);
-// Enter on the dialog's Close button is not a press on the centred card
-await page.focus('#spClose');
-await page.keyboard.press('Enter');
-dialog = await about(page);
-ok(
-	'Enter on Close closes About and keeps the tab manager',
-	!dialog.open &&
-		dialog.recents &&
-		dialog.focused === 'recentsMenu' &&
-		!dialog.inert.some(Boolean),
-	JSON.stringify(dialog),
 );
 await page.keyboard.press('Escape'); // leave the tab manager
 errors.push(...page.errors);
@@ -681,11 +625,12 @@ for (const [width, height] of [
 	await phone.keyboard.press('Escape');
 	await phone.click('#recents');
 	await sleep(800);
-	const twinButton = await shownSoon(phone, '#recentsMenu');
+	const phonePlus = await shownSoon(phone, '#newTab');
 	ok(
-		`${width}px: the tab manager shows its menu button`,
-		twinButton?.visible,
-		JSON.stringify(twinButton),
+		`${width}px: the tab manager shows its new-tab button and no menu button`,
+		phonePlus?.visible &&
+			!(await phone.evaluate(() => document.getElementById('recentsMenu'))),
+		JSON.stringify(phonePlus),
 	);
 	errors.push(...phone.errors);
 	await phone.close();

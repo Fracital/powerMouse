@@ -4,7 +4,7 @@ import type {
 	TransferrableResponse,
 	WebSocketDataType,
 } from '@mercuryworkshop/proxy-transports';
-import { isPortBody, receiveBody } from './bodyPort';
+import { isPortBody, receiveCounted } from './bodyPort';
 import {
 	HostToTransport,
 	postToPort,
@@ -97,7 +97,10 @@ export default class RemoteTransport implements ProxyTransport {
 			transferablesOf(body),
 		);
 		const { body: sent, ...rest } = response;
-		return { ...rest, body: isPortBody(sent) ? receiveBody(sent) : sent };
+		// (with the transport's count of the bytes it came as: responseFacts.ts)
+		return isPortBody(sent)
+			? { ...rest, ...receiveCounted(sent) }
+			: { ...rest, body: sent };
 	}
 	connect(
 		url: URL,

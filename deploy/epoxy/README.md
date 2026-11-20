@@ -34,6 +34,10 @@ Chrome's six connections to an HTTP/1 server (`connection-limits` suite).
 And a request whose kept-alive connection the server closed as the request
 reached it goes again on another connection, as Chrome sends it (see the
 `idle-close-retry` suite).
+And a stream's CLOSE is read after the data that came before it: epoxy
+dropped what a stream had received but not yet handed on, so a body read
+slower than the wire from an HTTP/1.1 server that closed its idle
+connection ended short (`slow-body-close` suite).
 The build also carries stomp-h3, HTTP/3 over wisp
 UDP for STomp's `http3` option (`h3/`, below), whose QUIC ClientHello and
 transport parameters are Chrome's too.
@@ -109,8 +113,15 @@ fails the build at `git apply --check`.
 | MercuryWorkshop/epoxy-tls                                      | `0077` | `[patch.crates-io]` so ring comes from the sibling checkout.                                                                                                                                                                                                                                                                                                                      |
 | MercuryWorkshop/epoxy-tls                                      | `0080` | `EpoxyClient.partition(ech_resolver)`: a partition may ask an ECH resolver of its own instead of the client's (Chrome keys its host cache, HTTPS records included, by the network partition). Without it, the client's, as before.                                                                                                                                                |
 | MercuryWorkshop/epoxy-tls                                      | `0081` | An idle HTTP/1 connection is closed after 300 s and an idle HTTP/2 one kept until its server closes it, as Chrome 157 keeps them, with six idle to a host at most; hyper-util's pool closed either after 90 s.                                                                                                                                                                    |
+| MercuryWorkshop/epoxy-tls                                      | `0082` | wisp: a stream's reads end after every packet it received before its CLOSE, in order, as a TCP stream ends after its data. They ended at the CLOSE, and what the stream held unread was dropped: a slow read of an HTTP/1.1 body cut short once the server closed its idle connection (`slow-body-close` suite).                                                                  |
 | r58Playz/hyper-util-wasm                                       | `0053` | `Builder::pool_idle_timeout_http2(false)`: the idle timeout closes an idle HTTP/1 connection only, an HTTP/2 one staying until its server closes it (for epoxy-tls 0081). The default is as before.                                                                                                                                                                               |
 | MercuryWorkshop/EpoxyTransport                                 | `0060` | `ech_dns` answers are kept per network partition and for their TTL, never longer (the records' smallest TTL, a NODATA's SOA negative TTL, nothing without one, a day at most); a failed lookup is asked again after 30 s. `ech_cache` (`load()`, `put()`) keeps them across a reload (STomp's `src/transport/echCache.ts`).                                                       |
+| MercuryWorkshop/epoxy-tls                                      | `0078` | A response says when its connection was made and how many bytes its body came as: `connection` (`performance.now()`), `{ reused: true, requestStart }` over a kept connection, else `connectStart`, `secureStart`, `connectEnd`, `requestStart`, and `dnsStart`, `dnsEnd` for the ECH lookup; `encoded.bytes`, the body's bytes before decoding.                                  |
+| MercuryWorkshop/EpoxyTransport                                 | `0056` | `request` passes them on: `connection` as ms from the call, `encodedBytes()` (not enumerable, so a cloned response drops it); `fieldSupport.timing` says a build has them.                                                                                                                                                                                                        |
+| MercuryWorkshop/EpoxyTransport                                 | `0061` | `httpsAnswer(host, headers?)`: the DoH answer (wire format) to the name's HTTPS question in the request's partition, the one its ECH lookup reads; one question per name and partition serves both, a lookup out is shared, and the bytes go to `ech_cache` too.                                                                                                                  |
+| ring 0.17.14                                                   | `0002` | With wasm SIMD128 its bitsliced AES takes eight blocks a batch, two lanes of the four `0001` takes, through the same constant-time circuit (the lanes never mix: only bitwise operations and shifts within a 64-bit lane); the CTR loop calls no memcpy. Without SIMD128 (stomp-h3's build) the code is `0001`'s. AES-128-CTR about 60 % faster.                                  |
+| MercuryWorkshop/epoxy-tls                                      | `0083` | `publish.sh` also builds the full client with SIMD128 and bulk memory into `full/epoxy-simd.wasm`; `simd-wasm.mjs` renames its closure-wrapper imports to the base build's and fails the build unless `full/epoxy.js` then serves it unchanged. Same Rust, so the same bytes on the wire.                                                                                         |
+| MercuryWorkshop/EpoxyTransport                                 | `0062` | The ESM bundle loads `epoxy-simd.wasm` where `WebAssembly.validate` takes SIMD128 and bulk memory, `epoxy.wasm` otherwise; the build copies both. One origin's download through the transport worker about a third faster (650 to 870 Mbit/s on loopback).                                                                                                                        |
 
 ## stomp-h3 (`h3/`)
 
@@ -171,6 +182,11 @@ on and an origin offers h3 (docs/http3.md).
   when the caller has none) and a Cookie as its crumbs, one field per
   cookie, as Chrome's QPACK encoder sends it; a response body is decoded
   from gzip, deflate, br or zstd (every frame of a zstd body, as Chrome).
+  A response's `encoded.bytes` counts its DATA bytes before that decoding
+  (a page's `encodedBodySize`), the whole body's once the stream has ended,
+  and a connection's `connectStart` and `connectEnd` say when `connect` was
+  called and its handshake ended, in `performance.now()`, as epoxy's
+  `connection` does over TCP.
 - `connect_webtransport` (`src/wt.rs`) opens a WebTransport (draft 02)
   session as Chrome does, on a QUIC connection of its own with the same
   transport parameters and ClientHello as `connect` but no TLS session
