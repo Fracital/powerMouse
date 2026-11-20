@@ -190,6 +190,12 @@ const PART_LIMIT_KB = Number(process.env.FRAME_HEAP_PART_LIMIT_KB) || 1102;
 // (src/prewrite.ts), keep it to a few KB (11 KB when the page rewrote and
 // placed it, 3.5 to 4 KB measured)
 const HANDLER_EXTRA_KB = Number(process.env.FRAME_HEAP_HANDLER_EXTRA_KB) || 6;
+// a frame under a script policy of nonces and 'strict-dynamic' (Google's
+// shape): the inject enforces it, and the bundle loads by its URL as in
+// any frame (a bundle that carried the document's nonce was compiled again
+// in each, about 770 KB). 1,078 KB measured, the same document under no
+// policy 1,062 KB.
+const POLICY_LIMIT_KB = Number(process.env.FRAME_HEAP_POLICY_LIMIT_KB) || 1100;
 // With the site pool on (STOMP_SITE_POOL) a frame of another site is a
 // slot's: its first one takes the pool's spare and the hub starts the next,
 // about 3.4 MB once, which 20 frames would read as 170 KB each, so the
@@ -289,6 +295,26 @@ ok(
 	`a proxied frame that opens an XMLHttpRequest (a GET, which needs no deferred part) costs at most ${PART_LIMIT_KB} KB of heap`,
 	parted.heapKB <= PART_LIMIT_KB,
 	`${parted.heapKB.toFixed(0)} KB, ${parted.rssKB.toFixed(0)} KB RSS (${FRAMES} frames)`,
+);
+
+const policyBody =
+	'<!doctype html><title>policy</title><div>x</div><script nonce="x">window.__ranAt = performance.now();</script>';
+const policed = await measureFrames({
+	proxied: true,
+	frames: FRAMES,
+	child: `hdr/doc?h=${encodeURIComponent(
+		"Content-Security-Policy:script-src 'nonce-x' 'strict-dynamic' https: 'unsafe-inline'; object-src 'none'; base-uri 'self'",
+	)}&body=${encodeURIComponent(policyBody)}&z=1`,
+});
+ok(
+	`all ${FRAMES} proxied frames under a script policy of 'strict-dynamic' ran their script`,
+	policed.loaded === FRAMES,
+	`${policed.loaded} did`,
+);
+ok(
+	`a proxied frame under a script policy of 'strict-dynamic' costs at most ${POLICY_LIMIT_KB} KB of heap`,
+	policed.heapKB <= POLICY_LIMIT_KB,
+	`${policed.heapKB.toFixed(0)} KB, ${policed.rssKB.toFixed(0)} KB RSS (${FRAMES} frames)`,
 );
 
 const handled = await measureFrames({
