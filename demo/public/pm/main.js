@@ -5339,6 +5339,7 @@ function openShieldsPage(view, from = null) {
 	if (view === 'global') buildGlobalPage();
 	else if (view === 'passkeys') buildPasskeysPage();
 	else if (view === 'about') buildAboutPage();
+	else if (view === 'settings') buildSettingsPage();
 	else if (view === 'extensions') buildExtensionsPage();
 	else buildFilterListsPage();
 	if (!shieldsPageOpen()) {
@@ -5505,15 +5506,16 @@ shieldsButton.addEventListener('click', () => {
 	else openShields();
 });
 
-// ---- the menu: Fullscreen, Extensions and About -----------------------------
+// ---- the menu: Fullscreen, Extensions, Settings and About -------------------
 // The button beside the address box (and its twin in the tab manager, which
 // hides the bar) opens the Shields panel's popover as a menu: Fullscreen puts
 // this page, STomp's window, in fullscreen and takes it out again, Extensions
 // lists the extensions as the puzzle piece does (which a narrow bar has no
-// room for), and About shows the proxy's build.
+// room for), Settings has the theme, and About shows the proxy's build.
 const menuPanel = $('pmMenu');
 const menuPopover = popover(menuPanel, $('menuScrim'));
 const menuFullscreen = $('menuFullscreen');
+const menuSettings = $('menuSettings');
 const menuAbout = $('menuAbout');
 
 // The Fullscreen API on this page's root, or null where the page cannot be
@@ -5546,6 +5548,7 @@ function syncFullscreenItem() {
 	const on = !!fullscreen.element();
 	menuFullscreen.innerHTML = `${shieldIcon(on ? 'fullscreenExit' : 'fullscreen')}<span>${on ? 'Exit fullscreen' : 'Fullscreen'}</span>`;
 }
+menuSettings.innerHTML = `${shieldIcon('gear')}<span>Settings</span>`;
 menuAbout.innerHTML = `${shieldIcon('info')}<span>About</span>`;
 
 // ---- what the wisp connection rides ------------------------------------------
@@ -5633,6 +5636,10 @@ addEventListener(
 menuFullscreen.addEventListener('click', () => {
 	menuPopover.close();
 	toggleFullscreen();
+});
+menuSettings.addEventListener('click', () => {
+	menuPopover.close();
+	openShieldsPage('settings');
 });
 menuAbout.addEventListener('click', () => {
 	menuPopover.close();
@@ -6406,6 +6413,158 @@ function fillAbout() {
 		['server', 'Server', serverFact()],
 	]);
 }
+
+// ---- Settings: the theme -----------------------------------------------------
+// The menu's Settings (the settings-page dialog): the theme picker, over
+// globalThis.PMTheme (pm/theme.js, docs/themes.md). Default, Light, Dark,
+// Follow system, then each theme installed from the Chrome Web Store with
+// Remove; installing one there switches to it, as in Chrome. The choice is
+// kept in this page's localStorage, as the other settings are.
+const THEME_STORE = 'https://chromewebstore.google.com/category/themes';
+
+/** a theme's swatch: its frame, its bar, its page and its accent */
+function themeSwatch(theme) {
+	const swatch = element('span', 'spThemeSwatch');
+	swatch.setAttribute('aria-hidden', 'true');
+	const builtinPreview = (id) =>
+		PMTheme.list().find((other) => other.id === id).preview;
+	const halves =
+		theme.id === 'system'
+			? [builtinPreview('light'), builtinPreview('dark')]
+			: [
+					theme.preview ?? {
+						frame: theme.tokens.frame,
+						toolbar: theme.tokens.toolbar,
+						ntp: theme.tokens.ntp,
+						accent: theme.tokens.accent,
+						text: theme.tokens['ntp-text'],
+					},
+				];
+	for (const colours of halves) {
+		const part = element('span', 'spThemeHalf');
+		part.style.setProperty('--frame', colours.frame);
+		part.style.setProperty('--bar', colours.toolbar);
+		part.style.setProperty('--page', colours.ntp);
+		part.style.setProperty('--dot', colours.accent);
+		// (a picture per scale: the one at 100%, else the first)
+		let frameImage = theme.images?.theme_frame;
+		if (frameImage && typeof frameImage === 'object')
+			frameImage = frameImage['100_percent'] ?? Object.values(frameImage)[0];
+		if (typeof frameImage === 'string' && frameImage !== 'stored')
+			part.style.setProperty(
+				'--frame-image',
+				`url("${String(frameImage).replace(/"/g, '%22')}")`,
+			);
+		swatch.append(part);
+	}
+	return swatch;
+}
+
+function themeNote(theme) {
+	if (theme.id === 'system')
+		return `Light or Dark, as your system is set (${theme.scheme} now)`;
+	if (theme.id === 'default') return 'The powerMouse look';
+	if (theme.source === 'builtin') return 'Built in';
+	return 'From the Chrome Web Store';
+}
+
+function renderThemes(focusId = null) {
+	const box = shieldsPage.querySelector('#spThemes');
+	if (!box) return;
+	const chosen = PMTheme.current().id;
+	box.replaceChildren();
+	for (const theme of PMTheme.list()) {
+		const row = element('div', 'spTheme');
+		const pick = element('button', 'spThemePick');
+		pick.type = 'button';
+		pick.setAttribute('role', 'radio');
+		pick.setAttribute('aria-checked', String(theme.id === chosen));
+		pick.tabIndex = theme.id === chosen ? 0 : -1;
+		pick.dataset.theme = theme.id;
+		const text = element('span', 'spRowText');
+		text.append(
+			element('span', 'spRowLabel', theme.name),
+			element('span', 'spRowSub', themeNote(theme)),
+		);
+		pick.append(themeSwatch(theme), text, element('span', 'spThemeMark'));
+		// the change event redraws the list, the focus on the chosen one
+		pick.addEventListener('click', () => PMTheme.apply(theme.id));
+		row.append(pick);
+		if (theme.source !== 'builtin') {
+			const remove = element('button', 'spBtn ghost spThemeRemove', 'Remove');
+			remove.type = 'button';
+			remove.dataset.theme = theme.id;
+			remove.setAttribute('aria-label', `Remove ${theme.name}`);
+			remove.addEventListener('click', async () => {
+				// a Web Store theme is uninstalled, as Chrome removes the theme
+				// it resets; the theme system forgets it either way
+				if (theme.extensionId && extApi())
+					await Promise.resolve()
+						.then(() => extApi().remove(theme.extensionId))
+						.catch(() => {});
+				await PMTheme.remove(theme.id);
+				setShieldsPageStatus(`Removed ${theme.name}.`);
+				renderThemes(PMTheme.current().id);
+			});
+			row.append(remove);
+		}
+		box.append(row);
+	}
+	if (focusId)
+		box
+			.querySelector(`.spThemePick[data-theme="${CSS.escape(focusId)}"]`)
+			?.focus();
+}
+
+function buildSettingsPage() {
+	shieldsPage.dataset.view = 'settings';
+	shieldsPage.innerHTML = `
+		<div class="spHead">
+			<h2 class="spTitle" id="shieldsPageTitle">Settings</h2>
+			<button class="spClose" id="spClose" type="button" aria-label="Close">×</button>
+		</div>
+		<div class="spBody">
+			<section class="spSection">
+				<h3 class="spSectionTitle" id="spThemeTitle">Theme</h3>
+				<p class="spSectionNote">The colours of the bars, menus, dialogs and the home page. A theme from the Chrome Web Store installs here too, and is shown as soon as it is added.</p>
+				<div class="spThemes" id="spThemes" role="radiogroup" aria-labelledby="spThemeTitle"></div>
+				<div class="spRowButtons">
+					<button class="spBtn ghost" id="spGetThemes" type="button">Get themes</button>
+				</div>
+			</section>
+			<div class="spStatus" id="spStatus" aria-live="polite"></div>
+		</div>`;
+	const page = (selector) => shieldsPage.querySelector(selector);
+	page('#spClose').addEventListener('click', closeShieldsPage);
+	page('#spGetThemes').addEventListener('click', () => {
+		closeShieldsPage();
+		navigate(THEME_STORE, { newTab: true });
+	});
+	// a radio group's keys: the arrows move the choice along the list
+	page('#spThemes').addEventListener('keydown', (event) => {
+		const step = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[
+			event.key
+		];
+		if (!step) return;
+		const picks = [...shieldsPage.querySelectorAll('.spThemePick')];
+		const at = picks.indexOf(document.activeElement);
+		if (at < 0) return;
+		event.preventDefault();
+		const next = picks[(at + step + picks.length) % picks.length];
+		next.focus();
+		next.click();
+	});
+	renderThemes();
+}
+
+// another window, Follow system or an install changed the theme: the open
+// picker follows
+PMTheme.addEventListener('change', () => {
+	if (shieldsPageOpen() && shieldsPage.dataset.view === 'settings') {
+		const focused = document.activeElement?.dataset?.theme ?? null;
+		renderThemes(shieldsPage.contains(document.activeElement) ? focused : null);
+	}
+});
 
 // A page named in the fragment (a reload, a restored session, a link to a
 // tab) is in the browser view from the first paint (index.html's .opening),

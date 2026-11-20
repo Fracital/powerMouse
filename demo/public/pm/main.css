@@ -12,9 +12,441 @@
 		format('woff2');
 }
 
+/* ---- themes (pm/theme.js, docs/themes.md) --------------------------------
+   Every colour and background of the UI is one of these tokens. :root holds
+   the Default theme, Powermouse's own look; data-pm-theme on the root picks
+   Light or Dark, and an installed theme (a Chrome Web Store theme) is one of
+   those two with its own values for some tokens, which pm/theme.js writes in
+   a rule of its own over them. The -rgb tokens are channels that rules use
+   at an alpha of their own (rgba(var(--pm-x-rgb), 0.12)); --pm-shadow-k
+   scales every shadow's alpha. What stays as it is in every theme: the quick
+   links' tiles, the page canvas (white under a page, as in Chrome) and a
+   card's close button over its page. */
+:root {
+	/* the home page (Chrome's new tab page): the page around the card, the
+	   card, and an installed theme's picture and its attribution */
+	--pm-page: #000;
+	--pm-page-image: url('/pm/noise.png');
+	--pm-text: white;
+	--pm-ntp: #000000;
+	--pm-ntp-image: none;
+	--pm-ntp-position: 0% 0%;
+	--pm-ntp-size: auto;
+	--pm-ntp-repeat: repeat;
+	--pm-ntp-text: white;
+	--pm-ntp-attribution: none;
+	--pm-border: #b6b6b6;
+	--pm-link: #4ca9fb;
+	--pm-link-hover: #438fd3;
+	--pm-link-active: #255d8f;
+	--pm-link-bright: #71cffe;
+	--pm-focus: #4ca9fb;
+	--pm-status: #9ad1f5;
+	--pm-error: #f67;
+	--pm-error-soft: rgba(204, 0, 0, 0.25);
+	--pm-muted: #9a9a9a;
+	--pm-hover: #161616;
+	--pm-raised: #1f1f1f;
+	--pm-raised-ring: #4a4a4a;
+	--pm-rail: #3a3a3a;
+	--pm-avatar: #222;
+	/* the GitHub button's yellow: the commit dots and hashes */
+	--pm-accent: #e8ed58;
+	--pm-accent-hover: #fbff96;
+	--pm-accent-active: #c1c55d;
+	--pm-accent-text: #e8ed58;
+	--pm-on-accent: black;
+	/* the home page's title bar (Chrome's frame) */
+	--pm-frame: #000;
+	--pm-frame-image: url('/pm/header-background.png');
+	--pm-frame-overlay: none;
+	--pm-frame-text: white;
+	--pm-frame-inactive: #000;
+	/* the bar with the address box, its copies on the tab cards, the
+	   bookmarks sidebar's head */
+	--pm-toolbar: #000;
+	--pm-toolbar-image: url('/pm/header-background.png');
+	--pm-toolbar-text: #fff;
+	--pm-toolbar-button: none;
+	--pm-toolbar-fg-rgb: 255, 255, 255;
+	--pm-navbar: #000;
+	--pm-navbar-icon: #ddd;
+	--pm-navbar-icon-hover: #fff;
+	--pm-navbar-press: rgba(51, 181, 229, 0.35);
+	--pm-navbar-press-icon: #33b5e5;
+	/* the address boxes and their suggestions (Chrome's omnibox) */
+	--pm-field: #fff;
+	--pm-field-active: #fff;
+	--pm-field-text: #495057;
+	--pm-field-border: #ced4da;
+	--pm-field-muted: #6c757d;
+	--pm-field-focus: #80bdff;
+	--pm-field-focus-ring: rgba(0, 123, 255, 0.25);
+	--pm-field-divider: #eee;
+	--pm-field-hover: #e8f1fb;
+	--pm-field-hover-text: #1a3d5c;
+	--pm-field-fg-rgb: 0, 0, 0;
+	--pm-chip: #8a8a8a;
+	--pm-chip-text: #fff;
+	--pm-badge: #6a6fe6;
+	--pm-badge-text: #fff;
+	--pm-letter: #555753;
+	--pm-letter-text: #fff;
+	/* Powermouse's outline buttons */
+	--pm-btn-blue: #2a9fd6;
+	--pm-btn-green: #77b300;
+	--pm-btn-orange: #ff8800;
+	--pm-btn-red: #cc0000;
+	--pm-btn-text: #fff;
+	/* the tab manager */
+	--pm-recents:
+		radial-gradient(ellipse at 30% 20%, #3a1f4a 0%, transparent 60%),
+		radial-gradient(ellipse at 80% 80%, #241a3a 0%, transparent 55%), #120d1a;
+	--pm-tab-image: none;
+	--pm-tab-text: #fff;
+	--pm-tab-icon: #fff;
+	--pm-tab-text-muted: rgba(255, 255, 255, 0.75);
+	--pm-tab-pill: rgba(0, 0, 0, 0.25);
+	--pm-tab-pill-border: rgba(255, 255, 255, 0.35);
+	--pm-tab-hover: rgba(255, 255, 255, 0.12);
+	--pm-tab-line: rgba(255, 255, 255, 0.15);
+	/* the request viewer */
+	--pm-sheet: rgba(18, 13, 26, 0.92);
+	--pm-sheet-fg-rgb: 255, 255, 255;
+	--pm-sheet-pill: rgba(0, 0, 0, 0.25);
+	--pm-sheet-ok: #7ed38a;
+	--pm-sheet-warn: #f0c060;
+	--pm-sheet-error: #f67;
+	--pm-sheet-link: #4ca9fb;
+	--pm-sheet-on-link: #000;
+	--pm-sheet-tag: #9ad1f5;
+	--pm-sheet-tag-border: rgba(76, 169, 251, 0.6);
+	/* the bookmarks sidebar and the home page's tab that opens it */
+	--pm-bookmark-text: #fff;
+	--pm-handle: #8f5902;
+	--pm-handle-hover: #a8690a;
+	--pm-handle-active: #6b4301;
+	--pm-scrim: rgba(0, 0, 0, 0.55);
+	/* a site's permission and passkey sheets, the Web Store's dialogs */
+	--pm-dialog: #111;
+	--pm-dialog-text: white;
+	--pm-dialog-muted: #b6b6b6;
+	--pm-dialog-focus: #729fcf;
+	--pm-dialog-scrim: rgba(6, 6, 12, 0.6);
+	/* the popovers (Shields, the menu, the extensions) and the settings-page
+	   dialog, after Brave's Leo panel: the resolved Nala dark tokens (from
+	   @brave/leo universal.tokens.json, cross-checked by sampling Brave's
+	   rendered panel): page.background #141415 (sunken), container.background
+	   #1c1c1d, neutral.10 #252527 (raised), text.primary #e4e4e5, secondary
+	   #c9c9ca, tertiary #909093, text.interactive / schemes.primary #bcc6f3
+	   (accent), schemes.on-primary #212848, divider.subtle #303032,
+	   outline-variant #464649, divider.interactive #303a68 */
+	--pm-panel: #1c1c1d;
+	--pm-panel-sunken: #141415;
+	--pm-panel-raised: #252527;
+	--pm-panel-raised-hover: #303032;
+	--pm-panel-control: #1f1f23;
+	--pm-panel-gutter: #0e0e0f;
+	--pm-panel-text: #e4e4e5;
+	--pm-panel-text-2: #c9c9ca;
+	--pm-panel-text-3: #909093;
+	--pm-panel-text-4: #5e5e62;
+	--pm-panel-strong: #fff;
+	--pm-panel-accent: #bcc6f3;
+	--pm-panel-accent-rgb: 188, 198, 243;
+	--pm-panel-on-accent: #212848;
+	--pm-panel-accent-border: #303a68;
+	--pm-panel-accent-hover: #7686ec;
+	--pm-panel-icon: #c9c9ca;
+	--pm-panel-divider: #303032;
+	--pm-panel-outline: #464649;
+	--pm-panel-thumb: #fff;
+	--pm-panel-fg-rgb: 255, 255, 255;
+	--pm-panel-warn: #f0cf96;
+	--pm-panel-warn-rgb: 245, 171, 53;
+	--pm-panel-good: #7fd8a6;
+	--pm-panel-bad: #f09a9a;
+	--pm-panel-danger: #f2a7a7;
+	--pm-panel-on-danger: #3b1010;
+	--pm-panel-chevron: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M3 4.5 6 7.5 9 4.5' fill='none' stroke='%23c9c9ca' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+	/* the custom-filters editor's uBlock-syntax tints */
+	--pm-code-domain: #7fd8a6;
+	--pm-code-sep: #e0719b;
+	--pm-code-selector: #cfa6ff;
+	--pm-code-option: #e8b974;
+	--pm-code-exception: #78c7ff;
+	--pm-shadow-rgb: 0, 0, 0;
+	--pm-shadow-k: 1;
+}
+
+/* Light: Tango's Aluminium greys with Sky Blue, the palette of the bar's
+   icons, on white surfaces */
+:root[data-pm-theme='light'] {
+	color-scheme: light;
+	--pm-page: #e4e6e1;
+	--pm-page-image: none;
+	--pm-text: #2e3436;
+	--pm-ntp: #fbfbfa;
+	--pm-ntp-text: #2e3436;
+	--pm-border: #c8ccc4;
+	--pm-link: #3465a4;
+	--pm-link-hover: #204a87;
+	--pm-link-active: #183a6b;
+	--pm-link-bright: #3465a4;
+	--pm-focus: #3465a4;
+	--pm-status: #3b6ea8;
+	--pm-error: #c4302b;
+	--pm-error-soft: rgba(204, 0, 0, 0.12);
+	--pm-muted: #6c716b;
+	--pm-hover: #eff0ed;
+	--pm-raised: #ffffff;
+	--pm-raised-ring: #babdb6;
+	--pm-rail: #d3d7cf;
+	--pm-avatar: #d3d7cf;
+	--pm-accent: #fce94f;
+	--pm-accent-hover: #fdf08a;
+	--pm-accent-active: #edd400;
+	--pm-accent-text: #8a6d00;
+	--pm-on-accent: #2e3436;
+	--pm-frame: #eeeeec;
+	--pm-frame-image: none;
+	--pm-frame-overlay: none;
+	--pm-frame-text: #2e3436;
+	--pm-frame-inactive: #f4f4f2;
+	--pm-toolbar: #f6f6f4;
+	--pm-toolbar-image: none;
+	--pm-toolbar-text: #2e3436;
+	--pm-toolbar-fg-rgb: 46, 52, 54;
+	--pm-navbar: #eeeeec;
+	--pm-navbar-icon: #555753;
+	--pm-navbar-icon-hover: #2e3436;
+	--pm-navbar-press: rgba(52, 101, 164, 0.16);
+	--pm-navbar-press-icon: #3465a4;
+	--pm-field: #ffffff;
+	--pm-field-active: #ffffff;
+	--pm-field-text: #2e3436;
+	--pm-field-border: #c8ccc4;
+	--pm-field-muted: #6c716b;
+	--pm-field-focus: #729fcf;
+	--pm-field-focus-ring: rgba(52, 101, 164, 0.2);
+	--pm-field-divider: #eeeeec;
+	--pm-field-hover: #e6eef8;
+	--pm-field-hover-text: #204a87;
+	--pm-chip: #888a85;
+	--pm-btn-blue: #1f7fb5;
+	--pm-btn-green: #4e8a00;
+	--pm-btn-orange: #ce5c00;
+	--pm-recents:
+		radial-gradient(ellipse at 30% 20%, #ffffff 0%, transparent 60%),
+		linear-gradient(160deg, #eeeeec 0%, #d3d7cf 100%);
+	--pm-tab-text: #2e3436;
+	--pm-tab-icon: #2e3436;
+	--pm-tab-text-muted: rgba(46, 52, 54, 0.7);
+	--pm-tab-pill: rgba(255, 255, 255, 0.6);
+	--pm-tab-pill-border: rgba(46, 52, 54, 0.25);
+	--pm-tab-hover: rgba(46, 52, 54, 0.08);
+	--pm-tab-line: rgba(46, 52, 54, 0.15);
+	--pm-sheet: rgba(250, 250, 249, 0.94);
+	--pm-sheet-fg-rgb: 46, 52, 54;
+	--pm-sheet-pill: rgba(255, 255, 255, 0.6);
+	--pm-sheet-ok: #3f7f05;
+	--pm-sheet-warn: #a05a00;
+	--pm-sheet-error: #c4302b;
+	--pm-sheet-link: #3465a4;
+	--pm-sheet-on-link: #fff;
+	--pm-sheet-tag: #3465a4;
+	--pm-sheet-tag-border: rgba(52, 101, 164, 0.45);
+	--pm-bookmark-text: #2e3436;
+	--pm-handle: #c17d11;
+	--pm-handle-hover: #d08b1c;
+	--pm-handle-active: #8f5902;
+	--pm-scrim: rgba(46, 52, 54, 0.35);
+	--pm-dialog: #ffffff;
+	--pm-dialog-text: #2e3436;
+	--pm-dialog-muted: #6c716b;
+	--pm-dialog-focus: #3465a4;
+	--pm-dialog-scrim: rgba(46, 52, 54, 0.35);
+	--pm-panel: #ffffff;
+	--pm-panel-sunken: #f3f4f2;
+	--pm-panel-raised: #eeeeec;
+	--pm-panel-raised-hover: #e2e4e0;
+	--pm-panel-control: #f7f7f6;
+	--pm-panel-gutter: #ecedea;
+	--pm-panel-text: #2e3436;
+	--pm-panel-text-2: #4d5350;
+	--pm-panel-text-3: #6c716b;
+	--pm-panel-text-4: #9a9e97;
+	--pm-panel-strong: #1c2122;
+	--pm-panel-accent: #3465a4;
+	--pm-panel-accent-rgb: 52, 101, 164;
+	--pm-panel-on-accent: #ffffff;
+	--pm-panel-accent-border: #a9bfdc;
+	--pm-panel-accent-hover: #3465a4;
+	--pm-panel-icon: #555753;
+	--pm-panel-divider: #dfe1dc;
+	--pm-panel-outline: #babdb6;
+	--pm-panel-thumb: #ffffff;
+	--pm-panel-fg-rgb: 46, 52, 54;
+	--pm-panel-warn: #8a5a00;
+	--pm-panel-warn-rgb: 245, 121, 0;
+	--pm-panel-good: #2e7d32;
+	--pm-panel-bad: #c4302b;
+	--pm-panel-danger: #cc0000;
+	--pm-panel-on-danger: #ffffff;
+	--pm-panel-chevron: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M3 4.5 6 7.5 9 4.5' fill='none' stroke='%23555753' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+	--pm-code-domain: #2e7d32;
+	--pm-code-sep: #a40066;
+	--pm-code-selector: #75507b;
+	--pm-code-option: #a05a00;
+	--pm-code-exception: #204a87;
+	--pm-shadow-rgb: 46, 52, 54;
+	--pm-shadow-k: 0.35;
+}
+
+/* Dark: the darkest Aluminiums, flat, with Sky Blue and Butter */
+:root[data-pm-theme='dark'] {
+	color-scheme: dark;
+	--pm-page: #1b1e1f;
+	--pm-page-image: none;
+	--pm-text: #eeeeec;
+	--pm-ntp: #232728;
+	--pm-ntp-text: #eeeeec;
+	--pm-border: #41474a;
+	--pm-link: #8cb3e0;
+	--pm-link-hover: #a9c7ea;
+	--pm-link-active: #729fcf;
+	--pm-link-bright: #a9c7ea;
+	--pm-focus: #8cb3e0;
+	--pm-status: #8cb3e0;
+	--pm-error: #ef6b6b;
+	--pm-error-soft: rgba(239, 41, 41, 0.2);
+	--pm-muted: #a0a49e;
+	--pm-hover: #2c3133;
+	--pm-raised: #2e3436;
+	--pm-raised-ring: #555753;
+	--pm-rail: #3d4345;
+	--pm-avatar: #3d4345;
+	--pm-accent: #fce94f;
+	--pm-accent-hover: #fdf08a;
+	--pm-accent-active: #edd400;
+	--pm-accent-text: #fce94f;
+	--pm-on-accent: #1b1e1f;
+	--pm-frame: #2e3436;
+	--pm-frame-image: none;
+	--pm-frame-overlay: none;
+	--pm-frame-text: #eeeeec;
+	--pm-frame-inactive: #34393b;
+	--pm-toolbar: #2a2f31;
+	--pm-toolbar-image: none;
+	--pm-toolbar-text: #eeeeec;
+	--pm-navbar: #16191a;
+	--pm-navbar-icon: #d3d7cf;
+	--pm-navbar-press: rgba(114, 159, 207, 0.25);
+	--pm-navbar-press-icon: #8cb3e0;
+	--pm-field: #1b1e1f;
+	--pm-field-active: #23282a;
+	--pm-field-text: #eeeeec;
+	--pm-field-border: #4a5154;
+	--pm-field-muted: #9a9e97;
+	--pm-field-focus: #729fcf;
+	--pm-field-focus-ring: rgba(114, 159, 207, 0.25);
+	--pm-field-divider: #2e3436;
+	--pm-field-hover: #2b3a4c;
+	--pm-field-hover-text: #eeeeec;
+	--pm-field-fg-rgb: 255, 255, 255;
+	--pm-chip: #555753;
+	--pm-chip-text: #eeeeec;
+	--pm-btn-blue: #4fa8e0;
+	--pm-btn-green: #8ae234;
+	--pm-btn-orange: #fcaf3e;
+	--pm-btn-red: #ef2929;
+	--pm-btn-text: #16191a;
+	--pm-recents:
+		radial-gradient(ellipse at 30% 20%, #3a4144 0%, transparent 60%),
+		radial-gradient(ellipse at 80% 80%, #262b2c 0%, transparent 55%), #16191a;
+	--pm-tab-text: #eeeeec;
+	--pm-tab-icon: #eeeeec;
+	--pm-tab-text-muted: rgba(238, 238, 236, 0.7);
+	--pm-tab-pill-border: rgba(238, 238, 236, 0.3);
+	--pm-tab-hover: rgba(255, 255, 255, 0.1);
+	--pm-tab-line: rgba(255, 255, 255, 0.12);
+	--pm-sheet: rgba(27, 30, 31, 0.94);
+	--pm-sheet-fg-rgb: 238, 238, 236;
+	--pm-sheet-ok: #8ae234;
+	--pm-sheet-warn: #fcaf3e;
+	--pm-sheet-error: #ef6b6b;
+	--pm-sheet-link: #8cb3e0;
+	--pm-sheet-on-link: #16191a;
+	--pm-sheet-tag: #a9c7ea;
+	--pm-sheet-tag-border: rgba(140, 179, 224, 0.5);
+	--pm-bookmark-text: #eeeeec;
+	--pm-scrim: rgba(0, 0, 0, 0.5);
+	--pm-dialog: #2a2f31;
+	--pm-dialog-text: #eeeeec;
+	--pm-dialog-muted: #a0a49e;
+	--pm-dialog-focus: #8cb3e0;
+	--pm-dialog-scrim: rgba(0, 0, 0, 0.5);
+	--pm-panel: #262b2c;
+	--pm-panel-sunken: #1d2122;
+	--pm-panel-raised: #30363a;
+	--pm-panel-raised-hover: #3a4144;
+	--pm-panel-control: #22272a;
+	--pm-panel-gutter: #191c1d;
+	--pm-panel-text: #eeeeec;
+	--pm-panel-text-2: #d3d7cf;
+	--pm-panel-text-3: #a0a49e;
+	--pm-panel-text-4: #6f746e;
+	--pm-panel-strong: #ffffff;
+	--pm-panel-accent: #9fbfe3;
+	--pm-panel-accent-rgb: 159, 191, 227;
+	--pm-panel-on-accent: #14263a;
+	--pm-panel-accent-border: #3d5a7a;
+	--pm-panel-accent-hover: #729fcf;
+	--pm-panel-icon: #d3d7cf;
+	--pm-panel-divider: #3a4144;
+	--pm-panel-outline: #555753;
+	--pm-panel-thumb: #eeeeec;
+	--pm-panel-warn: #f5c27a;
+	--pm-panel-warn-rgb: 252, 175, 62;
+	--pm-panel-good: #8ae234;
+	--pm-panel-chevron: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M3 4.5 6 7.5 9 4.5' fill='none' stroke='%23d3d7cf' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+	--pm-code-domain: #8ae234;
+	--pm-code-sep: #f28fb8;
+	--pm-code-selector: #c9a0dc;
+	--pm-code-option: #fcaf3e;
+	--pm-code-exception: #8cb3e0;
+}
+
+/* the window behind another (Chrome's inactive frame); pm/theme.js sets it */
+:root[data-pm-theme][data-pm-inactive] .head {
+	background-color: var(--pm-frame-inactive);
+}
+
+/* an installed theme's home page picture (theme_ntp_background), placed as
+   Chrome places it. Only with one: the same longhands set on the Default
+   card change how Chrome antialiases its corners (see .head) */
+:root[data-pm-ntp-image] .listing {
+	background-position: var(--pm-ntp-position);
+	background-size: var(--pm-ntp-size);
+	background-repeat: var(--pm-ntp-repeat);
+}
+
+/* an installed theme's attribution picture (theme_ntp_attribution), in the
+   home card's band beside the bookmarks tab */
+:root[data-pm-attribution] .listing::after {
+	content: '';
+	position: absolute;
+	top: 128px;
+	right: 25px;
+	width: min(240px, 40%);
+	height: 52px;
+	background: var(--pm-ntp-attribution) right center / contain no-repeat;
+	pointer-events: none;
+}
+
 body {
-	background: #000 url('/pm/noise.png');
-	color: white;
+	background: var(--pm-page) var(--pm-page-image);
+	color: var(--pm-text);
 	font-family: 'Montserrat', sans-serif;
 	font-weight: 500;
 }
@@ -33,30 +465,40 @@ body > .wrapper {
 a p,
 a span,
 #tempURL {
-	color: #4ca9fb;
-	text-decoration: underline #4ca9fb;
+	color: var(--pm-link);
+	text-decoration: underline var(--pm-link);
 }
 a p:hover,
 a span:hover,
 #tempURL:hover {
-	color: #438fd3;
-	text-decoration: underline #438fd3;
+	color: var(--pm-link-hover);
+	text-decoration: underline var(--pm-link-hover);
 }
 a p:hover:active,
 a span:active,
 #tempURL:active {
-	color: #255d8f;
-	text-decoration: underline #255d8f;
+	color: var(--pm-link-active);
+	text-decoration: underline var(--pm-link-active);
 }
 .head {
 	position: relative;
 	display: table;
 	width: calc(100% - 11px);
 	height: 60px;
-	border: 1px solid #b6b6b6;
+	border: 1px solid var(--pm-border);
 	border-radius: 5px;
+	/* Default's own values, written out: Chrome antialiases the rounded
+	   corners of a display: table box (this one, .listing, what is in them) a
+	   shade differently once this background comes through var(), and the
+	   Default theme stays as it was pixel for pixel */
 	background: #000 url('/pm/header-background.png');
+	color: var(--pm-frame-text);
 	padding: 5px;
+}
+:root[data-pm-theme] .head {
+	background:
+		var(--pm-frame-overlay) left top no-repeat,
+		var(--pm-frame) var(--pm-frame-image);
 }
 .head > h1 {
 	vertical-align: middle;
@@ -75,9 +517,10 @@ a span:active,
 	display: table;
 	width: calc(100% - 11px);
 	height: calc(100vh - 155px);
-	border: 1px solid #b6b6b6;
+	border: 1px solid var(--pm-border);
 	border-radius: 5px;
-	background: #000000;
+	background: var(--pm-ntp) var(--pm-ntp-image);
+	color: var(--pm-ntp-text);
 	padding: 5px;
 	line-height: 25px;
 	transition: none;
@@ -114,7 +557,7 @@ a span:active,
 }
 
 .romlink:hover {
-	color: #71cffe;
+	color: var(--pm-link-bright);
 	cursor: pointer;
 }
 .ns {
@@ -135,12 +578,12 @@ a span:active,
 	text-align: right;
 }
 .back:hover {
-	color: #71cffe;
+	color: var(--pm-link-bright);
 	cursor: pointer;
 }
 .git {
-	border: 2px solid black;
-	background: #e8ed58;
+	border: 2px solid var(--pm-on-accent);
+	background: var(--pm-accent);
 	border-radius: 10px;
 	display: block;
 	width: 100px;
@@ -148,7 +591,7 @@ a span:active,
 	text-align: center;
 	font-family: 'Montserrat', sans-serif;
 	font-weight: 600;
-	color: black;
+	color: var(--pm-on-accent);
 	user-drag: none;
 	line-height: 65px;
 	position: absolute;
@@ -159,10 +602,10 @@ a span:active,
 	font-size: 10px;
 }
 .git:hover {
-	background: #fbff96;
+	background: var(--pm-accent-hover);
 }
 .git:hover:active {
-	background: #c1c55d;
+	background: var(--pm-accent-active);
 }
 .inputWrapper {
 	width: calc(100% - 40px);
@@ -186,10 +629,10 @@ a span:active,
 	padding-right: 0px;
 	font-size: 1rem;
 	line-height: 1.5;
-	color: #495057;
-	background-color: #fff;
+	color: var(--pm-field-text);
+	background-color: var(--pm-field);
 	background-clip: padding-box;
-	border: 1px solid #ced4da;
+	border: 1px solid var(--pm-field-border);
 	border-radius: 0.25rem;
 	transition:
 		border-color 0.15s ease-in-out,
@@ -197,16 +640,16 @@ a span:active,
 }
 
 .form-text::placeholder {
-	color: #6c757d;
+	color: var(--pm-field-muted);
 	opacity: 1;
 }
 
 .form-text:focus {
-	color: #495057;
-	background-color: #fff;
-	border-color: #80bdff;
+	color: var(--pm-field-text);
+	background-color: var(--pm-field-active);
+	border-color: var(--pm-field-focus);
 	outline: 0;
-	box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+	box-shadow: 0 0 0 0.2rem var(--pm-field-focus-ring);
 	border-bottom-left-radius: 0px;
 	border-bottom-right-radius: 0px;
 }
@@ -246,52 +689,52 @@ button::-moz-focus-inner {
 	border-style: none;
 }
 .btn-blu {
-	border-color: #2a9fd6;
-	color: #2a9fd6;
+	border-color: var(--pm-btn-blue);
+	color: var(--pm-btn-blue);
 } /* colors */
 .btn-blu:hover {
-	background-color: #2a9fd6;
-	color: #fff;
+	background-color: var(--pm-btn-blue);
+	color: var(--pm-btn-text);
 }
 .btn-grn {
-	border-color: #77b300;
-	color: #77b300;
+	border-color: var(--pm-btn-green);
+	color: var(--pm-btn-green);
 }
 .btn-grn:hover {
-	background-color: #77b300;
-	color: #fff;
+	background-color: var(--pm-btn-green);
+	color: var(--pm-btn-text);
 }
 .btn-org {
-	border-color: #ff8800;
-	color: #ff8800;
+	border-color: var(--pm-btn-orange);
+	color: var(--pm-btn-orange);
 }
 .btn-org:hover {
-	background-color: #ff8800;
-	color: #fff;
+	background-color: var(--pm-btn-orange);
+	color: var(--pm-btn-text);
 }
 .btn-red {
-	border-color: #cc0000;
-	color: #cc0000;
+	border-color: var(--pm-btn-red);
+	color: var(--pm-btn-red);
 }
 .btn-red:hover {
-	background-color: #cc0000;
-	color: #fff;
+	background-color: var(--pm-btn-red);
+	color: var(--pm-btn-text);
 }
 .bge-blu {
-	background-color: #2a9fd6;
-	color: #fff;
+	background-color: var(--pm-btn-blue);
+	color: var(--pm-btn-text);
 } /* badges */
 .bge-grn {
-	background-color: #77b300;
-	color: #fff;
+	background-color: var(--pm-btn-green);
+	color: var(--pm-btn-text);
 }
 .bge-org {
-	background-color: #ff8800;
-	color: #fff;
+	background-color: var(--pm-btn-orange);
+	color: var(--pm-btn-text);
 }
 .bge-red {
-	background-color: #cc0000;
-	color: #fff;
+	background-color: var(--pm-btn-red);
+	color: var(--pm-btn-text);
 }
 
 .btn-blu:focus {
@@ -327,19 +770,19 @@ button::-moz-focus-inner {
 
 .auto-fill {
 	height: 22px;
-	border: 1px solid #ced4da;
-	background: #fff;
-	color: #495057;
+	border: 1px solid var(--pm-field-border);
+	background: var(--pm-field);
+	color: var(--pm-field-text);
 	width: calc(100% - 1.5rem);
 	padding: 0.375rem 0.75rem;
 	transition: ease-in-out 0.5s;
 }
 
 .auto-fill:hover {
-	border-color: #80bdff;
-	background: #80bdff;
+	border-color: var(--pm-field-focus);
+	background: var(--pm-field-focus);
 	outline: 0;
-	box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+	box-shadow: 0 0 0 0.2rem var(--pm-field-focus-ring);
 	border-bottom-left-radius: 0px;
 	border-bottom-right-radius: 0px;
 	margin-bottom: 0px;
@@ -356,7 +799,7 @@ button::-moz-focus-inner {
 	text-align: center;
 	font-size: 18px;
 	font-family: 'Source Sans Pro', sans-serif;
-	color: #f67;
+	color: var(--pm-error);
 	text-shadow: 1px 1px 5px rgba(0, 0, 0, 0.5);
 	font-weight: bold;
 	position: absolute;
@@ -544,7 +987,7 @@ button::-moz-focus-inner {
 	font-weight: 500;
 	text-align: left;
 	text-shadow: none;
-	color: #9ad1f5;
+	color: var(--pm-status);
 }
 
 @media only screen and (max-width: 767px) {
@@ -554,7 +997,7 @@ button::-moz-focus-inner {
 }
 
 #logMsg.error {
-	color: #f67;
+	color: var(--pm-error);
 }
 
 .rbottom label {
@@ -564,9 +1007,9 @@ button::-moz-focus-inner {
 .select {
 	font-family: 'Montserrat', sans-serif;
 	font-size: 14px;
-	color: #4ca9fb;
-	background: #000;
-	border: 1px solid #4ca9fb;
+	color: var(--pm-link);
+	background: var(--pm-ntp);
+	border: 1px solid var(--pm-link);
 	border-radius: 0.25rem;
 	padding: 3px 6px;
 }
@@ -580,7 +1023,7 @@ button::-moz-focus-inner {
 }
 
 .rbottom .check input {
-	accent-color: #4ca9fb;
+	accent-color: var(--pm-link);
 	vertical-align: -2px;
 }
 
@@ -682,8 +1125,8 @@ html.opening #browser {
 	align-items: center;
 	gap: 6px;
 	padding: 6px 8px;
-	background: #000 url('/pm/header-background.png');
-	border-bottom: 1px solid #b6b6b6;
+	background: var(--pm-toolbar) var(--pm-toolbar-image);
+	border-bottom: 1px solid var(--pm-border);
 }
 
 .chrome form {
@@ -701,7 +1144,7 @@ html.opening #browser {
 	padding: 0;
 	border: 1px solid transparent;
 	border-radius: 0.25rem;
-	background: none;
+	background: var(--pm-toolbar-button);
 	cursor: pointer;
 }
 
@@ -711,12 +1154,12 @@ html.opening #browser {
 }
 
 .toolbtn:hover:not(:disabled) {
-	background: rgba(255, 255, 255, 0.12);
-	border-color: rgba(255, 255, 255, 0.18);
+	background: rgba(var(--pm-toolbar-fg-rgb), 0.12);
+	border-color: rgba(var(--pm-toolbar-fg-rgb), 0.18);
 }
 
 .toolbtn:active:not(:disabled) {
-	background: rgba(255, 255, 255, 0.22);
+	background: rgba(var(--pm-toolbar-fg-rgb), 0.22);
 }
 
 .toolbtn:disabled,
@@ -760,14 +1203,14 @@ html.opening #browser {
 	text-overflow: ellipsis;
 	pointer-events: none;
 	/* grey and quiet: it reports, it does not call for attention */
-	color: #fff;
-	background: #8a8a8a;
+	color: var(--pm-chip-text);
+	background: var(--pm-chip);
 	border: none;
 }
 
 /* an error still shows in the error colour */
 .omniEnd .select.error {
-	color: #f67;
+	color: var(--pm-error);
 	border-color: #a33;
 }
 
@@ -789,8 +1232,8 @@ html.opening #browser {
 }*/
 
 .select.error {
-	color: #f67;
-	border-color: #cc0000;
+	color: var(--pm-error);
+	border-color: var(--pm-btn-red);
 }
 
 .frame {
@@ -813,7 +1256,7 @@ html.opening #browser {
 	justify-content: center;
 	align-items: stretch;
 	gap: 56px;
-	background: #000;
+	background: var(--pm-navbar);
 }
 
 .navbtn {
@@ -822,7 +1265,7 @@ html.opening #browser {
 	margin: 0;
 	border: 0;
 	background: transparent;
-	color: #ddd;
+	color: var(--pm-navbar-icon);
 	cursor: pointer;
 	transition: none;
 	-webkit-tap-highlight-color: transparent;
@@ -836,14 +1279,14 @@ html.opening #browser {
 }
 
 .navbtn:hover {
-	color: #fff;
+	color: var(--pm-navbar-icon-hover);
 }
 
 .navbtn:active,
 .navbtn:focus-visible {
 	outline: 0;
-	background: rgba(51, 181, 229, 0.35);
-	color: #33b5e5;
+	background: var(--pm-navbar-press);
+	color: var(--pm-navbar-press-icon);
 }
 
 /* tab manager, after the One UI recent-apps screen. The cards are the real
@@ -883,9 +1326,7 @@ body.recents .frames::before {
 	position: absolute;
 	inset: 0;
 	z-index: -1;
-	background:
-		radial-gradient(ellipse at 30% 20%, #3a1f4a 0%, transparent 60%),
-		radial-gradient(ellipse at 80% 80%, #241a3a 0%, transparent 55%), #120d1a;
+	background: var(--pm-recents);
 	opacity: 0;
 	transition: opacity 0.25s ease;
 }
@@ -989,10 +1430,10 @@ body.recents .frames .frame.gone,
 	display: inline-block;
 	padding: 12px 20px;
 	border-radius: 999px;
-	border: 1px solid rgba(255, 255, 255, 0.35);
-	color: #fff;
+	border: 1px solid var(--pm-tab-pill-border);
+	color: var(--pm-tab-text);
 	font-size: 14px;
-	background: rgba(0, 0, 0, 0.25);
+	background: var(--pm-tab-pill);
 }
 
 .recentsMore {
@@ -1001,14 +1442,14 @@ body.recents .frames .frame.gone,
 	border: 0;
 	border-radius: 50%;
 	background: transparent;
-	color: #fff;
+	color: var(--pm-tab-icon);
 	font-size: 28px;
 	line-height: 44px;
 	cursor: pointer;
 }
 
 .recentsMore:hover {
-	background: rgba(255, 255, 255, 0.12);
+	background: var(--pm-tab-hover);
 }
 
 /* the tab manager's own action: a new tab (the menu is the tab's, on its bar) */
@@ -1030,7 +1471,8 @@ body.recents .frames .frame.gone,
 	pointer-events: auto;
 	cursor: pointer;
 	overflow: hidden;
-	box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+	box-shadow: 0 10px 40px
+		rgba(var(--pm-shadow-rgb), calc(0.6 * var(--pm-shadow-k)));
 	transition:
 		transform var(--recents-settle, 0.25s) cubic-bezier(0.2, 0.8, 0.2, 1),
 		opacity 0.25s ease,
@@ -1049,8 +1491,8 @@ body.recents .frames .frame.gone,
 	align-items: center;
 	gap: 6px;
 	padding: 6px 8px; /* exactly .chrome: the close button overlaps, it takes no room */
-	background: #000 url('/pm/header-background.png');
-	border-bottom: 1px solid #b6b6b6;
+	background: var(--pm-toolbar) var(--pm-toolbar-image);
+	border-bottom: 1px solid var(--pm-border);
 	pointer-events: none;
 }
 
@@ -1081,8 +1523,8 @@ body.recents .frames .frame.gone,
    is on it (a quiet fill, as the demo has no focus rings) */
 .toolbtn.menubtn[aria-expanded='true'],
 .toolbtn.menubtn:focus-visible {
-	background: rgba(255, 255, 255, 0.12);
-	border-color: rgba(255, 255, 255, 0.18);
+	background: rgba(var(--pm-toolbar-fg-rgb), 0.12);
+	border-color: rgba(var(--pm-toolbar-fg-rgb), 0.18);
 }
 
 /* a phone's bar holds the menu button too: narrower buttons and gaps, so
@@ -1163,16 +1605,16 @@ body.recents .frames .frame.gone,
 	transform: translateX(-50%);
 	padding: 14px 44px;
 	border-radius: 999px;
-	border: 1px solid rgba(255, 255, 255, 0.35);
-	background: rgba(0, 0, 0, 0.25);
-	color: #fff;
+	border: 1px solid var(--pm-tab-pill-border);
+	background: var(--pm-tab-pill);
+	color: var(--pm-tab-text);
 	font-family: 'Montserrat', sans-serif;
 	font-size: 15px;
 	cursor: pointer;
 }
 
 .closeAll:hover {
-	background: rgba(255, 255, 255, 0.12);
+	background: var(--pm-tab-hover);
 }
 
 .dock {
@@ -1182,7 +1624,7 @@ body.recents .frames .frame.gone,
 	bottom: 0;
 	display: flex;
 	gap: 0;
-	border-top: 1px solid rgba(255, 255, 255, 0.15);
+	border-top: 1px solid var(--pm-tab-line);
 }
 
 .dockButton {
@@ -1217,7 +1659,7 @@ body.recents .frames .frame.gone,
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	color: rgba(255, 255, 255, 0.75);
+	color: var(--pm-tab-text-muted);
 	font-size: 16px;
 	pointer-events: none;
 }
@@ -1291,11 +1733,12 @@ body.recents .frames .frame.gone,
 	box-sizing: border-box;
 	max-height: 50vh;
 	overflow: auto;
-	background: #fff;
-	border: 1px solid #80bdff;
+	background: var(--pm-field-active);
+	border: 1px solid var(--pm-field-focus);
 	border-top: 0;
 	border-radius: 0 0 0.25rem 0.25rem;
-	box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+	box-shadow: 0 10px 28px
+		rgba(var(--pm-shadow-rgb), calc(0.45 * var(--pm-shadow-k)));
 }
 
 .suggestions:not(:empty) {
@@ -1326,11 +1769,11 @@ form.suggesting .omnibox,
 	margin: 0;
 	padding: 0.45rem 0.75rem;
 	border: 0;
-	border-top: 1px solid #eee;
+	border-top: 1px solid var(--pm-field-divider);
 	border-radius: 0;
 	box-shadow: none;
-	background: #fff;
-	color: #495057;
+	background: var(--pm-field-active);
+	color: var(--pm-field-text);
 	font-family: 'Roboto', sans-serif;
 	font-size: 15px;
 	line-height: 1.3;
@@ -1346,26 +1789,26 @@ form.suggesting .omnibox,
 
 /* the highlighted row: the arrows' or the pointer's (aria-selected) */
 .suggestions .auto-fill:hover {
-	border-color: #eee;
-	background: #fff;
-	color: #495057;
+	border-color: var(--pm-field-divider);
+	background: var(--pm-field-active);
+	color: var(--pm-field-text);
 	box-shadow: none;
 }
 
 .suggestions .auto-fill[data-hover] {
-	background: #e8f1fb;
-	color: #1a3d5c;
+	background: var(--pm-field-hover);
+	color: var(--pm-field-hover-text);
 }
 
 .suggestions .omnibox-head {
 	padding: 0.35rem 0.75rem 0.15rem;
-	border-top: 1px solid #eee;
+	border-top: 1px solid var(--pm-field-divider);
 	font:
 		600 11px 'Roboto',
 		sans-serif;
 	letter-spacing: 0.04em;
 	text-transform: uppercase;
-	color: #6c757d;
+	color: var(--pm-field-muted);
 	cursor: default;
 	user-select: none;
 }
@@ -1392,13 +1835,13 @@ form.suggesting .omnibox,
 .suggestions .omnibox-sub {
 	margin-left: 0.5rem;
 	font-size: 13px;
-	color: #6c757d;
+	color: var(--pm-field-muted);
 }
 
 .suggestions .omnibox-hint {
 	flex: none;
 	font-size: 12px;
-	color: #6c757d;
+	color: var(--pm-field-muted);
 }
 
 @media (max-width: 480px) {
@@ -1460,7 +1903,7 @@ input:focus-visible {
 
 .url:focus,
 .omnibox:focus {
-	border-color: #80bdff; /* focus stays visible, quietly */
+	border-color: var(--pm-field-focus); /* focus stays visible, quietly */
 }
 
 /* ---- request viewer: the active tab's proxied requests ------------------- */
@@ -1479,12 +1922,13 @@ input:focus-visible {
 	display: flex;
 	flex-direction: column;
 	box-sizing: border-box;
-	background: rgba(18, 13, 26, 0.92);
+	background: var(--pm-sheet);
 	backdrop-filter: blur(14px);
 	-webkit-backdrop-filter: blur(14px);
-	border-top: 1px solid rgba(255, 255, 255, 0.15);
-	box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.6);
-	color: #fff;
+	border-top: 1px solid rgba(var(--pm-sheet-fg-rgb), 0.15);
+	box-shadow: 0 -10px 40px
+		rgba(var(--pm-shadow-rgb), calc(0.6 * var(--pm-shadow-k)));
+	color: rgb(var(--pm-sheet-fg-rgb));
 	font-family: 'Montserrat', sans-serif;
 	font-size: 12px;
 	user-select: none;
@@ -1513,7 +1957,7 @@ input:focus-visible {
 	align-items: center;
 	gap: 12px;
 	padding: 10px 16px;
-	border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+	border-bottom: 1px solid rgba(var(--pm-sheet-fg-rgb), 0.1);
 }
 
 .requestsTitle {
@@ -1527,7 +1971,7 @@ input:focus-visible {
 
 .requestsCount {
 	flex: 0 0 auto;
-	color: rgba(255, 255, 255, 0.6);
+	color: rgba(var(--pm-sheet-fg-rgb), 0.6);
 	white-space: nowrap;
 	font-variant-numeric: tabular-nums;
 }
@@ -1536,16 +1980,16 @@ input:focus-visible {
 	flex: 0 0 auto;
 	padding: 6px 16px;
 	border-radius: 999px;
-	border: 1px solid rgba(255, 255, 255, 0.35);
-	background: rgba(0, 0, 0, 0.25);
-	color: #fff;
+	border: 1px solid rgba(var(--pm-sheet-fg-rgb), 0.35);
+	background: var(--pm-sheet-pill);
+	color: rgb(var(--pm-sheet-fg-rgb));
 	font-family: 'Montserrat', sans-serif;
 	font-size: 12px;
 	cursor: pointer;
 }
 
 .requestsClear:hover {
-	background: rgba(255, 255, 255, 0.12);
+	background: rgba(var(--pm-sheet-fg-rgb), 0.12);
 }
 
 .requestsList {
@@ -1561,7 +2005,7 @@ input:focus-visible {
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	color: rgba(255, 255, 255, 0.6);
+	color: rgba(var(--pm-sheet-fg-rgb), 0.6);
 	font-size: 14px;
 	pointer-events: none;
 }
@@ -1573,35 +2017,35 @@ input:focus-visible {
 	gap: 10px;
 	align-items: center;
 	padding: 5px 16px;
-	border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+	border-bottom: 1px solid rgba(var(--pm-sheet-fg-rgb), 0.06);
 	line-height: 18px;
 	white-space: nowrap;
 }
 
 .req:hover {
-	background: rgba(255, 255, 255, 0.04);
+	background: rgba(var(--pm-sheet-fg-rgb), 0.04);
 }
 
 .req .method {
 	font-size: 11px;
 	letter-spacing: 0.04em;
-	color: rgba(255, 255, 255, 0.75);
+	color: rgba(var(--pm-sheet-fg-rgb), 0.75);
 }
 
 .req .status {
 	font-variant-numeric: tabular-nums;
-	color: #7ed38a;
+	color: var(--pm-sheet-ok);
 }
 
 .req .status.s3 {
-	color: #f0c060;
+	color: var(--pm-sheet-warn);
 }
 
 .req .status.s4,
 .req .status.s5,
 .req .status.s0,
 .req .error {
-	color: #f67;
+	color: var(--pm-sheet-error);
 }
 
 /* the URL is the one selectable thing; clicking it copies */
@@ -1627,7 +2071,7 @@ input:focus-visible {
 	display: flex;
 	align-items: center;
 	min-width: 0;
-	color: rgba(255, 255, 255, 0.55);
+	color: rgba(var(--pm-sheet-fg-rgb), 0.55);
 }
 
 .req .path .pathHead {
@@ -1659,8 +2103,8 @@ input:focus-visible {
 	margin-left: 8px;
 	padding: 0 6px;
 	border-radius: 8px;
-	background: #4ca9fb;
-	color: #000;
+	background: var(--pm-sheet-link);
+	color: var(--pm-sheet-on-link);
 	font-size: 10px;
 	font-weight: 400;
 	line-height: 16px;
@@ -1670,7 +2114,7 @@ input:focus-visible {
 .req .dest,
 .req .ms,
 .req .size {
-	color: rgba(255, 255, 255, 0.6);
+	color: rgba(var(--pm-sheet-fg-rgb), 0.6);
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
@@ -1688,8 +2132,8 @@ input:focus-visible {
 .req .tag:not(:empty) {
 	padding: 0 7px;
 	border-radius: 999px;
-	border: 1px solid rgba(76, 169, 251, 0.6);
-	color: #9ad1f5;
+	border: 1px solid var(--pm-sheet-tag-border);
+	color: var(--pm-sheet-tag);
 	font-size: 10px;
 	line-height: 16px;
 }
@@ -1720,7 +2164,7 @@ input:focus-visible {
 }
 .commit:focus-visible,
 .commitsHead a:focus-visible {
-	outline: 2px solid #4ca9fb;
+	outline: 2px solid var(--pm-focus);
 	outline-offset: 2px;
 }
 
@@ -1750,10 +2194,10 @@ input:focus-visible {
 	padding: 0 2px 6px;
 	font-size: 14px;
 	line-height: 20px;
-	color: #9a9a9a;
+	color: var(--pm-muted);
 }
 .commitsHead a {
-	color: #4ca9fb;
+	color: var(--pm-link);
 	text-decoration: none;
 	font-weight: 600;
 	white-space: nowrap;
@@ -1788,7 +2232,7 @@ input:focus-visible {
 	top: 0;
 	bottom: 0;
 	width: 1px;
-	background: #3a3a3a;
+	background: var(--pm-rail);
 }
 .commitList li:first-child::before {
 	top: 50%;
@@ -1805,8 +2249,8 @@ input:focus-visible {
 	height: 7px;
 	margin-top: -4.5px;
 	border-radius: 50%;
-	background: #e8ed58;
-	border: 1px solid #000;
+	background: var(--pm-accent);
+	border: 1px solid var(--pm-on-accent);
 }
 .commit {
 	position: relative;
@@ -1820,7 +2264,7 @@ input:focus-visible {
 	line-height: 18px;
 }
 .commit:hover {
-	background: #161616;
+	background: var(--pm-hover);
 }
 .commitBody {
 	flex: 1;
@@ -1834,7 +2278,7 @@ input:focus-visible {
 	line-height: 22px;
 }
 .commitMeta {
-	color: #9a9a9a;
+	color: var(--pm-muted);
 	font-size: 12px;
 	line-height: 16px;
 }
@@ -1842,20 +2286,20 @@ input:focus-visible {
 	flex: none;
 	font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
 	font-size: 13px;
-	color: #e8ed58;
+	color: var(--pm-accent-text);
 }
 .commitAvatar {
 	flex: none;
 	width: 24px;
 	height: 24px;
 	border-radius: 50%;
-	background: #222;
+	background: var(--pm-avatar);
 }
 .commitsNote {
 	margin: 4px 2px;
 	font-size: 13px;
 	line-height: 18px;
-	color: #9a9a9a;
+	color: var(--pm-muted);
 }
 .commitsNote:empty {
 	display: none;
@@ -1916,11 +2360,13 @@ input:focus-visible {
 	z-index: 20;
 	width: min(420px, calc(100% - 32px));
 	transform: translateX(-50%);
-	border: 1px solid #b6b6b6;
+	border: 1px solid var(--pm-border);
 	border-radius: 5px;
-	background: #111;
+	background: var(--pm-dialog);
+	color: var(--pm-dialog-text);
 	padding: 12px 14px;
-	box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6);
+	box-shadow: 0 6px 24px
+		rgba(var(--pm-shadow-rgb), calc(0.6 * var(--pm-shadow-k)));
 }
 .permissionPrompt p {
 	margin: 0 0 12px;
@@ -1962,7 +2408,7 @@ input:focus-visible {
 }
 .passkeyPrompt p.detail {
 	margin: 0 0 4px;
-	color: #b6b6b6;
+	color: var(--pm-dialog-muted);
 	font-size: 0.85em;
 	overflow-wrap: anywhere;
 }
@@ -1973,7 +2419,7 @@ input:focus-visible {
 }
 .passkeyPrompt ul.items ul {
 	padding-left: 16px;
-	color: #b6b6b6;
+	color: var(--pm-dialog-muted);
 	font-size: 0.9em;
 }
 .passkeyPrompt .passkeyButtons {
@@ -1989,14 +2435,14 @@ input:focus-visible {
 }
 .passkeyPrompt .account small {
 	display: block;
-	color: #b6b6b6;
+	color: var(--pm-dialog-muted);
 	font-size: 0.8em;
 }
 .passkeyPrompt button:disabled {
 	opacity: 0.6;
 }
 .passkeyPrompt button:focus-visible {
-	outline: 2px solid #729fcf;
+	outline: 2px solid var(--pm-dialog-focus);
 	outline-offset: 2px;
 }
 
@@ -2021,12 +2467,12 @@ input:focus-visible {
 }
 
 .starbtn:hover:not(:disabled) {
-	background-color: rgba(0, 0, 0, 0.06);
-	border-color: rgba(0, 0, 0, 0.15);
+	background-color: rgba(var(--pm-field-fg-rgb), 0.06);
+	border-color: rgba(var(--pm-field-fg-rgb), 0.15);
 }
 
 .starbtn:active:not(:disabled) {
-	background-color: rgba(0, 0, 0, 0.12);
+	background-color: rgba(var(--pm-field-fg-rgb), 0.12);
 }
 
 .starbtn:disabled {
@@ -2038,7 +2484,7 @@ input:focus-visible {
 .bookmarksTab:focus-visible,
 .bookmarks button:focus-visible,
 .tokenbtn:focus-visible {
-	outline: 2px solid #4ca9fb;
+	outline: 2px solid var(--pm-focus);
 	outline-offset: 1px;
 }
 
@@ -2066,12 +2512,12 @@ input:focus-visible {
 }
 
 .tokenbtn:hover {
-	background-color: rgba(0, 0, 0, 0.06);
-	border-color: rgba(0, 0, 0, 0.15);
+	background-color: rgba(var(--pm-field-fg-rgb), 0.06);
+	border-color: rgba(var(--pm-field-fg-rgb), 0.15);
 }
 
 .tokenbtn:active {
-	background-color: rgba(0, 0, 0, 0.12);
+	background-color: rgba(var(--pm-field-fg-rgb), 0.12);
 }
 
 /* the card's bar is a picture the card takes presses for, but its star */
@@ -2100,19 +2546,19 @@ input:focus-visible {
 	place-items: center;
 	padding: 0;
 	/* one solid line in the card's own border colour */
-	border: 1px solid #b6b6b6;
+	border: 1px solid var(--pm-border);
 	border-left: 0;
 	border-radius: 0 10px 10px 0;
-	background: #8f5902; /* Tango Chocolate */
+	background: var(--pm-handle); /* Tango Chocolate */
 	cursor: pointer;
 }
 
 .bookmarksTab:hover {
-	background-color: #a8690a;
+	background-color: var(--pm-handle-hover);
 }
 
 .bookmarksTab:active {
-	background-color: #6b4301;
+	background-color: var(--pm-handle-active);
 }
 
 .bookmarksTab img {
@@ -2128,7 +2574,7 @@ input:focus-visible {
 	position: fixed;
 	inset: 0 0 48px 0;
 	z-index: 16;
-	background: rgba(0, 0, 0, 0.55);
+	background: var(--pm-scrim);
 	opacity: 0;
 	visibility: hidden;
 	transition:
@@ -2152,12 +2598,13 @@ input:focus-visible {
 	display: flex;
 	flex-direction: column;
 	box-sizing: border-box;
-	background: #000;
-	border: 1px solid #b6b6b6;
+	background: var(--pm-ntp);
+	border: 1px solid var(--pm-border);
 	border-left: 0;
 	border-radius: 0 5px 5px 0;
-	box-shadow: 10px 0 40px rgba(0, 0, 0, 0.6);
-	color: #fff;
+	box-shadow: 10px 0 40px
+		rgba(var(--pm-shadow-rgb), calc(0.6 * var(--pm-shadow-k)));
+	color: var(--pm-bookmark-text);
 	font-family: 'Montserrat', sans-serif;
 	transform: translateX(-100%);
 	visibility: hidden;
@@ -2188,8 +2635,9 @@ input:focus-visible {
 	align-items: center;
 	gap: 10px;
 	padding: 10px 10px 10px 16px;
-	background: #000 url('/pm/header-background.png');
-	border-bottom: 1px solid #b6b6b6;
+	background: var(--pm-toolbar) var(--pm-toolbar-image);
+	color: var(--pm-toolbar-text);
+	border-bottom: 1px solid var(--pm-border);
 	border-radius: 0 5px 0 0;
 }
 
@@ -2200,7 +2648,7 @@ input:focus-visible {
 
 .bookmarksCount {
 	flex: 0 0 auto;
-	border: 1px solid #b6b6b6;
+	border: 1px solid var(--pm-border);
 	border-radius: 10px;
 	padding: 0 10px;
 	font-size: 13px;
@@ -2218,14 +2666,14 @@ input:focus-visible {
 	border: 0;
 	border-radius: 50%;
 	background: transparent;
-	color: #fff;
+	color: var(--pm-toolbar-text);
 	font-size: 22px;
 	line-height: 32px;
 	cursor: pointer;
 }
 
 .bookmarksClose:hover {
-	background: rgba(255, 255, 255, 0.12);
+	background: rgba(var(--pm-toolbar-fg-rgb), 0.12);
 }
 
 .bookmarksList {
@@ -2251,7 +2699,7 @@ input:focus-visible {
 }
 
 .bookmark:hover {
-	background: #161616;
+	background: var(--pm-hover);
 }
 
 /* a row is dragged to reorder the list (a finger after a long press, so it
@@ -2275,10 +2723,10 @@ input:focus-visible {
 .bookmarksList.sorting .bookmark.dragging {
 	position: relative;
 	z-index: 1;
-	background: #1f1f1f;
+	background: var(--pm-raised);
 	box-shadow:
-		0 8px 24px rgba(0, 0, 0, 0.7),
-		0 0 0 1px #4a4a4a;
+		0 8px 24px rgba(var(--pm-shadow-rgb), calc(0.7 * var(--pm-shadow-k))),
+		0 0 0 1px var(--pm-raised-ring);
 	transition: none;
 }
 
@@ -2348,25 +2796,25 @@ input:focus-visible {
 
 /* the page's description, muted, between the title and the URL */
 .bookmarkDescription {
-	color: #9a9a9a;
+	color: var(--pm-muted);
 	font-size: 12px;
 	line-height: 16px;
 }
 
 .bookmarkUrl {
-	color: #4ca9fb;
+	color: var(--pm-link);
 	font-size: 12px;
 	line-height: 16px;
 }
 
 .bookmarkRemove {
 	margin-right: 8px;
-	color: #9a9a9a;
+	color: var(--pm-muted);
 }
 
 .bookmarkRemove:hover {
-	background: rgba(204, 0, 0, 0.25);
-	color: #f67;
+	background: var(--pm-error-soft);
+	color: var(--pm-error);
 }
 
 .bookmarksEmpty {
@@ -2378,7 +2826,7 @@ input:focus-visible {
 	gap: 6px;
 	padding: 24px;
 	text-align: center;
-	color: #9a9a9a;
+	color: var(--pm-muted);
 }
 
 .bookmarksEmpty img {
@@ -2389,12 +2837,12 @@ input:focus-visible {
 .bookmarksEmpty p {
 	margin: 0;
 	font-size: 15px;
-	color: #fff;
+	color: var(--pm-bookmark-text);
 }
 
 .bookmarksEmpty .bookmarksHint {
 	font-size: 13px;
-	color: #9a9a9a;
+	color: var(--pm-muted);
 }
 
 @media only screen and (max-width: 767px) {
@@ -2499,14 +2947,14 @@ input:focus-visible {
 }
 .shieldsbtn:hover,
 .shieldsbtn[aria-expanded='true'] {
-	background-color: rgba(0, 0, 0, 0.06);
-	border-color: rgba(0, 0, 0, 0.15);
+	background-color: rgba(var(--pm-field-fg-rgb), 0.06);
+	border-color: rgba(var(--pm-field-fg-rgb), 0.15);
 }
 .shieldsbtn:active {
-	background-color: rgba(0, 0, 0, 0.12);
+	background-color: rgba(var(--pm-field-fg-rgb), 0.12);
 }
 .shieldsbtn:focus-visible {
-	outline: 2px solid #4ca9fb;
+	outline: 2px solid var(--pm-focus);
 	outline-offset: 1px;
 }
 
@@ -2519,8 +2967,8 @@ input:focus-visible {
 	padding: 0 3px;
 	box-sizing: border-box;
 	border-radius: 999px;
-	background: #6a6fe6;
-	color: #fff;
+	background: var(--pm-badge);
+	color: var(--pm-badge-text);
 	font-size: 8px;
 	font-weight: 600;
 	line-height: 15px;
@@ -2548,26 +2996,8 @@ input:focus-visible {
 }
 
 .popover {
-	/* Brave Shields, 1:1 with the panel_new Leo panel. Colours are the resolved
-	   Nala dark tokens (from @brave/leo universal.tokens.json, cross-checked by
-	   sampling Brave's rendered panel): page.background #141415, container
-	   .background #1c1c1d, neutral.10 #252527, text.primary #e4e4e5, secondary
-	   #c9c9ca, tertiary #909093, text.interactive / schemes.primary #bcc6f3,
-	   schemes.on-primary #212848, divider.subtle #303032, outline-variant
-	   #464649, divider.interactive #303a68. */
-	--sh-page: #141415;
-	--sh-container: #1c1c1d;
-	--sh-card: #252527;
-	--sh-control: #1f1f23;
-	--sh-text: #e4e4e5;
-	--sh-text-2: #c9c9ca;
-	--sh-text-3: #909093;
-	--sh-interactive: #bcc6f3;
-	--sh-on-primary: #212848;
-	--sh-icon: #c9c9ca;
-	--sh-divider: #303032;
-	--sh-outline: #464649;
-	--sh-border-interactive: #303a68;
+	/* Brave Shields, 1:1 with the panel_new Leo panel, in the --pm-panel
+	   tokens (Leo's Nala dark colours in the Default theme, on :root) */
 	position: fixed;
 	z-index: 61;
 	max-width: calc(100vw - 16px);
@@ -2576,21 +3006,21 @@ input:focus-visible {
 	box-sizing: border-box;
 	padding: 0;
 	border-radius: 16px;
-	background: var(--sh-container);
-	color: var(--sh-text);
+	background: var(--pm-panel);
+	color: var(--pm-panel-text);
 	font-family: 'Montserrat', sans-serif;
 	font-weight: 400;
 	font-size: 14px;
 	line-height: 1.571;
 	box-shadow:
-		0 12px 40px rgba(0, 0, 0, 0.55),
-		0 0 0 1px rgba(255, 255, 255, 0.06);
+		0 12px 40px rgba(var(--pm-shadow-rgb), calc(0.55 * var(--pm-shadow-k))),
+		0 0 0 1px rgba(var(--pm-panel-fg-rgb), 0.06);
 	/* never the universal transition: a resize moves it at once */
 	transition: none;
 	/* its own scroller: the same thin scrollbar as the pages, so a short
 	   viewport does not put a chunky default bar over its rounded edge */
 	scrollbar-width: thin;
-	scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+	scrollbar-color: rgba(var(--pm-panel-fg-rgb), 0.2) transparent;
 }
 /* Brave's Shields popup is a native WebUI Views bubble (WebUIBubbleManager,
    no Brave animation override), and Chromium shows it with a plain opacity
@@ -2616,13 +3046,13 @@ input:focus-visible {
 	height: 9px;
 }
 .popover::-webkit-scrollbar-thumb {
-	background: rgba(255, 255, 255, 0.16);
+	background: rgba(var(--pm-panel-fg-rgb), 0.16);
 	border-radius: 999px;
 	border: 3px solid transparent;
 	background-clip: padding-box;
 }
 .popover::-webkit-scrollbar-thumb:hover {
-	background: rgba(255, 255, 255, 0.28);
+	background: rgba(var(--pm-panel-fg-rgb), 0.28);
 	background-clip: padding-box;
 }
 .popover::-webkit-scrollbar-track {
@@ -2649,7 +3079,7 @@ input:focus-visible {
 	border: none;
 	border-radius: 8px;
 	background: none;
-	color: var(--sh-text);
+	color: var(--pm-panel-text);
 	font: inherit;
 	text-align: left;
 	white-space: nowrap;
@@ -2661,10 +3091,10 @@ input:focus-visible {
 }
 .pmMenuItem:hover,
 .pmMenuItem:focus-visible {
-	background: rgba(255, 255, 255, 0.06);
+	background: rgba(var(--pm-panel-fg-rgb), 0.06);
 }
 .pmMenuItem:focus-visible {
-	outline: 2px solid var(--sh-interactive);
+	outline: 2px solid var(--pm-panel-accent);
 	outline-offset: -2px;
 }
 .pmMenuItem .shieldsIcon {
@@ -2706,11 +3136,11 @@ input:focus-visible {
 }
 .extAction:hover,
 .extAction[aria-expanded='true'] {
-	background: rgba(255, 255, 255, 0.12);
-	border-color: rgba(255, 255, 255, 0.18);
+	background: rgba(var(--pm-toolbar-fg-rgb), 0.12);
+	border-color: rgba(var(--pm-toolbar-fg-rgb), 0.18);
 }
 .extAction:focus-visible {
-	outline: 2px solid #4ca9fb;
+	outline: 2px solid var(--pm-focus);
 	outline-offset: 1px;
 }
 .extAction .extIcon {
@@ -2727,8 +3157,8 @@ input:focus-visible {
 	display: grid;
 	place-items: center;
 	border-radius: 5px;
-	background: #555753;
-	color: #fff;
+	background: var(--pm-letter);
+	color: var(--pm-letter-text);
 	font-family: 'Montserrat', sans-serif;
 	font-size: 11px;
 	font-weight: 700;
@@ -2743,8 +3173,8 @@ input:focus-visible {
 	padding: 0 3px;
 	box-sizing: border-box;
 	border-radius: 3px;
-	background: #6a6fe6;
-	color: #fff;
+	background: var(--pm-badge);
+	color: var(--pm-badge-text);
 	font-family: 'Montserrat', sans-serif;
 	font-size: 9px;
 	font-weight: 700;
@@ -2759,8 +3189,8 @@ input:focus-visible {
 }
 .toolbtn.extbtn[aria-expanded='true'],
 .toolbtn.extbtn:focus-visible {
-	background: rgba(255, 255, 255, 0.12);
-	border-color: rgba(255, 255, 255, 0.18);
+	background: rgba(var(--pm-toolbar-fg-rgb), 0.12);
+	border-color: rgba(var(--pm-toolbar-fg-rgb), 0.18);
 }
 /* a card's copy of the bar: the same buttons, as pictures */
 .cardExtensions {
@@ -2787,7 +3217,7 @@ input:focus-visible {
 }
 .extPanelHead {
 	padding: 6px 12px 8px;
-	color: var(--sh-text-3);
+	color: var(--pm-panel-text-3);
 	font-size: 12px;
 	font-weight: 600;
 	overflow: hidden;
@@ -2797,7 +3227,7 @@ input:focus-visible {
 .extPanelNote {
 	margin: 0;
 	padding: 4px 12px 10px;
-	color: var(--sh-text-3);
+	color: var(--pm-panel-text-3);
 	font-size: 12.5px;
 	line-height: 1.5;
 }
@@ -2836,7 +3266,7 @@ input:focus-visible {
 	border: none;
 	border-radius: 8px;
 	background: none;
-	color: var(--sh-icon);
+	color: var(--pm-panel-icon);
 	cursor: pointer;
 }
 .extRowMore .shieldsIcon {
@@ -2846,16 +3276,16 @@ input:focus-visible {
 .extRowMore:hover,
 .extRowMore:focus-visible,
 .extRowMore[aria-expanded='true'] {
-	background: rgba(255, 255, 255, 0.06);
+	background: rgba(var(--pm-panel-fg-rgb), 0.06);
 }
 .extRowMore:focus-visible {
-	outline: 2px solid var(--sh-interactive);
+	outline: 2px solid var(--pm-panel-accent);
 	outline-offset: -2px;
 }
 .extMenuRule {
 	height: 1px;
 	margin: 6px 4px;
-	background: var(--sh-divider);
+	background: var(--pm-panel-divider);
 }
 /* a checkbox or radio item's mark, where the others have their icon */
 .extMenuMark {
@@ -2871,7 +3301,7 @@ input:focus-visible {
 	top: 3px;
 	width: 6px;
 	height: 11px;
-	border: solid var(--sh-interactive);
+	border: solid var(--pm-panel-accent);
 	border-width: 0 2px 2px 0;
 	transform: rotate(45deg);
 }
@@ -2902,8 +3332,8 @@ input:focus-visible {
 .extCard {
 	padding: 12px 14px;
 	border-radius: 9px;
-	background: #141415;
-	border: 1px solid rgba(255, 255, 255, 0.06);
+	background: var(--pm-panel-sunken);
+	border: 1px solid rgba(var(--pm-panel-fg-rgb), 0.06);
 }
 .extCardHead {
 	display: flex;
@@ -2939,7 +3369,7 @@ input:focus-visible {
 .extPerms {
 	margin-top: 8px;
 	font-size: 12px;
-	color: #c9c9ca;
+	color: var(--pm-panel-text-2);
 }
 .extPerms summary {
 	cursor: pointer;
@@ -2947,12 +3377,12 @@ input:focus-visible {
 .extPerms ul {
 	margin: 6px 0 0;
 	padding-left: 18px;
-	color: #909093;
+	color: var(--pm-panel-text-3);
 	font-size: 11.5px;
 	line-height: 1.5;
 }
 .extPerms li.warn {
-	color: #f0cf96;
+	color: var(--pm-panel-warn);
 }
 .extButtons {
 	flex-wrap: wrap;
@@ -2960,26 +3390,26 @@ input:focus-visible {
 .extConfirm {
 	flex: 1 1 100%;
 	font-size: 12.5px;
-	color: #f0cf96;
+	color: var(--pm-panel-warn);
 }
 .spBtn.danger {
-	background: #f2a7a7;
-	color: #3b1010;
+	background: var(--pm-panel-danger);
+	color: var(--pm-panel-on-danger);
 }
 
 /* main_card: the raised surface holding the site row and the count box */
 .shieldsCard {
-	background: var(--sh-card);
+	background: var(--pm-panel-raised);
 	padding: 12px;
 	display: flex;
 	flex-direction: column;
 	gap: 12px;
-	border-bottom: 1px solid var(--sh-divider);
+	border-bottom: 1px solid var(--pm-panel-divider);
 	border-radius: 16px 16px 0 0;
 }
 .shieldsCardOff {
-	background: #303032;
-	color: var(--sh-text-2);
+	background: var(--pm-panel-raised-hover);
+	color: var(--pm-panel-text-2);
 }
 .shieldsCardOff .shieldsFavicon {
 	filter: grayscale(100%);
@@ -2998,13 +3428,14 @@ input:focus-visible {
 	width: 32px;
 	height: 32px;
 	border-radius: 50%;
-	background: var(--sh-container) center / 20px 20px no-repeat;
-	box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+	background: var(--pm-panel) center / 20px 20px no-repeat;
+	box-shadow: 0 1px 4px
+		rgba(var(--pm-shadow-rgb), calc(0.4 * var(--pm-shadow-k)));
 }
 .shieldsDomain {
 	grid-column: 2;
 	min-width: 0;
-	color: var(--sh-text);
+	color: var(--pm-panel-text);
 	font-size: 20px;
 	font-weight: 600;
 	line-height: 1.3;
@@ -3016,12 +3447,12 @@ input:focus-visible {
 }
 .shieldsState {
 	grid-column: 2;
-	color: var(--sh-text);
+	color: var(--pm-panel-text);
 	font-size: 16px;
 	line-height: 1.5;
 }
 .shieldsState b {
-	color: var(--sh-text);
+	color: var(--pm-panel-text);
 	font-weight: 600;
 }
 .shieldsHead .shieldsToggle {
@@ -3041,7 +3472,7 @@ input:focus-visible {
 	width: 65px;
 	height: 40px;
 	border-radius: 999px;
-	background: var(--sh-outline);
+	background: var(--pm-panel-outline);
 	border: none;
 	cursor: pointer;
 	/* Leo toggle: the track and thumb animate on every change at
@@ -3063,20 +3494,20 @@ input:focus-visible {
 	width: 32px;
 	height: 32px;
 	border-radius: 50%;
-	background: #fff;
+	background: var(--pm-panel-thumb);
 	transition:
 		transform var(--sh-toggle-dur) var(--sh-toggle-ease),
 		background-color var(--sh-toggle-dur) var(--sh-toggle-ease);
 }
 .shieldsToggle:checked {
-	background: var(--sh-interactive);
+	background: var(--pm-panel-accent);
 }
 .shieldsToggle:checked::after {
 	transform: translateX(25px);
-	background: var(--sh-on-primary);
+	background: var(--pm-panel-on-accent);
 }
 .shieldsToggle:focus-visible {
-	outline: 2px solid var(--sh-interactive);
+	outline: 2px solid var(--pm-panel-accent);
 	outline-offset: 2px;
 }
 .shieldsToggle.small {
@@ -3099,17 +3530,18 @@ input:focus-visible {
 .shieldsCount {
 	padding: 12px 8px;
 	border-radius: 16px;
-	background: var(--sh-container);
-	box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+	background: var(--pm-panel);
+	box-shadow: 0 1px 4px
+		rgba(var(--pm-shadow-rgb), calc(0.4 * var(--pm-shadow-k)));
 	display: flex;
 	align-items: center;
 	justify-content: center;
 	gap: 8px;
-	color: var(--sh-text-2);
+	color: var(--pm-panel-text-2);
 	font-size: 14px;
 }
 .shieldsCount b {
-	color: var(--sh-text);
+	color: var(--pm-panel-text);
 	font-size: 22px;
 	font-weight: 600;
 	line-height: 1.27;
@@ -3127,7 +3559,7 @@ input:focus-visible {
 	padding: 14px 16px;
 	background: none;
 	border: none;
-	color: var(--sh-text);
+	color: var(--pm-panel-text);
 	font-family: inherit;
 	font-size: 14px;
 	font-weight: 400;
@@ -3141,7 +3573,7 @@ input:focus-visible {
 .shieldsAdvancedHead .shieldsIcon {
 	width: 20px;
 	height: 20px;
-	color: var(--sh-icon);
+	color: var(--pm-panel-icon);
 }
 .shieldsAdvancedHead .chev {
 	flex: none;
@@ -3154,11 +3586,11 @@ input:focus-visible {
    data-expanded view-toggle */
 .shieldsAdvanced:not(.closed) .shieldsAdvancedHead,
 .shieldsAdvancedHead:hover {
-	color: var(--sh-interactive);
+	color: var(--pm-panel-accent);
 }
 .shieldsAdvanced:not(.closed) .shieldsAdvancedHead .shieldsIcon,
 .shieldsAdvancedHead:hover .shieldsIcon {
-	color: var(--sh-interactive);
+	color: var(--pm-panel-accent);
 }
 .shieldsAdvanced.closed .chev {
 	transform: rotate(0);
@@ -3173,7 +3605,7 @@ input:focus-visible {
 	flex: none;
 	width: 18px;
 	height: 18px;
-	color: var(--sh-icon);
+	color: var(--pm-panel-icon);
 }
 
 .shieldsRows {
@@ -3215,7 +3647,7 @@ input:focus-visible {
 	margin-inline-start: -4px;
 }
 .shieldsRowLabel {
-	color: var(--sh-text);
+	color: var(--pm-panel-text);
 	font-size: 14px;
 	line-height: 1.571;
 }
@@ -3224,8 +3656,8 @@ input:focus-visible {
 	flex: none;
 	border-radius: 6px;
 	padding: 2px 4px;
-	background: var(--sh-card);
-	color: var(--sh-text-2);
+	background: var(--pm-panel-raised);
+	color: var(--pm-panel-text-2);
 	font-size: 12px;
 	font-weight: 600;
 	line-height: 1.4;
@@ -3247,9 +3679,9 @@ input:focus-visible {
 	gap: 6px;
 	padding: 10px 6px 10px 10px;
 	border-radius: 8px;
-	background: var(--sh-control);
-	border: 1px solid var(--sh-divider);
-	color: var(--sh-text);
+	background: var(--pm-panel-control);
+	border: 1px solid var(--pm-panel-divider);
+	color: var(--pm-panel-text);
 	font-family: inherit;
 	font-size: 14px;
 	text-align: left;
@@ -3266,14 +3698,14 @@ input:focus-visible {
 	margin-left: auto;
 	width: 20px;
 	height: 20px;
-	color: var(--sh-icon);
+	color: var(--pm-panel-icon);
 	transition: transform 0.1s cubic-bezier(0.42, 0, 0.58, 1);
 }
 .shieldsDropBtn[aria-expanded='true'] .chev {
 	transform: rotate(180deg);
 }
 .shieldsDropBtn:focus-visible {
-	outline: 2px solid var(--sh-interactive);
+	outline: 2px solid var(--pm-panel-accent);
 	outline-offset: 1px;
 }
 /* Leo menu open: --leo-duration-m (200ms) --leo-easing-out, opacity and a
@@ -3299,9 +3731,10 @@ input:focus-visible {
 	padding: 4px;
 	list-style: none;
 	border-radius: 8px;
-	background: var(--sh-card);
-	border: 1px solid var(--sh-divider);
-	box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+	background: var(--pm-panel-raised);
+	border: 1px solid var(--pm-panel-divider);
+	box-shadow: 0 10px 30px
+		rgba(var(--pm-shadow-rgb), calc(0.5 * var(--pm-shadow-k)));
 	transform-origin: top center;
 	animation: shieldsMenuIn 0.2s cubic-bezier(0, 0, 0.58, 1);
 }
@@ -3312,21 +3745,21 @@ input:focus-visible {
 	padding: 8px 10px;
 	border-radius: 6px;
 	font-size: 14px;
-	color: var(--sh-text-2);
+	color: var(--pm-panel-text-2);
 	cursor: pointer;
 	transition: background-color 0.1s cubic-bezier(0.42, 0, 0.58, 1);
 }
 .shieldsDropList li:hover {
-	background: rgba(255, 255, 255, 0.05);
+	background: rgba(var(--pm-panel-fg-rgb), 0.05);
 }
 .shieldsDropList li[aria-selected='true'] {
-	color: var(--sh-interactive);
-	background: rgba(188, 198, 243, 0.12);
+	color: var(--pm-panel-accent);
+	background: rgba(var(--pm-panel-accent-rgb), 0.12);
 }
 
 .shieldsNote {
 	margin-top: 2px;
-	color: var(--sh-text-3);
+	color: var(--pm-panel-text-3);
 	font-size: 12px;
 	line-height: 1.5;
 }
@@ -3341,7 +3774,7 @@ input:focus-visible {
 	place-items: center;
 	background: none;
 	border: none;
-	color: var(--sh-icon);
+	color: var(--pm-panel-icon);
 	cursor: pointer;
 	border-radius: 8px;
 }
@@ -3350,7 +3783,7 @@ input:focus-visible {
 	height: 20px;
 }
 .shieldsMore:hover {
-	background: rgba(255, 255, 255, 0.05);
+	background: rgba(var(--pm-panel-fg-rgb), 0.05);
 }
 
 /* footer: two Leo outline buttons, then the try-off note on page.background */
@@ -3359,7 +3792,7 @@ input:focus-visible {
 	flex-wrap: wrap;
 	gap: 8px;
 	padding: 16px;
-	border-top: 1px solid var(--sh-divider);
+	border-top: 1px solid var(--pm-panel-divider);
 }
 .shieldsFooter button {
 	flex: 1 1 calc(50% - 8px);
@@ -3367,29 +3800,29 @@ input:focus-visible {
 	padding: 10px 16px;
 	border-radius: 999px;
 	background: transparent;
-	border: 1px solid var(--sh-border-interactive);
-	color: var(--sh-interactive);
+	border: 1px solid var(--pm-panel-accent-border);
+	color: var(--pm-panel-accent);
 	font-family: inherit;
 	font-size: 14px;
 	font-weight: 600;
 	cursor: pointer;
 }
 .shieldsFooter button:hover {
-	background: rgba(188, 198, 243, 0.08);
-	border-color: #7686ec;
+	background: rgba(var(--pm-panel-accent-rgb), 0.08);
+	border-color: var(--pm-panel-accent-hover);
 }
 .shieldsFooter button:focus-visible {
-	outline: 2px solid var(--sh-interactive);
+	outline: 2px solid var(--pm-panel-accent);
 	outline-offset: 1px;
 }
 
 .shieldsHint {
 	padding: 12px 8px 16px;
-	background: var(--sh-page);
-	border-top: 1px solid var(--sh-divider);
+	background: var(--pm-panel-sunken);
+	border-top: 1px solid var(--pm-panel-divider);
 	border-radius: 0 0 16px 16px;
 	text-align: center;
-	color: var(--sh-text-3);
+	color: var(--pm-panel-text-3);
 	font-size: 12px;
 	line-height: 1.5;
 }
@@ -3400,8 +3833,8 @@ input:focus-visible {
 	align-items: flex-start;
 	gap: 4px;
 	padding: 16px 16px 16px 12px;
-	background: var(--sh-page);
-	border-bottom: 1px solid var(--sh-divider);
+	background: var(--pm-panel-sunken);
+	border-bottom: 1px solid var(--pm-panel-divider);
 }
 .shieldsBack {
 	flex: none;
@@ -3412,14 +3845,14 @@ input:focus-visible {
 	background: none;
 	border: none;
 	border-radius: 50%;
-	color: var(--sh-icon);
+	color: var(--pm-panel-icon);
 	cursor: pointer;
 }
 .shieldsBack:hover {
-	background: rgba(255, 255, 255, 0.05);
+	background: rgba(var(--pm-panel-fg-rgb), 0.05);
 }
 .shieldsBack:focus-visible {
-	outline: 2px solid var(--sh-interactive);
+	outline: 2px solid var(--pm-panel-accent);
 	outline-offset: 1px;
 }
 .shieldsBack .shieldsIcon {
@@ -3432,7 +3865,7 @@ input:focus-visible {
 	padding-top: 4px;
 }
 .shieldsSubTitle {
-	color: var(--sh-text);
+	color: var(--pm-panel-text);
 	font-size: 16px;
 	font-weight: 600;
 	line-height: 1.5;
@@ -3442,7 +3875,7 @@ input:focus-visible {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	color: var(--sh-text-2);
+	color: var(--pm-panel-text-2);
 	font-size: 14px;
 	line-height: 1.571;
 }
@@ -3453,7 +3886,7 @@ input:focus-visible {
 }
 .shieldsSubNote {
 	margin-top: 12px;
-	color: var(--sh-text-3);
+	color: var(--pm-panel-text-3);
 	font-size: 12px;
 	line-height: 1.5;
 }
@@ -3461,19 +3894,19 @@ input:focus-visible {
 	margin-top: 10px;
 	padding: 9px 11px;
 	border-radius: 8px;
-	background: var(--sh-card);
-	border-left: 2px solid var(--sh-interactive);
-	color: var(--sh-text-2);
+	background: var(--pm-panel-raised);
+	border-left: 2px solid var(--pm-panel-accent);
+	color: var(--pm-panel-text-2);
 }
 .shieldsSubSection {
 	margin: 6px 0 2px;
 	padding-inline: 8px;
-	color: var(--sh-text-3);
+	color: var(--pm-panel-text-3);
 	font-size: 12px;
 	font-weight: 600;
 }
 .shieldsRowNative .shieldsRowLabel {
-	color: var(--sh-text-2);
+	color: var(--pm-panel-text-2);
 }
 .shieldsDot {
 	display: grid;
@@ -3484,11 +3917,11 @@ input:focus-visible {
 	width: 6px;
 	height: 6px;
 	border-radius: 50%;
-	background: var(--sh-outline);
+	background: var(--pm-panel-outline);
 }
 .shieldsNativeTag {
 	flex: none;
-	color: var(--sh-text-3);
+	color: var(--pm-panel-text-3);
 	font-size: 12px;
 }
 
@@ -3496,8 +3929,8 @@ input:focus-visible {
 .shieldsReport {
 	padding: 12px 16px;
 	border-radius: 16px;
-	background: var(--sh-page);
-	color: var(--sh-text-2);
+	background: var(--pm-panel-sunken);
+	color: var(--pm-panel-text-2);
 	font-size: 14px;
 	text-align: center;
 }
@@ -3505,9 +3938,9 @@ input:focus-visible {
 	margin-top: 10px;
 	padding: 9px 22px;
 	border-radius: 999px;
-	background: var(--sh-interactive);
+	background: var(--pm-panel-accent);
 	border: none;
-	color: var(--sh-on-primary);
+	color: var(--pm-panel-on-accent);
 	font-family: inherit;
 	font-size: 14px;
 	font-weight: 600;
@@ -3532,7 +3965,7 @@ input:focus-visible {
 	position: fixed;
 	inset: 0;
 	z-index: 62;
-	background: rgba(6, 6, 12, 0.6);
+	background: var(--pm-dialog-scrim);
 	backdrop-filter: blur(2px);
 }
 .shieldsPageScrim.hidden {
@@ -3540,11 +3973,6 @@ input:focus-visible {
 }
 
 .shieldsPage {
-	/* the .shieldsToggle / .shieldsIcon are shared with the panel and read these */
-	--sh-interactive: #bcc6f3;
-	--sh-on-primary: #212848;
-	--sh-outline: #464649;
-	--sh-icon: #c9c9ca;
 	position: fixed;
 	z-index: 63;
 	top: 50%;
@@ -3556,13 +3984,13 @@ input:focus-visible {
 	flex-direction: column;
 	box-sizing: border-box;
 	border-radius: 14px;
-	background: #1c1c1d;
-	color: #e4e4e5;
+	background: var(--pm-panel);
+	color: var(--pm-panel-text);
 	font-family: 'Montserrat', sans-serif;
 	font-weight: 500;
 	box-shadow:
-		0 24px 70px rgba(0, 0, 0, 0.6),
-		0 0 0 1px rgba(255, 255, 255, 0.06);
+		0 24px 70px rgba(var(--pm-shadow-rgb), calc(0.6 * var(--pm-shadow-k))),
+		0 0 0 1px rgba(var(--pm-panel-fg-rgb), 0.06);
 }
 .shieldsPage.hidden {
 	display: none;
@@ -3576,7 +4004,7 @@ input:focus-visible {
 	align-items: center;
 	gap: 8px;
 	padding: 16px 16px 14px;
-	border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+	border-bottom: 1px solid rgba(var(--pm-panel-fg-rgb), 0.07);
 }
 .spBack {
 	flex: none;
@@ -3588,20 +4016,20 @@ input:focus-visible {
 	border: none;
 	border-radius: 7px;
 	background: none;
-	color: #c9c9ca;
+	color: var(--pm-panel-text-2);
 	cursor: pointer;
 	transform: rotate(180deg);
 }
 .spBack:hover {
-	background: rgba(255, 255, 255, 0.07);
-	color: #fff;
+	background: rgba(var(--pm-panel-fg-rgb), 0.07);
+	color: var(--pm-panel-strong);
 }
 .spTitle {
 	flex: 1 1 auto;
 	margin: 0;
 	font-size: 19px;
 	font-weight: 700;
-	color: #fff;
+	color: var(--pm-panel-strong);
 }
 .spClose {
 	flex: none;
@@ -3611,14 +4039,99 @@ input:focus-visible {
 	border: none;
 	border-radius: 50%;
 	background: none;
-	color: #c9c9ca;
+	color: var(--pm-panel-text-2);
 	font-size: 22px;
 	line-height: 32px;
 	cursor: pointer;
 }
 .spClose:hover {
-	background: rgba(255, 255, 255, 0.1);
-	color: #fff;
+	background: rgba(var(--pm-panel-fg-rgb), 0.1);
+	color: var(--pm-panel-strong);
+}
+
+/* Settings (the menu's): the theme picker, a row per theme with its swatch,
+   its name and a mark on the chosen one; an installed theme's Remove at the
+   row's end */
+.spThemes {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+.spTheme {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.spThemePick {
+	flex: 1 1 auto;
+	min-width: 0;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 8px 12px 8px 8px;
+	border-radius: 9px;
+	background: var(--pm-panel-sunken);
+	border: 1px solid rgba(var(--pm-panel-fg-rgb), 0.06);
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+.spThemePick:hover {
+	border-color: rgba(var(--pm-panel-fg-rgb), 0.16);
+}
+.spThemePick[aria-checked='true'] {
+	border-color: var(--pm-panel-accent);
+	background: rgba(var(--pm-panel-accent-rgb), 0.08);
+}
+.spThemePick:focus-visible {
+	outline: 2px solid var(--pm-panel-accent);
+	outline-offset: 2px;
+}
+.spThemeSwatch {
+	flex: none;
+	display: flex;
+	width: 56px;
+	height: 38px;
+	border-radius: 6px;
+	overflow: hidden;
+	box-shadow: 0 0 0 1px rgba(var(--pm-panel-fg-rgb), 0.12);
+}
+/* a small picture of the window: the frame, the bar, the page and a dot in
+   the accent (Follow system: Light and Dark side by side) */
+.spThemeHalf {
+	flex: 1 1 0;
+	position: relative;
+	background:
+		radial-gradient(circle at 70% 70%, var(--dot) 0 4px, transparent 4.5px),
+		var(--frame-image, none) left top / auto 9px repeat-x,
+		linear-gradient(var(--frame) 0 9px, var(--bar) 9px 18px, var(--page) 18px);
+}
+.spThemeMark {
+	flex: none;
+	position: relative;
+	width: 18px;
+	height: 18px;
+	margin-left: auto;
+	border-radius: 50%;
+	border: 2px solid var(--pm-panel-outline);
+}
+.spThemePick[aria-checked='true'] .spThemeMark {
+	border-color: var(--pm-panel-accent);
+}
+.spThemePick[aria-checked='true'] .spThemeMark::after {
+	content: '';
+	position: absolute;
+	inset: 3px;
+	border-radius: 50%;
+	background: var(--pm-panel-accent);
+}
+.spThemePick .spRowLabel,
+.spThemePick .spRowSub {
+	display: block;
+}
+.spThemeRemove {
+	flex: none;
 }
 
 /* About (the menu's): the proxy's build and the session's facts, a term
@@ -3634,21 +4147,21 @@ input:focus-visible {
 	display: flex;
 	gap: 16px;
 	padding: 8px 0;
-	border-top: 1px solid rgba(255, 255, 255, 0.06);
+	border-top: 1px solid rgba(var(--pm-panel-fg-rgb), 0.06);
 }
 .aboutRow:first-child {
 	border-top: none;
 }
 .aboutRow dt {
 	flex: 0 0 34%;
-	color: #909093;
+	color: var(--pm-panel-text-3);
 	font-size: 12.5px;
 }
 .aboutRow dd {
 	flex: 1 1 auto;
 	min-width: 0;
 	margin: 0;
-	color: #e4e4e5;
+	color: var(--pm-panel-text);
 	font-size: 13px;
 	overflow-wrap: anywhere;
 	user-select: text;
@@ -3661,7 +4174,7 @@ input:focus-visible {
 .spInput:focus-visible,
 .spSettingRow.nav:focus-visible,
 .cmInput:focus-visible {
-	outline: 2px solid #bcc6f3;
+	outline: 2px solid var(--pm-panel-accent);
 	outline-offset: 2px;
 }
 
@@ -3677,31 +4190,31 @@ input:focus-visible {
 	margin-top: 16px;
 	padding: 14px 16px;
 	border-radius: 10px;
-	background: #141415;
-	border: 1px solid rgba(255, 255, 255, 0.05);
+	background: var(--pm-panel-sunken);
+	border: 1px solid rgba(var(--pm-panel-fg-rgb), 0.05);
 }
 .spCallout.warn {
-	border-color: rgba(245, 171, 53, 0.4);
-	background: rgba(245, 171, 53, 0.08);
-	color: #f0cf96;
+	border-color: rgba(var(--pm-panel-warn-rgb), 0.4);
+	background: rgba(var(--pm-panel-warn-rgb), 0.08);
+	color: var(--pm-panel-warn);
 	font-size: 12.5px;
 }
 .spCalloutTitle {
 	font-size: 14px;
 	font-weight: 700;
-	color: #fff;
+	color: var(--pm-panel-strong);
 	margin-bottom: 6px;
 }
 .spCallout p {
 	margin: 0;
-	color: #c9c9ca;
+	color: var(--pm-panel-text-2);
 	font-size: 12.5px;
 	line-height: 1.5;
 }
 
 .spSection {
 	padding: 14px 0;
-	border-top: 1px solid rgba(255, 255, 255, 0.06);
+	border-top: 1px solid rgba(var(--pm-panel-fg-rgb), 0.06);
 }
 .spSection:first-of-type {
 	border-top: none;
@@ -3710,20 +4223,20 @@ input:focus-visible {
 	margin: 0 0 6px;
 	font-size: 14.5px;
 	font-weight: 700;
-	color: #fff;
+	color: var(--pm-panel-strong);
 }
 .spSectionNote {
 	margin: 0 0 12px;
-	color: #909093;
+	color: var(--pm-panel-text-3);
 	font-size: 12px;
 	line-height: 1.5;
 	max-width: 62ch;
 }
 .spSectionNote.good {
-	color: #7fd8a6;
+	color: var(--pm-panel-good);
 }
 .spSectionNote.warn {
-	color: #f0cf96;
+	color: var(--pm-panel-warn);
 }
 
 /* the scrollable filter-list box: checkbox + bold name + grey source */
@@ -3731,8 +4244,8 @@ input:focus-visible {
 	max-height: 230px;
 	overflow-y: auto;
 	border-radius: 9px;
-	background: #141415;
-	border: 1px solid rgba(255, 255, 255, 0.06);
+	background: var(--pm-panel-sunken);
+	border: 1px solid rgba(var(--pm-panel-fg-rgb), 0.06);
 }
 /* thin, unobtrusive scrollbars everywhere in the settings pages */
 .shieldsPage ::-webkit-scrollbar {
@@ -3740,13 +4253,13 @@ input:focus-visible {
 	height: 9px;
 }
 .shieldsPage ::-webkit-scrollbar-thumb {
-	background: rgba(255, 255, 255, 0.16);
+	background: rgba(var(--pm-panel-fg-rgb), 0.16);
 	border-radius: 999px;
 	border: 3px solid transparent;
 	background-clip: padding-box;
 }
 .shieldsPage ::-webkit-scrollbar-thumb:hover {
-	background: rgba(255, 255, 255, 0.28);
+	background: rgba(var(--pm-panel-fg-rgb), 0.28);
 	background-clip: padding-box;
 }
 .shieldsPage ::-webkit-scrollbar-track {
@@ -3756,28 +4269,28 @@ input:focus-visible {
 .spListBox,
 .spEditor {
 	scrollbar-width: thin;
-	scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+	scrollbar-color: rgba(var(--pm-panel-fg-rgb), 0.2) transparent;
 }
 .spListRow {
 	display: flex;
 	align-items: flex-start;
 	gap: 11px;
 	padding: 8px 14px;
-	border-top: 1px solid rgba(255, 255, 255, 0.05);
+	border-top: 1px solid rgba(var(--pm-panel-fg-rgb), 0.05);
 	cursor: pointer;
 }
 .spListRow:first-child {
 	border-top: none;
 }
 .spListRow:hover {
-	background: rgba(255, 255, 255, 0.03);
+	background: rgba(var(--pm-panel-fg-rgb), 0.03);
 }
 .spCheck {
 	flex: none;
 	width: 17px;
 	height: 17px;
 	margin-top: 1px;
-	accent-color: #bcc6f3;
+	accent-color: var(--pm-panel-accent);
 	cursor: pointer;
 }
 .spListText {
@@ -3789,11 +4302,11 @@ input:focus-visible {
 .spListName {
 	font-size: 13px;
 	font-weight: 600;
-	color: #e4e4e5;
+	color: var(--pm-panel-text);
 }
 .spListSource {
 	font-size: 11.5px;
-	color: #909093;
+	color: var(--pm-panel-text-3);
 	word-break: break-word;
 }
 .spTag {
@@ -3803,8 +4316,8 @@ input:focus-visible {
 	font-size: 10px;
 	font-weight: 600;
 	letter-spacing: 0.02em;
-	color: #bcc6f3;
-	background: rgba(188, 198, 243, 0.18);
+	color: var(--pm-panel-accent);
+	background: rgba(var(--pm-panel-accent-rgb), 0.18);
 	vertical-align: 1px;
 }
 
@@ -3818,8 +4331,8 @@ input:focus-visible {
 	padding: 8px 16px;
 	border-radius: 8px;
 	border: none;
-	background: #bcc6f3;
-	color: #212848;
+	background: var(--pm-panel-accent);
+	color: var(--pm-panel-on-accent);
 	font-family: inherit;
 	font-size: 12.5px;
 	font-weight: 600;
@@ -3829,12 +4342,12 @@ input:focus-visible {
 	filter: brightness(1.08);
 }
 .spBtn.ghost {
-	background: #252527;
-	border: 1px solid rgba(255, 255, 255, 0.08);
-	color: #e4e4e5;
+	background: var(--pm-panel-raised);
+	border: 1px solid rgba(var(--pm-panel-fg-rgb), 0.08);
+	color: var(--pm-panel-text);
 }
 .spBtn.ghost:hover {
-	background: #303032;
+	background: var(--pm-panel-raised-hover);
 	filter: none;
 }
 
@@ -3847,14 +4360,14 @@ input:focus-visible {
 	min-width: 0;
 	padding: 9px 12px;
 	border-radius: 8px;
-	background: #141415;
-	border: 1px solid rgba(255, 255, 255, 0.1);
-	color: #e4e4e5;
+	background: var(--pm-panel-sunken);
+	border: 1px solid rgba(var(--pm-panel-fg-rgb), 0.1);
+	color: var(--pm-panel-text);
 	font-family: inherit;
 	font-size: 12.5px;
 }
 .spInput::placeholder {
-	color: #5e5e62;
+	color: var(--pm-panel-text-4);
 }
 
 .spCustomList {
@@ -3869,14 +4382,14 @@ input:focus-visible {
 	gap: 10px;
 	padding: 8px 10px 8px 14px;
 	border-radius: 8px;
-	background: #141415;
-	border: 1px solid rgba(255, 255, 255, 0.06);
+	background: var(--pm-panel-sunken);
+	border: 1px solid rgba(var(--pm-panel-fg-rgb), 0.06);
 }
 .spCustomUrlText {
 	flex: 1 1 auto;
 	min-width: 0;
 	font-size: 12px;
-	color: #c9c9ca;
+	color: var(--pm-panel-text-2);
 	word-break: break-all;
 }
 .spCustomRemove {
@@ -3887,14 +4400,14 @@ input:focus-visible {
 	border: none;
 	border-radius: 50%;
 	background: none;
-	color: #909093;
+	color: var(--pm-panel-text-3);
 	font-size: 18px;
 	line-height: 26px;
 	cursor: pointer;
 }
 .spCustomRemove:hover {
-	background: rgba(255, 255, 255, 0.08);
-	color: #fff;
+	background: rgba(var(--pm-panel-fg-rgb), 0.08);
+	color: var(--pm-panel-strong);
 }
 
 /* Global Settings rows: label left, control right */
@@ -3908,7 +4421,7 @@ input:focus-visible {
 	gap: 16px;
 	width: 100%;
 	padding: 9px 0;
-	border-top: 1px solid rgba(255, 255, 255, 0.06);
+	border-top: 1px solid rgba(var(--pm-panel-fg-rgb), 0.06);
 	text-align: left;
 }
 .spRows .spSettingRow:first-child {
@@ -3916,7 +4429,7 @@ input:focus-visible {
 }
 .spSettingRow.nav {
 	background: none;
-	border-top: 1px solid rgba(255, 255, 255, 0.06);
+	border-top: 1px solid rgba(var(--pm-panel-fg-rgb), 0.06);
 	border-left: none;
 	border-right: none;
 	border-bottom: none;
@@ -3925,11 +4438,11 @@ input:focus-visible {
 	cursor: pointer;
 }
 .spSettingRow.nav:hover {
-	background: rgba(255, 255, 255, 0.03);
+	background: rgba(var(--pm-panel-fg-rgb), 0.03);
 }
 .spSettingRow.nav .shieldsIcon {
 	flex: none;
-	color: #909093;
+	color: var(--pm-panel-text-3);
 }
 .spRowText {
 	flex: 1 1 auto;
@@ -3937,12 +4450,12 @@ input:focus-visible {
 }
 .spRowLabel {
 	font-size: 13.5px;
-	color: #e4e4e5;
+	color: var(--pm-panel-text);
 }
 .spRowSub {
 	margin-top: 3px;
 	font-size: 11.5px;
-	color: #909093;
+	color: var(--pm-panel-text-3);
 	line-height: 1.45;
 }
 .spRowControl {
@@ -3957,21 +4470,20 @@ input:focus-visible {
 	width: 100%;
 	padding: 9px 30px 9px 12px;
 	border-radius: 8px;
-	background: #1f1f23
-		url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M3 4.5 6 7.5 9 4.5' fill='none' stroke='%23c9c9ca' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>")
-		no-repeat right 10px center;
-	border: 1px solid #303032;
-	color: #e4e4e5;
+	background: var(--pm-panel-control) var(--pm-panel-chevron) no-repeat right
+		10px center;
+	border: 1px solid var(--pm-panel-divider);
+	color: var(--pm-panel-text);
 	font-family: inherit;
 	font-size: 14px;
 	cursor: pointer;
 }
 .shieldsSelect option {
-	background: #252527;
-	color: #e4e4e5;
+	background: var(--pm-panel-raised);
+	color: var(--pm-panel-text);
 }
 .shieldsSelect:focus-visible {
-	outline: 2px solid #bcc6f3;
+	outline: 2px solid var(--pm-panel-accent);
 	outline-offset: 1px;
 }
 .spSelect {
@@ -3987,8 +4499,8 @@ input:focus-visible {
 	height: 230px;
 	border-radius: 10px;
 	overflow: hidden;
-	background: #141415;
-	border: 1px solid rgba(255, 255, 255, 0.1);
+	background: var(--pm-panel-sunken);
+	border: 1px solid rgba(var(--pm-panel-fg-rgb), 0.1);
 	font-family:
 		ui-monospace, 'SF Mono', 'JetBrains Mono', 'Cascadia Code', Menlo, Consolas,
 		monospace;
@@ -4003,9 +4515,9 @@ input:focus-visible {
 	overflow: hidden;
 	text-align: right;
 	white-space: pre;
-	color: #464649;
-	background: #0e0e0f;
-	border-right: 1px solid rgba(255, 255, 255, 0.06);
+	color: var(--pm-panel-outline);
+	background: var(--pm-panel-gutter);
+	border-right: 1px solid rgba(var(--pm-panel-fg-rgb), 0.06);
 	user-select: none;
 	font-variant-numeric: tabular-nums;
 }
@@ -4029,7 +4541,7 @@ input:focus-visible {
 	position: absolute;
 	inset: 0;
 	pointer-events: none;
-	color: #c9c9ca;
+	color: var(--pm-panel-text-2);
 	background: transparent;
 }
 .cmHighlight code {
@@ -4044,46 +4556,46 @@ input:focus-visible {
 	resize: none;
 	background: transparent;
 	color: transparent;
-	caret-color: #e4e4e5;
+	caret-color: var(--pm-panel-text);
 	-webkit-text-fill-color: transparent;
 }
 .cmInput::selection {
-	background: rgba(188, 198, 243, 0.35);
+	background: rgba(var(--pm-panel-accent-rgb), 0.35);
 }
 /* uBlock-syntax tints */
 .cmComment {
-	color: #5e5e62;
+	color: var(--pm-panel-text-4);
 	font-style: italic;
 }
 .cmDomain {
-	color: #7fd8a6;
+	color: var(--pm-code-domain);
 }
 .cmSep {
-	color: #e0719b;
+	color: var(--pm-code-sep);
 }
 .cmSelector {
-	color: #cfa6ff;
+	color: var(--pm-code-selector);
 }
 .cmOption {
-	color: #e8b974;
+	color: var(--pm-code-option);
 }
 .cmException {
-	color: #78c7ff;
+	color: var(--pm-code-exception);
 	font-weight: 600;
 }
 .cmPlain {
-	color: #c9c9ca;
+	color: var(--pm-panel-text-2);
 }
 
 .spEditorStat {
 	flex: 1 1 auto;
 	font-size: 11.5px;
-	color: #909093;
+	color: var(--pm-panel-text-3);
 }
 
 .spStatus {
 	font-size: 12px;
-	color: #7fd8a6;
+	color: var(--pm-panel-good);
 	max-height: 0;
 	margin: 0;
 	overflow: hidden;
@@ -4099,7 +4611,7 @@ input:focus-visible {
 	opacity: 1;
 }
 .spStatus.bad {
-	color: #f09a9a;
+	color: var(--pm-panel-bad);
 }
 
 @media (max-width: 560px) {

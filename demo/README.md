@@ -296,7 +296,10 @@ holyWisp is started.
     label and icon follow `fullscreenchange`, so Escape or the browser
     leaving fullscreen shows too. Where the page cannot be made fullscreen
     (`document.fullscreenEnabled` false, as on an iPhone's Safari) the item
-    is not offered. **About** opens the Shields settings pages' dialog
+    is not offered. **Settings** opens the same dialog on the theme picker
+    (view `settings`): Default, Light, Dark, Follow system and the themes
+    installed from the Chrome Web Store (docs/themes.md).
+    **About** opens the Shields settings pages' dialog
     (`#shieldsPage`, view `about`): the version, build id, commit and build
     date from `/api/status` (`build`, the server's copy of
     `dist/build.json`, which `build.js` writes: the date is the commit's,
@@ -373,6 +376,7 @@ demo/
 │   └── pm/
 │       ├── main.css    Powermouse-derived styling
 │       ├── main.js     controller wiring and UI behaviour
+│       ├── theme.js    the themes and PMTheme (docs/themes.md), before first paint
 │       ├── dev.js      live reload client, npm run dev only
 │       ├── noise.png, header-background.png, logo.png
 │       └── icons/      the bar's, the menu's and the bookmarks' icons

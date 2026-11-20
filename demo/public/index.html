@@ -7,6 +7,8 @@
 		<link type="image/x-icon" rel="shortcut icon" href="/favicon.ico" />
 		<title>powerMouse</title>
 		<link rel="stylesheet" href="/pm/main.css" />
+		<!-- the chosen theme (docs/themes.md), on the root before the first paint -->
+		<script src="/pm/theme.js"></script>
 		<script>
 			// a page named in the fragment (a reload, a restored session, a link
 			// to a tab) opens in the browser view from the first paint: the home
@@ -336,8 +338,9 @@
 		></div>
 
 		<!-- the menu: the Shields panel's popover with Fullscreen (hidden where
-		     the page cannot be made fullscreen) and About, which opens the
-		     build information in the settings-page dialog below -->
+		     the page cannot be made fullscreen), Extensions, Settings (the
+		     theme) and About, which opens the build information in the
+		     settings-page dialog below -->
 		<div id="menuScrim" class="popoverScrim hidden"></div>
 		<div
 			id="pmMenu"
@@ -355,6 +358,13 @@
 			></button>
 			<button
 				id="menuExtensions"
+				class="pmMenuItem"
+				type="button"
+				role="menuitem"
+				tabindex="-1"
+			></button>
+			<button
+				id="menuSettings"
 				class="pmMenuItem"
 				type="button"
 				role="menuitem"
