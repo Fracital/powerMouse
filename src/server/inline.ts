@@ -29,6 +29,8 @@ export interface InlineDocument {
 	client?: string;
 	/** its creator is cross-origin isolated (InlineDocumentMessage) */
 	isolated?: boolean;
+	/** its creator is served with the proxy's Document-Isolation-Policy (src/server/apartAgent.ts) */
+	apart?: boolean;
 	/** the document's URL as its readbacks show it (the shell's base) */
 	url: string;
 	/**

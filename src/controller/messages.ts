@@ -258,10 +258,14 @@ export type HostBound = {
 	stale: [StaleInfo | null];
 	/** the inner controller's transport chose its carrier (StompController.carrier) */
 	carrier: [CarrierInfo];
+	/** a newer service worker took over from the inner controller's (StompController.onHandover) */
+	handover: [];
 	/** a note of the inner controller's transport, for the host's console (transportLog.ts) */
 	transportNote: [TransportNote];
 	/** a host hook threw in a proxied realm, or a hook URL could not be fetched */
 	hookError: [HookErrorInfo];
+	/** the document `client` is a page isolated natively shown without isolation (NavigateInfo.isolation) */
+	isolationWanted: [string];
 	/** a site asks for a permission the proxy origin holds for another (see StompController.onPermissionRequest) */
 	permission: [PermissionRequestInfo, boolean | null];
 	/**

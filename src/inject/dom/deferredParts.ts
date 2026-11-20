@@ -21,6 +21,11 @@
 // their hooks' checks, ../cacheCalls.ts, at a realm's first; a worker's
 // bundle has it itself)
 //
+// (and the reader of the position map a script file's rewrite carries,
+// ../positionMaps.ts, at a document's first position asked of such a file:
+// a stack's place, a long animation frame's script; a worker's bundle has
+// it itself)
+//
 // (and what Origin.from() answers a page, ../originFrom.ts, at a realm's
 // first call; a worker's bundle has it itself)
 //
@@ -145,7 +150,8 @@ import {
 	notificationParts,
 	permissionElements,
 } from '../permissionGates';
-import { reportsSeen } from '../reportsSeen';
+import { placeIn } from '../positionMaps';
+import { madeReport, reportsSeen } from '../reportsSeen';
 import { bucketMethods } from '../storageBucketMethods';
 import { storageUsage } from '../storageUsage';
 import { carry as carryWebTransport } from '../webTransport';
@@ -220,6 +226,7 @@ import {
 	dispatchViolation,
 	evalError,
 	markupBaseSite,
+	markupScriptSite,
 	noteBaseSite,
 	noteFormSite,
 	refusedTrustedPolicy,
@@ -250,6 +257,9 @@ export const parts = {
 	// what a page's add(), addAll() and caches.match() do past their hooks'
 	// checks, at a realm's first (../cacheCalls.ts; ../modules/Partition.ts)
 	cacheCalls,
+	// the reader of the maps of script files' rewrites, at a realm's first
+	// position of one (../positionMaps.ts; ../positionParts.ts)
+	placeIn,
 	// what a tainted source's refusals say (a WebGL texture, a VideoFrame, an
 	// OffscreenCanvas's export), at a document's first (./taintRefusals.ts;
 	// modules/CanvasTaint.ts)
@@ -266,6 +276,9 @@ export const parts = {
 	// the un-routing of ReportingObserver's reports, at the first
 	// (../reportsSeen.ts; ../modules/Unroute.ts)
 	reportsSeen,
+	// the reports of the violations the inject makes itself, at the first
+	// (../reportsSeen.ts; ./policyChecks.ts)
+	madeReport,
 	// what a worker's construction does past its checks, at a document's
 	// first (../workerStart.ts; ../modules/Worker.ts)
 	workerStart,
@@ -344,6 +357,8 @@ export const parts = {
 	noteBaseSite,
 	noteFormSite,
 	markupBaseSite,
+	// where a script of the markup a violation names is (./policyChecks.ts)
+	markupScriptSite,
 	// the page's own policy's checks of its code and of the loads no worker
 	// sees, at the first a document with a policy needs (./policyChecks.ts;
 	// Client.ts), and a data: URL's integrity, which shares their digests

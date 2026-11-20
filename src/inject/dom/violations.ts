@@ -23,7 +23,7 @@ import { parsedBases } from './cloneNode';
 import { deferred } from './deferred';
 
 /** where the code that made a violation was, as the page reads it: its sourceFile, lineNumber and columnNumber */
-type Site = [string, number, number];
+export type Site = [string, number, number];
 
 /**
  * The place each violation names where the browser's named the inject's
@@ -162,6 +162,52 @@ export function markupBaseSite(
 }
 
 /**
+ * The markup's comments and raw text elements, each element's name, start
+ * tag's rest and text (scripting on: a noscript's is text)
+ */
+const MARKUP_TEXTS =
+	/<!--[\s\S]*?(?:-->|$)|<(script|style|textarea|title|xmp|iframe|noembed|noframes|noscript|plaintext)(?=[\s/>])((?:[^>"']|"[^"]*"|'[^']*')*>)([\s\S]*?)(?:<\/\1(?=[\s/>])[^>]*>|$)/gi;
+/**
+ * How far each client's markup is read for its scripts (markupScriptSite):
+ * where the next search starts, and the place lines are counted to, its
+ * line and the line's start
+ */
+const scriptScans = new LazyWeakMap<object, [number, number, number, number]>();
+
+/**
+ * Where the page's markup has the inline script of the parser whose text is
+ * `text` (the next such one after the last found): the place Chrome names
+ * for its violation, the document's URL and the line and column where its
+ * text starts: its lines are its line feeds (a carriage return alone ends
+ * none) and its columns UTF-16 units (measured, Chrome 157)
+ */
+export function markupScriptSite(
+	client: DocumentClient,
+	text: string,
+): Site | undefined {
+	const markup = client.markupSoFar;
+	const scanned = scriptScans.get(client) ?? [0, 0, 1, 0];
+	const from = scanned[1];
+	let [, , line, start] = scanned;
+	const scan = new RegExp(MARKUP_TEXTS);
+	scan.lastIndex = scanned[0];
+	for (let match; (match = scan.exec(markup));) {
+		if (match[1]?.toLowerCase() !== 'script') continue;
+		if (match[3].replace(/\r\n?/g, '\n') !== text) continue;
+		const at = match.index + match[1].length + match[2].length + 1;
+		const ends = /\n/g;
+		ends.lastIndex = from;
+		for (let end; (end = ends.exec(markup)) && end.index < at;) {
+			line++;
+			start = ends.lastIndex;
+		}
+		scriptScans.set(client, [scan.lastIndex, at, line, start]);
+		return [sourceName(client.url.url.href), line, at - start + 1];
+	}
+	return undefined;
+}
+
+/**
  * `event` names `site` as where its code was: its sourceFile, lineNumber
  * and columnNumber read it (their getters hooked in place at a realm's
  * first, as the target's is, ./modules/ContentSecurity.ts)
@@ -205,6 +251,7 @@ export function dispatchViolation(
 	node: Node | null,
 	documentURI?: string,
 	statusCode = 200,
+	site?: Site,
 ) {
 	const event = new Event('securitypolicyviolation', {
 		bubbles: true,
@@ -228,8 +275,8 @@ export function dispatchViolation(
 		client.codeViolationTarget.set(event, node);
 	}
 	// (where the page's code set the base or submitted the form)
-	const place = noted(client, directive, blockedURI);
-	if (place) placeViolation(client, event, place[0]);
+	const place = site ?? noted(client, directive, blockedURI)?.[0];
+	if (place) placeViolation(client, event, place);
 	// it reads trusted (../violationDispatch.ts): each listener of the
 	// document and its window is handed one view of it, as window.event is
 	const global = client.global as typeof globalThis;

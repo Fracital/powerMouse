@@ -34,14 +34,16 @@ refusing UDP to one name leaves HTTP/3 on for the rest of the session.
 | the HTTP/3 worker                                          | `src/transport/http3/h3Thread.ts`                                          | Where stomp-h3 runs inside the transport worker: a worker of its own, the transport worker's script started again under the name `stomp-h3`. The transport worker keeps the wisp UDP streams and hands each datagram across as it arrives (its buffer moved, not copied); a response body comes back on a port of its own (`bodyPort.ts`). Decrypting, quinn and decoding a response a 1.2 KB packet at a time then cost a thread that runs nothing else, where they queued behind every other request of the page. Where that worker cannot start or load stomp-h3, stomp-h3 runs in the transport worker; a host that constructs `Http3Transport` itself loads it in its own realm. |
 | `Http3Transport`                                           | `src/transport/http3/`                                                     | Wraps the base transport (a `ProxyTransport`). Learns h3 origins, keeps one QUIC connection per origin, decides per request whether h3 is used, falls back. Exported from `dist/controller.mjs` for hosts that construct transports themselves (`new Http3Transport(base, options, moduleUrl)`; `options.udp` can supply another channel opener there).                                                                                                                                                                                                                                                                                                                               |
 | `TransportDescriptor.http3`                                | `src/transport/construct.ts`                                               | The transport worker, the page host and the controller frame wrap the constructed transport when the descriptor asks for it. The module defaults to `h3/stomp_h3.js` next to the transport module (`/epoxy/h3/stomp_h3.js`).                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `stomp_h3.js` + `stomp_h3_bg.wasm` (2.4 MB, 844 KB brotli) | fetched by the HTTP/3 worker the first time an origin offers h3            | Nothing loads while no origin has offered h3.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `stomp_h3.js` + `stomp_h3_bg.wasm` (2.4 MB, 844 KB brotli) | fetched by the HTTP/3 worker the first time an origin offers h3            | Nothing loads while no origin has offered h3: the first Alt-Svc or HTTPS record that names h3 loads it, never the transport's start.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 ## How a request goes
 
 1. A response over the base transport (HTTP/1.1 or HTTP/2) carries
    `Alt-Svc: h3=":443"; ma=86400`. The wrapper keeps it for that origin
    (`URL.origin`) until its max-age, and starts a QUIC handshake to the
-   origin in the background.
+   origin in the background. An HTTPS record that names h3 does the same
+   before the first request (Discovery, under What matches Chrome), and
+   that request waits a bounded head start for the handshake.
 2. Requests that come while the handshake runs go over the base transport,
    with no wait. Once it is done, every request to the origin goes over the
    QUIC connection (multiplexed, up to 100 streams at once).
@@ -137,11 +139,50 @@ relay: `udpBlockedUntil`, `udpCarried` and the hosts in `udpRefused`.
 - Discovery: `Alt-Svc` (RFC 7838) from https responses only, `h3` only (the
   drafts such as `h3-29` are ignored, as current Chrome does), `ma` (default
   24 h), `clear`, and a new field replaces what the origin advertised before.
-  HTTPS DNS records (RFC 9460) with `dns` set to a DNS-over-HTTPS URL (for
-  example `https://cloudflare-dns.com/dns-query`): asked once per name in the
-  background, through the base transport, and an `alpn` naming h3 counts like
-  an Alt-Svc for the record's TTL. `force` lists origins to use h3 on without
-  either, like `--origin-to-force-quic-on`.
+  HTTPS DNS records (RFC 9460), asked of the DNS-over-HTTPS server `dns`
+  names (by default the transport's epoxy `ech_dns`, the demo's
+  `https://cloudflare-dns.com/dns-query`; an empty string asks none) through
+  the base transport: once per name per network partition for the answer's
+  TTL (5 minutes for no record), for an https origin on port 443 named by a
+  host name. An `alpn` naming h3 counts like an Alt-Svc for the record's
+  TTL, and it counts for the name's very first request, as in Chrome, whose
+  resolver asks for the record beside the addresses and whose first request
+  races QUIC against TCP: that request waits for the record up to 300 ms,
+  then gives the QUIC handshake a head start of `wait` (300 ms) and goes
+  over the base transport when it is not up by then (the handshake goes on,
+  and the requests after it do not wait for it). A record later than 300 ms
+  serves from the next request on. Over a relay that has carried nothing
+  back since a head start ran out, a first request neither waits for the
+  record nor gives a head start until a datagram comes back. Nothing of
+  this happens when the transport starts: a name's record is asked at its
+  first request, and stomp-h3 loads when the first record (or Alt-Svc) names
+  h3. Until it has loaded, a first request does not wait for its record (it
+  goes over the base transport while the record is asked beside it, and a
+  record that names h3 serves from the next request on), so a page opened
+  the moment the transport is ready costs what it did. The DoH server's own
+  name is never asked of it, as Chrome resolves its secure DNS server's name
+  without it; the connection to it is the one the transport opens for
+  epoxy's ECH lookups when it starts. When `dns` is epoxy's own `ech_dns`
+  and the epoxy build answers HTTPS records itself (its `httpsAnswer`,
+  asked with the request's fields, which name its network partition, of
+  the shard a name's requests go to), the record is read from epoxy's ECH
+  lookup, the one question per name and partition Chrome asks for both, and
+  the connection's TLS that waits for it finds it answered; an older build
+  is asked over DoH as above. Measured through the demo with Chrome 157
+  (Cloudflare's `/cdn-cgi/trace`, medians, alternated with the build before
+  and its epoxy, on the stack before the carrier host and the shared ECH
+  cache): the first request to www.cloudflare.com after one to
+  example.com reported `http=http/3`, as native Chrome's does, where it was
+  `http/2` before, in 111.5 against 102 ms at Ready and 124.5 against
+  126.5 ms after a 2 s pause; example.com, the session's first such name,
+  is `http/2` in both and costs the same (175 against 175.5 ms at Ready).
+  A first request to a name whose record names no h3 costs the same while
+  stomp-h3 has not loaded (httpbin.org 168.5 against 173.5 ms), and once it
+  has, the time epoxy would have spent connecting while it waited for the
+  same answer (httpbin.org 118.5 against 100.5 ms, www.gnu.org 179.5
+  against 147.5 ms): the request starts after the answer, where epoxy's own
+  lookup runs beside its TCP connection. `force` lists origins to use h3 on without either, like
+  `--origin-to-force-quic-on`.
 - The alternative is used only for the origin that advertised it, and only
   on the origin's own host: an alt-authority naming another host is ignored,
   so a site cannot send another origin's requests to a server it names.

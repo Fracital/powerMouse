@@ -28,9 +28,15 @@ import {
 	type CodeItem,
 } from '../../cspJudge';
 import { proxyBlobURL } from '../../routeURL';
+import { digest } from '../../sha';
+import ProxyModule from '../modules/Proxy';
+import UnrouteModule from '../modules/Unroute';
+import { LazySet, LazyWeakMap } from '../ownCollections';
 import type DocumentClient from './Client';
 import { nativeSetTimeout, nonceOf } from './Client';
 import { deferred } from './deferred';
+import { nativeConsoleError, nativeConsoleInfo } from './modules/Context';
+import type { Site } from './violations';
 
 /** what Chrome names a refused load of `url` by (a script's, a style's) */
 function blockedOf(url: URL): string {
@@ -59,11 +65,22 @@ function dispatchViolation(
 	node: Node | null,
 	documentURI?: string,
 	statusCode?: number,
+	site?: Site,
 ) {
 	const global = client.global as typeof globalThis;
 	const Event = global.SecurityPolicyViolationEvent;
 	if (typeof Event !== 'function') return;
 	const document = global.document;
+	makeReport(
+		client,
+		policy,
+		directive,
+		blocked,
+		sample,
+		documentURI,
+		statusCode,
+		site,
+	);
 	nativeSetTimeout(() => {
 		try {
 			deferred('dispatchViolation')(
@@ -77,11 +94,74 @@ function dispatchViolation(
 				node,
 				documentURI,
 				statusCode,
+				site,
 			);
 		} catch (error) {
 			// the document is gone, or the part cannot be had
 		}
 	});
+}
+
+/**
+ * The csp-violation report of a violation the inject makes, which the
+ * page's ReportingObservers have before its event (takeRecords at once):
+ * where its code was is `site`'s, or none (null, as Chrome's report names
+ * no place: measured). A document reports each report once: one that reads
+ * as one it made before (the same code refused again at the same place, a
+ * script file run twice) is not made again, though its event fires
+ * (measured). One with no place is always made: natively it has a place of
+ * its own.
+ */
+const madeBodies = new LazyWeakMap<DocumentClient, LazySet<string>>();
+function makeReport(
+	client: DocumentClient,
+	policy: Policy,
+	directive: string,
+	blocked: string,
+	sample: string,
+	documentURI?: string,
+	statusCode?: number,
+	site?: Site,
+) {
+	const global = client.global as typeof globalThis;
+	const made = client.getModule(UnrouteModule)?.madeReports;
+	const proxyModule = client.getModule(ProxyModule);
+	if (!made || !proxyModule) return;
+	const body = {
+		sourceFile: site?.[0] ?? null,
+		lineNumber: site?.[1] ?? null,
+		columnNumber: site?.[2] ?? null,
+		documentURL: documentURI ?? client.url.url.href.replace(/#.*$/s, ''),
+		referrer:
+			documentURI === undefined
+				? (client.referrerOf(global.document) ?? '')
+				: '',
+		blockedURL: blocked,
+		effectiveDirective: directive,
+		originalPolicy: policy.text,
+		sample,
+		disposition: policy.disposition,
+		statusCode: statusCode ?? 200,
+	};
+	if (site) {
+		let bodies = madeBodies.get(client);
+		if (!bodies) madeBodies.set(client, (bodies = new LazySet()));
+		// (no global of the page's makes the key)
+		const key = `${site[0]}\n${site[1]}\n${site[2]}\n${body.documentURL}\n${body.referrer}\n${blocked}\n${directive}\n${policy.text}\n${sample}\n${policy.disposition}\n${body.statusCode}`;
+		if (bodies.has(key)) return;
+		bodies.add(key);
+	}
+	try {
+		deferred('madeReport').report(
+			global,
+			proxyModule,
+			made,
+			body,
+			nativeSetTimeout,
+		);
+	} catch (error) {
+		// the part cannot be had
+	}
 }
 
 /**
@@ -156,6 +236,59 @@ function elementIntegrity(element: Element): string | null {
 }
 
 /**
+ * Chrome's console message for a script element `policy` refuses at
+ * script-src-elem (`governed`: the directive that governs it), printed by
+ * the console's native method, which no page hook sees, as the browser's
+ * own (measured, Chrome 157): an inline one's names the hash of the page's
+ * text, an external one's its URL
+ */
+function logScriptRefusal(
+	policy: Policy,
+	governed: { name: string; sources: string[] },
+	item: CodeItem,
+) {
+	const { name, sources } = governed;
+	const directive = sources.length ? `${name} ${sources.join(' ')}` : name;
+	const enforced = policy.disposition === 'enforce';
+	const action = enforced
+		? ' The action has been blocked.'
+		: ' The policy is report-only, so the violation has been logged but no further action has been taken.';
+	let message: string;
+	if (item.url) {
+		message = `Loading the script '${item.url.href}' violates the following Content Security Policy directive: "${directive}".${name === 'script-src-elem' ? '' : ` Note that 'script-src-elem' was not explicitly set, so '${name}' is used as a fallback.`}`;
+	} else {
+		const lower = sources.map((source) => source.toLowerCase());
+		message = `Executing inline script violates the following Content Security Policy directive '${directive}'.${
+			lower.includes("'unsafe-inline'") &&
+			sources.some((source) => /^'(nonce-|sha(256|384|512)-)/i.test(source))
+				? " Note that 'unsafe-inline' is ignored if either a hash or nonce value is present in the source list."
+				: ` Either the 'unsafe-inline' keyword, a hash ('sha256-${digest('sha256', item.text ?? '')}'), or a nonce ('nonce-...') is required to enable inline execution.${name === 'default-src' ? " Note also that 'script-src' was not explicitly set, so 'default-src' is used as a fallback." : ''}`
+		}`;
+	}
+	try {
+		Reflect.apply(
+			enforced ? nativeConsoleError : nativeConsoleInfo,
+			undefined,
+			[message + action],
+		);
+	} catch (error) {
+		// no console
+	}
+}
+
+/**
+ * Where the page's code that called the hook is, as a violation names it
+ * (the URL with no query or fragment, measured: ./violations.ts), or none
+ * where no script of the page's called it
+ */
+function callerSite(client: DocumentClient): Site | undefined {
+	const at = client.getModule(UnrouteModule)!.callerSite();
+	return at.filename === ''
+		? undefined
+		: [at.filename.replace(/[?#].*$/s, ''), at.lineno, at.colno];
+}
+
+/**
  * Whether the page's own policy refuses a piece of its code at `directive`
  * (a script or style element, a handler or style attribute), firing the
  * violation(s) the browser would: true where an enforced policy refuses it,
@@ -177,13 +310,23 @@ function codeRefused(
 	 * inject reports only the enforced ones, so the page sees each once
 	 */
 	workerReports: boolean,
+	/** where the code is (a script of the markup's) */
+	site?: Site,
 ): boolean {
 	let refused = false;
 	for (const { policy, self } of client.pagePolicies()) {
 		const governed = governing(policy, directive);
 		if (!governed) continue;
 		if (codeAllows(governed.sources, directive, { ...item, self })) continue;
-		if (policy.disposition === 'report' && workerReports) continue;
+		if (policy.disposition === 'enforce') refused = true;
+		// (the worker judges only a list of hosts: ./cspJudge.ts hostsApply)
+		if (
+			(policy.disposition === 'report' &&
+				workerReports &&
+				hostsApply(governed.sources)) ||
+			client.quietRefusal
+		)
+			continue;
 		const sample =
 			item.sample &&
 			governed.sources.some(
@@ -191,8 +334,19 @@ function codeRefused(
 			)
 				? item.sample.slice(0, 40)
 				: '';
-		dispatchViolation(client, policy, directive, blocked, sample, node);
-		if (policy.disposition === 'enforce') refused = true;
+		dispatchViolation(
+			client,
+			policy,
+			directive,
+			blocked,
+			sample,
+			node,
+			undefined,
+			undefined,
+			site,
+		);
+		if (directive === 'script-src-elem')
+			logScriptRefusal(policy, governed, item);
 	}
 	return refused;
 }
@@ -281,7 +435,9 @@ export const policyChecks = {
 		const document = global.document;
 		try {
 			const dispatch = deferred('dispatchViolation');
-			for (const { policy } of reporting)
+			for (const { policy } of reporting) {
+				// (one report, however many events: measured)
+				makeReport(client, policy, directive, blocked, '');
 				for (let time = 0; time < times; time++)
 					dispatch(
 						client,
@@ -293,6 +449,7 @@ export const policyChecks = {
 						'',
 						null,
 					);
+			}
 		} catch (error) {
 			// the part cannot be had: the load went out all the same
 		}
@@ -363,6 +520,14 @@ export const policyChecks = {
 				script ? element : null,
 				{ text: code, nonce, parser, sample: code },
 				false,
+				// a script of the markup's names where its text starts, one the
+				// page's code inserts the inserting call (in a script file, its
+				// place in the file's text: ../positionParts.ts)
+				client.parsedSource === code
+					? deferred('markupScriptSite')(client, code)
+					: elem && script
+						? callerSite(client)
+						: undefined,
 			);
 		return codeRefused(
 			client,

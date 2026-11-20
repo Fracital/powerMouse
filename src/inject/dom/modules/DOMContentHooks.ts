@@ -567,8 +567,14 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			// nothing
 			if (rewritten !== script.text) rewrittenScripts.set(script, rewritten);
 			// the page's own script-src refuses this inline script: it keeps no
-			// text, so it runs nothing, and the inject reports it (src/csp.ts)
-			if (!script.hasAttribute('src')) {
+			// text, so it runs nothing, and the inject reports it (src/csp.ts).
+			// A script of markup the parser will run (a copy being made of it)
+			// is the parser's: judged with the markup (rewriteInlineScripts,
+			// DocumentClient judgeParsed), not as one the page inserts
+			if (
+				!script.hasAttribute('src') &&
+				getGlobalParsingState(realm) !== 'parsingBeforeWrite'
+			) {
 				if (client.refuseInlineScript(script, passed, false)) {
 					script.text = '';
 					return;

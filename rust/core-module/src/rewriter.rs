@@ -59,6 +59,10 @@ const FLAG_SINGLE: u32 = 128;
 /// the source does not parse or the part does not apply (a None told from an
 /// empty answer)
 const FLAG_PRINT: u32 = 256;
+/// the output carries the map of itself to the script's text, for the
+/// positions a page reads (`rwjs::positions`): a script file the service
+/// worker serves
+const FLAG_POSITIONS: u32 = 512;
 
 /// statuses besides 0: the configuration or the params did not parse
 const STATUS_CONFIG: i32 = 1;
@@ -195,6 +199,7 @@ pub unsafe extern "C" fn call(ptr: *mut u8, len: usize, flags: u32) -> i32 {
 	let options = Options {
 		module: flags & FLAG_MODULE != 0,
 		holder: flags & FLAG_HOLDER != 0,
+		positions: flags & FLAG_POSITIONS != 0,
 		config: &config,
 		params: &params,
 	};

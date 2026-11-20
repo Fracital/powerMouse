@@ -6,7 +6,12 @@
 // with the page or a crash) or the worker took longer than the timeout. A
 // port that closed or timed out is not used again.
 import type { Config } from '../config';
-import { RewrittenBy, ScriptSource, ScriptType } from '../rewriteJS';
+import {
+	RewrittenBy,
+	SCRIPT_FILE,
+	ScriptSource,
+	ScriptType,
+} from '../rewriteJS';
 import {
 	REWRITE_READY,
 	REWRITE_RPC,
@@ -247,7 +252,7 @@ export class RewritePool {
 			url,
 			config,
 			type,
-			undefined,
+			SCRIPT_FILE,
 			preamble,
 			told,
 		);

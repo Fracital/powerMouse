@@ -37,6 +37,21 @@ const KNOWN_BY_REASON = {
 			'no headers: frames/same origin, a Document-Isolation-Policy',
 			'an embedder policy only: frames/same origin, a Document-Isolation-Policy',
 		],
+	"a frame that is not isolated natively, in a page the proxy isolates with a Document-Isolation-Policy of its own under a host that is not isolated, is in that page's agent cluster (its parent reaches it there), where Chrome 157 gives every document the 5 microsecond clock and isolated dedicated workers whatever its Permissions-Policy or its element's allow say (measured): its inject hides crossOriginIsolated and SharedArrayBuffer, not the clock":
+		[
+			'the host is not isolated: COOP and an embedder policy: frames/same origin, an embedder policy and a permissions policy of none',
+			"the host is not isolated: COOP and an embedder policy: frames/same origin, an embedder policy, allow 'none'",
+			'the host is not isolated: COOP and an embedder policy: frames/another origin, an embedder and a resource policy',
+			'the host is not isolated: COOP and an embedder policy: frames/another origin, allowed, through a redirect of this origin without headers',
+			'the host is not isolated: COOP and an embedder policy: frames/a credentialless frame of another origin, no headers',
+			'the host is not isolated: COOP and an embedder policy: frames/another origin, allowed, and its own frame of this origin',
+			'the host is not isolated: COOP and a credentialless embedder policy: frames/same origin, an embedder policy and a permissions policy of none',
+			"the host is not isolated: COOP and a credentialless embedder policy: frames/same origin, an embedder policy, allow 'none'",
+			'the host is not isolated: COOP and a credentialless embedder policy: frames/another origin, an embedder and a resource policy',
+			'the host is not isolated: COOP and a credentialless embedder policy: frames/another origin, allowed, through a redirect of this origin without headers',
+			'the host is not isolated: COOP and a credentialless embedder policy: frames/a credentialless frame of another origin, no headers',
+			'the host is not isolated: COOP and a credentialless embedder policy: frames/another origin, allowed, and its own frame of this origin',
+		],
 };
 const KNOWN = new Map(
 	Object.entries(KNOWN_BY_REASON).flatMap(([why, names]) =>
@@ -353,8 +368,12 @@ if (!only || 'the wait of Frame.go'.includes(only)) {
 }
 
 // The host that does not send the headers: a second demo server without
-// them. Nothing is isolated there, so every page reads what a page without
-// the headers reads natively, whatever it sent.
+// them. A page that is isolated natively is served with a
+// Document-Isolation-Policy there (Chrome 137 and later), which isolates it
+// in an agent cluster of its own, and reads as natively: isolated, its
+// workers and frames as natively, its embedder policy's checks the
+// worker's. Every other page reads what a page without the headers reads
+// natively, as before.
 if (!only || 'the host is not isolated'.includes(only)) {
 	const port = await freePort();
 	const env = {
@@ -370,14 +389,40 @@ if (!only || 'the host is not isolated'.includes(only)) {
 		[fileURLToPath(new URL('../../demo/server.js', import.meta.url))],
 		{ env, stdio: ['ignore', 'ignore', 'inherit'] },
 	);
+	// the kinds of page, the parts each runs here, and whether it is
+	// isolated natively (a page that is not reads as before: its
+	// document.featurePolicy is the browser's own, the proxy origin's or
+	// what the host's page lets its frames have, and its embedder policy is
+	// the browser's to enforce on a worker's script, which no proxied
+	// document has here)
+	const UNISOLATED_KINDS = [
+		['COOP and an embedder policy', ALL, true],
+		['COOP and a credentialless embedder policy', ALL, true],
+		['a Document-Isolation-Policy', 'self,workers', true],
+		['no headers', 'self,workers', false],
+		[
+			'the headers and a permissions policy that gives it up',
+			'self,workers',
+			false,
+		],
+	];
+	const SHARED_TO_WORKER =
+		'self/a SharedArrayBuffer posted to a worker is shared with it';
+	const NOT_ISOLATED_SKIP = [
+		'self/the permission by document.featurePolicy',
+		'workers/a worker whose script has no embedder policy',
+		'workers/a worker whose script has no embedder policy, through a redirect with one',
+	];
 	try {
 		await waitForServer(`http://127.0.0.1:${port}/api/status`);
-		const parts = { parts: 'self,workers' };
-		const plain =
-			natives['no headers'] ?? (await native({ headers: [], ...parts }));
-		const want = Object.fromEntries(
-			Object.entries(plain).filter(([name]) => /^(self|workers)\//.test(name)),
-		);
+		const wants = {};
+		for (const [name, parts] of UNISOLATED_KINDS) {
+			const kind = { ...KINDS[name], parts };
+			wants[name] =
+				natives[name] && KINDS[name].parts === parts
+					? natives[name]
+					: await native(kind);
+		}
 		for (const [mode, base] of [
 			['same-origin', `http://127.0.0.1:${port}/`],
 			['isolated', `http://localhost:${port}/`],
@@ -393,26 +438,29 @@ if (!only || 'the host is not isolated'.includes(only)) {
 				hostIsolated === false,
 				String(hostIsolated),
 			);
-			for (const [name, headers] of [
-				['COOP and an embedder policy', [COOP, COEP]],
-				['no headers', []],
-			]) {
-				const got = await proxied(base, { headers, ...parts });
+			for (const [name, parts, isolated] of UNISOLATED_KINDS) {
+				const got = await proxied(base, { ...KINDS[name], parts });
 				ok(
 					`${mode}, the host is not isolated: a page with ${name} ran every case`,
 					got !== null,
+					normal(got?.['self/crossOriginIsolated']),
 				);
-				compare(`${mode}, the host is not isolated: ${name}`, want, got, [
-					// document.featurePolicy is the browser's own here, as
-					// it always was: the proxy origin's (same-origin mode),
-					// or what the host's page lets its frames have
-					'self/the permission by document.featurePolicy',
-					// an embedder policy is the browser's to enforce on a
-					// worker's script, and no proxied document has one here
-					...(name === 'no headers'
-						? []
-						: ['workers/a worker whose script has no embedder policy']),
-				]);
+				// (Chrome 137 and later: the proxy's own Document-Isolation-Policy)
+				ok(
+					`${mode}, the host is not isolated: a page with ${name} is ${isolated ? 'isolated, and a SharedArrayBuffer it posts to a worker is shared' : 'not isolated'}`,
+					isolated
+						? got?.['self/crossOriginIsolated'] === true &&
+								normal(got[SHARED_TO_WORKER]) ===
+									normal(['[object SharedArrayBuffer]', 7])
+						: got?.['self/crossOriginIsolated'] === false,
+					normal([got?.['self/crossOriginIsolated'], got?.[SHARED_TO_WORKER]]),
+				);
+				compare(
+					`${mode}, the host is not isolated: ${name}`,
+					wants[name],
+					got,
+					isolated ? [] : NOT_ISOLATED_SKIP,
+				);
 			}
 		}
 	} finally {
@@ -430,7 +478,10 @@ function compare(label, want, got, skip = []) {
 		const wanted = normal(want[name]);
 		const had = normal(got?.[name]);
 		const detail = `\n      native  ${wanted}\n      proxied ${had}`;
-		const known = KNOWN.get(`${label.replace(/^[^:]+: /, '')}: ${name}`);
+		// (a mode's label leads: "isolated: " or "same-origin, ")
+		const known = KNOWN.get(
+			`${label.replace(/^(same-origin|isolated)(: |, )/, '')}: ${name}`,
+		);
 		if (known)
 			ok(
 				`${label}: ${name} differs as known (${known})`,

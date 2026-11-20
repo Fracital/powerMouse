@@ -199,7 +199,12 @@ export interface ScriptSource {
 	shifts?: number[];
 	/** false: never written into the output (a javascript: URL's body) */
 	embed?: boolean;
+	/** true: a script file the service worker serves, whose output carries the map of itself to its text (rust/rwjs/src/positions.rs) */
+	positions?: boolean;
 }
+
+/** a script file the service worker serves: its own text kept, and its output mapped to it */
+export const SCRIPT_FILE: ScriptSource = { positions: true };
 
 /** whether `code` parses as a script of one expression statement (a javascript: URL's body) */
 export function singleExpression(code: string): boolean {

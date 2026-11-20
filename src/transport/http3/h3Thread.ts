@@ -11,7 +11,13 @@
 // split the work. A response body comes back on a port of its own
 // (bodyPort.ts).
 import type { RawHeaders } from '@mercuryworkshop/proxy-transports';
-import { isPortBody, receiveBody, sendBody, type PortBody } from '../bodyPort';
+import {
+	isPortBody,
+	receiveBody,
+	receiveCounted,
+	sendBody,
+	type PortBody,
+} from '../bodyPort';
 import { RpcHelper } from '../rpc';
 import type { H3Connection, H3Module, H3Response } from './Http3Transport';
 
@@ -185,7 +191,11 @@ export function serveH3(scope: DedicatedWorkerGlobalScope): void {
 					report(id);
 					throw error;
 				}
-				const out = response.body ? sendBody(response.body, true) : null;
+				// (with its count of the bytes the body came as, at its end)
+				const encoded = response.encoded;
+				const out = response.body
+					? sendBody(response.body, true, encoded ? () => encoded.bytes : null)
+					: null;
 				return [
 					{ status: response.status, headers: response.headers, body: out },
 					out ? [out.$stompBodyPort] : [],
@@ -253,10 +263,12 @@ class RemoteConnection implements H3Connection {
 			{ conn: this.#id, method, url, headers, body: sent },
 			sent && isPortBody(sent) ? [sent.$stompBodyPort] : [],
 		);
+		if (!response.body)
+			return { status: response.status, headers: response.headers, body: null };
 		return {
 			status: response.status,
 			headers: response.headers,
-			body: response.body ? receiveBody(response.body) : null,
+			...receiveCounted(response.body),
 		};
 	}
 }
