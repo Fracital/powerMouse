@@ -3822,6 +3822,12 @@ export default class DocumentClient extends Client {
 	/** @internal whether the page's markup had speculation rules, which hold its text marked (Readback) */
 	speculationMarked = false;
 	/**
+	 * @internal a copy of markup is being made whose scripts
+	 * rewriteInlineScripts rewrites next (DOMContentHooks leaves them): each
+	 * inline script of a page was rewritten twice, the first time for nothing
+	 */
+	copyingMarkup = false;
+	/**
 	 * @internal set by the Readback module: `script` holds `rewritten` for the
 	 * text `written` the page gave it, which is what the page reads back; in
 	 * `pieces`, the text nodes that held it and what each was given
@@ -4249,6 +4255,7 @@ export default class DocumentClient extends Client {
 				// (attached or not), which would fetch its images; the copy is
 				// made of its nodes (in the parse's own tree, where a base's
 				// hook finds the policies before it)
+				this.copyingMarkup = true;
 				node.append(
 					cloneRawNode(
 						shallow ? [from] : [...from.childNodes],
@@ -4257,6 +4264,7 @@ export default class DocumentClient extends Client {
 						shallow,
 					),
 				);
+				this.copyingMarkup = false;
 				setGlobalParsingState(this.global);
 				// inline scripts are rewritten here, once. A classic script gets a
 				// preamble that restores the source the page wrote for
@@ -4270,6 +4278,7 @@ export default class DocumentClient extends Client {
 				);
 				this.rewriteInlineScripts(node, true, job.sources ?? undefined);
 			} finally {
+				this.copyingMarkup = false;
 				setGlobalParsingState(this.global);
 				this.#parseBase = null;
 				this.markupCopy = false;
