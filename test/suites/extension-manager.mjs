@@ -32,8 +32,8 @@
 //    Chrome's refusals, a key taken from another command, Clear, and a
 //    shortcut firing commands.onCommand from the host and from a proxied
 //    page, and _execute_action opening the popup;
-//  - Pack extension: Chrome's dialog makes a CRX3 and a key, and the CRX
-//    installs under the key's id;
+//  - Pack extension: Chrome's dialog, spaced as Chrome's, makes a CRX3 and
+//    a key, and the CRX installs under the key's id;
 //  - at 390px the page fits, the side nav behind the menu button.
 // EXT_SHOTS=<dir> writes a screenshot of each view there.
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -1420,6 +1420,38 @@ const packDialog = await page.evaluate(() => ({
 	].map((label) => label.textContent),
 	go: document.querySelector('[data-control="pack:go"]')?.disabled,
 }));
+// Chrome 157's spacing (its cr-input in the pack dialog): the note 16px
+// over the first label, each label 8px over its field, 16px from a field
+// to the next label, Browse 12px after its field and level with it
+const packSpacing = await page.evaluate(() => {
+	const note = document
+		.querySelector('#xpSubView .spSectionNote')
+		.getBoundingClientRect();
+	const rows = [...document.querySelectorAll('#xpSubView .xpPackRow')].map(
+		(row) => ({
+			label: row.querySelector('.spRowLabel').getBoundingClientRect(),
+			input: row.querySelector('.spInput').getBoundingClientRect(),
+			browse: row.querySelector('.spBtn').getBoundingClientRect(),
+		}),
+	);
+	const round = (n) => Math.round(n * 2) / 2;
+	return {
+		noteToLabel: round(rows[0].label.top - note.bottom),
+		labelToField: rows.map((row) => round(row.input.top - row.label.bottom)),
+		fieldToLabel: round(rows[1].label.top - rows[0].input.bottom),
+		browseGap: rows.map((row) => round(row.browse.left - row.input.right)),
+		browseLevel: rows.map((row) => round(row.browse.bottom - row.input.bottom)),
+	};
+});
+ok(
+	"Pack extension's fields are spaced as Chrome's: 16px from the note, the label 8px over its field, 16px between fields, Browse 12px after its field and level with it",
+	packSpacing.noteToLabel === 16 &&
+		packSpacing.labelToField.every((gap) => gap === 8) &&
+		packSpacing.fieldToLabel === 16 &&
+		packSpacing.browseGap.every((gap) => gap === 12) &&
+		packSpacing.browseLevel.every((gap) => Math.abs(gap) <= 1),
+	JSON.stringify(packSpacing),
+);
 await page.setInputFiles('#xpPackFolder', FOLDER);
 await painted(page);
 await shot(page, 'pack');

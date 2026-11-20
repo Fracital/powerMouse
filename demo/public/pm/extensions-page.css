@@ -418,6 +418,32 @@
 	margin: 0 0 8px;
 	overflow-wrap: anywhere;
 }
+/* Pack extension's fields, spaced as Chrome 157's cr-input in its dialog:
+   16px under the note and between fields, the label 8px over its field,
+   Browse 12px after the field and level with it, no rules between rows */
+.spRows.xpPack {
+	margin-top: 16px;
+}
+.xpPack .xpPackRow {
+	align-items: flex-end;
+	gap: 12px;
+	padding: 0;
+	border-top: none;
+}
+.xpPack .xpPackRow + .xpPackRow {
+	margin-top: 16px;
+}
+.xpPackRow .spRowLabel {
+	margin-bottom: 8px;
+}
+.xpPackRow .spInput {
+	display: block;
+	box-sizing: border-box;
+	width: 100%;
+}
+.xpPack .spRowButtons {
+	margin-top: 20px;
+}
 .xpShortcutNote {
 	margin: 4px 0 0;
 }

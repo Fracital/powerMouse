@@ -19,6 +19,10 @@
 //    access, the pin; unpinned, the button leaves the bar and pops out
 //    while its popup shows;
 //  - Remove from its menu asks in Chrome's dialog, then it is gone;
+//  - the address bar's status chip stays the service worker's and the
+//    transport's: nothing of the extension's install, pins, a failed call
+//    or its removal shows there (Chrome says "Extension pinned" to a screen
+//    reader only);
 //  - Options opens its page in a tab whose bar shows chrome-extension://,
 //    and such an address typed in the bar opens it; no shields there;
 //  - the content script runs in the tab's page;
@@ -322,6 +326,15 @@ const popupState = (page) =>
 
 // ---- the isolated host, desktop ------------------------------------------------
 const page = await browsing(HOST);
+// every text the address bar's status chip shows from here on
+await page.evaluate(() => {
+	const chip = document.getElementById('chromeStatus');
+	window.__chipSaid = [chip.textContent];
+	new MutationObserver(() => window.__chipSaid.push(chip.textContent)).observe(
+		chip,
+		{ childList: true, characterData: true, subtree: true },
+	);
+});
 const puzzle = await box(page, '#toolExtensions');
 const omniBox = await box(page, '#omni');
 const menuBox = await box(page, '#toolMenu');
@@ -1023,6 +1036,20 @@ const on = await until(
 ok('turned on again: its button is back', on === 1, String(on));
 await page.keyboard.press('Escape');
 
+// a failed call of the extensions API (the extension gone under its
+// button): nothing in the status chip
+await page.evaluate(() => {
+	window.controller.extensions.clickAction = async () => {
+		throw new Error('No installed extension probe');
+	};
+});
+await page.click(`#extActions .extAction[data-ext="${id}"]`);
+await sleep(500);
+await page.evaluate(() => delete window.controller.extensions.clickAction);
+const announced = await page.evaluate(
+	() => document.querySelector('.extAnnouncer')?.textContent ?? null,
+);
+
 // Remove, from its menu: the page asks, then it is gone
 await page.click(`#extActions .extAction[data-ext="${id}"]`, {
 	button: 'right',
@@ -1063,6 +1090,22 @@ ok(
 	JSON.stringify(removed),
 );
 await page.keyboard.press('Escape');
+const chipSaid = await page.evaluate(() => ({
+	said: window.__chipSaid,
+	now: document.getElementById('chromeStatus').textContent,
+	error: document.getElementById('chromeStatus').classList.contains('error'),
+}));
+ok(
+	"the status chip said only the proxy's state through the install, the pins, a failed call and the removal; the pin was said to a screen reader",
+	chipSaid.said.length > 0 &&
+		chipSaid.said.every(
+			(text) => !/extension|pinned|removed|probe/i.test(text),
+		) &&
+		/^(Ready|Loaded|Loading…)$/.test(chipSaid.now) &&
+		!chipSaid.error &&
+		/^Extension (pinned|unpinned)$/.test(announced ?? ''),
+	JSON.stringify({ chipSaid, announced }),
+);
 if (process.env.EXT_SHOTS) {
 	await addProbe(page);
 	await page.keyboard.press('Escape');

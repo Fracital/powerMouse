@@ -313,7 +313,10 @@ if (CFG.dev) {
 }
 
 function setStatus(text, error = false) {
-	// the landing line, the live bar and every card's copy of the bar
+	// the landing line, the live bar and every card's copy of the bar. It
+	// says what the service worker, the transport and the tab's load are
+	// doing, nothing of the extensions (their buttons and the Extensions
+	// page say theirs, as Chrome's do)
 	const chips = document.querySelectorAll('.cardLabel .status');
 	for (const node of [landingStatus, chromeStatus, ...chips]) {
 		node.textContent = text;
@@ -6305,11 +6308,31 @@ function renderExtActions() {
 	extActions.replaceChildren(...buttons);
 }
 
-/** a failed call of the extensions API, said where the user is */
+/**
+ * a failed call of the extensions API: the Extensions page's status line
+ * when it is open, the console otherwise. The address bar's status chip is
+ * the service worker's and the transport's alone; Chrome shows an
+ * extension's state on its button and in chrome://extensions only
+ */
 function extFailed(error) {
 	if (shieldsPageOpen() && shieldsPage.dataset.view === 'extensions')
 		setShieldsPageStatus(error.message, true);
-	else setStatus(`Extension: ${error.message}`, true);
+	else console.warn('Extensions:', error.message);
+}
+
+/**
+ * Chrome's words for a screen reader as a pin changes ("Extension pinned",
+ * "Extension unpinned"): said, never shown
+ */
+let extAnnouncer = null;
+function announceExt(text) {
+	if (!extAnnouncer) {
+		extAnnouncer = element('div', 'extAnnouncer');
+		extAnnouncer.setAttribute('aria-live', 'polite');
+		document.body.append(extAnnouncer);
+	}
+	extAnnouncer.textContent = '';
+	requestAnimationFrame(() => (extAnnouncer.textContent = text));
 }
 
 /** a visible button to anchor a popup or a menu at, for one that is hidden */
@@ -6539,7 +6562,7 @@ function extPanelRow(info, action) {
 		pin.addEventListener('click', async () => {
 			try {
 				await extApi().pin(info.id, !info.pinned);
-				setStatus(info.pinned ? 'Extension unpinned' : 'Extension pinned');
+				announceExt(info.pinned ? 'Extension unpinned' : 'Extension pinned');
 			} catch (error) {
 				extFailed(error);
 			}
@@ -6662,13 +6685,13 @@ async function runExtMenuEntry(info, entry) {
 		default:
 			try {
 				await api.runMenuCommand(info.id, entry);
+				if (entry.command === 'pin' || entry.command === 'unpin')
+					announceExt(
+						entry.command === 'pin' ? 'Extension pinned' : 'Extension unpinned',
+					);
 			} catch (error) {
 				extFailed(error);
 			}
-			if (entry.command === 'pin' || entry.command === 'unpin')
-				setStatus(
-					entry.command === 'pin' ? 'Extension pinned' : 'Extension unpinned',
-				);
 			scheduleExtSync();
 	}
 }
@@ -6693,8 +6716,8 @@ function confirmExtRemoval(info) {
 	remove.addEventListener('click', async () => {
 		extMenuPopover.close();
 		try {
+			// (its button leaves the bar: Chrome says nothing more)
 			await extApi().remove(info.id);
-			setStatus(`Removed ${info.name}.`);
 		} catch (error) {
 			extFailed(error);
 		}

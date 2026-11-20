@@ -3137,6 +3137,16 @@ input:focus-visible {
 .extActions:empty {
 	display: none;
 }
+/* what Chrome says to a screen reader as a pin changes: never drawn */
+.extAnnouncer {
+	position: fixed;
+	width: 1px;
+	height: 1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+	pointer-events: none;
+}
 .extAction {
 	position: relative;
 	flex: none;
