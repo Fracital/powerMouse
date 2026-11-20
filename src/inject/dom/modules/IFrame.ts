@@ -15,9 +15,6 @@ import {
 	containerOf,
 	destinationURL,
 	frameDestination,
-	frameWindow,
-	freshFrame,
-	recordFresh,
 	swappingFrames,
 } from '../freshContext';
 import { baseTarget, clickedLink } from '../links';
@@ -427,11 +424,17 @@ export default class IFrameModule extends Module<DocumentClient> {
 					Reflect.apply(stopImmediate, event, []);
 					const to = (event as CustomEvent).detail;
 					if (
-						typeof to === 'string' &&
-						to.startsWith(scopePrefix(moduleClient)) &&
-						moduleClient.freshFrame?.(target, to)
+						typeof to !== 'string' ||
+						!to.startsWith(scopePrefix(moduleClient))
 					)
-						event.preventDefault();
+						return;
+					try {
+						if (!moduleClient.freshFrame?.(target, to)) return;
+					} catch (error) {
+						// the fresh context cannot be had: the frame stays on the
+						// worker's document, where nothing of the other origin is
+					}
+					event.preventDefault();
 				},
 				true,
 			);
@@ -441,20 +444,10 @@ export default class IFrameModule extends Module<DocumentClient> {
 		// A frame of this document that is to show another origin's document
 		// gets a fresh browsing context first (freshContext.ts): asked by the
 		// frame's own document, which may run another bundle
-		moduleClient.freshFrame = (element, routed, formData, page) => {
-			const old = frameWindow(element);
-			if (!freshFrame(element, routed, formData)) return false;
-			recordFresh(
-				moduleClient,
-				element,
-				old,
-				page ??
-					(routed === null ? '' : (unrouteURL(moduleClient, routed) ?? routed)),
-				(native, hook) =>
-					proxyModule.wrapFunction(native, (target, that, args) => hook(args)),
-			);
-			return true;
-		};
+		// (../freshSwap.ts, a deferred part made at a document's first; throws
+		// where it cannot be had, and the frame is not navigated)
+		moduleClient.freshFrame = (element, routed, formData, page) =>
+			deferred('freshSwap')(moduleClient, element, routed, formData, page);
 
 		// This document, when it is a frame still on its initial about:blank
 		// (which fires no navigate event): a navigation of it to another
@@ -469,20 +462,26 @@ export default class IFrameModule extends Module<DocumentClient> {
 			if (origin === moduleClient.originKey) return false;
 			const container = containerOf(global, moduleClient.names.client);
 			if (!container?.parent.freshFrame) return false;
-			return container.parent.freshFrame(
-				container.element,
-				empty
-					? null
-					: routeHTML(
-							new StompURL(destination, moduleClient.url),
-							moduleClient.url,
-							moduleClient.config,
-							false,
-							moduleClient.nestedRoute,
-						),
-				formData,
-				destination.href,
-			);
+			try {
+				return container.parent.freshFrame(
+					container.element,
+					empty
+						? null
+						: routeHTML(
+								new StompURL(destination, moduleClient.url),
+								moduleClient.url,
+								moduleClient.config,
+								false,
+								moduleClient.nestedRoute,
+							),
+					formData,
+					destination.href,
+				);
+			} catch (error) {
+				// the fresh context cannot be had (../freshSwap.ts): the
+				// navigation goes nowhere, as one never sent
+				return true;
+			}
 		};
 
 		// a link or form of this document aimed by name at a frame of it still
@@ -777,9 +776,18 @@ export default class IFrameModule extends Module<DocumentClient> {
 				// in the parent's realm, once this event is over: the frame is
 				// taken out of its document, this one with it
 				const again = () =>
-					container.parent.global.setTimeout(() =>
-						container.parent.freshFrame?.(container.element, routed, formData),
-					);
+					container.parent.global.setTimeout(() => {
+						try {
+							container.parent.freshFrame?.(
+								container.element,
+								routed,
+								formData,
+							);
+						} catch (error) {
+							// the fresh context cannot be had: the navigation, cancelled
+							// already, goes nowhere
+						}
+					});
 				// the request is the parent's element's now: the worker takes
 				// this document for its referrer and initiator, as it was, and
 				// the policy the browser gives a request of this document's as

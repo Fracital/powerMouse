@@ -274,6 +274,36 @@
 					made((frame) => {
 						frame.src = `data:text/html,${encodeURIComponent(MADE('"data"'))}`;
 					}),
+				// a frame of this origin sent to another (the fixture's other
+				// host), which gets a fresh browsing context first
+				// (src/inject/dom/freshSwap.ts): where the frame lands, and
+				// whether the src set threw
+				freshFrame: () =>
+					new Promise((resolve) => {
+						const frame = document.createElement('iframe');
+						const landed = [];
+						let threw = null;
+						addEventListener('message', (event) => {
+							// (the window the page holds answers for the fresh one too)
+							if (event.source !== frame.contentWindow) return;
+							if (event.data?.landed) landed.push(event.data.landed);
+							if (landed[0] !== '?first' || landed.length > 1) return;
+							const url = new URL(
+								'deferred-refusals-landed.html?fresh',
+								location.href,
+							);
+							url.hostname =
+								url.hostname === 'localhost' ? '127.0.0.1' : 'localhost';
+							try {
+								frame.src = url.href;
+							} catch (error) {
+								threw = String(error && error.message);
+							}
+							setTimeout(() => resolve({ landed, threw }), 3000);
+						});
+						frame.src = 'deferred-refusals-landed.html?first';
+						document.body.append(frame);
+					}),
 				// a refresh meta a script puts in a frame's document
 				// (rareAttributes.ts): where the frame goes
 				refresh: () =>

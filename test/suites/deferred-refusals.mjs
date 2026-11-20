@@ -194,7 +194,13 @@ const REFUSING = [
  * the documents a frame of the child is given whose code is a part, asked
  * on their own (each waits a while for what does not come)
  */
-const DOCUMENTS = ['srcdoc', 'javascriptDocument', 'dataFrame', 'refresh'];
+const DOCUMENTS = [
+	'srcdoc',
+	'javascriptDocument',
+	'dataFrame',
+	'refresh',
+	'freshFrame',
+];
 /**
  * an <object>'s HTML document, untyped and typed, in a child of its own (it
  * waits a while for each object)
@@ -472,6 +478,12 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		'with the parts, a refresh meta a script inserts refreshes its frame',
 		documents.out?.refresh?.refreshed === true,
 		JSON.stringify(documents.out?.refresh),
+	);
+	ok(
+		'with the parts, a frame of this origin sent to another lands there, in a fresh context',
+		documents.out?.freshFrame?.landed?.join() === '?first,?fresh' &&
+			documents.out.freshFrame.threw === null,
+		JSON.stringify(documents.out?.freshFrame),
 	);
 	const based = await top.evaluate(() => window.__baseIn());
 	ok(
@@ -865,6 +877,12 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		'without the parts, a refresh meta is refused: its frame stays',
 		out.refresh?.stayed === true,
 		JSON.stringify(out.refresh),
+	);
+	ok(
+		'without the parts, a frame of this origin sent to another is refused: it is not navigated',
+		out.freshFrame?.landed?.join() === '?first' &&
+			out.freshFrame.threw === null,
+		JSON.stringify(out.freshFrame),
 	);
 	// as an enforced base-uri refuses it: the browser refuses its refusal
 	// URL, and nothing reports the page's own base
