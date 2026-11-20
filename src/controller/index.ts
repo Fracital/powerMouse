@@ -1015,6 +1015,19 @@ export function activated(worker: ServiceWorker): Promise<ServiceWorker> {
 	});
 }
 
+/**
+ * The error for a page without `navigator.serviceWorker`: a browser hides
+ * it in a page that is not a secure context (plain http off localhost),
+ * which is the common case and the one to name
+ */
+function noServiceWorkers(): Error {
+	return new Error(
+		globalThis.isSecureContext === false
+			? `Service workers need a secure context, and ${location.origin} is not one: serve this page over HTTPS, or from localhost while you develop.`
+			: 'Your browser does not support service workers.',
+	);
+}
+
 /** the worker a registration holds, newest first; throws for an empty one */
 function registrationWorker(
 	registration: ServiceWorkerRegistration,
@@ -1206,6 +1219,8 @@ export class StompController extends EventTarget {
 	#blockerHeld?: WebAssembly.Module;
 	/** the same modules compiled, for the threads and pages of this agent cluster (none without `rewriter: 'wasm'`) */
 	#compiled: Promise<Record<string, WebAssembly.Module>> | null = null;
+	/** why a module did not load or compile, by its name (what #rewriterReady says) */
+	#moduleFailures: Record<string, unknown> = {};
 	/** settles once the modules' bytes are in (#modules) */
 	#loaded: Promise<unknown>;
 	/** settles once the transport exists where it is hosted; the handshake waits for it */
@@ -1319,8 +1334,7 @@ export class StompController extends EventTarget {
 			updateViaCache?: ServiceWorkerUpdateViaCache;
 		} = {},
 	): Promise<ServiceWorkerRegistration> {
-		if (!('serviceWorker' in navigator))
-			throw new Error('Your browser does not support service workers.');
+		if (!('serviceWorker' in navigator)) throw noServiceWorkers();
 		const scope = isUrlLike(directory)
 			? new URL(directory, location.href)
 			: defaultDirectory();
@@ -1349,8 +1363,7 @@ export class StompController extends EventTarget {
 		// before anything async: a bad name is a programming error
 		validateNames(init.names, Object.getOwnPropertyNames(globalThis));
 		validateHooks(init.hooks);
-		if (!('serviceWorker' in navigator))
-			throw new Error('Your browser does not support service workers.');
+		if (!('serviceWorker' in navigator)) throw noServiceWorkers();
 		// a step of a frame's history taken with location.replace is a
 		// history step all the same (history.ts)
 		tellSteps((url) => this.#call('historyStep', url));
@@ -2268,6 +2281,18 @@ export class StompController extends EventTarget {
 				assetName(this.config.assets, 'core'),
 				this.directory,
 			);
+			// the bytes came and the page may not compile them: Chrome's
+			// CompileError names the policy ("violates the following Content
+			// Security policy directive")
+			const failure = this.#moduleFailures.core as Error | undefined;
+			if (
+				failure?.name === 'CompileError' &&
+				/content security policy/i.test(String(failure.message))
+			)
+				throw new Error(
+					`Stomp: this page's Content-Security-Policy does not let it compile WebAssembly, and the rewriter is the wasm core module (${url.href}). Add 'wasm-unsafe-eval' to the policy's script-src (or default-src).`,
+					{ cause: failure },
+				);
 			throw new Error(
 				`Stomp: the host does not serve the asset 'core' (${url.href}). The rewriter is the wasm core module; serve dist/${DEFAULT_ASSETS.core} beside the other bundles, or name it in init.assets.core.`,
 			);
@@ -2454,6 +2479,7 @@ export class StompController extends EventTarget {
 					}
 					loaded[name] = bytes;
 				} catch (error) {
+					this.#moduleFailures[name] = error;
 					// a blocker nobody asked for (it is on by default) is not a
 					// fault of the host's: said once, and not as a warning
 					if (name === 'blocker' && this.#adblock?.byDefault)
