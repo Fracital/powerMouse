@@ -335,6 +335,24 @@ const MUTED: ErrorReport = {
 /** a DataCloneError's message: what it was thrown for, the value as text, the verdict */
 const UNCLONEABLE = /^([^:]*: )([\s\S]+)( could not be cloned\.)$/;
 
+/** a page's ReportingObserver, as the reports the inject makes reach it (../reportsSeen.ts madeReport) */
+export interface MadeObserver {
+	callback: Function;
+	/** the types it takes, or null for every type */
+	types: string[] | null;
+	/** it is to be handed the reports made before it first observes */
+	buffered: boolean;
+	/** the reports the inject made that it is still to be handed */
+	pending: unknown[];
+}
+/** the page's observers, and the reports the inject made (the newest 100) */
+export interface MadeReports {
+	observers: LazyWeakMap<object, MadeObserver>;
+	/** the observers that observe, in the order they started */
+	observing: object[];
+	buffer: { type: string; report: object }[];
+}
+
 /**
  * Strings the browser builds from request URLs come back as the page's URLs:
  * performance entries (name, toJSON, the lists from performance.*,
@@ -987,6 +1005,16 @@ export default class UnrouteModule extends Module<Client> {
 			});
 	}
 	/**
+	 * The page's ReportingObservers and the reports the inject made itself
+	 * (its own violations, ../reportsSeen.ts madeReport), which reach them
+	 * as the browser's own reach them
+	 */
+	readonly madeReports: MadeReports = {
+		observers: new LazyWeakMap(),
+		observing: [],
+		buffer: [],
+	};
+	/**
 	 * Reports a page reads through ReportingObserver (a deprecation, an
 	 * intervention, a policy violation) name the page's URLs: the report's
 	 * `url` (the document's), and the URLs in its body, in their getters and
@@ -1025,18 +1053,68 @@ export default class UnrouteModule extends Module<Client> {
 			Observer.prototype,
 			'takeRecords',
 		)?.value;
+		const { observers } = this.madeReports;
 		if (typeof nativeTakeRecords === 'function')
 			Observer.prototype.takeRecords = proxyModule.wrapFunction(
 				nativeTakeRecords,
-				(target, that, args) => seen(Reflect.apply(target, that, args)),
+				(target, that, args) => {
+					const records = seen(Reflect.apply(target, that, args));
+					// and the reports the inject made that it holds
+					const pending = observers.get(that)?.pending;
+					if (pending?.length && Array.isArray(records)) {
+						for (let i = 0; i < pending.length; i++)
+							records[records.length] = pending[i];
+						pending.length = 0;
+					}
+					return records;
+				},
 			);
+		// whether each observes, and the reports the inject made that a
+		// buffered one is handed as it starts
+		for (const name of ['observe', 'disconnect'] as const) {
+			const native = Reflect.getOwnPropertyDescriptor(
+				Observer.prototype,
+				name,
+			)?.value;
+			if (typeof native === 'function')
+				Observer.prototype[name] = proxyModule.wrapFunction(
+					native,
+					(target, that, args) => {
+						const result = Reflect.apply(target, that, args);
+						const observer = observers.get(that);
+						if (!observer) return result;
+						const { observing } = this.madeReports;
+						let at = -1;
+						for (let i = 0; i < observing.length; i++)
+							if (observing[i] === that) at = i;
+						if (name === 'disconnect') {
+							if (at >= 0) {
+								for (let i = at + 1; i < observing.length; i++)
+									observing[i - 1] = observing[i];
+								observing.length--;
+							}
+							return result;
+						}
+						if (at >= 0) return result;
+						observing[observing.length] = that as object;
+						// handed the reports before once, as it first observes
+						// (as the browser's registers it)
+						if (observer.buffered) {
+							observer.buffered = false;
+							if (this.madeReports.buffer.length)
+								reportParts.made?.().buffered(this.madeReports, that, observer);
+						}
+						return result;
+					},
+				);
+		}
 		global.ReportingObserver = proxyModule.wrapFunction(
 			Observer,
 			(target, that, args, newTarget) => {
 				// called without new: the browser's TypeError
 				if (!newTarget) return Reflect.apply(target, that, args);
-				if (typeof args[0] === 'function') {
-					const callback = args[0];
+				const callback = args[0];
+				if (typeof callback === 'function') {
 					args[0] = function (this: unknown, ...called: unknown[]) {
 						const came = Array.isArray(called[0]) ? called[0].length : 0;
 						try {
@@ -1051,7 +1129,36 @@ export default class UnrouteModule extends Module<Client> {
 						return Reflect.apply(callback, this, called);
 					};
 				}
-				return Reflect.construct(target, args, newTarget);
+				const made = Reflect.construct(target, args, newTarget);
+				if (typeof callback === 'function') {
+					// the types it takes (strings of an array, as most pages
+					// give them; any other list takes the inject's reports too)
+					let types: string[] | null = null;
+					let buffered = false;
+					try {
+						const options = args[1] as
+							{ types?: unknown; buffered?: unknown } | null | undefined;
+						if (options && typeof options === 'object') {
+							buffered = !!options.buffered;
+							const given = options.types;
+							if (Array.isArray(given)) {
+								types = [];
+								for (let i = 0; i < given.length; i++)
+									if (typeof given[i] === 'string')
+										types[types.length] = given[i];
+							}
+						}
+					} catch (error) {
+						// options the browser read already
+					}
+					observers.set(made, {
+						callback,
+						types,
+						buffered,
+						pending: [],
+					});
+				}
+				return made;
 			},
 			true,
 		);
