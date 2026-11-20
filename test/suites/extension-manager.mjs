@@ -34,7 +34,8 @@
 //    page, and _execute_action opening the popup;
 //  - Pack extension: Chrome's dialog, spaced as Chrome's, makes a CRX3 and
 //    a key, and the CRX installs under the key's id;
-//  - at 390px the page fits, the side nav behind the menu button.
+//  - at 390px the page fits, the side nav behind the menu button, a drawer
+//    that a press beside it and Escape close.
 // EXT_SHOTS=<dir> writes a screenshot of each view there.
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -1558,6 +1559,52 @@ const sideOpen = await phone.evaluate(
 	() => getComputedStyle(document.getElementById('xpSide')).visibility,
 );
 await shot(phone, 'phone');
+// a press beside the drawer closes it (and is only that), as does Escape;
+// the page stays
+const drawer = () =>
+	phone.evaluate(() => ({
+		side: getComputedStyle(document.getElementById('xpSide')).visibility,
+		expanded: document.getElementById('xpMenu').getAttribute('aria-expanded'),
+		page: !document.getElementById('shieldsPage').classList.contains('hidden'),
+		view: document.getElementById('shieldsPage').dataset.view,
+	}));
+const beside = await phone.evaluate(() => {
+	const side = document.getElementById('xpSide').getBoundingClientRect();
+	const main = document.getElementById('xpMain').getBoundingClientRect();
+	return [(side.right + main.right) / 2, main.top + main.height / 2];
+});
+await phone.mouse.click(...beside);
+const pressed = await until(
+	phone,
+	() => getComputedStyle(document.getElementById('xpSide')).visibility,
+	(value) => value === 'hidden',
+	5000,
+).then(drawer);
+await phone.click('#xpMenu');
+await until(
+	phone,
+	() => getComputedStyle(document.getElementById('xpSide')).visibility,
+	(value) => value === 'visible',
+	5000,
+);
+await phone.keyboard.press('Escape');
+const escaped = await until(
+	phone,
+	() => getComputedStyle(document.getElementById('xpSide')).visibility,
+	(value) => value === 'hidden',
+	5000,
+).then(drawer);
+ok(
+	"390px: a press beside the side nav's drawer closes it, as Escape does, and the page stays",
+	[pressed, escaped].every(
+		(state) =>
+			state.side === 'hidden' &&
+			state.expanded === 'false' &&
+			state.page &&
+			state.view === 'extensions',
+	),
+	JSON.stringify({ pressed, escaped }),
+);
 ok(
 	'390px: the page fits with no horizontal scroll, its head on one row over the search, the side nav behind the menu button',
 	fit.left >= 0 &&

@@ -1688,6 +1688,8 @@ addEventListener(
 		if (event.key !== 'Escape') return;
 		const page = document.getElementById('shieldsPage');
 		if (!page || page.classList.contains('hidden')) return;
+		// (a menu or popup in front of the page closes first: main.js's popovers)
+		if (popoverStack.length) return;
 		if (page.dataset.view !== 'extensions') return;
 		const sheet = document.getElementById('passkeyPrompt');
 		if (sheet) {
@@ -1705,6 +1707,32 @@ addEventListener(
 		} else if (XP.view !== 'list')
 			xpGo(XP.view === 'errors' ? 'details' : 'list');
 		else return;
+		event.preventDefault();
+		event.stopImmediatePropagation();
+	},
+	true,
+);
+
+// a press outside the side menu (a narrow window's drawer) closes it, as
+// a click on the backdrop of Chrome's drawer does, and does nothing else
+let xpSideClosedBy = null;
+addEventListener(
+	'pointerdown',
+	(event) => {
+		xpSideClosedBy = null;
+		if (!XP.sideOpen || !xpOpen()) return;
+		if (event.target.closest?.('#xpSide, #xpMenu')) return;
+		XP.sideOpen = false;
+		xpRender({ more: false });
+		xpSideClosedBy = event.pointerId;
+	},
+	true,
+);
+addEventListener(
+	'click',
+	(event) => {
+		if (xpSideClosedBy === null || event.pointerId !== xpSideClosedBy) return;
+		xpSideClosedBy = null;
 		event.preventDefault();
 		event.stopImmediatePropagation();
 	},

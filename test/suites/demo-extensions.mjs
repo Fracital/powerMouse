@@ -15,6 +15,15 @@
 //    own action items, its site access submenu, Options, Remove, Unpin,
 //    Manage extension, View web permissions; the arrows move and open the
 //    submenu, an item chosen reaches the background;
+//  - the menus, one open at a time: a right click on the button opens its
+//    menu while the list, the main menu or its popup is open, which close;
+//    the menu is the main menu's popover; it closes on a press in the
+//    proxied page's frame, on the bar, a right click in the page, Escape,
+//    the window losing the focus and another tab; in the list, a press
+//    outside More options' menu closes only the menu (Manage extensions
+//    waits for the next click); one that opens over the Extensions page is
+//    in front of it, closed by a press on the page and by Escape before the
+//    page, and the page opening closes one open under it;
 //  - the puzzle piece's list as Chrome's extensions menu: the sections by
 //    access, the pin; unpinned, the button leaves the bar and pops out
 //    while its popup shows;
@@ -31,6 +40,8 @@
 //    piece to the menu's item: the address box keeps 120px, the list, a
 //    popup and the page fit the window;
 //  - the same on the same-origin host (the bar's button, its popup).
+// (the demo page's own globals, read in the page)
+/* global activateTab, extAnchor, extButton, openExtensionsPage, openExtMenu, tabs */
 import { crc32, deflateRawSync } from 'node:zlib';
 import {
 	done,
@@ -910,6 +921,207 @@ ok(
 );
 await page.keyboard.press('Escape');
 
+// the menus: an extension's opens on a right click on its button whatever
+// is open, one menu or popup at a time, and closes wherever the press
+// outside it lands (the proxied page's frame, the list it opened from, the
+// bar), on Escape, when the window loses the focus or the tab changes
+const opened = (page) =>
+	page.evaluate(() =>
+		Object.fromEntries(
+			['extMenu', 'extPanel', 'extPopup', 'pmMenu', 'shieldsPage'].map(
+				(name) => [
+					name,
+					!document.getElementById(name).classList.contains('hidden'),
+				],
+			),
+		),
+	);
+/** only these of opened()'s are open */
+const onlyOpen = (state, ...names) =>
+	!!state &&
+	Object.entries(state).every(([name, open]) => open === names.includes(name));
+const extButtonOf = `#extActions .extAction[data-ext="${id}"]`;
+const settled = async () => {
+	await painted(page);
+	await sleep(100);
+	return opened(page);
+};
+/** a point of `box` that the extension's menu is not over (its scrim is) */
+const outsideMenu = (box) =>
+	page.evaluate((r) => {
+		for (let y = r.top + 4; y < r.bottom; y += 8)
+			for (let x = r.left + 4; x < r.right; x += 8)
+				if (document.elementFromPoint(x, y)?.id === 'extMenuScrim')
+					return [x, y];
+		return null;
+	}, box);
+/** a right click on `selector` (under a popover's scrim, whose press it is), its menu shown */
+async function rightClick(selector) {
+	await page.click(selector, { button: 'right', force: true });
+	await until(
+		page,
+		() => !document.getElementById('extMenu').classList.contains('hidden'),
+		Boolean,
+		10000,
+	);
+	return settled();
+}
+await page.click('#toolExtensions');
+await painted(page);
+const overList = await rightClick(extButtonOf);
+await page.keyboard.press('Escape');
+await page.click('#toolMenu');
+await painted(page);
+const overMenu = await rightClick(extButtonOf);
+await page.keyboard.press('Escape');
+await page.click(extButtonOf);
+await popupFrame(page);
+const overPopup = await rightClick(extButtonOf);
+ok(
+	"a right click on the extension's button opens its menu while the list, the menu or its popup is open, which closes",
+	onlyOpen(overList, 'extMenu') &&
+		onlyOpen(overMenu, 'extMenu') &&
+		onlyOpen(overPopup, 'extMenu'),
+	JSON.stringify({ overList, overMenu, overPopup }),
+);
+const look = await page.evaluate(() => {
+	const style = (element) => {
+		const s = getComputedStyle(element);
+		return [s.backgroundColor, s.borderRadius, s.boxShadow, s.padding].join();
+	};
+	const row = (element) => {
+		const s = getComputedStyle(element);
+		return [s.font, s.color, s.paddingLeft, s.borderRadius].join();
+	};
+	const menu = document.getElementById('extMenu');
+	const app = document.getElementById('pmMenu');
+	return {
+		same: style(menu) === style(app),
+		rows:
+			row(menu.querySelector('.pmMenuItem')) ===
+			row(app.querySelector('.pmMenuItem')),
+	};
+});
+ok(
+	"the extension's menu is the menu's popover, its rows the menu's",
+	look.same && look.rows,
+	JSON.stringify(look),
+);
+const frameAt = await box(page, '.frame:not(.hidden)');
+const inFrame = [frameAt.left + 200, frameAt.top + 200];
+await page.mouse.click(...inFrame);
+const afterFrame = await settled();
+await rightClick(extButtonOf);
+await page.mouse.click(...inFrame, { button: 'right' });
+const afterRight = await settled();
+await rightClick(extButtonOf);
+const omniAt = await box(page, '#omni');
+await page.mouse.click(omniAt.left + 30, omniAt.top + omniAt.height / 2);
+const afterBar = await settled();
+await rightClick(extButtonOf);
+await page.keyboard.press('Escape');
+const afterEscape = await settled();
+await rightClick(extButtonOf);
+// (the window losing the focus: a headless page keeps it, so it is told)
+await page.evaluate(() => {
+	document.hasFocus = () => false;
+	dispatchEvent(new FocusEvent('blur'));
+});
+const afterBlur = await settled();
+await page.evaluate(() => delete document.hasFocus);
+ok(
+	"the extension's menu closes on a press in the page's frame, a right click in the page, on the bar, on Escape and when the window loses the focus",
+	[afterFrame, afterRight, afterBar, afterEscape, afterBlur].every((state) =>
+		onlyOpen(state),
+	),
+	JSON.stringify({
+		afterFrame,
+		afterRight,
+		afterBar,
+		afterEscape,
+		afterBlur,
+	}),
+);
+
+// in the list: More options' menu closes on a press in the list, which
+// stays; the press is the menu's (Manage extensions waits for the next)
+await page.click('#toolExtensions');
+await painted(page);
+await page.click('#extPanel .extRowMore[aria-haspopup]');
+await painted(page);
+const kebab = await opened(page);
+const title = await box(page, '#extPanel .extPanelTitle');
+await page.mouse.click(title.left + 10, title.top + 5);
+const inList = await settled();
+await page.click('#extPanel .extRowMain', { button: 'right' });
+await painted(page);
+const rowMenu2 = await opened(page);
+await page.mouse.click(
+	...(await outsideMenu(await box(page, '#extPanel .extManage'))),
+);
+const onManage = await settled();
+await page.click('#extPanel .extManage');
+const managing = await settled();
+ok(
+	"in the list a press outside More options' menu closes it and leaves the list, also on Manage extensions, which the next click opens",
+	onlyOpen(kebab, 'extMenu', 'extPanel') &&
+		onlyOpen(inList, 'extPanel') &&
+		onlyOpen(rowMenu2, 'extMenu', 'extPanel') &&
+		onlyOpen(onManage, 'extPanel') &&
+		onlyOpen(managing, 'shieldsPage'),
+	JSON.stringify({ kebab, inList, rowMenu2, onManage, managing }),
+);
+// a menu opened over the Extensions page (as an extension's shortcut can):
+// in front of it, closed by a press on the page, which stays, and by
+// Escape before the page
+await page.evaluate((id) => openExtMenu(id, extAnchor(extButton)), id);
+await until(
+	page,
+	() => !document.getElementById('extMenu').classList.contains('hidden'),
+	Boolean,
+	10000,
+);
+await painted(page);
+const overPage = await page.evaluate(() => {
+	const menu = document.getElementById('extMenu');
+	const r = menu.getBoundingClientRect();
+	const hit = document.elementFromPoint(r.left + r.width / 2, r.top + 12);
+	return { inFront: menu.contains(hit), inert: menu.inert };
+});
+const card = await box(page, '#shieldsPage');
+await page.mouse.click(card.left + card.width / 2, card.bottom - 30);
+const pressOnPage = await settled();
+await page.evaluate((id) => openExtMenu(id, extAnchor(extButton)), id);
+await until(
+	page,
+	() => !document.getElementById('extMenu').classList.contains('hidden'),
+	Boolean,
+	10000,
+);
+await page.keyboard.press('Escape');
+const escapeOnPage = await settled();
+await page.keyboard.press('Escape');
+const pageClosed = await settled();
+ok(
+	'a menu that opens over the Extensions page is in front of it; a press on the page closes it, and Escape closes it before the page',
+	overPage.inFront &&
+		!overPage.inert &&
+		onlyOpen(pressOnPage, 'shieldsPage') &&
+		onlyOpen(escapeOnPage, 'shieldsPage') &&
+		onlyOpen(pageClosed),
+	JSON.stringify({ overPage, pressOnPage, escapeOnPage, pageClosed }),
+);
+// opening the page closes a menu open under it
+await rightClick(extButtonOf);
+await page.evaluate(() => openExtensionsPage());
+const pageOverMenu = await settled();
+await page.keyboard.press('Escape');
+ok(
+	'the Extensions page opening closes the menu that was open',
+	onlyOpen(pageOverMenu, 'shieldsPage'),
+	JSON.stringify(pageOverMenu),
+);
+
 // Options: its page in a new tab, the bar showing chrome-extension://
 const tabsBefore = await page.evaluate(
 	() => document.querySelectorAll('#frames iframe.frame').length,
@@ -948,6 +1160,17 @@ ok(
 		options.shields === true &&
 		optionsTitle === 'Probe options',
 	JSON.stringify({ options, tabsBefore, optionsTitle }),
+);
+
+// another tab: the menu closes
+await rightClick(extButtonOf);
+await page.evaluate(() => activateTab(tabs[0]));
+const otherTab = await settled();
+await page.evaluate(() => activateTab(tabs.at(-1)));
+ok(
+	"another tab closes the extension's menu",
+	onlyOpen(otherTab),
+	JSON.stringify(otherTab),
 );
 
 // typed: the page it names opens

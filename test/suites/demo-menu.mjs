@@ -4,8 +4,9 @@
 //    has no menu button, only its new-tab button, and the cards' copies of
 //    the bar carry the menu button's picture;
 //  - the menu fades in when it opens and is gone at once when it closes, by
-//    every way (its button, a click outside, Escape, an item chosen), and
-//    so is the Shields panel: no fade-out, nothing left to see or click;
+//    every way (its button, a click or a right click outside, Escape, an
+//    item chosen, another popover opening), and so is the Shields panel:
+//    no fade-out, nothing left to see or click;
 //  - Fullscreen puts the demo's own page in fullscreen and out of it, its
 //    label and icon saying what choosing it does, also after the page left
 //    fullscreen another way; where the page cannot be made fullscreen the
@@ -385,6 +386,30 @@ ok(
 			document.getElementById('toolMenu').getAttribute('aria-expanded'),
 		)) === 'false',
 	JSON.stringify(state),
+);
+
+await page.click('#toolMenu');
+await painted(page);
+await page.mouse.click(400, 400, { button: 'right' });
+state = await leftover(page, 'pmMenu', 'menuScrim');
+ok(
+	'a right click outside closes the menu at once',
+	gone(state),
+	JSON.stringify(state),
+);
+// one popover at a time: another opening closes the menu
+await page.click('#toolMenu');
+await painted(page);
+await page.evaluate(() => document.getElementById('toolShields').click());
+state = await leftover(page, 'pmMenu', 'menuScrim');
+const shieldsInstead = await page.evaluate(
+	() => !document.getElementById('shieldsPanel').classList.contains('hidden'),
+);
+await page.keyboard.press('Escape');
+ok(
+	'the Shields panel opening closes the menu: one popover at a time',
+	gone(state) && shieldsInstead,
+	JSON.stringify({ state, shieldsInstead }),
 );
 
 // the Shields panel, on the same popover: fades in, goes at once

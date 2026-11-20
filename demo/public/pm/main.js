@@ -5444,6 +5444,8 @@ let shieldsPageOpener = null;
 let shieldsPageInert = [];
 
 function openShieldsPage(view, from = null) {
+	// no menu or popup stays behind the dialog (a menu's Manage extension)
+	closePopovers();
 	shieldsPageFrom = from;
 	if (!shieldsPageOpener) shieldsPageOpener = document.activeElement;
 	if (view === 'global') buildGlobalPage();
@@ -5512,7 +5514,8 @@ addEventListener(
 			(event.shiftKey ? controls.at(-1) : controls[0]).focus();
 			return;
 		}
-		if (event.key !== 'Escape') return;
+		// (a popover in front of it closes first)
+		if (event.key !== 'Escape' || popoverStack.length) return;
 		if (
 			['filters', 'passkeys'].includes(shieldsPage.dataset.view) &&
 			shieldsPageFrom === 'global'
@@ -5541,17 +5544,43 @@ function shieldsComingSoon(title) {
 }
 
 /**
- * A popover under a button (the Shields panel, the menu): `panel` (a
- * .popover) over `scrim` (a .popoverScrim), which takes the click outside
- * it. It fades in when it opens and is gone at once when it closes, however
- * it closes (its button again, a click outside, Escape, an item chosen): the
- * global .hidden, so nothing of it is left to see, click or focus. Escape
- * closes it before anything else sees the key, and the focus goes back to
- * its button when it was in the popover. `onClose` hears each close (an
- * extension's popup unloads then); `place` puts it somewhere else than
- * under its button's right edge (given the button's box).
+ * A popover under a button (the Shields panel, the menus, an extension's
+ * popup): `panel` (a .popover) over `scrim` (a .popoverScrim), which covers
+ * the window, the proxied page's frames included, and takes the press
+ * outside it. It fades in when it opens and is gone at once when it closes,
+ * however it closes (its button again, a press outside, Escape, an item
+ * chosen, the window losing focus, another tab): the global .hidden, so
+ * nothing of it is left to see, click or focus. The focus goes back to its
+ * button when it was in the popover. `onClose` hears each close (an
+ * extension's popup unloads then); `onOutside` hears a press on its scrim
+ * once it has closed (`event`, for what was under it); `place` puts it
+ * somewhere else than under its button's right edge (given the button's
+ * box).
+ *
+ * One at a time, as Chrome's menus and bubbles are: opening one closes the
+ * others, except the one its button is in (an extension's menu from a row
+ * of the extensions list keeps the list), and it is put in front of that
+ * one, its scrim too. So the open ones are a chain, the front one last in
+ * `popoverStack`: closing one closes those in front of it, Escape closes
+ * the front one before anything else sees the key, and a press outside
+ * the front one closes it (and the ones behind it, where the press is
+ * outside them too). A press on a scrim is that scrim's only: the click
+ * does nothing else, and a right click there opens the menu of what is
+ * under it (an extension's button) rather than the browser's.
  */
-function popover(panel, scrim, { onClose = null, place = null } = {}) {
+const popoverStack = [];
+/** the z-index of the first popover's scrim; its panel is one more, and each one in front three more (its submenu between) */
+const POPOVER_Z = 60;
+/** the same over the settings dialog (.shieldsPage, 63, and its sheets, 64) */
+const POPOVER_OVER_DIALOG_Z = 65;
+/** whether listenPopovers() has run */
+let popoversHeard = false;
+
+function popover(
+	panel,
+	scrim,
+	{ onClose = null, onOutside = null, place = null } = {},
+) {
 	let anchor = null;
 	const isOpen = () => !panel.classList.contains('hidden');
 	const position = () => {
@@ -5561,16 +5590,37 @@ function popover(panel, scrim, { onClose = null, place = null } = {}) {
 		panel.style.left = 'auto';
 		panel.style.right = `${Math.max(8, Math.round(innerWidth - rect.right))}px`;
 	};
-	const open = (button) => {
+	const self = { panel, scrim, onOutside, isOpen };
+	self.open = (button) => {
+		for (const other of [...popoverStack].reverse())
+			if (other !== self && !other.panel.contains(button)) other.close();
 		anchor?.setAttribute('aria-expanded', 'false');
 		anchor = button;
+		const at = popoverStack.indexOf(self);
+		if (at >= 0) popoverStack.splice(at, 1);
+		popoverStack.push(self);
+		// over a settings dialog open under it too (an extension's shortcut
+		// or action.openPopup() while the Extensions page shows), which made
+		// everything else inert
+		const z =
+			(shieldsPageOpen() ? POPOVER_OVER_DIALOG_Z : POPOVER_Z) +
+			3 * (popoverStack.length - 1);
+		scrim.style.zIndex = String(z);
+		panel.style.zIndex = String(z + 1);
+		scrim.inert = false;
+		panel.inert = false;
 		panel.classList.remove('hidden');
 		position();
 		panel.setAttribute('aria-hidden', 'false');
 		scrim.classList.remove('hidden');
 		button.setAttribute('aria-expanded', 'true');
 	};
-	const close = () => {
+	self.close = () => {
+		const at = popoverStack.indexOf(self);
+		if (at >= 0) {
+			for (const above of popoverStack.slice(at + 1).reverse()) above.close();
+			popoverStack.splice(at, 1);
+		}
 		if (!isOpen()) return;
 		const inside = panel.contains(document.activeElement);
 		panel.classList.add('hidden');
@@ -5580,20 +5630,80 @@ function popover(panel, scrim, { onClose = null, place = null } = {}) {
 		if (inside && anchor.isConnected) anchor.focus();
 		onClose?.();
 	};
-	scrim.addEventListener('click', close);
+	// a right click on the scrim: the menu of what is under it, not the
+	// browser's (Chrome opens the button's menu with one press)
+	scrim.addEventListener('contextmenu', (event) => {
+		event.preventDefault();
+		const under = document.elementFromPoint(event.clientX, event.clientY);
+		if (!under || under.closest('.popoverScrim, iframe')) return;
+		under.dispatchEvent(new MouseEvent('contextmenu', event));
+	});
 	addEventListener('resize', () => {
 		if (isOpen()) position();
 	});
+	if (!popoversHeard) {
+		// (made with the first popover, after the submenus' keys: Escape
+		// closes an open submenu alone)
+		popoversHeard = true;
+		listenPopovers();
+	}
+	return self;
+}
+
+/** every popover closed (the window lost focus, another tab, a settings page) */
+function closePopovers() {
+	popoverStack[0]?.close();
+	closeSubmenu();
+}
+
+/**
+ * What closes the popovers, wherever it happens: a press outside the front
+ * one (by a mouse as it goes down, as Chrome's menus close; by a finger or
+ * a pen as it clicks, so the tap does not reach what was under the scrim),
+ * Escape, the window losing the focus or going hidden. A press in the
+ * proxied page's frame or an extension's popup is on a scrim (it covers
+ * them), so it is heard here too.
+ */
+function listenPopovers() {
+	const press = (event) => {
+		const touch = event.pointerType === 'touch' || event.pointerType === 'pen';
+		if ((event.type === 'click') !== touch || !popoverStack.length) return;
+		const target = event.target;
+		while (popoverStack.length) {
+			const front = popoverStack[popoverStack.length - 1];
+			if (front.panel.contains(target) || subMenu.contains(target)) return;
+			front.close();
+			if (target === front.scrim) return front.onOutside?.(event);
+		}
+	};
+	addEventListener('pointerdown', press, true);
+	addEventListener('click', press, true);
 	addEventListener(
 		'keydown',
 		(event) => {
-			if (event.key !== 'Escape' || !isOpen()) return;
-			close();
+			if (event.key !== 'Escape' || !popoverStack.length) return;
+			popoverStack[popoverStack.length - 1].close();
 			event.stopImmediatePropagation();
 		},
 		true,
 	);
-	return { open, close, isOpen };
+	// (the focus going into a frame of this page blurs the window too: an
+	// extension's popup takes it when it shows)
+	addEventListener('blur', () =>
+		setTimeout(() => {
+			if (document.hasFocus() || !popoverStack.length) return;
+			const active = document.activeElement;
+			if (
+				active?.tagName === 'IFRAME' &&
+				popoverStack.some((open) => open.panel.contains(active))
+			)
+				return;
+			closePopovers();
+		}),
+	);
+	document.addEventListener('visibilitychange', () => {
+		if (document.hidden) closePopovers();
+	});
 }
 
 // A menu item's submenu, as Chrome's menus have them (the menu's Extensions
@@ -5641,10 +5751,13 @@ function openSubmenu(owner) {
 	subMenuOwner = owner;
 	owner.setAttribute('aria-expanded', 'true');
 	subMenu.replaceChildren(...build());
+	const parent = owner.closest('.popover');
+	// in front of its menu, under a popover in front of that one
+	subMenu.style.zIndex = String((Number(parent?.style.zIndex) || 61) + 1);
+	subMenu.inert = false;
 	subMenu.classList.remove('hidden');
 	subMenu.setAttribute('aria-hidden', 'false');
 	placeSubmenu();
-	const parent = owner.closest('.popover');
 	if (parent)
 		subMenuParent.observe(parent, {
 			attributes: true,
@@ -6032,6 +6145,16 @@ function appExtensionsMenu() {
 				},
 			);
 			row.dataset.ext = info.id;
+			// a right click: its menu, as on its row of the extensions list
+			row.addEventListener('contextmenu', (event) => {
+				event.preventDefault();
+				openExtMenu(
+					info.id,
+					extAnchor(menuButton),
+					{ x: event.clientX, y: event.clientY },
+					'menu',
+				);
+			});
 			rows.push(row);
 		}
 		rows.push(element('div', 'extMenuRule'));
@@ -6109,8 +6232,6 @@ menuButton.addEventListener(
 );
 menuThemes.hidden = !globalThis.PMTheme;
 
-// (made top first: Escape closes the one in front, an extension's menu
-// before the list it opened from)
 let extPopupHandle = null;
 /** where a right click opened the menu (the menu opens there, as Chrome's) */
 let extMenuPoint = null;
@@ -6154,13 +6275,14 @@ const extPopupPopover = popover(extPopup, $('extPopupScrim'), {
 			renderExtActions();
 		}
 	},
-});
-// a click outside the popup closes it; on another extension's button (or
-// the puzzle piece) it is that button's click too, as in Chrome
-$('extPopupScrim').addEventListener('click', (event) => {
-	const under = document.elementFromPoint(event.clientX, event.clientY);
-	const button = under?.closest?.('.extAction, #toolExtensions');
-	if (button && button !== extPopupAnchor) button.click();
+	// a click outside the popup closes it; on another extension's button
+	// (or the puzzle piece) it is that button's click too, as in Chrome
+	onOutside: (event) => {
+		if (event.button !== 0) return;
+		const under = document.elementFromPoint(event.clientX, event.clientY);
+		const button = under?.closest?.('.extAction, #toolExtensions');
+		if (button && button !== extPopupAnchor) button.click();
+	},
 });
 
 /** the installed extensions and the active tab's buttons, as last read */
@@ -6421,9 +6543,9 @@ async function showExtPopup(id, { byUser = true } = {}) {
 	});
 }
 
-/** another tab: its popup closes (Chrome's does) */
+/** another tab: its popup and any menu close (Chrome's do) */
 function extTabChanged() {
-	if (extPopupPopover.isOpen()) extPopupPopover.close();
+	closePopovers();
 }
 
 /** Chrome's sections of its extensions menu, by the extensions' access to the site */
