@@ -331,7 +331,6 @@ const sampleOpen = () =>
 				const controls = [
 					'#recentsCount',
 					'#newTab',
-					'#recentsMenu',
 					'#closeAll',
 					'.dockButton',
 				].flatMap((sel) => [...panel.querySelectorAll(sel)]);

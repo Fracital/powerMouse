@@ -285,8 +285,9 @@ holyWisp is started.
     Discord's own scripts delete `window.localStorage`.
 
 14. **Menu.** A button beside the address box, outside it (`#toolMenu`),
-    and its twin beside New tab in the tab manager, which hides the bar
-    (`#recentsMenu`), open one menu (`#pmMenu`), a popover built on the
+    opens the menu (`#pmMenu`). The menu is the tab's: the tab manager,
+    which hides the bar, has only its New tab button. The menu is a popover
+    built on the
     Shields panel's (`popover()` in main.js, `.popover` in main.css): it
     fades in, and closes at once by every way (its button, a click outside,
     Escape, an item chosen). **Fullscreen** calls `requestFullscreen()` on
