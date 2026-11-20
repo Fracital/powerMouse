@@ -2,9 +2,7 @@ import Module from '../../Module';
 import { mayOpenPopup, popupOpened } from '../activation';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { heldClicks } from '../heldClicks';
-import { baseTarget, clickedLink } from '../links';
-
-const SAME_FRAME = ['', '_self', '_top', '_parent', '_unfencedtop'];
+import { baseTarget, clickedLink, SAME_FRAME } from '../links';
 
 /**
  * Links that would open a new browsing context (`target="_blank"`, a name
