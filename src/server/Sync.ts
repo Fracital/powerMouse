@@ -54,8 +54,10 @@ const answers = new Map<string, [string, string][]>();
 const askers = new Map<string, Set<() => void>>();
 /**
  * Whether a page's synchronous request reaches this worker: true once an
- * ask came, false once a page said its ask went past (`?n`), undefined
- * until either (Config syncAnswers, which the documents are served with)
+ * ask came, false once a page said its question went past (`?n`; the
+ * question is a HEAD the worker answers itself, serviceWorker.ts
+ * syncProbe), undefined until either (Config syncAnswers, which the
+ * documents are served with)
  */
 let reached: boolean | undefined;
 /** what is known of the browser's synchronous requests (reached) */

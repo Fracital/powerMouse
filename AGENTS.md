@@ -217,9 +217,15 @@ on every save (use a `git worktree`).
   own (`src/inject/dom/syncAnswer.ts`, `?a=` in `src/server/Sync.ts`),
   which Firefox's worker answers in the body. One ask waits at most
   `SYNC_ASK_MS`, under `SYNC_KICK_MS`, so the kick still goes out. Chrome
-  and WebKit send that request to the network: the first document that
-  finds so tells the worker (`?n`), which keeps it and serves
-  `config.syncAnswers: false` to the documents after it.
+  and WebKit send that request to the network, so a document whose config
+  does not say first finds out with a HEAD for the rewriter library's file
+  (`SYNC_PROBE_HEADER`, `syncProbe` in `src/server/serviceWorker.ts`): the
+  worker answers it itself and the host's server as the file it serves.
+  Never send the ask, or any request the worker may not see, to an address
+  the host does not serve: Chrome logs its 404 in the document's console.
+  The first document that finds the browser sends it past tells the
+  worker (`?n`), which keeps it and serves `config.syncAnswers: false` to
+  the documents after it.
   WebKit stops the service worker and the page's own workers while the
   page waits, so no answer comes there at all: the controller's document
   learns that once (`src/controller/syncFreezes.ts`), the worker keeps it

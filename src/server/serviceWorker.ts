@@ -19,6 +19,7 @@ import { nestedMarkOfKind, nestedTopOf } from '../rewriteHTML';
 import { addRouteScope, proxyOrigins, unwrapRoute } from '../routeURL';
 import { SW_ROUTE, type ApiReply } from '../serviceWorkerTypes';
 import { getPublicSuffix } from '../suffix';
+import { SYNC_ANSWER_HEADER, SYNC_PROBE_HEADER } from '../syncAsk';
 import HandoffTransport, {
 	CONTROLLER_REPLACED,
 	CONTROLLER_RETIRED,
@@ -2699,6 +2700,37 @@ async function sweepBundles() {
 }
 
 /**
+ * A document's question whether its synchronous request reaches this worker
+ * (src/inject/dom/syncAnswer.ts): a HEAD for the rewriter library's file
+ * with SYNC_PROBE_HEADER, answered here with SYNC_ANSWER_HEADER. Past the
+ * worker (Chrome, WebKit) the host's server answers it as the file it
+ * serves. False for any other request.
+ */
+function syncProbe(event: FetchEvent, pathname: string): boolean {
+	const { request } = event;
+	if (
+		request.method !== 'HEAD' ||
+		request.headers.get(SYNC_PROBE_HEADER) !== '1'
+	)
+		return false;
+	const files = new Set([
+		`${new URL(self.registration.scope).pathname}${assetName(undefined, 'rewriterLib')}`,
+	]);
+	for (const ref of controllers.values())
+		files.add(
+			`${ref.config.scope}${assetName(ref.config.assets, 'rewriterLib')}`,
+		);
+	if (!files.has(pathname)) return false;
+	event.respondWith(
+		new Response(null, {
+			status: 204,
+			headers: { [SYNC_ANSWER_HEADER]: '1', 'cache-control': 'no-store' },
+		}),
+	);
+	return true;
+}
+
+/**
  * An about:srcdoc client's claim (SRCDOC_CLAIM): a request of its own, so
  * its client is the document's (Chrome reports its URL as empty until the
  * document is parsed)
@@ -2738,6 +2770,7 @@ self.addEventListener('fetch', (event: FetchEvent) => {
 	)
 		return;
 	if (documentBundle(event, pathname, search)) return;
+	if (syncProbe(event, pathname)) return;
 	if (srcdocClaim(event, pathname)) return;
 	noteRequest(event.request, event.clientId);
 	const unmarked = unmarkHomed(event.request);

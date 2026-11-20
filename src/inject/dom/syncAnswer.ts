@@ -11,10 +11,20 @@
 // which answers it with the cookies' text (src/server/Sync.ts answers),
 // and Firefox runs the rest meanwhile. Chrome and WebKit send it to the
 // network, past the worker, so a document asks only while its config does
-// not say the browser does that (Config syncAnswers); a document that finds
-// it so tells the worker, which serves the documents after it with that.
-// Measured in Firefox 160, Chrome 157 and WebKitGTK 2.52.4.
-import { SYNC_ANSWER_HEADER, SYNC_ASK_MS } from '../../syncAsk';
+// not say the browser does that (Config syncAnswers). One whose config does
+// not say first finds out with a HEAD for the rewriter library's file
+// (SYNC_PROBE_HEADER), which the worker answers itself and the host's
+// server answers as the file it serves: the ask's own address is no file
+// of the host's, and Chrome logged its 404 in every such document's console
+// (at the bridge's code, in rewriterLib.js). A document that finds the
+// browser sends it past tells the worker, which serves the documents after
+// it with that. Measured in Firefox 160, Chrome 157 and WebKitGTK 2.52.4.
+import { rewriterLibJS } from '../../routeURL';
+import {
+	SYNC_ANSWER_HEADER,
+	SYNC_ASK_MS,
+	SYNC_PROBE_HEADER,
+} from '../../syncAsk';
 import type DocumentClient from './Client';
 
 /** what this realm found: whether its ask reached the worker */
@@ -33,12 +43,20 @@ export function syncAnswer(
 	deadline: number,
 ): string {
 	reaches ??= client.syncAnswers;
-	if (reaches === false) return '';
 	// the snapshot's class, whose prototype no page reaches (the
 	// XMLHttpRequest module stands another class in for the page)
 	const methods = XMLHttpRequest.prototype;
 	// (routeURL.ts queueXHR)
 	const route = `${client.directory}xhr`;
+	if (reaches === undefined) {
+		const found = probeReaches(client, methods);
+		// the browser sends it past: the worker hears it once, for the
+		// documents after this one
+		if (found === false)
+			client.nativeFetch(`${route}?n`, { method: 'POST' }).catch(() => {});
+		reaches = found ?? false;
+	}
+	if (!reaches) return '';
 	const wait = Math.min(SYNC_ASK_MS, deadline - Date.now());
 	const request = new XMLHttpRequest();
 	try {
@@ -56,14 +74,39 @@ export function syncAnswer(
 		Reflect.apply(methods.getResponseHeader, request, [SYNC_ANSWER_HEADER]) !==
 		'1'
 	) {
-		// the network's answer: the worker hears it once, for the documents
-		// after this one
-		if (reaches === undefined)
-			client.nativeFetch(`${route}?n`, { method: 'POST' }).catch(() => {});
+		// not the worker's answer: this realm asks no more
 		reaches = false;
 		return '';
 	}
-	reaches = true;
 	const text = Reflect.getOwnPropertyDescriptor(methods, 'responseText')!.get!;
 	return `; ${Reflect.apply(text, request, []) as string}`;
+}
+
+/**
+ * Whether a synchronous request of this document reaches its worker: a
+ * HEAD for the rewriter library's file, marked, which the worker answers
+ * itself, and which past the worker the host answers as the file (no error
+ * in the console, no body); null when the request is refused
+ */
+function probeReaches(
+	client: DocumentClient,
+	methods: typeof XMLHttpRequest.prototype,
+): boolean | null {
+	const request = new XMLHttpRequest();
+	try {
+		Reflect.apply(methods.open, request, [
+			'HEAD',
+			rewriterLibJS(client.url, client.config),
+			false,
+		]);
+		Reflect.apply(methods.setRequestHeader, request, [SYNC_PROBE_HEADER, '1']);
+		Reflect.apply(methods.send, request, []);
+	} catch (error) {
+		// (a policy of the page's, a network error): nothing learned
+		return null;
+	}
+	return (
+		Reflect.apply(methods.getResponseHeader, request, [SYNC_ANSWER_HEADER]) ===
+		'1'
+	);
 }

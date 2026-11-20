@@ -66,6 +66,9 @@ async function watchLibrary(page) {
 	await cdp.send('Network.enable');
 	const asked = [];
 	cdp.on('Network.requestWillBeSent', ({ request, frameId }) => {
+		// a HEAD asks whether a synchronous request reaches the worker
+		// (src/inject/dom/syncAnswer.ts) and reads nothing of the file
+		if (request.method === 'HEAD') return;
 		if (LIBRARY.test(request.url)) asked.push({ url: request.url, frameId });
 	});
 	return {
