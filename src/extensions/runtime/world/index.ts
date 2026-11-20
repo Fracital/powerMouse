@@ -10,6 +10,7 @@
 // page's own functions (page.reflect, page.natives.callback).
 import { buildChrome } from '../api';
 import { Context } from '../context';
+import { errorConsole } from '../errors';
 import { receiveMessages } from '../messaging';
 import { scriptNatives, useNatives } from '../natives';
 import { makeGlobal } from './global';
@@ -179,6 +180,32 @@ export function makeWorld(page: PageSide, config: WorldConfig): World {
 		evaluate(code, config.url),
 	);
 	membrane.useGlobal(global);
+	// its errors for the extensions page: its scripts' uncaught ones, and
+	// the console.error and console.warn of a console of the world's own
+	// (over the page's, which the page keeps as it was)
+	let worldConsole: Console | null = null;
+	try {
+		const view = (global as { console?: Console }).console;
+		if (view) {
+			worldConsole = Object.create(view) as Console;
+			if (
+				!Reflect.defineProperty(global, 'console', {
+					value: worldConsole,
+					writable: true,
+					configurable: true,
+				})
+			)
+				worldConsole = null;
+		}
+	} catch (error) {
+		worldConsole = null;
+	}
+	ctx.errors = errorConsole(ctx, {
+		win: null,
+		console: worldConsole,
+		contextUrl: () => web.location.href,
+	});
+	membrane.onError = (error) => ctx.errors?.uncaught(error);
 	const loader = new ModuleLoader(
 		ext.id,
 		Number(ext.generation) || 0,

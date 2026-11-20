@@ -158,23 +158,106 @@ export interface ExtensionInfo {
 	 * icons; empty when it has neither (Chrome draws a letter tile then)
 	 */
 	actionIcons: Record<string, string>;
-	/** where it reads and changes sites (Chrome's site access, `setSiteAccess()`) */
+	/** where it reads and changes sites (Chrome's site access, `setSiteAccess()`, `setSiteHosts()`) */
 	siteAccess: SiteAccess;
 	/**
 	 * The sites it asks to read and change: its host permissions and its
 	 * content scripts' matches (Chrome's requested host permissions)
 	 */
 	requestedHosts: string[];
+	/**
+	 * It asks for every site (`<all_urls>`, or a pattern of any host):
+	 * Chrome's extension page offers the site access select then, and a list
+	 * of `requestedHosts` to turn on one by one otherwise
+	 */
+	allHostsRequested: boolean;
 	/** where its name in its menu leads: `homepage_url`, else its Web Store page for one installed from there */
 	homepageUrl: string | null;
+	/** its Chrome Web Store page, for a store install */
+	webStoreUrl: string | null;
+	/** its files' size in bytes (what Chrome's Size row counts: the unpacked files) */
+	size: number;
+	/** where it was loaded from: an unpacked folder's name, a package's file name; null for a Web Store install */
+	path: string | null;
+	/** its errors are collected (Chrome's Collect errors: on by default for an unpacked one) */
+	collectErrors: boolean;
+	/** how many errors (manifest and runtime) are kept for it */
+	errorCount: number;
+	/**
+	 * What it can do, in Chrome's words, each with its lines; the sites'
+	 * lines are left out for one that asks for sites (Chrome shows its site
+	 * access there instead)
+	 */
+	permissionWarnings: { message: string; details: string[] }[];
+}
+
+/** an error Chrome's error console keeps for an extension (`extensions.errors()`) */
+export interface ExtensionErrorEntry {
+	id: number;
+	type: 'manifest' | 'runtime';
+	message: string;
+	severity: 'log' | 'warn' | 'error';
+	/** the script it came from (chrome-extension:// for the extension's files), `manifest.json` for a manifest error */
+	source: string;
+	/** the document it happened in (a content script's page, an extension page's chrome-extension:// URL) */
+	contextUrl: string;
+	stackTrace: {
+		url: string;
+		lineNumber: number;
+		columnNumber: number;
+		functionName: string;
+	}[];
+	/** the same error again counts here (Chrome's ErrorMap) */
+	occurrences: number;
+	timestamp: number;
+	/** a manifest error's key, and what in it */
+	manifestKey?: string;
+	manifestSpecific?: string;
+	/** a runtime error came from the extension's service worker */
+	isServiceWorker?: boolean;
+}
+
+/** what a context reports (the worker fills in the rest) */
+export interface ReportedError {
+	message: string;
+	severity: 'warn' | 'error';
+	/** stack frames as the context read them (routed URLs: the worker turns them into real ones) */
+	stackTrace: ExtensionErrorEntry['stackTrace'];
+	/** the document's real URL */
+	contextUrl: string;
+	isServiceWorker?: boolean;
+}
+
+/** a page or background of an extension (Inspect views) */
+export interface ExtensionView {
+	kind:
+		'background' | 'service_worker' | 'popup' | 'options' | 'tab' | 'offscreen';
+	/** its URL, routable through the controller */
+	url: string;
+	/** the same as `chrome-extension://...` */
+	displayUrl: string;
+	/** a background that runs (a service worker shows as inactive otherwise) */
+	active: boolean;
+}
+
+/** what `extensions.pack()` makes */
+export interface PackResult {
+	/** the CRX3 */
+	crx: Blob;
+	/** a new private key as PKCS#8 PEM (Chrome's .pem), null when one was given */
+	key: string | null;
+	/** the id the key gives */
+	id: string;
 }
 
 /**
  * An extension's site access, as Chrome keeps it (runtime host
  * permissions): every site it asks for (`withheld` false: "On all sites"),
- * or only the origins in `sites` ("On <site>"; none: "When you click the
+ * or only the sites in `sites` ("On <site>"; none: "When you click the
  * extension"), where a click on its button grants the tab until it
- * navigates
+ * navigates. A site is an origin (`https://example.com`, as its menu's "On
+ * <site>" adds it) or a match pattern (`*://*.example.com/*`, as
+ * `setSiteHosts()` keeps one, the extensions page's list of sites).
  */
 export interface SiteAccess {
 	withheld: boolean;
@@ -269,7 +352,9 @@ export interface ExtensionsChange {
 		| 'settings'
 		| 'popup'
 		| 'ready'
-		| 'theme';
+		| 'theme'
+		| 'errors'
+		| 'commands';
 	/** the extension it is about (none for `ready`; for `theme`, the theme now shown, none for the default) */
 	id?: string;
 	/** the tab it is about (an action change for one tab) */
@@ -316,9 +401,16 @@ export interface ExtensionShortcut {
 	id: string;
 	/** the command's name: `_execute_action` (and MV2's `_execute_browser_action`, `_execute_page_action`) clicks its button */
 	name: string;
+	/** the manifest's, or `Activate the extension` for `_execute_action` */
 	description: string;
-	/** as the manifest suggests it for this platform, `Ctrl+Shift+Y`; empty when none */
+	/**
+	 * The shortcut it runs on now, `Ctrl+Shift+Y`; empty when none: the
+	 * manifest's suggestion for this platform at install (unless another
+	 * extension held it), then what `setShortcut()` set
+	 */
 	shortcut: string;
+	/** In Chrome or Global (`setCommandScope()`) */
+	scope: 'chrome' | 'global';
 }
 
 /** what `extensions.runCommand()` did: what a click does, or `command` (commands.onCommand) */
@@ -447,6 +539,10 @@ export interface ShippedExtension {
 	userScriptMessaging?: boolean;
 	/** the install's generation, which its scripts' routes name */
 	generation?: number;
+	/** each command's shortcut as the user set it (commands.getAll) */
+	shortcuts?: Record<string, string>;
+	/** report errors to the worker's error console (developer mode on and collecting for it) */
+	collect?: boolean;
 	/** a content document's entries that match it */
 	entries?: ShippedEntry[];
 	/**
@@ -590,6 +686,8 @@ export type ExtensionCommand =
 			files?: Record<string, ArrayBuffer>;
 			webStore?: string;
 			filename?: string;
+			/** where it was loaded from (an unpacked folder's name) */
+			path?: string;
 			enabled?: boolean;
 			policy?: boolean;
 	  }
@@ -632,7 +730,21 @@ export type ExtensionCommand =
 	| { op: 'theme' }
 	| { op: 'themes' }
 	/** Chrome's Reset to default: every theme is uninstalled */
-	| { op: 'resetTheme' };
+	| { op: 'resetTheme' }
+	/** the error console (Chrome's ErrorConsole) */
+	| { op: 'errors'; id: string }
+	| { op: 'clearErrors'; id: string; ids?: number[] }
+	| { op: 'collectErrors'; id: string; on: boolean }
+	/** developer mode: the error console collects only while it is on (read it when `on` is absent) */
+	| { op: 'developerMode'; on?: boolean }
+	/** site access on exactly these sites (match patterns; none: on a click), as the extensions page's list sets it */
+	| { op: 'siteHosts'; id: string; hosts: string[] }
+	| { op: 'commands' }
+	| { op: 'setShortcut'; id: string; name: string; shortcut: string }
+	| { op: 'setCommandScope'; id: string; name: string; scope: string }
+	| { op: 'reload'; id: string }
+	/** an installed extension's files, to pack */
+	| { op: 'files'; id: string };
 
 /**
  * manifest.theme as Chrome reads it, with Chrome's key names and values as

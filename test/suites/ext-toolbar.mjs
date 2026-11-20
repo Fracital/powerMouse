@@ -1127,20 +1127,22 @@ for (const [mode, base] of [
 		(command) => command.id === ids.pop,
 	);
 	ok(
-		`${mode}: commands() lists the manifest's shortcuts`,
+		`${mode}: commands() lists the manifest's shortcuts, _execute_action as Chrome's shortcuts page words it`,
 		canonical(commands) ===
 			canonical([
 				{
 					id: ids.pop,
 					name: '_execute_action',
-					description: '',
+					description: 'Activate the extension',
 					shortcut: 'Ctrl+Shift+Y',
+					scope: 'chrome',
 				},
 				{
 					id: ids.pop,
 					name: 'toggle',
 					description: 'Toggle it',
 					shortcut: 'Alt+Shift+T',
+					scope: 'chrome',
 				},
 			]),
 		JSON.stringify(commands),

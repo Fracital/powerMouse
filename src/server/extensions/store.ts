@@ -40,6 +40,12 @@ export interface StoredExtension {
 	lastRunVersion?: string;
 	/** bumps with every install and update: the content scripts' routes carry it */
 	generation: number;
+	/** where it was loaded from (an unpacked folder's name), when the host said */
+	path?: string;
+	/** Collect errors as the user set it (absent: Chrome's default for its source) */
+	collectErrors?: boolean;
+	/** each command's shortcut and scope, as assigned (Chrome's CommandService) */
+	shortcuts?: Record<string, { shortcut: string; scope: 'chrome' | 'global' }>;
 }
 
 const TYPES: Record<string, string> = {

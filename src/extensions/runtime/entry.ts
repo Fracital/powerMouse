@@ -28,6 +28,7 @@ import {
 } from '../types';
 import { buildChrome, VIEW_MARK, type ViewMark } from './api';
 import { Context, copy, messageOf } from './context';
+import { errorConsole } from './errors';
 import { receiveMessages } from './messaging';
 import {
 	call,
@@ -493,6 +494,13 @@ function contentContext(given: RuntimePayload, ext: ShippedExtension) {
 	);
 	ctx.injects = true;
 	receiveMessages(ctx);
+	// (its listeners' errors; its scripts' own are reported where they run:
+	// an isolated world's, runEntry's)
+	ctx.errors = errorConsole(ctx, {
+		win: null,
+		console: null,
+		contextUrl: () => natives.location.href,
+	});
 	ctx.placed = ctx
 		.hub('hello', {
 			client: given.client,
@@ -691,6 +699,16 @@ function pageContext(given: RuntimePayload) {
 	addSheet(`@layer{body{font-family:${extensionFont()};font-size:75%}}`);
 	const chrome = buildChrome(ctx);
 	receiveMessages(ctx);
+	// its errors for the extensions page (an emulated service worker's are
+	// the worker script's, as Chrome's)
+	const workerScript = given.serviceWorker?.url;
+	ctx.errors = errorConsole(ctx, {
+		win: global as unknown as Window & typeof globalThis,
+		console: (global as unknown as { console: Console }).console,
+		contextUrl: () => workerScript ?? natives.location.href,
+		serviceWorker: !!workerScript,
+		hidden: () => ctx.kind === 'background' || ctx.kind === 'offscreen',
+	});
 	// the page's own `chrome` (the browser's, with its app and csi) gains the
 	// extension's namespaces
 	const existing = global.chrome;
@@ -889,8 +907,18 @@ function backgroundPage(ctx: Context, given: RuntimePayload) {
 			const ran = (await ctx.worker('runtime', 'ranVersion')) as {
 				previous: string | null;
 				now: string;
+				started?: 'reloaded' | 'enabled';
 			};
-			if (ran.previous === null)
+			// (turned on again: Chrome tells it nothing; Reload is an update to
+			// the same version)
+			if (ran.started === 'enabled') return;
+			if (ran.started === 'reloaded')
+				ctx
+					.event('runtime.onInstalled')
+					.dispatch([
+						{ reason: 'update', previousVersion: ran.previous ?? ran.now },
+					]);
+			else if (ran.previous === null)
 				ctx.event('runtime.onInstalled').dispatch([{ reason: 'install' }]);
 			else if (ran.previous !== ran.now)
 				ctx

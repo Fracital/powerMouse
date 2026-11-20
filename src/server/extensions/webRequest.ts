@@ -176,7 +176,7 @@ export class WebRequests {
 		channel: string,
 		event: WebRequestListener['event'],
 		details: WebRequestDetails,
-		enabled: (extensionId: string) => boolean,
+		enabled: (extensionId: string, url: string, tabId: number) => boolean,
 	): Promise<WebRequestVerdict | null> {
 		if (!this.any) return null;
 		// (the Web Store's requests no extension sees, as no rule acts on them)
@@ -192,7 +192,8 @@ export class WebRequests {
 		const waits: Promise<WebRequestVerdict | null>[] = [];
 		for (const registration of [...this.#registrations.values()]) {
 			if (registration.channel !== channel) continue;
-			if (!enabled(registration.extensionId)) continue;
+			if (!enabled(registration.extensionId, details.url, details.tabId))
+				continue;
 			const wanted = registration.listeners.filter(
 				(listener) =>
 					listener.event === event &&

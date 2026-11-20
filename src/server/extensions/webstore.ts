@@ -88,8 +88,8 @@ class StoreError extends Error {
 
 // ---- the extensions as the store sees them ---------------------------------
 
-/** management.ExtensionInfo (CreateExtensionInfo) */
-function extensionInfo(loaded: Loaded): Record<string, unknown> {
+/** management.ExtensionInfo (CreateExtensionInfo), as the store's pages and the extensions with "management" read it */
+export function managementInfo(loaded: Loaded): Record<string, unknown> {
 	const { record, manifest } = loaded;
 	const enabled = record.enabled;
 	const store = record.source === 'webstore';
@@ -546,9 +546,9 @@ async function management(
 	};
 	switch (call) {
 		case 'getAll':
-			return (await everyExtension(registry)).map(extensionInfo);
+			return (await everyExtension(registry)).map(managementInfo);
 		case 'get':
-			return extensionInfo(found());
+			return managementInfo(found());
 		case 'getPermissionWarningsById':
 			return warningsOf(
 				found().record.manifest as unknown as Record<string, unknown>,

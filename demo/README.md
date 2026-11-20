@@ -384,6 +384,8 @@ demo/
 │       ├── main.css    Powermouse-derived styling
 │       ├── main.js     controller wiring and UI behaviour
 │       ├── theme.js    the themes and PMTheme (docs/themes.md), before first paint
+│       ├── extensions-page.js, extensions-page.css
+│       │               the Extensions page, after chrome://extensions
 │       ├── dev.js      live reload client, npm run dev only
 │       ├── noise.png, header-background.png, logo.png
 │       └── icons/      the bar's, the menu's and the bookmarks' icons

@@ -11,6 +11,13 @@
 // which it installs the rulesets into and whose state it keeps).
 import { utf8Bytes } from '../../byteString';
 import {
+	ACTION_COMMANDS,
+	ACTION_DESCRIPTION,
+	normalizeShortcut,
+	shortcutPlatform,
+	suggestedShortcut,
+} from '../../extensions/commands';
+import {
 	getMessage,
 	localeChain,
 	localize,
@@ -28,11 +35,15 @@ import {
 	extensionURL,
 } from '../../extensions/origin';
 import {
+	CONTENT_SCRIPT_ROUTE,
 	ExtensionError,
 	type ExtensionCommand,
+	type ExtensionErrorEntry,
 	type ExtensionInfo,
 	type ExtensionsChange,
+	type ExtensionShortcut,
 	type Manifest,
+	type ReportedError,
 	type RunAt,
 	type ShippedExtension,
 	type SiteAccess,
@@ -59,7 +70,7 @@ import {
 } from './store';
 import { verifyStorePackage } from './storeProof';
 import { isTheme, themeManifest, themeSections } from './themes';
-import { STORE_HOST } from './webstore';
+import { managementInfo, STORE_HOST, warningsOf } from './webstore';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -109,6 +120,14 @@ export interface Loaded {
 	sources: Map<string, string>;
 	/** storage.session.setAccessLevel let content scripts in */
 	sessionOpen: boolean;
+	/** what Chrome warns of its manifest (unknown keys and permissions), as manifest errors */
+	installWarnings: {
+		message: string;
+		manifestKey: string;
+		manifestSpecific?: string;
+	}[];
+	/** the error console's entries (runtime and manifest errors) */
+	errors: ExtensionErrorEntry[];
 	/** its place among the pinned buttons (lower first), null when unpinned */
 	pinned: number | null;
 	/** its site access (the user's choice in its menu) */
@@ -117,6 +136,245 @@ export interface Loaded {
 	requestedHosts: string[];
 	/** its button's icon at 16 and 32 pixels (the action's, else the extension's) */
 	toolbarIcons: Record<string, string>;
+}
+
+/** the keys Chrome's manifest handlers know (_manifest_features.json); any other is an install warning */
+const MANIFEST_KEYS = new Set([
+	'action',
+	'author',
+	'automation',
+	'background',
+	'browser_action',
+	'chrome_settings_overrides',
+	'chrome_url_overrides',
+	'commands',
+	'content_capabilities',
+	'content_scripts',
+	'content_security_policy',
+	'converted_from_user_script',
+	'cross_origin_embedder_policy',
+	'cross_origin_opener_policy',
+	'current_locale',
+	'declarative_net_request',
+	'default_locale',
+	'description',
+	'devtools_page',
+	'differential_fingerprint',
+	'event_rules',
+	'export',
+	'externally_connectable',
+	'file_browser_handlers',
+	'file_handlers',
+	'file_system_provider_capabilities',
+	'homepage_url',
+	'host_permissions',
+	'icons',
+	'import',
+	'incognito',
+	'input_components',
+	'key',
+	'manifest_version',
+	'minimum_chrome_version',
+	'nacl_modules',
+	'name',
+	'oauth2',
+	'offline_enabled',
+	'omnibox',
+	'optional_host_permissions',
+	'optional_permissions',
+	'options_page',
+	'options_ui',
+	'page_action',
+	'permissions',
+	'replacement_web_app',
+	'requirements',
+	'sandbox',
+	'short_name',
+	'side_panel',
+	'storage',
+	'system_indicator',
+	'theme',
+	'trial_tokens',
+	'tts_engine',
+	'update_url',
+	'version',
+	'version_name',
+	'web_accessible_resources',
+	'webview',
+]);
+
+/** the API permissions Chrome knows (permissions_info); any other name is an install warning */
+const KNOWN_PERMISSIONS = new Set([
+	'accessibilityFeatures.modify',
+	'accessibilityFeatures.read',
+	'activeTab',
+	'alarms',
+	'audio',
+	'background',
+	'bookmarks',
+	'browsingData',
+	'certificateProvider',
+	'clipboardRead',
+	'clipboardWrite',
+	'contentSettings',
+	'contextMenus',
+	'cookies',
+	'debugger',
+	'declarativeContent',
+	'declarativeNetRequest',
+	'declarativeNetRequestFeedback',
+	'declarativeNetRequestWithHostAccess',
+	'declarativeWebRequest',
+	'desktopCapture',
+	'documentScan',
+	'dns',
+	'downloads',
+	'downloads.open',
+	'downloads.ui',
+	'enterprise.deviceAttributes',
+	'enterprise.hardwarePlatform',
+	'enterprise.networkingAttributes',
+	'enterprise.platformKeys',
+	'experimental',
+	'favicon',
+	'fileBrowserHandler',
+	'fileSystemProvider',
+	'fontSettings',
+	'gcm',
+	'geolocation',
+	'history',
+	'identity',
+	'identity.email',
+	'idle',
+	'input',
+	'loginState',
+	'management',
+	'nativeMessaging',
+	'notifications',
+	'offscreen',
+	'pageCapture',
+	'platformKeys',
+	'power',
+	'printerProvider',
+	'printing',
+	'printingMetrics',
+	'privacy',
+	'processes',
+	'proxy',
+	'readingList',
+	'scripting',
+	'search',
+	'sessions',
+	'sidePanel',
+	'storage',
+	'system.cpu',
+	'system.display',
+	'system.memory',
+	'system.storage',
+	'systemLog',
+	'tabCapture',
+	'tabGroups',
+	'tabs',
+	'topSites',
+	'tts',
+	'ttsEngine',
+	'unlimitedStorage',
+	'userScripts',
+	'vpnProvider',
+	'wallpaper',
+	'webAuthenticationProxy',
+	'webNavigation',
+	'webRequest',
+	'webRequestAuthProvider',
+	'webRequestBlocking',
+]);
+
+/** the most errors Chrome's ErrorMap keeps per extension (kMaxErrorsPerExtension) */
+const MAX_ERRORS = 100;
+
+const isHostPattern = (permission: string) =>
+	permission === '<all_urls>' || permission.includes('://');
+
+/** a site as a match pattern (`https://example.org/*`), as developerPrivate.addHostPermission takes it ("Invalid host." for anything else) */
+export function sitePattern(site: string): string {
+	const text = String(site).trim();
+	if (/^(\*|https?):\/\/(\*|(\*\.)?[^/*:]+)(:\d+)?\/.*$/.test(text))
+		return text;
+	throw new ExtensionError('bad-source', 'Invalid host.');
+}
+
+/** a kept site is a match pattern (setSiteHosts'), not an origin (the menu's "On <site>") */
+const isSitePattern = (site: string) => /^[^:]+:\/\/[^/]*\//.test(site);
+
+/** a kept site as a match pattern: an origin's every page */
+const siteAsPattern = (site: string) =>
+	isSitePattern(site) ? site : `${site}/*`;
+
+/** a pattern of every host (PermissionSet::HasEffectiveAccessToAllHosts) */
+const allHosts = (pattern: string) =>
+	pattern === '<all_urls>' || /^(\*|https?):\/\/\*\//.test(pattern);
+
+/** a manifest without what it asks of sites (the details' permission warnings, when site access lists the sites) */
+function withoutHosts(manifest: Manifest): Record<string, unknown> {
+	const rest: Record<string, unknown> = { ...manifest };
+	delete rest.host_permissions;
+	delete rest.content_scripts;
+	if (Array.isArray(manifest.permissions))
+		rest.permissions = manifest.permissions.filter(
+			(permission) => !isHostPattern(permission),
+		);
+	return rest;
+}
+
+/** whether pattern `inner` asks for no more than `outer` gives (both match patterns) */
+function patternWithin(inner: string, outer: string): boolean {
+	if (outer === '<all_urls>') return true;
+	if (inner === '<all_urls>') return false;
+	const split = (pattern: string) =>
+		/^([^:]+):\/\/([^/]*)(\/.*)$/.exec(pattern)?.slice(1) ?? null;
+	const a = split(inner);
+	const b = split(outer);
+	if (!a || !b) return false;
+	const schemeOk =
+		b[0] === '*' ? /^(\*|https?)$/.test(a[0]) : a[0] === b[0] || false;
+	const host = a[1].replace(/:\d+$/, '');
+	const outerHost = b[1].replace(/:\d+$/, '');
+	const hostOk =
+		outerHost === '*' ||
+		host === outerHost ||
+		(outerHost.startsWith('*.') &&
+			(host === outerHost.slice(2) ||
+				host.endsWith(`.${outerHost.slice(2)}`) ||
+				(host.startsWith('*.') && host.endsWith(outerHost.slice(1)))));
+	return schemeOk && hostOk;
+}
+
+/**
+ * What Chrome warns of a manifest as it loads it (install warnings, which
+ * the error console shows as manifest errors): a key no handler knows
+ * ("Unrecognized manifest key 'x'."), a permission no API has
+ * ("Permission 'x' is unknown."), measured on Chrome 157
+ */
+function installWarnings(manifest: Manifest): Loaded['installWarnings'] {
+	const warnings: Loaded['installWarnings'] = [];
+	for (const key of Object.keys(manifest))
+		if (!MANIFEST_KEYS.has(key) && !key.startsWith('_'))
+			warnings.push({
+				message: `Unrecognized manifest key '${key}'.`,
+				manifestKey: key,
+			});
+	for (const permission of manifest.permissions ?? [])
+		if (
+			typeof permission === 'string' &&
+			!isHostPattern(permission) &&
+			!KNOWN_PERMISSIONS.has(permission)
+		)
+			warnings.push({
+				message: `Permission '${permission}' is unknown.`,
+				manifestKey: 'permissions',
+				manifestSpecific: permission,
+			});
+	return warnings;
 }
 
 /** the reply of a call into the backend */
@@ -312,6 +570,20 @@ export class ExtensionRegistry {
 	#frameIds = new Map<string, number>();
 	/** the next frame id: from a random start, so a worker that restarted gives no id a page still holds */
 	#nextFrameId = 1 + Math.floor(Math.random() * 0x100000) * 0x400;
+	/** developer mode: the error console collects only while it is on (Chrome's ErrorConsole) */
+	#developerMode = false;
+	/** the error console's next id (ErrorMap's g_next_error_id) */
+	#nextErrorId = 1;
+	#errorWrites = new Map<string, ReturnType<typeof setTimeout>>();
+	/**
+	 * events for a background that is starting (installed, turned on,
+	 * reloaded) and has not run its scripts yet: Chrome queues them for a
+	 * lazy background, so they go once it asks ranVersion (or in 10 s)
+	 */
+	#held = new Map<
+		string,
+		{ messages: unknown[]; timer: ReturnType<typeof setTimeout> }
+	>();
 	/** the scope's cookie jar (createServer hands it over) */
 	cookies?: Cookies;
 	/** the controllers' addresses: every extension context talks on one (the worker sets it) */
@@ -320,6 +592,8 @@ export class ExtensionRegistry {
 	/** read the installed extensions, once per worker start */
 	ready(): Promise<void> {
 		this.#ready ??= (async () => {
+			this.#developerMode =
+				(await extensionState.get('_', 'developerMode')) === true;
 			for (const record of await records.all())
 				try {
 					await this.#load(record);
@@ -357,13 +631,110 @@ export class ExtensionRegistry {
 		return () => this.#listeners.delete(listener);
 	}
 
-	#emit(change: ExtensionsChange) {
+	#emit(change: ExtensionsChange, before?: Loaded) {
 		for (const listener of [...this.#listeners])
 			try {
 				listener(change);
 			} catch (error) {
 				// a controller that went away
 			}
+		this.#holdWhileStarting(change);
+		this.#tellManagement(change, before);
+	}
+
+	/** an extension whose background starts now holds its events (#held) */
+	#holdWhileStarting(change: ExtensionsChange) {
+		const id = change.id;
+		if (!id) return;
+		if (
+			change.type !== 'installed' &&
+			change.type !== 'updated' &&
+			change.type !== 'enabled'
+		) {
+			if (change.type === 'disabled' || change.type === 'removed')
+				this.#release(id, false);
+			return;
+		}
+		const loaded = this.#loaded.get(id);
+		const background = loaded?.record.manifest.background;
+		if (
+			!loaded?.record.enabled ||
+			!(
+				background?.service_worker ||
+				background?.page ||
+				background?.scripts?.length
+			)
+		)
+			return;
+		this.#release(id, false);
+		this.#held.set(id, {
+			messages: [],
+			timer: setTimeout(() => this.#release(id, true), 10_000),
+		});
+	}
+
+	/** the held events go to the background now (or are dropped with it) */
+	#release(id: string, send: boolean) {
+		const held = this.#held.get(id);
+		if (!held) return;
+		clearTimeout(held.timer);
+		this.#held.delete(id);
+		if (send) for (const message of held.messages) this.#post(id, message);
+	}
+
+	/** an event for an extension's background, held while it starts */
+	#postEvent(id: string, message: unknown) {
+		const held = this.#held.get(id);
+		if (held) held.messages.push(message);
+		else this.#post(id, message);
+	}
+
+	/**
+	 * chrome.management's events in the other extensions that hold
+	 * "management", as Chrome's ManagementEventRouter fires them: a load is
+	 * onEnabled, an unload onDisabled (an update and an uninstall unload
+	 * first), then onInstalled or onUninstalled
+	 */
+	#tellManagement(change: ExtensionsChange, before?: Loaded) {
+		const id = change.id;
+		if (!id) return;
+		const now = this.#loaded.get(id);
+		const off = (loaded: Loaded) =>
+			managementInfo({
+				...loaded,
+				record: { ...loaded.record, enabled: false },
+			});
+		const events: [string, unknown[]][] = [];
+		switch (change.type) {
+			case 'installed':
+			case 'updated':
+				if (change.type === 'updated' && before?.record.enabled)
+					events.push(['onDisabled', [off(before)]]);
+				if (now?.record.enabled)
+					events.push(['onEnabled', [managementInfo(now)]]);
+				if (now) events.push(['onInstalled', [managementInfo(now)]]);
+				break;
+			case 'enabled':
+				if (now) events.push(['onEnabled', [managementInfo(now)]]);
+				break;
+			case 'disabled':
+				if (now) events.push(['onDisabled', [managementInfo(now)]]);
+				break;
+			case 'removed':
+				if (before?.record.enabled) events.push(['onDisabled', [off(before)]]);
+				events.push(['onUninstalled', [id]]);
+				break;
+			default:
+				return;
+		}
+		for (const other of this.enabled())
+			if (other.record.id !== id && other.granted.has('management'))
+				for (const [name, args] of events)
+					this.#postEvent(other.record.id, {
+						t: 'event',
+						name: `management.${name}`,
+						args,
+					});
 	}
 
 	/**
@@ -515,10 +886,21 @@ export class ExtensionRegistry {
 				),
 				activeTab: granted.has('activeTab'),
 			},
-			hostPermissions: [...granted].filter(
-				(permission) =>
-					permission === '<all_urls>' || permission.includes('://'),
-			),
+			// (site access withholds its hosts but the sites it keeps: their
+			// rules wait for a click, the activeTabGranted hook)
+			...(loaded.siteAccess.withheld
+				? {
+						hostPermissions: loaded.siteAccess.sites
+							.map(siteAsPattern)
+							.filter((site) =>
+								[...granted].some(
+									(pattern) =>
+										isHostPattern(pattern) && patternWithin(site, pattern),
+								),
+							),
+						withheldHostPermissions: [...granted].filter(isHostPattern),
+					}
+				: { hostPermissions: [...granted].filter(isHostPattern) }),
 			state: (await extensionState.get(record.id, 'dnr')) as
 				DnrExtension['state'] | undefined,
 		};
@@ -694,6 +1076,12 @@ export class ExtensionRegistry {
 			warnings,
 			sources: new Map(),
 			sessionOpen: this.#loaded.get(record.id)?.sessionOpen ?? false,
+			installWarnings: theme ? [] : installWarnings(raw),
+			errors:
+				this.#loaded.get(record.id)?.errors ??
+				((await extensionState.get(record.id, 'errors')) as
+					ExtensionErrorEntry[] | undefined) ??
+				[],
 			pinned:
 				((await extensionState.get(record.id, 'pinned')) as
 					number | undefined) ?? null,
@@ -703,6 +1091,8 @@ export class ExtensionRegistry {
 			requestedHosts: requestedHosts(raw),
 			toolbarIcons: {},
 		};
+		for (const error of loaded.errors)
+			this.#nextErrorId = Math.max(this.#nextErrorId, error.id + 1);
 		// the toolbar's sizes: 16 pixels at 1x, 32 at 2x (Chrome's 16 dip
 		// action icon), the action's own icons first
 		for (const size of [16, 32]) {
@@ -726,6 +1116,9 @@ export class ExtensionRegistry {
 		const { record, manifest } = loaded;
 		const options = manifest.options_ui?.page ?? manifest.options_page;
 		const background = manifest.background;
+		const raw = record.manifest;
+		const store = record.source === 'webstore';
+		const storePage = `https://${STORE_HOST}/detail/${record.webStoreId ?? record.id}`;
 		return {
 			id: record.id,
 			type: loaded.theme ? 'theme' : 'extension',
@@ -748,13 +1141,9 @@ export class ExtensionRegistry {
 				manifest.page_action
 			),
 			permissions: [...loaded.granted].filter(
-				(permission) =>
-					permission !== '<all_urls>' && !permission.includes('://'),
+				(permission) => !isHostPattern(permission),
 			),
-			hostPermissions: [...loaded.granted].filter(
-				(permission) =>
-					permission === '<all_urls>' || permission.includes('://'),
-			),
+			hostPermissions: [...loaded.granted].filter(isHostPattern),
 			contentScripts: loaded.entries.length,
 			background: background?.service_worker
 				? 'service_worker'
@@ -763,6 +1152,28 @@ export class ExtensionRegistry {
 					: 'none',
 			manifest: copy(manifest),
 			warnings: [...loaded.warnings],
+			size: Object.values(record.index ?? {}).reduce(
+				(sum, file) => sum + (file[2] ?? 0),
+				0,
+			),
+			path:
+				record.source === 'webstore'
+					? null
+					: (record.path ??
+						(record.source === 'package' || record.filename !== 'unpacked'
+							? record.filename
+							: null)),
+			collectErrors: this.#collecting(loaded),
+			errorCount: loaded.errors.length,
+			// (with site access shown, the hosts are its rows, not warnings:
+			// developerPrivate's simplePermissions)
+			permissionWarnings: loaded.theme
+				? []
+				: warningsOf(
+						loaded.requestedHosts.length
+							? withoutHosts(raw)
+							: (raw as Record<string, unknown>),
+					),
 			pinned: loaded.pinned !== null,
 			pinOrder: loaded.pinned,
 			actionIcons: { ...loaded.toolbarIcons },
@@ -771,12 +1182,14 @@ export class ExtensionRegistry {
 				sites: [...loaded.siteAccess.sites],
 			},
 			requestedHosts: [...loaded.requestedHosts],
+			allHostsRequested: loaded.requestedHosts.some(allHosts),
 			homepageUrl:
 				typeof manifest.homepage_url === 'string' && manifest.homepage_url
 					? manifest.homepage_url
-					: record.source === 'webstore'
-						? `https://${STORE_HOST}/detail/${record.id}`
+					: store
+						? storePage
 						: null,
+			webStoreUrl: store ? storePage : null,
 		};
 	}
 
@@ -847,6 +1260,7 @@ export class ExtensionRegistry {
 			};
 		loaded.siteAccess = next;
 		await extensionState.put(id, 'siteAccess', next);
+		await this.#dnrSync(id);
 		this.#emit({ type: 'settings', id });
 		return this.info(loaded);
 	}
@@ -866,7 +1280,9 @@ export class ExtensionRegistry {
 		} catch (error) {
 			return false;
 		}
-		return loaded.siteAccess.sites.includes(origin);
+		return loaded.siteAccess.sites.some((site) =>
+			isSitePattern(site) ? hostPermitted([site], url) : site === origin,
+		);
 	}
 
 	/** its declarativeContent rules (kept across restarts, as Chrome keeps them); `rules` replaces them */
@@ -905,6 +1321,15 @@ export class ExtensionRegistry {
 			generation: loaded.record.generation,
 			...(loaded.worlds.some((world) => !world.worldId && world.messaging)
 				? { userScriptMessaging: true }
+				: {}),
+			shortcuts: Object.fromEntries(
+				Object.entries(loaded.record.shortcuts ?? {}).map(([name, kept]) => [
+					name,
+					kept.shortcut,
+				]),
+			),
+			...(this.#developerMode && this.#collecting(loaded)
+				? { collect: true }
 				: {}),
 		};
 	}
@@ -980,6 +1405,10 @@ export class ExtensionRegistry {
 			webStoreId:
 				storeId ?? this.#loaded.get(read.id)?.record.webStoreId ?? null,
 			filename,
+			path:
+				command.path ??
+				(source === 'unpacked' ? command.filename : undefined) ??
+				(source === 'package' ? filename : undefined),
 			enabled: command.enabled,
 			policy: command.policy,
 			installer,
@@ -992,6 +1421,7 @@ export class ExtensionRegistry {
 			source: StoredExtension['source'];
 			webStoreId: string | null;
 			filename: string;
+			path?: string;
 			enabled?: boolean;
 			policy?: boolean;
 			installer?: string;
@@ -1018,8 +1448,14 @@ export class ExtensionRegistry {
 				? { lastRunVersion: previous.lastRunVersion }
 				: {}),
 			generation: (previous?.generation ?? 0) + 1,
+			...(options.path ? { path: options.path } : {}),
+			...(previous?.collectErrors !== undefined
+				? { collectErrors: previous.collectErrors }
+				: {}),
 		};
+		record.shortcuts = this.#assignShortcuts(record, previous?.shortcuts);
 		const shown = this.currentTheme()?.record.id;
+		const before = this.#loaded.get(read.id);
 		await records.put(record);
 		// Chrome 157 pins a new extension's button (kExtensionsPinnedByDefault,
 		// on by default, and its user setting's default): on its install,
@@ -1034,7 +1470,12 @@ export class ExtensionRegistry {
 		await this.#dnrSync(record.id);
 		if (loaded.theme && record.enabled)
 			await this.#replaceThemes(record.id, options.installer ?? null);
-		this.#emit({ type: previous ? 'updated' : 'installed', id: read.id });
+		// (Chrome's ErrorConsole drops the last install's manifest errors and adds this one's)
+		this.#manifestErrors(loaded);
+		this.#emit(
+			{ type: previous ? 'updated' : 'installed', id: read.id },
+			before,
+		);
 		if (loaded.theme && record.enabled) this.#emitTheme();
 		else if (shown === read.id) this.#emitTheme();
 		return this.info(loaded);
@@ -1181,7 +1622,13 @@ export class ExtensionRegistry {
 			const shown = this.currentTheme();
 			loaded.record = { ...loaded.record, enabled };
 			await records.put(loaded.record);
-			if (!enabled) this.#activeTabs.delete(id);
+			if (!enabled) {
+				this.#activeTabs.delete(id);
+				// (its content scripts already in pages lose their extension)
+				this.#post(id, { t: 'contextGone' });
+			}
+			// (turned on again: its background starts with no onInstalled)
+			else await extensionState.put(id, 'started', 'enabled');
 			await this.#dnrSync(id);
 			// (turning a theme on shows it, as Chrome's undo does)
 			if (loaded.theme && enabled) await this.#replaceThemes(id, null);
@@ -1200,14 +1647,18 @@ export class ExtensionRegistry {
 	/** uninstall one that is loaded (the registry is ready) */
 	async #drop(id: string): Promise<void> {
 		const shown = this.currentTheme()?.record.id === id;
+		const before = this.#loaded.get(id);
 		this.#loaded.delete(id);
+		clearTimeout(this.#errorWrites.get(id));
+		this.#errorWrites.delete(id);
 		await records.delete(id);
 		await files.remove(id);
 		await storageAreas.forget(id);
 		await extensionState.forget(id);
 		this.#activeTabs.delete(id);
 		await this.#dnrSync(id);
-		this.#emit({ type: 'removed', id });
+		this.#post(id, { t: 'contextGone' });
+		this.#emit({ type: 'removed', id }, before);
 		if (shown) this.#emitTheme();
 	}
 
@@ -1227,18 +1678,444 @@ export class ExtensionRegistry {
 		return this.install({ op: 'install', webStore: storeId }, download);
 	}
 
-	/** the version the background last ran, and note this one (runtime.onInstalled) */
-	async ranVersion(
-		id: string,
-	): Promise<{ previous: string | null; now: string }> {
+	/** the version the background last ran, and note this one (runtime.onInstalled); `reloaded` after Reload */
+	async ranVersion(id: string): Promise<{
+		previous: string | null;
+		now: string;
+		/** why it starts: Reload (onInstalled `update`), turned on again (no event) */
+		started?: 'reloaded' | 'enabled';
+	}> {
 		const loaded = this.#found(id);
+		// (its scripts ran, its listeners are on: what it missed goes now)
+		this.#release(id, true);
 		const now = loaded.record.manifest.version ?? '';
 		const previous = loaded.record.lastRunVersion ?? null;
+		const started = await extensionState.get(id, 'started');
+		if (started) await extensionState.put(id, 'started', null);
 		if (previous !== now) {
 			loaded.record = { ...loaded.record, lastRunVersion: now };
 			await records.put(loaded.record);
 		}
-		return { previous, now };
+		return {
+			previous,
+			now,
+			...(started === 'reloaded' || started === 'enabled' ? { started } : {}),
+		};
+	}
+
+	/**
+	 * Chrome's Reload: the extension starts again from its files, as an
+	 * update to the same version (its background restarts, its content
+	 * scripts' routes are new, runtime.onInstalled says `update`)
+	 */
+	async reload(id: string): Promise<ExtensionInfo> {
+		await this.ready();
+		const before = this.#found(id);
+		const record: StoredExtension = {
+			...before.record,
+			updatedAt: Date.now(),
+			generation: before.record.generation + 1,
+		};
+		await records.put(record);
+		await extensionState.put(id, 'started', 'reloaded');
+		this.#post(id, { t: 'contextGone' });
+		const loaded = await this.#load(record);
+		await this.#dnrSync(id);
+		this.#manifestErrors(loaded);
+		this.#emit({ type: 'updated', id }, before);
+		return this.info(loaded);
+	}
+
+	/** an installed extension's files, as bytes by path (pack) */
+	async filesOf(id: string): Promise<Record<string, ArrayBuffer>> {
+		await this.ready();
+		const loaded = this.#found(id);
+		const out: Record<string, ArrayBuffer> = {};
+		for (const path of loaded.record.files) {
+			const bytes = await files.bytes(id, path);
+			if (bytes)
+				out[path] = bytes.buffer.slice(
+					bytes.byteOffset,
+					bytes.byteOffset + bytes.byteLength,
+				) as ArrayBuffer;
+		}
+		return out;
+	}
+
+	// ---- site access (runtime host permissions) --------------------------------
+
+	/**
+	 * Site access on exactly these sites, as the extensions page's list sets
+	 * it (developerPrivate.addHostPermission, removeHostPermission): its
+	 * sites withheld but these, each a match pattern ("Invalid host." for
+	 * anything else, as Chrome's); none is on a click
+	 */
+	async setSiteHosts(id: string, hosts: string[]): Promise<ExtensionInfo> {
+		await this.ready();
+		const loaded = this.#found(id);
+		if (!loaded.requestedHosts.length)
+			throw new ExtensionError(
+				'unsupported',
+				`${loaded.manifest.name} asks for no site access.`,
+			);
+		const next: SiteAccess = {
+			withheld: true,
+			sites: [...new Set(hosts.map(sitePattern))],
+		};
+		loaded.siteAccess = next;
+		await extensionState.put(id, 'siteAccess', next);
+		await this.#dnrSync(id);
+		this.#emit({ type: 'settings', id });
+		return this.info(loaded);
+	}
+
+	// ---- the error console (Chrome's ErrorConsole) -----------------------------
+
+	/** Chrome's default: an unpacked extension's errors are collected, any other's not (GetMaskForExtension) */
+	#collecting(loaded: Loaded): boolean {
+		if (loaded.theme) return false;
+		return loaded.record.collectErrors ?? loaded.record.source === 'unpacked';
+	}
+
+	get developerMode(): boolean {
+		return this.#developerMode;
+	}
+
+	/** developer mode on or off: the console collects only while it is on, and forgets everything as it goes off */
+	async setDeveloperMode(on: boolean): Promise<boolean> {
+		await this.ready();
+		if (on === this.#developerMode) return on;
+		this.#developerMode = on;
+		await extensionState.put('_', 'developerMode', on);
+		for (const loaded of this.#loaded.values()) {
+			if (on) {
+				if (loaded.record.enabled) this.#manifestErrors(loaded);
+			} else if (loaded.errors.length) {
+				loaded.errors = [];
+				this.#errorsChanged(loaded);
+			}
+			this.#post(loaded.record.id, {
+				t: 'collect',
+				on: on && this.#collecting(loaded),
+			});
+		}
+		return on;
+	}
+
+	/** Collect errors for one extension (SetReportingAllForExtension) */
+	async setCollectErrors(id: string, on: boolean): Promise<ExtensionInfo> {
+		await this.ready();
+		const loaded = this.#found(id);
+		loaded.record = { ...loaded.record, collectErrors: on };
+		await records.put(loaded.record);
+		this.#post(id, { t: 'collect', on: on && this.#developerMode });
+		this.#emit({ type: 'errors', id });
+		return this.info(loaded);
+	}
+
+	async errors(id: string): Promise<ExtensionErrorEntry[]> {
+		await this.ready();
+		return copy(this.#found(id).errors);
+	}
+
+	/** delete some errors (by id), or all of them (developerPrivate.deleteExtensionErrors) */
+	async clearErrors(id: string, ids?: number[]): Promise<void> {
+		await this.ready();
+		const loaded = this.#found(id);
+		const before = loaded.errors.length;
+		loaded.errors = ids
+			? loaded.errors.filter((error) => !ids.includes(error.id))
+			: [];
+		if (loaded.errors.length !== before) this.#errorsChanged(loaded);
+	}
+
+	/** an install's manifest errors replace the last one's (ErrorConsole::OnExtensionInstalled) */
+	#manifestErrors(loaded: Loaded) {
+		if (!this.#developerMode || !this.#collecting(loaded)) return;
+		const kept = loaded.errors.filter((error) => error.type === 'runtime');
+		const warnings: Loaded['installWarnings'] = [
+			...loaded.installWarnings,
+			...loaded.warnings.map((message) => ({ message, manifestKey: '' })),
+		];
+		const made = warnings.map((warning): ExtensionErrorEntry => ({
+			id: this.#nextErrorId++,
+			type: 'manifest',
+			message: warning.message,
+			severity: 'warn',
+			source: 'manifest.json',
+			contextUrl: '',
+			stackTrace: [],
+			occurrences: 1,
+			timestamp: Date.now(),
+			manifestKey: warning.manifestKey,
+			...(warning.manifestSpecific
+				? { manifestSpecific: warning.manifestSpecific }
+				: {}),
+		}));
+		const before = loaded.errors.length;
+		loaded.errors = [...made, ...kept].slice(-MAX_ERRORS);
+		if (made.length || before !== loaded.errors.length)
+			this.#errorsChanged(loaded);
+	}
+
+	/**
+	 * A context's error (an uncaught exception, a rejection nobody handled,
+	 * console.error or console.warn), kept as Chrome's ErrorMap keeps it:
+	 * only while developer mode is on and the extension's errors are
+	 * collected, the same error again counts as an occurrence of the one
+	 * kept (and moves to the end), at most 100 per extension
+	 */
+	/** a content script entry's route as its file, `chrome-extension://<id>/content.js` (its first script's) */
+	#contentScriptFile(loaded: Loaded, url: string): string {
+		const key = new RegExp(
+			`/${CONTENT_SCRIPT_ROUTE}/${loaded.record.id}/[^/]+/([^/?#]+)\\.js(?:[?#].*)?$`,
+		).exec(url)?.[1];
+		if (!key) return url;
+		const entry = this.entriesOf(loaded).find(
+			(candidate) => candidate.key === decodeURIComponent(key),
+		);
+		return entry?.js[0] && !/^[a-z]+:/i.test(entry.js[0])
+			? extensionURL(loaded.record.id, cleanPath(entry.js[0]))
+			: url;
+	}
+
+	reportError(id: string, reported: ReportedError) {
+		const loaded = this.#loaded.get(id);
+		if (!loaded || !this.#developerMode || !this.#collecting(loaded)) return;
+		const message = String(reported?.message ?? '').slice(0, 10_000);
+		const severity = reported?.severity === 'warn' ? 'warn' : 'error';
+		const stackTrace = (
+			Array.isArray(reported?.stackTrace) ? reported.stackTrace : []
+		)
+			.slice(0, 64)
+			.map((frame) => ({
+				url: displayExtensionURL(
+					this.#contentScriptFile(loaded, String(frame?.url ?? '')),
+				),
+				lineNumber: Number(frame?.lineNumber) || 0,
+				columnNumber: Number(frame?.columnNumber) || 0,
+				functionName: String(frame?.functionName || '(anonymous function)'),
+			}));
+		const contextUrl = displayExtensionURL(String(reported?.contextUrl ?? ''));
+		// (RuntimeError::CleanUpInit: the source is the stack's top frame)
+		const source = stackTrace[0]?.url || contextUrl;
+		const entry: ExtensionErrorEntry = {
+			id: 0,
+			type: 'runtime',
+			message,
+			severity,
+			source,
+			contextUrl,
+			stackTrace,
+			occurrences: 1,
+			timestamp: Date.now(),
+			...(reported?.isServiceWorker ? { isServiceWorker: true } : {}),
+		};
+		const same = loaded.errors.findIndex(
+			(error) =>
+				error.type === 'runtime' &&
+				error.message === entry.message &&
+				error.severity === entry.severity &&
+				error.source === entry.source &&
+				error.contextUrl === entry.contextUrl &&
+				error.stackTrace.length === entry.stackTrace.length &&
+				JSON.stringify(error.stackTrace[0] ?? null) ===
+					JSON.stringify(entry.stackTrace[0] ?? null),
+		);
+		if (same >= 0) {
+			entry.id = loaded.errors[same].id;
+			entry.occurrences = loaded.errors[same].occurrences + 1;
+			loaded.errors.splice(same, 1);
+		} else entry.id = this.#nextErrorId++;
+		if (loaded.errors.length >= MAX_ERRORS) loaded.errors.shift();
+		loaded.errors.push(entry);
+		this.#errorsChanged(loaded);
+	}
+
+	/** store the console's entries a moment later (a burst is one write), and tell the hosts */
+	#errorsChanged(loaded: Loaded) {
+		const id = loaded.record.id;
+		clearTimeout(this.#errorWrites.get(id));
+		this.#errorWrites.set(
+			id,
+			setTimeout(() => {
+				this.#errorWrites.delete(id);
+				if (this.#loaded.get(id) === loaded)
+					extensionState.put(id, 'errors', loaded.errors).catch(() => {});
+				this.#emit({ type: 'errors', id });
+			}, 50),
+		);
+	}
+
+	// ---- commands (Chrome's CommandService) ------------------------------------
+
+	/** the commands of a manifest, the action's first (CommandsInfo, with the action's that Chrome adds for a button) */
+	#commandNames(manifest: Manifest): string[] {
+		const declared = Object.keys(manifest.commands ?? {});
+		const actionKey = manifest.action
+			? '_execute_action'
+			: manifest.browser_action
+				? '_execute_browser_action'
+				: manifest.page_action
+					? '_execute_page_action'
+					: null;
+		return [
+			...(actionKey ? [actionKey] : []),
+			...declared.filter((name) => !ACTION_COMMANDS.includes(name)).sort(),
+		];
+	}
+
+	/**
+	 * the shortcuts of a new install: what it had before, and for each new
+	 * command its suggested key when no other extension's command holds it
+	 * (AssignKeybindings, which never overrides)
+	 */
+	#assignShortcuts(
+		record: StoredExtension,
+		previous: StoredExtension['shortcuts'] | undefined,
+	): NonNullable<StoredExtension['shortcuts']> {
+		const out: NonNullable<StoredExtension['shortcuts']> = {};
+		if (isTheme(record.manifest)) return out;
+		const platform = shortcutPlatform(
+			typeof navigator === 'undefined' ? '' : navigator.userAgent,
+		);
+		const taken = new Set<string>();
+		for (const loaded of this.#loaded.values())
+			if (loaded.record.id !== record.id)
+				for (const kept of Object.values(loaded.record.shortcuts ?? {}))
+					if (kept.shortcut) taken.add(kept.shortcut);
+		const commands = record.manifest.commands ?? {};
+		for (const name of this.#commandNames(record.manifest)) {
+			if (previous?.[name]) {
+				out[name] = previous[name];
+				continue;
+			}
+			const declared =
+				commands[name] ??
+				(ACTION_COMMANDS.includes(name)
+					? ACTION_COMMANDS.map((action) => commands[action]).find(Boolean)
+					: undefined);
+			const suggested = suggestedShortcut(declared?.suggested_key, platform);
+			const free = !!suggested && !taken.has(suggested);
+			if (free) taken.add(suggested);
+			out[name] = { shortcut: free ? suggested : '', scope: 'chrome' };
+		}
+		return out;
+	}
+
+	/** every enabled extension's commands, as the Keyboard shortcuts page lists them */
+	async commands(): Promise<ExtensionShortcut[]> {
+		await this.ready();
+		const rows: ExtensionShortcut[] = [];
+		for (const loaded of this.enabled()) {
+			const kept = loaded.record.shortcuts ?? {};
+			for (const name of this.#commandNames(loaded.record.manifest)) {
+				const action = ACTION_COMMANDS.includes(name);
+				const shortcut = kept[name]?.shortcut ?? '';
+				rows.push({
+					id: loaded.record.id,
+					name,
+					description: action
+						? ACTION_DESCRIPTION
+						: (loaded.manifest.commands?.[name]?.description ?? ''),
+					shortcut,
+					scope: kept[name]?.scope ?? 'chrome',
+				});
+			}
+		}
+		return rows;
+	}
+
+	/**
+	 * A command's shortcut, as the shortcuts page sets it
+	 * (developerPrivate.updateExtensionCommand): another command that held
+	 * it loses it (AddKeybindingPref with allow_overrides); '' clears it
+	 */
+	async setShortcut(
+		id: string,
+		name: string,
+		given: string,
+	): Promise<ExtensionShortcut[]> {
+		await this.ready();
+		const loaded = this.#found(id);
+		if (!this.#commandNames(loaded.record.manifest).includes(name))
+			throw new ExtensionError(
+				'not-found',
+				`${loaded.manifest.name} has no command ${name}.`,
+			);
+		// (a key Chrome's input would refuse clears the command's, as
+		// updateExtensionCommand does: measured on 157)
+		let shortcut: string;
+		try {
+			shortcut = normalizeShortcut(String(given ?? ''));
+		} catch (error) {
+			shortcut = '';
+		}
+		if (shortcut)
+			for (const other of this.#loaded.values())
+				for (const [command, kept] of Object.entries(
+					other.record.shortcuts ?? {},
+				))
+					if (
+						kept.shortcut === shortcut &&
+						!(other.record.id === id && command === name)
+					) {
+						other.record = {
+							...other.record,
+							shortcuts: {
+								...other.record.shortcuts,
+								[command]: { ...kept, shortcut: '' },
+							},
+						};
+						await records.put(other.record);
+						if (other.record.id !== id)
+							this.#emit({ type: 'commands', id: other.record.id });
+					}
+		const current = this.#found(id);
+		current.record = {
+			...current.record,
+			shortcuts: {
+				...current.record.shortcuts,
+				[name]: {
+					scope: current.record.shortcuts?.[name]?.scope ?? 'chrome',
+					shortcut,
+				},
+			},
+		};
+		await records.put(current.record);
+		this.#emit({ type: 'commands', id });
+		return this.commands();
+	}
+
+	/** a command's scope: In Chrome, or Global (Chrome keeps it; no key reaches STomp from outside the browser) */
+	async setCommandScope(
+		id: string,
+		name: string,
+		scope: string,
+	): Promise<ExtensionShortcut[]> {
+		await this.ready();
+		const loaded = this.#found(id);
+		if (scope !== 'chrome' && scope !== 'global')
+			throw new ExtensionError(
+				'bad-source',
+				`${scope} is not a command scope.`,
+			);
+		const kept = loaded.record.shortcuts?.[name];
+		if (!kept)
+			throw new ExtensionError(
+				'not-found',
+				`${loaded.manifest.name} has no command ${name}.`,
+			);
+		loaded.record = {
+			...loaded.record,
+			shortcuts: {
+				...loaded.record.shortcuts,
+				[name]: { ...kept, scope },
+			},
+		};
+		await records.put(loaded.record);
+		this.#emit({ type: 'commands', id });
+		return this.commands();
 	}
 
 	// ---- what the request path asks ------------------------------------------
@@ -1862,37 +2739,8 @@ export class ExtensionRegistry {
 	): Promise<unknown> {
 		await this.ready();
 		const self = this.#found(id);
-		const describe = (loaded: Loaded) => {
-			const info = this.info(loaded);
-			return {
-				id: info.id,
-				name: info.name,
-				shortName: info.shortName,
-				description: info.description,
-				version: info.version,
-				enabled: info.enabled,
-				type: info.type,
-				installType: loaded.record.policy
-					? 'admin'
-					: loaded.record.source === 'unpacked'
-						? 'development'
-						: 'normal',
-				mayDisable: !loaded.record.policy,
-				isApp: false,
-				offlineEnabled: false,
-				optionsUrl: info.optionsUrl ? displayExtensionURL(info.optionsUrl) : '',
-				homepageUrl: '',
-				updateUrl: '',
-				permissions: info.permissions,
-				hostPermissions: info.hostPermissions,
-				icons: Object.entries(loaded.record.manifest.icons ?? {}).map(
-					([size, path]) => ({
-						size: Number(size),
-						url: extensionURL(loaded.record.id, cleanPath(path)),
-					}),
-				),
-			};
-		};
+		// (Chrome's ExtensionInfo, as the store's pages read it)
+		const describe = managementInfo;
 		switch (call) {
 			case 'getSelf':
 				return describe(self);

@@ -2,8 +2,8 @@
 // here and added as a .zip through the Extensions page:
 //  - the puzzle piece after the address box lists the extensions and opens
 //    the Extensions page, as does the menu's Extensions item;
-//  - the page adds a .zip (its card: name, version, where it came from,
-//    its permissions in Chrome's words), says what a bad Web Store address
+//  - the page adds a .zip (its card: name, Chrome's badge for a file; its
+//    details: version, source, site access), says what a bad Web Store address
 //    did, turns an extension off and on, and removes it after asking;
 //  - the bar's button for the extension (pinned as Chrome 157 pins a new
 //    one), its initial for an icon, the badge its background set for the
@@ -199,14 +199,12 @@ const cards = (page) =>
 			id: card.dataset.ext,
 			name: card.querySelector('.spListName')?.textContent,
 			on: card.querySelector('.shieldsToggle')?.checked,
-			facts: card.querySelector('.extFacts')?.textContent,
-			permissions: [...card.querySelectorAll('.extPerms li')].map(
-				(li) => li.textContent,
-			),
+			badge:
+				card.querySelector('.xpSourceBadge')?.getAttribute('aria-label') ??
+				null,
 			buttons: [...card.querySelectorAll('.extButtons .spBtn')].map(
 				(button) => button.textContent,
 			),
-			confirm: card.querySelector('.extConfirm')?.textContent ?? null,
 		})),
 	);
 
@@ -402,22 +400,37 @@ const added = await until(
 let list = await cards(page);
 const id = list[0]?.id;
 ok(
-	'a .zip from the file button: its card, on, with its version, origin and permissions',
+	"a .zip from the file button: its card, on, Chrome's badge for a file, Details and Remove",
 	added &&
 		list.length === 1 &&
 		/^[a-p]{32}$/.test(id) &&
-		list[0].name === `${NAME} 1.0` &&
+		list[0].name === NAME &&
 		list[0].on === true &&
-		/From a file/.test(list[0].facts) &&
-		/Manifest V3/.test(list[0].facts) &&
-		list[0].permissions.includes(
-			'Read and change all your data on all websites',
-		) &&
-		list[0].permissions.includes('contextMenus') &&
-		JSON.stringify(list[0].buttons) === JSON.stringify(['Options', 'Remove']),
+		list[0].badge === 'Not from Chrome Web Store.' &&
+		JSON.stringify(list[0].buttons) === JSON.stringify(['Details', 'Remove']),
 	JSON.stringify(list),
 );
 const addedStatus = await status(page);
+await page.click(`[data-control="${id}:details"]`);
+await painted(page);
+const facts = await page.evaluate(() =>
+	Object.fromEntries(
+		[...document.querySelectorAll('#xpSubView .xpDetails > *')].map((row) => [
+			row.querySelector('.spRowLabel')?.textContent,
+			[...row.querySelectorAll('.spRowSub')].map((sub) => sub.textContent),
+		]),
+	),
+);
+await page.click('#xpSubView .xpBack');
+await painted(page);
+ok(
+	'its details: its version, a file as source, site access on all sites, its options',
+	facts.Version?.[0] === '1.0' &&
+		facts.Source?.[0] === 'Not from Chrome Web Store.' &&
+		!!facts['Site access'] &&
+		!!facts['Extension options'],
+	JSON.stringify(facts),
+);
 ok(
 	'the page says it was added',
 	addedStatus?.text === `Added ${NAME} 1.0.` && !addedStatus.bad,

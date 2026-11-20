@@ -195,7 +195,13 @@ export class ExtensionPipeline {
 		};
 	}
 
-	#enabled = (id: string) => !!this.#registry.get(id)?.record.enabled;
+	// (an extension whose site access withholds the host hears none of its requests)
+	#enabled = (id: string, url: string, tabId: number) => {
+		const loaded = this.#registry.get(id);
+		return (
+			!!loaded?.record.enabled && this.#registry.siteGranted(loaded, url, tabId)
+		);
+	};
 
 	#dispatch(event: WebRequestListener['event'], details: WebRequestDetails) {
 		return webRequests.dispatch(this.#channel, event, details, this.#enabled);

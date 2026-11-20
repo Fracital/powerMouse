@@ -12,6 +12,7 @@ import {
 	type ContextKind,
 	type ShippedExtension,
 } from '../types';
+import type { ErrorConsole } from './errors';
 import { listen, natives } from './natives';
 
 export const NO_RECEIVER =
@@ -247,6 +248,14 @@ export class Context {
 	placed: Promise<void> = natives.Promise.resolve();
 	/** the other contexts of the extension under this controller */
 	readonly peers = new Map<string, Presence>();
+	/** what reports its errors to the extensions page (errors.ts) */
+	errors: ErrorConsole | null = null;
+	/**
+	 * The extension was disabled, removed or reloaded under this content
+	 * context: Chrome's "Extension context invalidated." (runtime.id reads
+	 * undefined, its calls fail)
+	 */
+	invalidated = false;
 	readonly bus: BroadcastChannel;
 	readonly #handlers = new Map<string, ((message: BusMessage) => void)[]>();
 	#calls = 0;
@@ -278,6 +287,9 @@ export class Context {
 			this.peers.delete(String(message.ctx));
 		});
 		this.on('roll', () => this.announce());
+		this.on('contextGone', () => {
+			if (this.kind === 'content') this.invalidated = true;
+		});
 		// what the hub tells the extension's pages (action.onClicked, a
 		// notification's or a menu's click)
 		this.on('event', (message) => {
@@ -379,6 +391,7 @@ export class Context {
 	}
 
 	listenerError(error: unknown) {
+		this.errors?.listener(error);
 		natives.console.error(`${this.ext.name}: Error in event handler:`, error);
 	}
 
@@ -470,6 +483,10 @@ export class Context {
 		{ voidResult = false } = {},
 	): (...args: unknown[]) => unknown {
 		return (...args: unknown[]) => {
+			// (a content script whose extension went under it: Chrome's bindings
+			// throw before the call is made)
+			if (this.invalidated)
+				throw new natives.Error('Extension context invalidated.');
 			const cb =
 				typeof args[args.length - 1] === 'function'
 					? (args.pop() as (...values: unknown[]) => unknown)

@@ -12,6 +12,7 @@ import {
 	CONTENT_SCRIPT_ROUTE,
 	ExtensionError,
 	type ExtensionCommand,
+	type ReportedError,
 	type WebRequestListener,
 } from '../../extensions/types';
 import {
@@ -99,6 +100,46 @@ export async function extensionCommand(
 			case 'grant':
 				registry.grantActiveTab(String(command.id), Number(command.tabId));
 				return undefined;
+			case 'errors':
+				return await registry.errors(command.id);
+			case 'clearErrors':
+				await registry.clearErrors(
+					command.id,
+					Array.isArray(command.ids) ? command.ids.map(Number) : undefined,
+				);
+				return undefined;
+			case 'collectErrors':
+				return await registry.setCollectErrors(command.id, !!command.on);
+			case 'developerMode':
+				if (typeof command.on === 'boolean')
+					return await registry.setDeveloperMode(command.on);
+				await registry.ready();
+				return registry.developerMode;
+			case 'siteHosts':
+				return await registry.setSiteHosts(
+					String(command.id),
+					Array.isArray(command.hosts) ? command.hosts.map(String) : [],
+				);
+			case 'commands':
+				return await registry.commands();
+			case 'setShortcut':
+				return await registry.setShortcut(
+					command.id,
+					String(command.name),
+					String(command.shortcut ?? ''),
+				);
+			case 'setCommandScope':
+				return await registry.setCommandScope(
+					command.id,
+					String(command.name),
+					String(command.scope),
+				);
+			case 'reload':
+				webRequests.forget(command.id);
+				fetchEvents.forget(command.id);
+				return await registry.reload(command.id);
+			case 'files':
+				return await registry.filesOf(command.id);
 			case 'pin':
 				return await registry.setPinned(
 					String(command.id),
@@ -166,7 +207,16 @@ interface ApiCall {
 	args: unknown[];
 }
 
-const CONTENT_AREAS = new Set(['storage']);
+const CONTENT_AREAS = new Set(['storage', 'errors']);
+
+/** a stack frame's URL as the worker read it: a routed one is its real URL */
+function realFrameURL(url: string, realURL: (routed: string) => string) {
+	try {
+		return realURL(url);
+	} catch (error) {
+		return url;
+	}
+}
 
 /** answer a context's `extapi` call */
 export async function extensionApi(
@@ -264,6 +314,42 @@ export async function extensionApi(
 				break;
 			case 'management':
 				value = await registry.management(id, call.call, args);
+				break;
+			case 'errors': {
+				// a context's error for the error console (Chrome's ErrorConsole)
+				const reported = (args[0] ?? {}) as ReportedError;
+				await registry.ready();
+				registry.reportError(id, {
+					...reported,
+					stackTrace: (Array.isArray(reported.stackTrace)
+						? reported.stackTrace
+						: []
+					).map((frame) => ({
+						...frame,
+						url: realFrameURL(String(frame?.url ?? ''), realURL),
+					})),
+					contextUrl: realFrameURL(String(reported.contextUrl ?? ''), realURL),
+				});
+				value = undefined;
+				break;
+			}
+			case 'commands':
+				// commands.getAll: the manifest's commands with the shortcuts they run on now
+				value = (await registry.commands())
+					.filter(
+						(command) =>
+							command.id === id &&
+							(command.name in (registry.get(id)?.manifest.commands ?? {}) ||
+								!!command.shortcut),
+					)
+					.map(({ name, shortcut }) => ({
+						// (the manifest's words: '' for an action command with none)
+						description: String(
+							registry.get(id)?.manifest.commands?.[name]?.description ?? '',
+						),
+						name,
+						shortcut,
+					}));
 				break;
 			case 'runtime':
 				if (call.call === 'ranVersion') value = await registry.ranVersion(id);

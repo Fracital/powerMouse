@@ -268,6 +268,14 @@ export function runtimeApi(ctx: Context) {
 			return ctx.lastError;
 		},
 	});
+	// a content script whose extension was disabled, removed or reloaded
+	// under it reads no id (Chrome's invalidated context)
+	if (content)
+		natives.defineProperty(api, 'id', {
+			enumerable: true,
+			configurable: true,
+			get: () => (ctx.invalidated ? undefined : ext.id),
+		});
 	return api;
 }
 
@@ -1682,13 +1690,17 @@ export function commandsApi(ctx: Context) {
 		string,
 		{ description?: string; suggested_key?: Record<string, string> }
 	>;
+	const shortcuts = ctx.ext.shortcuts ?? {};
 	return {
+		// (the shortcuts the user set on the extensions page, as the worker keeps them)
 		getAll: ctx.method(() =>
-			Object.entries(commands).map(([name, command]) => ({
-				name,
-				description: command.description ?? '',
-				shortcut: command.suggested_key?.default ?? '',
-			})),
+			ctx.worker('commands', 'getAll').catch(() =>
+				Object.entries(commands).map(([name, command]) => ({
+					name,
+					description: command.description ?? '',
+					shortcut: shortcuts[name] ?? '',
+				})),
+			),
 		),
 		onCommand: ctx.event('commands.onCommand').api,
 	};
@@ -1731,7 +1743,26 @@ export function buildChrome(ctx: Context): Record<string, unknown> {
 					?.shadowRoot ?? null,
 		},
 	};
-	if (ctx.kind === 'content') return chrome;
+	if (ctx.kind === 'content') {
+		// Chrome's namespaces are made on first read. Once the extension is
+		// disabled, removed or reloaded under the script, one it never read
+		// reads undefined, and one it read stays, its calls throwing
+		// "Extension context invalidated." (Context.method)
+		for (const key of natives.ownKeys(chrome)) {
+			const value = chrome[key as string];
+			let read = false;
+			natives.defineProperty(chrome, key, {
+				enumerable: true,
+				configurable: true,
+				get: () => {
+					if (ctx.invalidated && !read) return undefined;
+					read = true;
+					return value;
+				},
+			});
+		}
+		return chrome;
+	}
 	const mv3 = Number(manifest.manifest_version) >= 3;
 	const granted = new Set(ctx.ext.permissions);
 	Object.assign(chrome, {

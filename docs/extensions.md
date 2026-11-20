@@ -34,30 +34,37 @@ const options = await controller.extensions.options(info.id);
 await frame.go(controller.extensions.resolveUrl(options.displayUrl));
 ```
 
-| Member                                                           | Description                                                                                                                                                                                                                                                                                                                                                                           |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `install(source, { filename, enabled, policy })`                 | install, or update in place an extension of the same id; resolves to its `ExtensionInfo`. `policy: true` is an enterprise policy install: an MV3 extension may then block in webRequest.                                                                                                                                                                                              |
-| `list()`, `get(id)`                                              | the installed extensions, oldest first; one, or null                                                                                                                                                                                                                                                                                                                                  |
-| `enable(id)`, `disable(id)`, `remove(id)`                        | a disabled extension's content scripts, rules, listeners and background stop; `remove` deletes its package, storage and state                                                                                                                                                                                                                                                         |
-| `update(id)`                                                     | download a Web Store extension again                                                                                                                                                                                                                                                                                                                                                  |
-| `onChange(listener)`                                             | `installed`, `updated`, `removed`, `enabled`, `disabled`, `action` (a badge, title, icon or popup changed), `settings` (pinned, site access), `popup` (`action.openPopup()`: show the popup for `change.tabId` with `mountPopup`), `menus`, `notification`, `tab` (open `change.url` in a new tab: an extension opened one while the host has none), `ready`; returns the unsubscribe |
-| `action(id, tabId?)`, `actions(tabId?)`                          | the toolbar button of one extension, or of every enabled one with an action (the pinned first, in their order), for a tab (default: the active tab): its `tooltip`, `iconUrl` (16 px, 32 on a 2x screen), badge colors as Chrome draws them, `enabled`, `siteInteraction`, `wantsToRun`                                                                                               |
-| `clickAction(id, tabId?)`                                        | what a click does: `popup`, `clicked` (action.onClicked went to the background), `granted` (scripts waiting on the tab ran), or `disabled` (Chrome opens the button's menu then)                                                                                                                                                                                                      |
-| `pin(id, pinned?)`                                               | pin the button to the toolbar or unpin it; Chrome 157 pins a new install with a button                                                                                                                                                                                                                                                                                                |
-| `setSiteAccess(id, access, tabId?)`                              | the site access of its menu: `click`, `site` (the tab's site) or `all`; a withheld site holds its content scripts until a click                                                                                                                                                                                                                                                       |
-| `contextMenu(id, { source, tabId, developerMode, browserName })` | the button's menu as Chrome 157 makes it (`source: 'menu'` for the extensions menu's More options, without Pin); the host does `home`, `options`, `uninstall`, `manage`, `permissions`, `learnMore`, `inspect`                                                                                                                                                                        |
-| `runMenuCommand(id, entry, tabId?)`                              | carry out a menu entry: `pin`, `unpin`, `site:*`, or the extension's own `item` (contextMenus.onClicked with Chrome's info and the tab)                                                                                                                                                                                                                                               |
-| `commands()`, `runCommand(id, name, tabId?)`                     | the manifest's keyboard shortcuts, and running one: `_execute_action` acts as a click, any other fires commands.onCommand                                                                                                                                                                                                                                                             |
-| `openPopup(id, { tabId, parent, at })`                           | click and show the popup in a new iframe anchored at an element or a point; null when the click went to the background                                                                                                                                                                                                                                                                |
-| `mountPopup(id, iframe, tabId?)`                                 | show the popup in an iframe of the host's; the `PopupHandle` tells its size (`onResize`, clamped as Chrome clamps popups) and `onClose` (the popup's `window.close()`)                                                                                                                                                                                                                |
-| `options(id)`                                                    | the options page: `url`, `displayUrl` (`chrome-extension://...`), `openInTab`                                                                                                                                                                                                                                                                                                         |
-| `displayUrl(url)`, `resolveUrl(url)`                             | an extension URL as an address bar shows it, and back (`frame.go(resolveUrl('chrome-extension://<id>/page.html'))` opens an extension page in a tab)                                                                                                                                                                                                                                  |
-| `extensionOf(url)`                                               | the extension a URL belongs to, or null                                                                                                                                                                                                                                                                                                                                               |
-| `menus(id)`, `clickMenu(id, info, tabId?)`                       | an extension's context menu items, and telling it one was clicked                                                                                                                                                                                                                                                                                                                     |
-| `notificationEvent(id, notificationId, kind, ...)`               | tell it the user clicked or closed one of its notifications                                                                                                                                                                                                                                                                                                                           |
-| `onPrompt(handler)`                                              | draw the Chrome Web Store's install and uninstall dialogs: the handler gets `{ kind, id, name, iconUrl, permissions, url, frame }` and resolves true for Add extension or Remove (see below)                                                                                                                                                                                          |
-| `theme()`, `themes()`, `onTheme(listener)`                       | the Chrome theme shown (null for the default), every installed theme, and hearing it change: see [Themes](#themes)                                                                                                                                                                                                                                                                    |
-| `resetTheme()`                                                   | Chrome's Reset to default: uninstall every theme                                                                                                                                                                                                                                                                                                                                      |
+| Member                                                                | Description                                                                                                                                                                                                                                                                                                                                                                           |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `install(source, { filename, enabled, policy })`                      | install, or update in place an extension of the same id; resolves to its `ExtensionInfo`. `policy: true` is an enterprise policy install: an MV3 extension may then block in webRequest.                                                                                                                                                                                              |
+| `list()`, `get(id)`                                                   | the installed extensions, oldest first; one, or null                                                                                                                                                                                                                                                                                                                                  |
+| `enable(id)`, `disable(id)`, `remove(id)`                             | a disabled extension's content scripts, rules, listeners and background stop; `remove` deletes its package, storage and state                                                                                                                                                                                                                                                         |
+| `update(id)`                                                          | download a Web Store extension again                                                                                                                                                                                                                                                                                                                                                  |
+| `onChange(listener)`                                                  | `installed`, `updated`, `removed`, `enabled`, `disabled`, `action` (a badge, title, icon or popup changed), `settings` (pinned, site access), `popup` (`action.openPopup()`: show the popup for `change.tabId` with `mountPopup`), `menus`, `notification`, `tab` (open `change.url` in a new tab: an extension opened one while the host has none), `ready`; returns the unsubscribe |
+| `action(id, tabId?)`, `actions(tabId?)`                               | the toolbar button of one extension, or of every enabled one with an action (the pinned first, in their order), for a tab (default: the active tab): its `tooltip`, `iconUrl` (16 px, 32 on a 2x screen), badge colors as Chrome draws them, `enabled`, `siteInteraction`, `wantsToRun`                                                                                               |
+| `clickAction(id, tabId?)`                                             | what a click does: `popup`, `clicked` (action.onClicked went to the background), `granted` (scripts waiting on the tab ran), or `disabled` (Chrome opens the button's menu then)                                                                                                                                                                                                      |
+| `pin(id, pinned?)`                                                    | pin the button to the toolbar or unpin it; Chrome 157 pins a new install with a button                                                                                                                                                                                                                                                                                                |
+| `setSiteAccess(id, access, tabId?)`                                   | the site access of its menu: `click`, `site` (the tab's site) or `all`; a withheld site holds its content scripts until a click                                                                                                                                                                                                                                                       |
+| `contextMenu(id, { source, tabId, developerMode, browserName })`      | the button's menu as Chrome 157 makes it (`source: 'menu'` for the extensions menu's More options, without Pin); the host does `home`, `options`, `uninstall`, `manage`, `permissions`, `learnMore`, `inspect`                                                                                                                                                                        |
+| `runMenuCommand(id, entry, tabId?)`                                   | carry out a menu entry: `pin`, `unpin`, `site:*`, or the extension's own `item` (contextMenus.onClicked with Chrome's info and the tab)                                                                                                                                                                                                                                               |
+| `commands()`, `runCommand(id, name, tabId?)`                          | the manifest's keyboard shortcuts, and running one: `_execute_action` acts as a click, any other fires commands.onCommand                                                                                                                                                                                                                                                             |
+| `openPopup(id, { tabId, parent, at })`                                | click and show the popup in a new iframe anchored at an element or a point; null when the click went to the background                                                                                                                                                                                                                                                                |
+| `mountPopup(id, iframe, tabId?)`                                      | show the popup in an iframe of the host's; the `PopupHandle` tells its size (`onResize`, clamped as Chrome clamps popups) and `onClose` (the popup's `window.close()`)                                                                                                                                                                                                                |
+| `options(id)`                                                         | the options page: `url`, `displayUrl` (`chrome-extension://...`), `openInTab`                                                                                                                                                                                                                                                                                                         |
+| `displayUrl(url)`, `resolveUrl(url)`                                  | an extension URL as an address bar shows it, and back (`frame.go(resolveUrl('chrome-extension://<id>/page.html'))` opens an extension page in a tab)                                                                                                                                                                                                                                  |
+| `extensionOf(url)`                                                    | the extension a URL belongs to, or null                                                                                                                                                                                                                                                                                                                                               |
+| `menus(id)`, `clickMenu(id, info, tabId?)`                            | an extension's context menu items, and telling it one was clicked                                                                                                                                                                                                                                                                                                                     |
+| `notificationEvent(id, notificationId, kind, ...)`                    | tell it the user clicked or closed one of its notifications                                                                                                                                                                                                                                                                                                                           |
+| `onPrompt(handler)`                                                   | draw the Chrome Web Store's install and uninstall dialogs: the handler gets `{ kind, id, name, iconUrl, permissions, url, frame }` and resolves true for Add extension or Remove (see below)                                                                                                                                                                                          |
+| `theme()`, `themes()`, `onTheme(listener)`                            | the Chrome theme shown (null for the default), every installed theme, and hearing it change: see [Themes](#themes)                                                                                                                                                                                                                                                                    |
+| `resetTheme()`                                                        | Chrome's Reset to default: uninstall every theme                                                                                                                                                                                                                                                                                                                                      |
+| `reload(id)`                                                          | the extensions page's reload: the background starts again and hears `runtime.onInstalled` with reason `update`, content scripts already in pages lose their extension, its errors stay                                                                                                                                                                                                |
+| `setDeveloperMode(on)`                                                | Chrome's developer mode, which the host keeps and sets at boot and on each toggle: errors are collected only while it is on, and all go as it goes off                                                                                                                                                                                                                                |
+| `errors(id)`, `clearErrors(id, ids?)`, `setCollectErrors(id, on)`     | the extension's errors as the Errors view lists them (see [Errors](#errors)), clearing them, and Collect errors                                                                                                                                                                                                                                                                       |
+| `setSiteHosts(id, hosts)`                                             | site access on exactly these sites, each a match pattern (none: on a click); see [Site access](#site-access)                                                                                                                                                                                                                                                                          |
+| `setShortcut(id, name, shortcut)`, `setCommandScope(id, name, scope)` | a command's shortcut (`''` clears it) and its scope, as the Keyboard shortcuts page sets them; see [Keyboard shortcuts](#keyboard-shortcuts)                                                                                                                                                                                                                                          |
+| `views(id)`                                                           | the pages to inspect: the background or service worker (`active` false while it is stopped), the offscreen document, the extension's pages open in tabs                                                                                                                                                                                                                               |
+| `pack(source, { key })`                                               | Chrome's Pack extension: a CRX3 of an unpacked extension's files (as `install()` takes them, or an installed one's id), signed with the PKCS#8 PEM key given or a new RSA-2048 key, which comes back as `key`                                                                                                                                                                         |
 
 `controller.tabIdOf(frame)` is the tab id the extensions know a frame by, and
 `controller.activeTab` (a frame or null) is the tab `chrome.tabs.query({ active: true })`
@@ -529,6 +536,125 @@ The demo hands the theme to its theme system: `showChromeTheme` in
 `demo/public/pm/main.js` calls `PMTheme.fromChrome(theme.theme, theme)` and
 `PMTheme.install` when the page has them.
 
+### Managing extensions
+
+`controller.extensions` has what chrome://extensions does with an
+installed extension. ExtensionInfo carries what its cards and details
+show:
+
+- `size`: its files' bytes;
+- `path`: an unpacked folder's name, or a package's file name;
+- `homepageUrl` and `webStoreUrl`;
+- `collectErrors` and `errorCount`;
+- `permissionWarnings`: Chrome's messages. For one that asks for sites,
+  the sites' lines are left out, and its site access shows instead.
+
+`enable(id)` and `disable(id)` start and stop its background, content
+scripts, rules, listeners and button. A disabled extension's open popup
+closes.
+
+A content script already in a page keeps running when its extension is
+disabled, removed or reloaded under it, as in Chrome. There,
+`chrome.runtime.id` reads undefined, and every call such as
+`runtime.sendMessage` throws "Extension context invalidated.". As in
+Chrome, a namespace the script never read before reads undefined then.
+When the extension is turned on again, it hears no `runtime.onInstalled`
+and is not injected into open tabs. Events for a background that is
+still starting wait until its scripts have run, as Chrome queues them
+for a lazy background.
+
+Another extension with "management" hears `management.onEnabled`,
+`onDisabled`, `onInstalled` and `onUninstalled` in Chrome's order:
+
+- an install: onEnabled, then onInstalled;
+- an update or a reload: onDisabled, onEnabled, onInstalled;
+- a removal: onDisabled, then onUninstalled.
+
+#### Errors
+
+The worker keeps each extension's errors as Chrome's ErrorConsole does,
+with the extension, so `remove` takes them. They are collected only while
+developer mode is on (`setDeveloperMode`), and only for an extension
+whose Collect errors is on. By default an unpacked extension's is on and
+a packaged one's is off. Each context reports its own errors:
+
+- an extension page, a background page and an offscreen document report
+  uncaught errors, unhandled rejections, `console.error` and
+  `console.warn`;
+- a service worker reports the same except `console.warn`, which
+  Chrome's worker console keeps out;
+- a content script reports its isolated world's uncaught errors, its
+  listeners' errors, `console.error` and `console.warn`. Its page is the
+  `contextUrl`, and its file is the stack's.
+
+An error is `{ id, type, message, severity, source, contextUrl,
+stackTrace, occurrences, timestamp }`. A manifest error also has
+`manifestKey`, and its severity is `warn`, as the errors page shows it. The messages and URLs are Chrome's, with
+chrome-extension:// URLs:
+
+- "Uncaught Error: …"
+- "Uncaught (in promise) Error: …"
+- "Unrecognized manifest key 'x'."
+- "Permission 'x' is unknown."
+
+The same error again adds to its `occurrences`, and at most 100 errors
+are kept. `console.log` is never collected. A background's or a worker's
+uncaught error stays out of the host page's console, as Chrome keeps it
+in the extension's own DevTools.
+
+#### Site access
+
+`info.siteAccess` is `{ withheld, sites }`:
+
+- `withheld` false: "On all sites";
+- `withheld` with sites: only those sites are granted;
+- `withheld` with no sites: "On click".
+
+`setSiteAccess(id, 'click' | 'site' | 'all', tabId)` is the toolbar
+menu's choice. `setSiteHosts(id, hosts)` is the extensions page's list.
+Each host is a match pattern such as `https://example.com/*` or
+`*://*.example.com/*`. Anything else is refused with "Invalid host.", as
+Chrome refuses it, and that includes an origin with no path.
+
+`info.requestedHosts` is what the extension asks for: its host
+permissions and its content scripts' matches. `info.allHostsRequested`
+is true when it asks for every site. Chrome then offers the select
+instead of the list.
+
+A withheld site holds the extension's content scripts until its button,
+or one of its commands, is clicked on the tab. It also holds the
+extension's webRequest listeners, its cross-origin reads and its
+declarativeNetRequest host access.
+
+#### Keyboard shortcuts
+
+`commands()` lists each enabled extension's commands as the Keyboard
+shortcuts page does. An extension with a button has `_execute_action`
+first ("Activate the extension"), then its named commands. Each comes
+with the shortcut it runs on now and its `scope`. An install takes the
+manifest's suggestion for the platform unless another extension holds
+that shortcut.
+
+`setShortcut` takes Chrome's text (`Ctrl+Shift+Y`). A shortcut is Ctrl,
+Alt, Command or Shift with one key. It needs Ctrl or Alt, but not both.
+The key is one of:
+
+- a letter or a digit;
+- Comma or Period;
+- an arrow;
+- Insert, Delete, Home, End, PageUp or PageDown;
+- Space or Tab;
+- a media key, which takes no modifier.
+
+A shortcut Chrome would refuse clears the command's shortcut, as
+Chrome's API does. A shortcut that another command holds moves to this
+one. `chrome.commands.getAll()` in the extension reads the shortcuts as
+they are now.
+
+`runCommand(id, name, tabId)` is a press of the shortcut.
+`_execute_action` clicks the button, and any other command fires
+`commands.onCommand(name, tab)`.
+
 ## Limits
 
 - Backgrounds share the controller document's thread and heap; an MV3
@@ -592,6 +718,12 @@ The demo hands the theme to its theme system: `showChromeTheme` in
   approval, even if Chrome would allow the change without one.
 - declarativeContent judges a rule's `pageUrl` only: its `css` and
   `isBookmarked` conditions never hold.
+- A shortcut's Global scope is kept and listed, but a key reaches STomp
+  only from its own pages.
+- `views()` lists no popup (native Chrome 157 lists none either) and no
+  page outside the controller's frames.
+- A content script entry with several files names its first file in an
+  error's stack.
 - Chrome's own pages (`chrome://`), native messaging, `debugger`, `tabCapture` and `desktopCapture` are not there.
   Namespaces the extension asks for that STomp does not implement are
   stubs whose calls resolve and whose events never fire.

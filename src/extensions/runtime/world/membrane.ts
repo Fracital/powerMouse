@@ -127,6 +127,8 @@ export function createMembrane(page: PageSide, trusted: Trusted | null) {
 	const kindOf = new WeakMap<object, number>();
 	/** the world's global, a view of the page's window (./global.ts) */
 	let worldGlobal: object | null = null;
+	/** the world's error console, told each error reported */
+	let onError: ((error: unknown) => void) | null = null;
 	/** calls of the page's under way, from the world */
 	let depth = 0;
 
@@ -539,6 +541,11 @@ export function createMembrane(page: PageSide, trusted: Trusted | null) {
 	}
 
 	function report(error: unknown) {
+		try {
+			onError?.(error);
+		} catch (thrown) {
+			// the error console's trouble is none of the script's
+		}
 		try {
 			// (a page's error, a DOMException say, as itself: no view's Proxy)
 			page.natives.console.error(
@@ -1032,6 +1039,10 @@ export function createMembrane(page: PageSide, trusted: Trusted | null) {
 		/** a world's function as the browser calls it (its exceptions reported) */
 		listenerOf: (fn: Function) => callbackOf(fn, true),
 		report,
+		/** who hears what is reported (the world's error console) */
+		set onError(listener: ((error: unknown) => void) | null) {
+			onError = listener;
+		},
 		/** whether the world is inside a call of the page's */
 		get depth() {
 			return depth;

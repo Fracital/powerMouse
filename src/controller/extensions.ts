@@ -13,6 +13,7 @@ import {
 	extensionURL,
 	resolveExtensionURL,
 } from '../extensions/origin';
+import { packExtension } from '../extensions/pack';
 import {
 	BACKGROUND_PAGE,
 	CONTEXT_NAME_PREFIX,
@@ -24,6 +25,7 @@ import {
 	type ExtensionAction,
 	type ExtensionCommand,
 	type ExtensionErrorCode,
+	type ExtensionErrorEntry,
 	type ExtensionInfo,
 	type ExtensionMenuEntry,
 	type ExtensionNotification,
@@ -34,7 +36,9 @@ import {
 	type ExtensionsChange,
 	type ExtensionShortcut,
 	type ExtensionSource,
+	type ExtensionView,
 	type InstallOptions,
+	type PackResult,
 	type PopupHandle,
 	type SiteInteraction,
 	type ThemeImageFile,
@@ -487,6 +491,8 @@ interface HubExtension {
 	notifications: Map<string, ExtensionNotification>;
 	/** popups a host is mounting (mountPopup): the next page of the URL that says hello is one */
 	popups: { url: string; tabId: number; at: number }[];
+	/** its pages open now, by context, as they announced themselves (views()) */
+	pages: Map<string, { kind: string; url: string }>;
 	/** the contexts of its popups that are open now */
 	openPopups: Set<string>;
 	/** action.openPopup() calls waiting for their popup to say hello */
@@ -614,6 +620,7 @@ export class ExtensionHub {
 					menus: new Map(),
 					notifications: new Map(),
 					popups: [],
+					pages: new Map(),
 					openPopups: new Set(),
 					popupWaiters: new Set(),
 					grantedTabs: new Set(),
@@ -623,6 +630,8 @@ export class ExtensionHub {
 				};
 				ext.bus.onmessage = (event) => this.#receive(ext, event.data);
 				this.#extensions.set(info.id, ext);
+				// (pages open from before, a controller's reload: they say who they are again)
+				this.#post(ext, { t: 'roll' });
 				this.#startBackground(ext);
 			}
 			for (const [id, ext] of this.#extensions)
@@ -705,8 +714,18 @@ export class ExtensionHub {
 		}
 		if (message?.t === 'bye') {
 			this.#subframes.delete(String(message.ctx));
+			ext.pages.delete(String(message.ctx));
 			if (ext.openPopups.delete(String(message.ctx)))
 				this.#host.notify({ type: 'action', id: ext.info.id });
+			return;
+		}
+		if (message?.t === 'presence') {
+			const presence = message.p as { ctx: string; kind: string; url: string };
+			if (presence?.kind !== 'content')
+				ext.pages.set(String(presence.ctx), {
+					kind: String(presence.kind),
+					url: String(presence.url),
+				});
 			return;
 		}
 		if (message?.t !== 'hub') return;
@@ -1610,8 +1629,7 @@ export class ExtensionHub {
 		if (ext.grantedTabs.has(tabId)) return { interaction: 'granted', url };
 		if (this.#wants(ext, url)) {
 			const access = ext.info.siteAccess;
-			const granted =
-				!access.withheld || access.sites.includes(new URL(url).origin);
+			const granted = !access.withheld || siteListed(access.sites, url);
 			return { interaction: granted ? 'granted' : 'withheld', url };
 		}
 		if (ext.blockedTabs.has(tabId)) return { interaction: 'withheld', url };
@@ -1743,6 +1761,49 @@ export class ExtensionHub {
 		return 'clicked';
 	}
 
+	/**
+	 * Its pages to inspect, as the extensions page lists them: the
+	 * background (a service worker inactive while it is not running), its
+	 * offscreen document and its pages open in tabs
+	 */
+	views(id: string): ExtensionView[] {
+		const ext = this.#extensions.get(id);
+		const info = ext?.info;
+		if (!ext || !info || info.background === 'none') return [];
+		const view = (kind: ExtensionView['kind'], url: string, active = true) => ({
+			kind,
+			url,
+			displayUrl: displayExtensionURL(url),
+			active,
+		});
+		const rows: ExtensionView[] = [];
+		const background = info.manifest.background ?? {};
+		if (info.background === 'service_worker')
+			rows.push(
+				view(
+					'service_worker',
+					extensionURL(id, cleanPath(background.service_worker ?? '')),
+					!!ext.background,
+				),
+			);
+		else
+			rows.push(
+				view(
+					'background',
+					extensionURL(
+						id,
+						background.page
+							? cleanPath(background.page)
+							: '_generated_background_page.html',
+					),
+				),
+			);
+		for (const page of ext.pages.values())
+			if (page.kind === 'offscreen' || page.kind === 'tab')
+				rows.push(view(page.kind, page.url));
+		return rows;
+	}
+
 	/** pin the button to the toolbar (after the pinned ones), or unpin it */
 	async pin(id: string, pinned: boolean): Promise<ExtensionInfo> {
 		this.#found(id);
@@ -1828,7 +1889,7 @@ export class ExtensionHub {
 				const checked =
 					wants && !access.withheld && allLike
 						? 'all'
-						: wants && (!access.withheld || access.sites.includes(site.origin))
+						: wants && (!access.withheld || siteListed(access.sites, url))
 							? 'site'
 							: 'click';
 				entries.push({
@@ -2077,43 +2138,14 @@ export class ExtensionHub {
 		this.#host.notify({ type: 'menus', id: ext.info.id });
 	}
 
-	/** the extensions' keyboard shortcuts (manifest `commands`), as suggested for this platform */
+	/**
+	 * The enabled extensions' keyboard shortcuts as the Keyboard shortcuts
+	 * page lists them: each command (`_execute_action` first, for one with
+	 * a button) with the shortcut it runs on now (the worker keeps them)
+	 */
 	async commands(): Promise<ExtensionShortcut[]> {
 		await this.ready;
-		const platform =
-			typeof navigator === 'undefined'
-				? 'linux'
-				: /Mac/i.test(navigator.platform)
-					? 'mac'
-					: /Win/i.test(navigator.platform)
-						? 'windows'
-						: /CrOS/.test(navigator.userAgent)
-							? 'chromeos'
-							: 'linux';
-		const out: ExtensionShortcut[] = [];
-		for (const ext of this.#extensions.values()) {
-			const commands = (ext.info.manifest.commands ?? {}) as Record<
-				string,
-				{
-					description?: string;
-					suggested_key?: Record<string, string> | string;
-				}
-			>;
-			for (const [name, command] of Object.entries(commands)) {
-				const suggested = command?.suggested_key;
-				const shortcut =
-					typeof suggested === 'string'
-						? suggested
-						: (suggested?.[platform] ?? suggested?.default ?? '');
-				out.push({
-					id: ext.info.id,
-					name,
-					description: String(command?.description ?? ''),
-					shortcut,
-				});
-			}
-		}
-		return out;
+		return this.command<ExtensionShortcut[]>({ op: 'commands' });
 	}
 
 	/**
@@ -2177,6 +2209,8 @@ export class ExtensionHub {
 				return this.runCommand(id, String(a), (b as number | null) ?? null);
 			case 'popupOpen':
 				return Promise.resolve(this.popupOpen);
+			case 'views':
+				return this.ready.then(() => this.views(id));
 			default:
 				return Promise.reject(new Error(`${call} is not a toolbar call`));
 		}
@@ -2233,6 +2267,19 @@ export class ExtensionHub {
 	}
 }
 
+/** a site access list grants `url`: an origin of it, or a match pattern (setSiteHosts') that matches it */
+function siteListed(sites: string[], url: string): boolean {
+	let origin: string;
+	try {
+		origin = new URL(url).origin;
+	} catch (error) {
+		return false;
+	}
+	return sites.some((site) =>
+		/^[^:]+:\/\/[^/]*\//.test(site) ? urlMatches(site, url) : site === origin,
+	);
+}
+
 function urlMatches(pattern: string, url: string): boolean {
 	if (pattern === '<all_urls>') return /^(https?|wss?|ftp|file):/.test(url);
 	const parts = /^(\*|[a-z-]+):\/\/([^/]*)(\/.*)?$/.exec(pattern);
@@ -2259,7 +2306,8 @@ export type ToolbarCall =
 	| 'runMenuCommand'
 	| 'commands'
 	| 'runCommand'
-	| 'popupOpen';
+	| 'popupOpen'
+	| 'views';
 
 /** a host page's `contextMenu()` options */
 export interface MenuOptions {
@@ -2548,10 +2596,12 @@ export async function installCommand(
 		};
 	}
 	const files: Record<string, ArrayBuffer> = {};
+	let folder: string | undefined;
 	if (isFileList(source)) {
 		for (const file of Array.from(source)) {
 			const path = (file.webkitRelativePath || file.name).split('/');
-			// a folder's files name the folder first
+			// a folder's files name the folder first (Chrome's Source row shows it)
+			if (file.webkitRelativePath && path.length > 1) folder ??= path[0];
 			const name = file.webkitRelativePath
 				? path.slice(1).join('/')
 				: path.join('/');
@@ -2570,6 +2620,7 @@ export async function installCommand(
 			op: 'install',
 			files,
 			...(options.filename ? { filename: options.filename } : {}),
+			...(folder ? { path: folder } : {}),
 			...common,
 		},
 		transfer: Object.values(files),
@@ -2637,6 +2688,10 @@ export class Extensions {
 			return;
 		}
 		if (change.type === 'theme') void this.#tellTheme();
+		// a disabled or removed extension's popup closes (Chrome closes it with its renderer)
+		if ((change.type === 'disabled' || change.type === 'removed') && change.id)
+			for (const popup of [...this.#popups])
+				if (popup.id === change.id) popup.close();
 		if (change.type === 'removed' && change.id)
 			this.#keepThemeURLs(
 				[...this.#themeURLs.keys()].filter((id) => id !== change.id),
@@ -2897,6 +2952,152 @@ export class Extensions {
 		tabId: number | null = this.#backend.activeTab(),
 	): Promise<ClickResult> {
 		return this.#backend.click(id, tabId);
+	}
+
+	// ---- the extensions page's controls ---------------------------------------
+
+	/**
+	 * Reload it, as the extensions page's reload does: its background starts
+	 * again and hears runtime.onInstalled with reason `update`, its content
+	 * scripts already in pages lose their extension; its errors stay
+	 */
+	reload(id: string): Promise<ExtensionInfo> {
+		return this.#backend.command<ExtensionInfo>({ op: 'reload', id });
+	}
+
+	/** Chrome's developer mode: errors are collected only while it is on, and all go as it goes off. The host sets it at boot and on each toggle. */
+	async setDeveloperMode(on: boolean): Promise<void> {
+		await this.#backend.command({ op: 'developerMode', on: !!on });
+	}
+
+	/** its errors as the extensions page's Errors view lists them, oldest first */
+	errors(id: string): Promise<ExtensionErrorEntry[]> {
+		return this.#backend.command<ExtensionErrorEntry[]>({ op: 'errors', id });
+	}
+
+	/** clear its errors, or those of the ids given */
+	async clearErrors(id: string, ids?: number[]): Promise<void> {
+		await this.#backend.command({
+			op: 'clearErrors',
+			id,
+			...(ids ? { ids: [...ids] } : {}),
+		});
+	}
+
+	/** Collect errors on or off (off for a packed extension, on for an unpacked one until set) */
+	setCollectErrors(id: string, on: boolean): Promise<ExtensionInfo> {
+		return this.#backend.command<ExtensionInfo>({
+			op: 'collectErrors',
+			id,
+			on: !!on,
+		});
+	}
+
+	/**
+	 * Site access on exactly these sites, as the extensions page's list of
+	 * sites sets it: each a match pattern (`https://example.com/*`,
+	 * `*://*.example.com/*`; anything else is refused, "Invalid host.", as
+	 * Chrome refuses it); none is "On click". `setSiteAccess(id, 'all')`
+	 * gives it every site it asks for again.
+	 */
+	setSiteHosts(id: string, hosts: string[]): Promise<ExtensionInfo> {
+		return this.#backend.command<ExtensionInfo>({
+			op: 'siteHosts',
+			id,
+			hosts: [...hosts].map(String),
+		});
+	}
+
+	/**
+	 * Set a command's shortcut (`Ctrl+Shift+Y`; '' clears it). A shortcut
+	 * Chrome would refuse clears the command's, as the extensions API does;
+	 * another command that held it loses it. Answers the commands as they
+	 * are now.
+	 */
+	async setShortcut(
+		id: string,
+		name: string,
+		shortcut: string,
+	): Promise<ExtensionShortcut[]> {
+		const rows = await this.#backend.command<ExtensionShortcut[]>({
+			op: 'setShortcut',
+			id,
+			name,
+			shortcut: String(shortcut ?? ''),
+		});
+		return rows;
+	}
+
+	/** In Chrome or Global: Chrome keeps it, and a key reaches STomp only from its own pages either way */
+	async setCommandScope(
+		id: string,
+		name: string,
+		scope: 'chrome' | 'global',
+	): Promise<ExtensionShortcut[]> {
+		const rows = await this.#backend.command<ExtensionShortcut[]>({
+			op: 'setCommandScope',
+			id,
+			name,
+			scope,
+		});
+		return rows;
+	}
+
+	/** its pages to inspect: its background or service worker, its offscreen document, its pages open in tabs */
+	views(id: string): Promise<ExtensionView[]> {
+		return this.#backend.toolbar('views', [id]) as Promise<ExtensionView[]>;
+	}
+
+	/**
+	 * Chrome's Pack extension: an unpacked extension (its files, as
+	 * install() takes them, or an installed extension's id) as a CRX3
+	 * signed with the PKCS#8 PEM key given, or a new RSA-2048 key, which
+	 * comes back to keep (the id stays with it)
+	 */
+	async pack(
+		source: ExtensionSource,
+		options: { key?: string } = {},
+	): Promise<PackResult> {
+		let files: Record<string, ArrayBuffer>;
+		if (typeof source === 'string') {
+			const id = source.trim();
+			files = await this.#backend.command<Record<string, ArrayBuffer>>({
+				op: 'files',
+				id,
+			});
+		} else {
+			const { command } = await installCommand(source);
+			if (command.op !== 'install' || !command.files)
+				throw new ExtensionError(
+					'bad-source',
+					"pack() takes an unpacked extension's files or an installed extension's id.",
+				);
+			files = command.files;
+		}
+		let packed: Awaited<ReturnType<typeof packExtension>>;
+		try {
+			packed = await packExtension(
+				Object.fromEntries(
+					Object.entries(files).map(([name, bytes]) => [
+						name,
+						new Uint8Array(bytes),
+					]),
+				),
+				options.key,
+			);
+		} catch (error) {
+			throw new ExtensionError(
+				'bad-source',
+				error instanceof Error ? error.message : String(error),
+			);
+		}
+		return {
+			crx: new Blob([packed.crx as Uint8Array<ArrayBuffer>], {
+				type: 'application/x-chrome-extension',
+			}),
+			key: packed.key,
+			id: packed.id,
+		};
 	}
 
 	/**
