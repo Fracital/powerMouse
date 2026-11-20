@@ -9,7 +9,10 @@
 // here loads 120 MB of cacheable resources (480 of 256 KB); right after,
 // the worker holds about one walk's Requests, not a walk's per load, and a
 // resource it kept loads again at once (natively, from the browser's
-// cache), not after the walks.
+// cache), not after the walks. The cache keeps a listing of its store
+// since, made by one walk and kept by its writes: an eviction drops the
+// oldest by it, without a walk, so the first resource of the page is gone
+// (asked for again, the origin is asked) and the last is kept (it is not).
 import { createServer } from 'node:http';
 import {
 	done,
@@ -25,6 +28,8 @@ import { workerMemory } from '../worker-memory.mjs';
 const KB = 256;
 const LOADS = 480;
 const body = Buffer.alloc(KB * 1024, 97);
+/** the asset requests the origin got, by id */
+const asked = new Map();
 
 const server = createServer((req, res) => {
 	const url = new URL(req.url, 'http://x/');
@@ -32,6 +37,8 @@ const server = createServer((req, res) => {
 		res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
 		res.end('<!doctype html><title>CACHE WALKS</title><p>cache walks');
 	} else if (url.pathname === '/asset') {
+		const id = url.searchParams.get('i');
+		asked.set(id, (asked.get(id) ?? 0) + 1);
 		res.writeHead(200, {
 			'content-type': 'application/octet-stream',
 			'content-length': body.length,
@@ -123,6 +130,21 @@ if (frame) {
 		'a resource it kept is loaded again at once, as natively, not after the walks',
 		proxied.status === 200 && proxied.ms < 2000,
 		JSON.stringify({ native, proxied }),
+	);
+	// (an eviction runs after the write that went past the budget)
+	await sleep(1000);
+	const first = await frame
+		.evaluate(again, `${ORIGIN}asset?i=proxied-0`)
+		.catch((error) => ({ error: String(error).slice(0, 200) }));
+	ok(
+		'past the budget the oldest resource was evicted: loaded again, the origin is asked for it',
+		first.status === 200 && asked.get('proxied-0') === 2,
+		JSON.stringify({ first, asked: asked.get('proxied-0') }),
+	);
+	ok(
+		'and the newest is kept: the origin is not asked again',
+		asked.get(`proxied-${LOADS - 1}`) === 1,
+		JSON.stringify({ asked: asked.get(`proxied-${LOADS - 1}`) }),
 	);
 }
 

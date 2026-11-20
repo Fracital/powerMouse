@@ -417,23 +417,62 @@ function seconds(control: Map<string, string>, name: string): number | null {
 	return value !== undefined && /^\d+$/.test(value) ? Number(value) : null;
 }
 
+/** an entry of the store as its listing has it: when it was written, and its bytes */
+interface Listed {
+	at: number;
+	size: number;
+}
+
+/**
+ * What the store holds, by URL, the oldest write first, and its bytes in
+ * all: one for the worker, whatever HttpCache asks (every controller's
+ * shares the store). It is made by one walk of the store, the first time a
+ * write needs the budget, and from then on every write and delete of the
+ * worker keeps it. An eviction drops the oldest by it, where each one walked
+ * the store and read every entry's headers again (a full store, some
+ * thousands of entries, once per 10 MB written), and a request for a URL it
+ * does not have is a miss without asking the store. An entry another worker
+ * of the origin wrote (one still serving the tabs of an older version)
+ * is not in it until the next worker walks: a request for it goes to the
+ * network, as a miss does.
+ */
+const listing: {
+	entries: Map<string, Listed> | null;
+	bytes: number;
+	/** the walk that makes `entries`, while it runs */
+	walking: Promise<void> | null;
+	/** what was written (an entry) or deleted (null) while the walk ran, which it may not have seen */
+	during: Map<string, Listed | null>;
+	/** an eviction is running */
+	evicting: boolean;
+} = {
+	entries: null,
+	bytes: 0,
+	walking: null,
+	during: new Map(),
+	evicting: false,
+};
+
+/** note a write of `url` (an entry) or its delete (null) in the listing */
+function listed(url: string, entry: Listed | null) {
+	const entries = listing.entries;
+	if (entries === null) {
+		if (listing.walking) listing.during.set(url, entry);
+		return;
+	}
+	const old = entries.get(url);
+	if (old) {
+		entries.delete(url);
+		listing.bytes -= old.size;
+	}
+	if (entry) {
+		entries.set(url, entry);
+		listing.bytes += entry.size;
+	}
+}
+
 export class HttpCache {
 	private cache?: Promise<Cache>;
-	private bytes = -1;
-	/** the bytes every write added, from the start: what an eviction's walk did not list */
-	private added = 0;
-	/**
-	 * The walk of the store in flight (a measure or an eviction), one at a
-	 * time: each lists every entry and reads each one's headers, and a write
-	 * that started one of its own whenever the store was over budget made a
-	 * page full of cacheable loads start one per load. They overlapped by the
-	 * hundred, each holding a Request and a Response for every entry while
-	 * it read them one by one (a 30-site browse held 1.4 million Requests and
-	 * 1.3 GB in the worker), and each load's entry waited for its walk.
-	 */
-	private walking: Promise<void> | null = null;
-	/** a write found the store over budget during a walk: an eviction follows it */
-	private walkAgain = false;
 	private open(): Promise<Cache> {
 		return (this.cache ??= caches.open(STORE));
 	}
@@ -475,6 +514,7 @@ export class HttpCache {
 		// the entry a previous request is still writing (its body streams in)
 		// counts as stored: a follow-up request must not race it upstream
 		await this.pending.get(url);
+		if (listing.entries !== null && !listing.entries.has(url)) return null;
 		const cache = await this.open();
 		const stored = await cache.match(url);
 		if (!stored) return null;
@@ -592,7 +632,8 @@ export class HttpCache {
 			if (kept === null) return;
 			size = kept.byteLength;
 		}
-		headers.set(STORED_AT, String(Date.now()));
+		const at = Date.now();
+		headers.set(STORED_AT, String(at));
 		headers.set(SIZE, String(size));
 		if (headers.has('vary'))
 			headers.set(VARY, HttpCache.varyKey(headers.get('vary'), requestHeaders));
@@ -608,31 +649,44 @@ export class HttpCache {
 				headers,
 			}),
 		);
-		if (this.bytes < 0) await (this.walking ?? this.walk(() => this.measure()));
-		this.bytes += size;
-		this.added += size;
+		listed(url, { at, size });
 		// (the write is done: the entry is not held back while the store is walked)
-		if (this.bytes > BUDGET) this.evictSoon();
+		if (listing.entries === null) void this.list();
+		else if (listing.bytes > BUDGET) void this.evict();
 	}
-	/** run `walk` as the one walk of the store */
-	private walk(walk: () => Promise<void>): Promise<void> {
-		const running: Promise<void> = walk()
+	/**
+	 * Make the listing, by one walk of the store (one at a time: each walk
+	 * holds a Request and a Response for every entry while it reads them one
+	 * by one), and evict past the budget once it is made
+	 */
+	private list(): Promise<void> {
+		return (listing.walking ??= (async () => {
+			const cache = await this.open();
+			const walked: [string, Listed][] = [];
+			for (const request of await cache.keys()) {
+				const stored = await cache.match(request);
+				if (!stored) continue;
+				walked.push([
+					request.url,
+					{
+						at: Number(stored.headers.get(STORED_AT)) || 0,
+						size: Number(stored.headers.get(SIZE)) || 0,
+					},
+				]);
+			}
+			walked.sort((a, b) => a[1].at - b[1].at);
+			listing.entries = new Map();
+			listing.bytes = 0;
+			for (const [url, entry] of walked) listed(url, entry);
+			// (what was written or deleted since the walk began is as it was left)
+			for (const [url, entry] of listing.during) listed(url, entry);
+		})()
 			.catch(() => {})
 			.finally(() => {
-				if (this.walking !== running) return;
-				this.walking = null;
-				if (this.walkAgain) {
-					this.walkAgain = false;
-					if (this.bytes > BUDGET) this.evictSoon();
-				}
-			});
-		this.walking = running;
-		return running;
-	}
-	/** an eviction, unless a walk is running already (then one after it, if still over budget) */
-	private evictSoon() {
-		if (this.walking) this.walkAgain = true;
-		else void this.walk(() => this.evict());
+				listing.during.clear();
+				listing.walking = null;
+				if (listing.bytes > BUDGET) void this.evict();
+			}));
 	}
 	/**
 	 * a 304: keep the body, take the fresher headers, start the clock again.
@@ -708,7 +762,8 @@ export class HttpCache {
 				!['content-length', 'content-type', 'transfer-encoding'].includes(name)
 			)
 				headers.set(name, value);
-		headers.set(STORED_AT, String(Date.now()));
+		const at = Date.now();
+		headers.set(STORED_AT, String(at));
 		if (headers.has('vary'))
 			headers.set(VARY, HttpCache.varyKey(headers.get('vary'), requestHeaders));
 		else headers.delete(VARY);
@@ -726,6 +781,7 @@ export class HttpCache {
 				headers,
 			}),
 		);
+		listed(url, { at, size: Number(headers.get(SIZE)) || 0 });
 		for (const name of OWN) headers.delete(name);
 		if (vary !== null) headers.set('vary', vary);
 		return new Response(body, {
@@ -736,16 +792,18 @@ export class HttpCache {
 	}
 	async clear(): Promise<void> {
 		this.cache = undefined;
-		this.bytes = 0;
 		await caches.delete(STORE);
+		// (the store is gone, and with it every entry)
+		if (listing.entries !== null) {
+			listing.entries.clear();
+			listing.bytes = 0;
+		}
 	}
 	/** drop the entry kept under `url` */
 	async drop(url: string): Promise<void> {
 		await this.pending.get(url);
 		const cache = await this.open();
-		const stored = await cache.match(url);
-		if (await cache.delete(url))
-			this.bytes -= Number(stored?.headers.get(SIZE)) || 0;
+		if (await cache.delete(url)) listed(url, null);
 	}
 	/** drop what is kept of `origin`'s responses, in every partition (Clear-Site-Data: "cache") */
 	async clearOrigin(origin: string): Promise<void> {
@@ -764,46 +822,27 @@ export class HttpCache {
 			}
 			if (kept !== origin) continue;
 			await this.pending.get(request.url);
-			const stored = await cache.match(request);
-			if (await cache.delete(request))
-				this.bytes -= Number(stored?.headers.get(SIZE)) || 0;
-		}
-	}
-	private async measure() {
-		const cache = await this.open();
-		this.bytes = 0;
-		for (const request of await cache.keys()) {
-			const stored = await cache.match(request);
-			this.bytes += Number(stored?.headers.get(SIZE)) || 0;
+			if (await cache.delete(request)) listed(request.url, null);
 		}
 	}
 	/**
 	 * drop the oldest entries until well under budget (so the next writes
-	 * do not each walk the store), counting anew what is kept (an entry a
-	 * write replaced was counted twice)
+	 * do not each evict), by the listing; one eviction at a time
 	 */
 	private async evict() {
-		const cache = await this.open();
-		const entries: [Request, number, number][] = [];
-		let bytes = 0;
-		const added = this.added;
-		for (const request of await cache.keys()) {
-			const stored = await cache.match(request);
-			const size = Number(stored?.headers.get(SIZE)) || 0;
-			bytes += size;
-			entries.push([
-				request,
-				Number(stored?.headers.get(STORED_AT)) || 0,
-				size,
-			]);
-		}
-		// (with what was written since the listing, which it does not hold)
-		this.bytes = bytes + (this.added - added);
-		entries.sort((a, b) => a[1] - b[1]);
-		for (const [request, , size] of entries) {
-			if (this.bytes <= BUDGET * EVICT_TO) break;
-			await cache.delete(request);
-			this.bytes -= size;
+		if (listing.evicting || listing.entries === null) return;
+		listing.evicting = true;
+		try {
+			const cache = await this.open();
+			for (const url of [...listing.entries.keys()]) {
+				if (listing.bytes <= BUDGET * EVICT_TO) break;
+				// (one a write replaced meanwhile is the newest now: it stays)
+				if (listing.entries.keys().next().value !== url) continue;
+				listed(url, null);
+				await cache.delete(url).catch(() => false);
+			}
+		} finally {
+			listing.evicting = false;
 		}
 	}
 }
