@@ -633,7 +633,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					// the browser compiles the code as a function's body: marked,
 					// so the function reads back with the page's code in it
 					// (its positions read as its own, as natively: of its tag in the
-					// page's markup, ./violations.ts handlerPlace). The page's
+					// page's markup, ../markupPlaces.ts handlerPlace). The page's
 					// policy judges it again as it first runs, by the policies in
 					// force then (DocumentClient.codeRuns)
 					const key = sourceKey(source);

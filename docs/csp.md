@@ -131,7 +131,7 @@ its error event, as for the refused script natively, and the page reads
 its own src back. A violation of an inline script of the markup names
 where its text starts, as Chrome's does: the document's URL (no query, no
 fragment), the line (its line feeds counted; a carriage return alone ends
-none) and the column in UTF-16 units (`./violations.ts`
+none) and the column in UTF-16 units (`./markupPlaces.ts`
 `markupScriptSite`, read from the markup the inject received); an external
 one's names none, as natively. One the page's code inserts (through the
 DOM, by document.write) names the inserting call, as Chrome's does: in a

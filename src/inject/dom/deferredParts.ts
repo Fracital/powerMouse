@@ -175,6 +175,7 @@ import { instructionData, loadXML, xmlProlog } from './instructions';
 import { lazyFonts } from './lazyFonts';
 import { formEncoding, legacyFormQuery, legacyQuery } from './legacyEncoding';
 import { markupMembers } from './markupMembers';
+import { codePlace, handlerPlace, markupScriptSite } from './markupPlaces';
 import { markupSinks } from './markupSinks';
 import { measuredMemory } from './measuredMemory';
 import { moduleGraph } from './moduleGraph';
@@ -225,12 +226,9 @@ import {
 } from './taintRefusals';
 import { uncontrolledCopies } from './uncontrolledCopies';
 import {
-	codePlace,
 	dispatchViolation,
 	evalError,
-	handlerPlace,
 	markupBaseSite,
-	markupScriptSite,
 	noteBaseSite,
 	noteFormSite,
 	refusedTrustedPolicy,
@@ -266,7 +264,7 @@ export const parts = {
 	// the script V8 ran (../positionMaps.ts; ../positionParts.ts)
 	positionReaders,
 	// where the markup has a script or a handler V8 counts a frame's line
-	// and column from (./violations.ts; Client.ts rewriteInlineScripts,
+	// and column from (./markupPlaces.ts; Client.ts rewriteInlineScripts,
 	// modules/DOMAttributes.ts)
 	codePlace,
 	handlerPlace,
@@ -370,7 +368,8 @@ export const parts = {
 	noteBaseSite,
 	noteFormSite,
 	markupBaseSite,
-	// where a script of the markup a violation names is (./policyChecks.ts)
+	// where a script of the markup a violation names is (./markupPlaces.ts;
+	// ./policyChecks.ts)
 	markupScriptSite,
 	// the page's own policy's checks of its code and of the loads no worker
 	// sees, at the first a document with a policy needs (./policyChecks.ts;
