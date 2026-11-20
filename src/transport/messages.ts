@@ -1099,6 +1099,15 @@ export interface ControllerInitMessage {
 	 * load that finishes after the handshake sends CONTROLLER_MODULES.
 	 */
 	modules?: Record<string, ArrayBuffer>;
+	/**
+	 * The modules come as the first message on the handshake's port (a
+	 * CONTROLLER_MODULES), not in `modules`: a message through
+	 * ServiceWorker.postMessage goes by way of the browser's process, 5.6 ms
+	 * for their 2 MB on Chrome 157, one on a port 1.8. The worker says it
+	 * took them (`hello`'s portModules); a worker of an earlier build does
+	 * not, and is sent a CONTROLLER_MODULES
+	 */
+	modulesOnPort?: boolean;
 	/** the built-in blocker: its lists (its module is `modules.blocker`) (docs/adblock.md) */
 	adblock?: AdblockInit;
 	/**
@@ -1489,7 +1498,7 @@ export type Controllerbound = {
 	 * creates for the controller is up (`ready`), with the worker's name for
 	 * this run of it (ReviveMessage.instance)
 	 */
-	hello: [{ instance: string }];
+	hello: [{ instance: string; portModules?: boolean }];
 	ready: [{ build: string }];
 	/** another controller registered with this one's id; the worker closes the port right after */
 	replaced: [];

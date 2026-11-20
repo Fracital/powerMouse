@@ -2504,6 +2504,20 @@ export class StompController extends EventTarget {
 		const channel = new MessageChannel();
 		const port = channel.port1;
 		if (!standby) this.#port = port;
+		// the modules go first on the port (ControllerInitMessage
+		// modulesOnPort); a worker that does not say it took them there (of
+		// an earlier build) is sent them as for a load after the handshake
+		const modules = this.#modules;
+		let modulesTaken = !modules;
+		const modulesAfter = () => {
+			if (modulesTaken) return;
+			modulesTaken = true;
+			const message: ControllerModulesMessage = {
+				directory: this.config.directory,
+				modules: modules!,
+			};
+			this.serviceworker.postMessage({ [CONTROLLER_MODULES]: message });
+		};
 		let stopServing: (() => void) | undefined;
 		/** whether this channel is the one in use; a standby offer the worker answers becomes it */
 		const current = (): boolean => {
@@ -2538,6 +2552,8 @@ export class StompController extends EventTarget {
 				hello: async (info) => {
 					if (!current()) return;
 					this.#instance = info?.instance;
+					if (info?.portModules) modulesTaken = true;
+					else modulesAfter();
 					this.#settleTaken();
 					this.#init.agent?.heard?.();
 				},
@@ -2607,6 +2623,7 @@ export class StompController extends EventTarget {
 					if (!current()) return;
 					// a worker of a build that says no hello
 					if (this.#awaiting) this.#settleTaken();
+					modulesAfter();
 					const build = info?.build;
 					// the worker we already settled on as stale answers again
 					// (it restarted): nothing new to heal
@@ -2773,7 +2790,7 @@ export class StompController extends EventTarget {
 						},
 					}
 				: {}),
-			...(this.#modules ? { modules: this.#modules } : {}),
+			...(modules ? { modulesOnPort: true } : {}),
 			...(this.#adblock ? { adblock: this.#adblock } : {}),
 			...(this.#init.agent
 				? {
@@ -2786,6 +2803,13 @@ export class StompController extends EventTarget {
 			...(this.#sites ? { pooled: true } : {}),
 		};
 
+		if (modules) {
+			const first: ControllerModulesMessage = {
+				directory: this.config.directory,
+				modules,
+			};
+			port.postMessage({ [CONTROLLER_MODULES]: first });
+		}
 		this.serviceworker.postMessage({ [CONTROLLER_INIT]: message }, transfer);
 		// what the pages' client hints carry before any page reported it
 		if (!standby) this.#postClientHints();

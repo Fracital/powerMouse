@@ -121,12 +121,21 @@ export function adoptModule(name: string, module: WebAssembly.Module): void {
 	idle.delete(name);
 }
 
+/**
+ * FNV-1a of the bytes four at a time (then the last few one by one): a
+ * handshake's 2 MB were 3 to 4 ms of the worker's answer one at a time
+ * (Chrome 157), and the print is only ever compared with this thread's
+ * own (compiledFrom)
+ */
 function fingerprint(bytes: ArrayBuffer): string {
-	const view = new Uint8Array(bytes);
+	const whole = bytes.byteLength >>> 2;
+	const words = new Int32Array(bytes, 0, whole);
 	let hash = 0x811c9dc5;
-	for (let i = 0; i < view.length; i++)
-		hash = Math.imul(hash ^ view[i], 0x01000193);
-	return `${view.length}.${hash >>> 0}`;
+	for (let i = 0; i < whole; i++) hash = Math.imul(hash ^ words[i], 0x01000193);
+	const tail = new Uint8Array(bytes, whole << 2);
+	for (let i = 0; i < tail.length; i++)
+		hash = Math.imul(hash ^ tail[i], 0x01000193);
+	return `${bytes.byteLength}.${hash >>> 0}`;
 }
 
 async function adoptBytes(name: string, bytes: ArrayBuffer): Promise<void> {
@@ -168,6 +177,12 @@ export async function adoptModules(
 	pending.add(all);
 	await all;
 	pending.delete(all);
+}
+
+/** modules on their way to this thread (`adopted` once they are adopted): heldModules() waits for them too */
+export function modulesComing(adopted: Promise<void>): void {
+	pending.add(adopted);
+	adopted.finally(() => pending.delete(adopted));
 }
 
 /** whether this thread holds the module `name` at all (a member: the core), compiled or as bytes it can compile synchronously */
