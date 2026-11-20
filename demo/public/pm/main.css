@@ -2456,6 +2456,12 @@ input:focus-visible {
 .passkeyPrompt button:disabled {
 	opacity: 0.6;
 }
+/* the sheets' plain buttons (Block, Close, Cancel) in the sheet's text
+   colour, not the system's black */
+.permissionPrompt .block,
+.permissionPrompt .close {
+	color: var(--pm-dialog-text);
+}
 .passkeyPrompt button:focus-visible {
 	outline: 2px solid var(--pm-dialog-focus);
 	outline-offset: 2px;
@@ -3461,6 +3467,74 @@ input:focus-visible {
 	justify-content: flex-end;
 }
 
+/* Chrome's install dialog (askExtension), and its uninstall dialog from the
+   store and the Extensions page: the settings dialog's surface, the Remove
+   bubble's icon and title, "It can:" and a plain row per warning, then Add
+   extension (the accent) and Cancel (the raised surface) at the bottom
+   right. A modal sheet near the top, as Chrome's is under the toolbar */
+.extInstall {
+	position: fixed;
+	top: 64px;
+	left: 50%;
+	z-index: 20;
+	width: min(448px, calc(100% - 32px));
+	max-height: calc(100% - 80px);
+	overflow-y: auto;
+	transform: translateX(-50%);
+	padding: 20px;
+	font-size: 13px;
+	line-height: 20px;
+}
+.extInstall * {
+	box-sizing: border-box;
+}
+.extInstall:focus {
+	outline: none;
+}
+/* a long name wraps, as Chrome's title does, beside the icon's top */
+.extInstall .extDialogHead {
+	align-items: flex-start;
+	margin-bottom: 0;
+}
+.extInstall .extDialogTitle {
+	min-width: 0;
+	margin: 0;
+	padding-top: 5px;
+	line-height: 22px;
+}
+.extInstall #passkeyPromptDetail {
+	margin-top: 16px;
+	overflow-wrap: anywhere;
+}
+.extInstallLead {
+	margin: 0 0 4px;
+}
+.extInstallList,
+.extInstallList ul {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.extInstallList > li + li {
+	margin-top: 4px;
+}
+.extInstallList ul {
+	padding-left: 16px;
+	color: var(--pm-panel-text-2);
+	font-size: 12px;
+	line-height: 18px;
+}
+.extInstall .extDialogButtons {
+	margin-top: 20px;
+	flex-wrap: wrap;
+}
+.extInstall .spBtn {
+	white-space: nowrap;
+}
+.extInstall .spBtn:disabled {
+	cursor: default;
+}
+
 /* the popup an extension's button opens: its document, sized as it asks,
    in Chrome's square bubble with its 1px border. Hidden (and laid out, so
    its document can measure itself) until its first size is in; the open
@@ -4154,12 +4228,17 @@ input:focus-visible {
 	max-height: min(760px, calc(100vh - 56px));
 	display: flex;
 	flex-direction: column;
+	font-weight: 500;
+}
+/* the dialogs' surface: the settings dialog and the extension install
+   dialog (.extInstall) */
+.shieldsPage,
+.extInstall {
 	box-sizing: border-box;
 	border-radius: 14px;
 	background: var(--pm-panel);
 	color: var(--pm-panel-text);
 	font-family: 'Montserrat', sans-serif;
-	font-weight: 500;
 	box-shadow:
 		0 24px 70px rgba(var(--pm-shadow-rgb), calc(0.6 * var(--pm-shadow-k))),
 		0 0 0 1px rgba(var(--pm-panel-fg-rgb), 0.06);

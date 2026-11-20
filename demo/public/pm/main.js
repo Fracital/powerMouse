@@ -566,10 +566,43 @@ async function verifyUser() {
 const SHEET_GUARD_MS = 500;
 
 /**
+ * The classes of a sheet's parts: the passkey sheet's own, or the
+ * extension dialogs' (Chrome's install and uninstall dialogs), which are
+ * the Remove bubble's head and the settings dialog's buttons on the
+ * settings dialog's surface
+ */
+const SHEET_LOOKS = {
+	passkey: {
+		box: 'permissionPrompt passkeyPrompt',
+		head: 'passkeyHead',
+		icon: '',
+		title: 'title',
+		detail: 'detail',
+		items: 'items',
+		buttons: 'passkeyButtons',
+		button: 'btn',
+		close: 'close',
+	},
+	extension: {
+		box: 'extInstall',
+		head: 'extDialogHead',
+		icon: 'extDialogIcon',
+		title: 'extDialogTitle',
+		detail: 'extInstallLead',
+		items: 'extInstallList',
+		buttons: 'spRowButtons extDialogButtons',
+		button: 'spBtn',
+		close: 'ghost close',
+	},
+};
+
+/**
  * One passkey sheet: a `title`, lines of `detail` (and `items`, a list of
  * `{ message, details }`), a button per entry of `choices` ([label, answer,
  * className, sub]) and one that closes it. `icon` is the image beside the
- * title (the passkey's by default).
+ * title (the passkey's by default). `look` names its SHEET_LOOKS, and
+ * `focusClose` starts the focus on the closing button instead of the first
+ * choice.
  * Resolves the chosen answer, or null when it was closed, Escape was
  * pressed, or `signal` aborted (the page gave up). A modal dialog: the focus
  * moves into it and stays there, and goes back where it was after.
@@ -581,10 +614,13 @@ function passkeyPrompt({
 	items = [],
 	icon: iconSrc = '/pm/icons/passkey.svg',
 	trustedOnly = false,
+	look: lookName = 'passkey',
+	focusClose = false,
 	choices,
 	close,
 	signal,
 }) {
+	const look = SHEET_LOOKS[lookName];
 	const asked = passkeyQueue.then(
 		() =>
 			new Promise((resolve) => {
@@ -592,11 +628,10 @@ function passkeyPrompt({
 				const opener = document.activeElement;
 				const box = document.createElement('div');
 				box.id = 'passkeyPrompt';
-				box.className = 'permissionPrompt passkeyPrompt';
+				box.className = look.box;
 				box.setAttribute('role', 'dialog');
 				box.setAttribute('aria-modal', 'true');
 				box.setAttribute('aria-labelledby', 'passkeyPromptTitle');
-				box.setAttribute('aria-describedby', 'passkeyPromptDetail');
 				const settle = (answer) => {
 					box.remove();
 					removeEventListener('keydown', onKey, true);
@@ -606,13 +641,14 @@ function passkeyPrompt({
 				};
 				signal.addEventListener('abort', () => settle(null), { once: true });
 				const head = document.createElement('div');
-				head.className = 'passkeyHead';
+				head.className = look.head;
 				const icon = document.createElement('img');
+				if (look.icon) icon.className = look.icon;
 				icon.src = iconSrc;
 				icon.alt = '';
 				const line = document.createElement('p');
 				line.id = 'passkeyPromptTitle';
-				line.className = 'title';
+				line.className = look.title;
 				line.textContent = title;
 				head.append(icon, line);
 				box.append(head);
@@ -620,13 +656,13 @@ function passkeyPrompt({
 				more.id = 'passkeyPromptDetail';
 				for (const text of detail.filter(Boolean)) {
 					const row = document.createElement('p');
-					row.className = 'detail';
+					row.className = look.detail;
 					row.textContent = text;
 					more.append(row);
 				}
 				if (items.length) {
 					const list = document.createElement('ul');
-					list.className = 'items';
+					list.className = look.items;
 					for (const item of items) {
 						const entry = document.createElement('li');
 						entry.textContent = item.message;
@@ -643,14 +679,18 @@ function passkeyPrompt({
 					}
 					more.append(list);
 				}
-				box.append(more);
+				// (an extension that asks for nothing has no "It can:", as Chrome's)
+				if (more.childNodes.length || lookName === 'passkey') {
+					box.append(more);
+					box.setAttribute('aria-describedby', 'passkeyPromptDetail');
+				}
 				const buttons = document.createElement('div');
-				buttons.className = 'passkeyButtons';
+				buttons.className = look.buttons;
 				const all = [];
 				const button = (label, className, answer, sub) => {
 					const element = document.createElement('button');
 					element.type = 'button';
-					element.className = `btn ${className}`;
+					element.className = `${look.button} ${className}`.trim();
 					element.textContent = label;
 					if (sub) {
 						const small = document.createElement('small');
@@ -666,7 +706,8 @@ function passkeyPrompt({
 				};
 				for (const [label, answer, className, sub] of choices)
 					button(label, className ?? 'account btn-blu', answer, sub);
-				button(close, 'close', null);
+				button(close, look.close, null);
+				const closer = all.at(-1);
 				box.append(buttons);
 				const onKey = (event) => {
 					if (!box.isConnected) return;
@@ -692,9 +733,9 @@ function passkeyPrompt({
 				// meant for the page under the sheet does not
 				setTimeout(() => {
 					for (const element of all) element.disabled = false;
-					(
-						all.find((element) => !element.classList.contains('close')) ??
-						all[0]
+					(focusClose
+						? closer
+						: (all.find((element) => element !== closer) ?? closer)
 					).focus();
 				}, SHEET_GUARD_MS);
 				box.tabIndex = -1;
@@ -710,17 +751,19 @@ function passkeyPrompt({
  * Chrome words them: "Add "<name>"?" with what the extension can do and
  * Add extension, or "Remove "<name>"?" with Remove. The store's page asked
  * on a click of its button; the worker made the request and checked the
- * page is the store's.
+ * page is the store's. Chrome's install dialog starts on Cancel.
  */
 function askExtension(prompt) {
 	const install = prompt.kind === 'install';
 	return passkeyPrompt({
 		trustedOnly: true,
+		look: 'extension',
+		focusClose: install,
 		title: install ? `Add "${prompt.name}"?` : `Remove "${prompt.name}"?`,
 		icon: prompt.iconUrl || '/pm/icons/extensions.svg',
 		detail: install && prompt.permissions.length ? ['It can:'] : [],
 		items: install ? prompt.permissions : [],
-		choices: [[install ? 'Add extension' : 'Remove', true, 'btn-blu']],
+		choices: [[install ? 'Add extension' : 'Remove', true, '']],
 		close: 'Cancel',
 		signal: new AbortController().signal,
 	}).then((answer) => answer === true);

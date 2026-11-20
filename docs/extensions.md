@@ -456,8 +456,9 @@ Chrome's permission warnings (`src/extensions/permissionMessages.ts`, the
 rules of `chrome_permission_message_rules.cc`, such as "Read and change
 your data on 127.0.0.1 and chromewebstore.google.com"). The demo draws
 `Add "<name>"?`, "It can:" and the warnings, with Add extension and Cancel
-(`Remove "<name>"?` with Remove and Cancel), and its buttons take a click
-only after 500 ms, as Chrome's do. After an install the store's
+(`Remove "<name>"?` with Remove and Cancel). An extension that asks for no
+permission gets no "It can:". As in Chrome, the buttons take a click only
+after 500 ms, the focus starts on Cancel, and Escape cancels. After an install the store's
 `onInstalled` fires and the page shows Remove from Chrome, and the bar gets
 the extension's button from the same change.
 

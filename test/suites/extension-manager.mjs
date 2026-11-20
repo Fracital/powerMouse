@@ -387,7 +387,7 @@ const closePage = async (page) => {
 
 const answerDialog = async (page, label) => {
 	await sleep(700);
-	await page.click(`#passkeyPrompt .passkeyButtons button:text-is("${label}")`);
+	await page.click(`#passkeyPrompt button:text-is("${label}")`);
 	await until(page, () => !document.getElementById('passkeyPrompt'), Boolean);
 };
 
@@ -1362,7 +1362,7 @@ await openPage(page);
 await page.click(`[data-control="${ZIP_ID}:remove"]`);
 const question = await until(
 	page,
-	() => document.querySelector('#passkeyPrompt .title')?.textContent ?? null,
+	() => document.getElementById('passkeyPromptTitle')?.textContent ?? null,
 	Boolean,
 	5000,
 );

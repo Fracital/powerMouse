@@ -26,7 +26,7 @@
 //    goes, and after a reload the page offers Add to Chrome again;
 //  - with the network (no SKIP_NETWORK), the real store's ChatGPT page shows
 //    an enabled Add to Chrome, and its click the host's dialog.
-/* global chrome -- the store page's, in the functions evaluated there */
+/* global chrome, PMTheme, askExtension -- the store page's and the demo's, in the functions evaluated there */
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { parseCrx } from '../../src/extensions/crx.ts';
@@ -227,21 +227,140 @@ const dialog = (page) =>
 		const box = document.getElementById('passkeyPrompt');
 		if (!box) return null;
 		return {
-			title: box.querySelector('.title')?.textContent,
-			detail: [...box.querySelectorAll('p.detail')].map((p) => p.textContent),
-			items: [...box.querySelectorAll('ul.items > li')].map(
+			title: box.querySelector('.extDialogTitle')?.textContent,
+			detail: [...box.querySelectorAll('.extInstallLead')].map(
+				(p) => p.textContent,
+			),
+			items: [...box.querySelectorAll('.extInstallList > li')].map(
 				(li) => li.textContent,
 			),
-			buttons: [...box.querySelectorAll('.passkeyButtons button')].map(
+			buttons: [...box.querySelectorAll('.extDialogButtons button')].map(
 				(button) => button.textContent,
 			),
-			icon: box.querySelector('.passkeyHead img')?.getAttribute('src') ?? '',
+			icon: box.querySelector('.extDialogIcon')?.getAttribute('src') ?? '',
 		};
 	});
+
+/**
+ * Each of the dialog's buttons: its text, and the WCAG contrast of its
+ * computed colour on its computed background (the first opaque one under
+ * it, the translucent ones over that composited)
+ */
+const dialogContrast = (page) =>
+	page.evaluate(() => {
+		const parse = (text) => {
+			const [r, g, b, a = 1] = text
+				.replace(/^[^(]*\(|\)$/g, '')
+				.split(/[\s,/]+/)
+				.filter(Boolean)
+				.map(Number);
+			return [r, g, b, a];
+		};
+		const over = ([r, g, b, a], [R, G, B]) => [
+			r * a + R * (1 - a),
+			g * a + G * (1 - a),
+			b * a + B * (1 - a),
+		];
+		const under = (node) => {
+			const layers = [];
+			for (; node; node = node.parentElement) {
+				const color = parse(getComputedStyle(node).backgroundColor);
+				if (color[3] > 0) layers.push(color);
+				if (color[3] >= 1) break;
+			}
+			return layers.reduceRight(
+				(bg, layer) => over(layer, bg),
+				[255, 255, 255],
+			);
+		};
+		const luminance = (rgb) =>
+			rgb
+				.map((v) => v / 255)
+				.map((v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4))
+				.reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0);
+		return [
+			...document.querySelectorAll('#passkeyPrompt .extDialogButtons button'),
+		].map((button) => {
+			const bg = under(button);
+			const fg = over(parse(getComputedStyle(button).color), bg);
+			const [hi, lo] = [luminance(fg), luminance(bg)].sort((a, b) => b - a);
+			return [
+				button.textContent,
+				Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100,
+			];
+		});
+	});
+// the themes the dialog is read in: Default, Light, Dark, and a Web Store
+// theme of each scheme (installed as the store installs one)
+const CONTRAST_THEMES = [
+	['default'],
+	['light'],
+	['dark'],
+	[
+		'chrome-theme:forestforestforestforestforestfore',
+		{
+			frame: [71, 105, 91],
+			toolbar: [207, 221, 192],
+			ntp_text: [230, 255, 204],
+			ntp_link: [36, 70, 0],
+			ntp_header: [233, 185, 110],
+		},
+	],
+	[
+		'chrome-theme:pastelpastelpastelpastelpastelpast',
+		{
+			frame: [250, 214, 230],
+			toolbar: [255, 240, 246],
+			ntp_background: [255, 248, 251],
+			ntp_text: [80, 20, 50],
+			ntp_header: [214, 90, 150],
+		},
+	],
+];
+/** the dialog's buttons' contrast in each theme, then Default again */
+async function contrastByTheme(page) {
+	const out = {};
+	for (const [id, colors] of CONTRAST_THEMES) {
+		const scheme = await page.evaluate(
+			async ([id, colors]) => {
+				if (colors)
+					await PMTheme.install(
+						PMTheme.fromChrome(
+							{ colors },
+							{ id, extensionId: id.split(':')[1], name: id, version: '1' },
+						),
+					);
+				else PMTheme.apply(id);
+				return PMTheme.current().scheme;
+			},
+			[id, colors],
+		);
+		// (read once the colours have finished their transition to it)
+		await sleep(50);
+		await until(
+			page,
+			() =>
+				document
+					.getElementById('passkeyPrompt')
+					?.getAnimations({ subtree: true }).length ?? 0,
+			(count) => count === 0,
+		);
+		const name = colors ? `Web Store ${id.slice(13, 19)}` : id;
+		out[`${name} (${scheme})`] = await dialogContrast(page);
+	}
+	await page.evaluate(
+		async (ids) => {
+			PMTheme.apply('default');
+			for (const id of ids) await PMTheme.remove(id);
+		},
+		CONTRAST_THEMES.filter(([, colors]) => colors).map(([id]) => id),
+	);
+	return out;
+}
 const answerDialog = async (page, label) => {
 	// (its buttons take a click once the guard has passed)
 	await sleep(700);
-	await page.click(`#passkeyPrompt .passkeyButtons button:text-is("${label}")`);
+	await page.click(`#passkeyPrompt button:text-is("${label}")`);
 	await until(page, () => !document.getElementById('passkeyPrompt'), Boolean);
 };
 const barButtons = (page) =>
@@ -606,6 +725,33 @@ async function run(mode, base) {
 			shown.icon.startsWith('data:image/png;base64,'),
 		JSON.stringify(shown),
 	);
+
+	// its buttons read at 4.5:1 at least in every theme; the focus starts on
+	// Cancel, as Chrome's, and Tab keeps it in the dialog
+	await sleep(700);
+	const contrast = await contrastByTheme(page);
+	ok(
+		`${mode}: Add extension and Cancel contrast 4.5:1 with their backgrounds in every theme`,
+		Object.keys(contrast).length === CONTRAST_THEMES.length &&
+			Object.values(contrast).every(
+				(buttons) =>
+					buttons.length === 2 && buttons.every(([, ratio]) => ratio >= 4.5),
+			),
+		JSON.stringify(contrast),
+	);
+	const focus = [
+		await page.evaluate(() => document.activeElement?.textContent),
+	];
+	for (const key of ['Tab', 'Tab', 'Shift+Tab', 'Shift+Tab']) {
+		await page.keyboard.press(key);
+		focus.push(await page.evaluate(() => document.activeElement?.textContent));
+	}
+	ok(
+		`${mode}: the dialog starts on Cancel and Tab stays in it`,
+		JSON.stringify(focus) ===
+			'["Cancel","Add extension","Cancel","Add extension","Cancel"]',
+		JSON.stringify(focus),
+	);
 	await answerDialog(page, 'Cancel');
 	await sleep(300);
 	let log = await pageLog(frame);
@@ -637,11 +783,46 @@ async function run(mode, base) {
 	);
 	damaged = false;
 
-	// ---- the click again: Add extension
+	// ---- an extension that asks for nothing: no "It can:", and Escape
+	// answers as Cancel does
+	await page.evaluate((name) => {
+		window.__asked = 'open';
+		askExtension({ kind: 'install', name, iconUrl: '', permissions: [] }).then(
+			(answer) => (window.__asked = answer),
+		);
+	}, NAME);
+	await until(page, () => !!document.getElementById('passkeyPrompt'), Boolean);
+	const bare = await page.evaluate(() => ({
+		described: document
+			.getElementById('passkeyPrompt')
+			.hasAttribute('aria-describedby'),
+		detail: !!document.getElementById('passkeyPromptDetail'),
+	}));
+	await sleep(700);
+	await page.keyboard.press('Escape');
+	const escaped = await until(
+		page,
+		() => window.__asked,
+		(answer) => answer !== 'open',
+	);
+	ok(
+		`${mode}: with no permissions the dialog has no "It can:", and Escape cancels it`,
+		!bare.described &&
+			!bare.detail &&
+			escaped === false &&
+			!(await page.evaluate(() => !!document.getElementById('passkeyPrompt'))),
+		JSON.stringify({ bare, escaped }),
+	);
+
+	// ---- the click again: Add extension, from the keys (Shift+Tab from
+	// Cancel, Enter)
 	const before = downloads;
 	await frame.click('#action');
 	await until(page, () => !!document.getElementById('passkeyPrompt'), Boolean);
-	await answerDialog(page, 'Add extension');
+	await sleep(700);
+	await page.keyboard.press('Shift+Tab');
+	await page.keyboard.press('Enter');
+	await until(page, () => !document.getElementById('passkeyPrompt'), Boolean);
 	frame = await storeFrame(page, 'Remove from Chrome');
 	log = await pageLog(frame);
 	ok(

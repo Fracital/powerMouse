@@ -430,7 +430,7 @@ const prompted = (page) =>
 	page.evaluate(() => !!document.getElementById('passkeyPrompt'));
 const answerDialog = async (page, label) => {
 	await sleep(700);
-	await page.click(`#passkeyPrompt .passkeyButtons button:text-is("${label}")`);
+	await page.click(`#passkeyPrompt button:text-is("${label}")`);
 	await until(page, () => !document.getElementById('passkeyPrompt'), Boolean);
 };
 
@@ -656,7 +656,7 @@ async function run(mode, base) {
 	await frame.click('#action');
 	await until(page, () => !!document.getElementById('passkeyPrompt'), Boolean);
 	const title = await page.evaluate(
-		() => document.querySelector('#passkeyPrompt .title')?.textContent ?? null,
+		() => document.getElementById('passkeyPromptTitle')?.textContent ?? null,
 	);
 	ok(
 		`${mode}: Remove from Chrome asks the host Remove "<name>"?`,
