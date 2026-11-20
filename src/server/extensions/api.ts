@@ -67,6 +67,8 @@ export async function extensionCommand(
 			case 'expect':
 				registry.expectNavigation(String(command.url), Number(command.tabId));
 				return undefined;
+			case 'frame':
+				return registry.frameIdOf(String(command.client));
 			case 'grant':
 				registry.grantActiveTab(String(command.id), Number(command.tabId));
 				return undefined;

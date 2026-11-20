@@ -1059,6 +1059,18 @@ export class DnrEngine {
 
 	// --- frames ---
 
+	/**
+	 * A main frame that committed in no known tab is `tabId`'s (its document
+	 * said so): the matches held for it go to the tab, as at a commit
+	 */
+	onMainFramePlaced(tabId: number) {
+		this.tracker.onMainFrameCommitted(
+			tabId,
+			[...this.extensions.keys()],
+			TAB_ID_NONE,
+		);
+	}
+
 	/** a frame committed a navigation (OnDidFinishNavigation) */
 	onNavigationCommitted(commit: CommitInfo) {
 		const main = commit.parent === null;

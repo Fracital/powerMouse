@@ -1135,6 +1135,12 @@ export interface ControllerInitMessage {
 	 * not, and is sent a CONTROLLER_MODULES
 	 */
 	modulesOnPort?: boolean;
+	/**
+	 * initRemoteTransport may name the page's client (declarativeNetRequest
+	 * asks about its sockets as that document's); a controller of an
+	 * earlier build takes the port alone
+	 */
+	transportClients?: boolean;
 	/** the built-in blocker: its lists (its module is `modules.blocker`) (docs/adblock.md) */
 	adblock?: AdblockInit;
 	/**
@@ -1405,6 +1411,8 @@ export type SWbound = {
 			source: string;
 			/** a WebTransport session (an https URL) rather than a WebSocket */
 			type?: 'webtransport';
+			/** the service worker client of the document that opens it */
+			client?: string;
 		},
 		boolean,
 	];
@@ -1567,7 +1575,8 @@ export type Controllerbound = {
 	ready: [{ build: string }];
 	/** another controller registered with this one's id; the worker closes the port right after */
 	replaced: [];
-	initRemoteTransport: [MessagePort];
+	/** with the page's client, to a controller that said it takes it (transportClients) */
+	initRemoteTransport: [MessagePort | { port: MessagePort; client: string }];
 	/** a proxied top asks for the compiled wasm modules, answered on the port (PAGE_MODULES) */
 	pageModules: [MessagePort];
 	/** a proxied request completed; only sent when the host asked (config.requestLog) */

@@ -263,6 +263,10 @@ export class ExtensionRegistry {
 	#expected = new Map<string, { tabId: number; at: number }>();
 	/** the tabs each extension holds activeTab for (a click on its button) */
 	#activeTabs = new Map<string, Set<number>>();
+	/** each nested document's frame id (a tab's top document is 0) */
+	#frameIds = new Map<string, number>();
+	/** the next frame id: from a random start, so a worker that restarted gives no id a page still holds */
+	#nextFrameId = 1 + Math.floor(Math.random() * 0x100000) * 0x400;
 	/** the scope's cookie jar (createServer hands it over) */
 	cookies?: Cookies;
 	/** the controllers' addresses: every extension context talks on one (the worker sets it) */
@@ -327,6 +331,12 @@ export class ExtensionRegistry {
 		};
 		host.tabOf = (client) => this.#clientTabs.get(client) ?? -1;
 		host.hostNavigationTab = (url) => this.#navigationTab(url);
+		host.frameIdOf = (client) => this.frameIdOf(client);
+		host.sameFrame = (next, previous) => {
+			const id = this.#frameIds.get(previous);
+			if (id !== undefined && !this.#frameIds.has(next))
+				this.#keepFrameId(next, id);
+		};
 		host.hooks = {
 			activeTabGranted: (id, tabId) =>
 				this.#activeTabs.get(id)?.has(tabId) ?? false,
@@ -362,6 +372,21 @@ export class ExtensionRegistry {
 				for (const tabs of this.#activeTabs.values()) tabs.delete(tabId);
 			this.#tabDocuments.set(tabId, client);
 		}
+		for (const host of this.#dnrHosts) host.placed(client, tabId);
+	}
+
+	/** a document's frame id: 0 for a tab's top document, else its own, assigned on first ask */
+	frameIdOf(client: string): number {
+		if (this.#clientTabs.has(client)) return 0;
+		let id = this.#frameIds.get(client);
+		if (id === undefined) this.#keepFrameId(client, (id = this.#nextFrameId++));
+		return id;
+	}
+
+	#keepFrameId(client: string, id: number) {
+		this.#frameIds.set(client, id);
+		if (this.#frameIds.size > 4096)
+			this.#frameIds.delete(this.#frameIds.keys().next().value!);
 	}
 
 	/** the host is sending a tab to `url`: its main frame's request is that tab's */

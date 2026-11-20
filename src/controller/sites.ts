@@ -271,12 +271,17 @@ export class BrokeredTransport {
 		this.#decorate = decorate;
 		this.#admit = admit;
 	}
-	servePort(port: MessagePort) {
+	/** `decorate` and `admit`: a page's own, in place of the controller's */
+	servePort(
+		port: MessagePort,
+		decorate?: DecorateHandshake,
+		admit?: AdmitSession,
+	) {
 		const channel = new MessageChannel();
 		answerDecorate(
 			channel.port2,
-			(url, headers) => this.#decorate(url, headers),
-			(url, origin) => this.#admit(url, origin),
+			decorate ?? ((url, headers) => this.#decorate(url, headers)),
+			admit ?? ((url, origin) => this.#admit(url, origin)),
 		);
 		this.#hub
 			.call('serve', { port, decorate: channel.port1 }, [port, channel.port1])

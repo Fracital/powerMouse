@@ -232,15 +232,27 @@ it changed. A disabled or removed extension's rules are uninstalled. Every
 the engine's, with Chrome's answers and errors; with several controllers,
 each engine makes the call, so they keep the same rules.
 
-The worker asks the engine at the request's three points (before the
-request, as its headers go out, as the response's arrive) and webRequest
-after it, Chrome's order. A WebSocket or WebTransport handshake, which
+The worker asks the engine at the request's three points: before the
+request, as its headers go out, and as the response's arrive. Before the
+request, webRequest's onBeforeRequest goes to the listeners first and the
+engine matches while they answer, as Chrome's
+`WebRequestEventRouter::OnBeforeRequest` does. A request a rule blocks or
+redirects is still told to the listeners (onBeforeRequest, then
+onErrorOccurred with `net::ERR_BLOCKED_BY_CLIENT`), and their blocking
+answers are dropped. As the response's headers arrive, onHeadersReceived
+also goes first. As the headers go out, the engine's changes come first
+and onBeforeSendHeaders sees them, where Chrome tells the listeners the
+headers before its rules change them. A WebSocket or WebTransport handshake, which
 never passes the worker, is asked about by the controller while any
 extension is enabled. Tab ids come from the hubs: each top document's
 client is placed in its tab as it reports its navigation, a frame's
 requests are in its parent's tab, and a main frame's own request is in
-the tab `frame.go()` sent it to (the hub tells the worker first). The
-action count badge goes to the extension's action for that tab. A click on
+the tab `frame.go()` sent it to (the hub tells the worker first) or in the
+tab of the document that started it, and its redirects stay in that tab. A
+socket's handshake is in its document's tab and frame. Frame ids are the
+worker's: the hub asks it for a nested document's id, so a context's
+`sender.frameId`, executeScript's results and the rules' matches agree.
+The action count badge goes to the extension's action for that tab. A click on
 an extension's button grants it activeTab for the tab until the tab's top
 document changes, which getMatchedRules reads.
 
@@ -271,11 +283,11 @@ document changes, which getMatchedRules reads.
   `reload` for the same URL again and `link` otherwise, with no
   qualifiers. A navigation that fails tells no `onErrorOccurred`.
   `onCreated` gives no `openerTabId`.
-- declarativeNetRequest gives a main frame's own request its tab when the
-  host sent it (`frame.go()`) or a document of the tab started it; a
-  navigation a tab starts in no other way (a link the page's own markup
-  holds, a form) has tab id -1 until its document reports. A WebSocket's
-  or WebTransport session's handshake is tab -1. With several controllers
+- A main frame's request that neither the host nor a hooked document
+  announced (one that leaves an image document, or an about:blank one the
+  page wrote) is matched with tab id -1, so a `tabIds` condition misses it
+  and onRuleMatchedDebug reports -1. Its matched rules and its action
+  count go to the tab once its document reports. With several controllers
   in one scope, a rule's action count goes to the same tab id under each.
 - `scripting.executeScript({ files })` runs the files but answers no
   result (a `func` answers its return value, as in Chrome).

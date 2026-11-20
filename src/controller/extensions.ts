@@ -79,6 +79,8 @@ export interface TabFrames<F extends TabFrame> {
 	frameOf(client: string): F | null;
 	/** whether the client is the frame's top document */
 	isTop(frame: F, client: string): boolean;
+	/** a nested document's frame id, as the worker keeps it (its requests' frame ids are the same) */
+	frameIdOf?: (client: string) => Promise<unknown>;
 	/** the host's onOpen: a new tab opened from `opener` */
 	open?: (url: string, opener: F) => void;
 	/** a new tab with no tab to open it from: the host is told (a `tab` change) */
@@ -165,6 +167,7 @@ export function framesAsTabs<F extends TabFrame>(
 		if (!frame) throw new Error(`No tab with id: ${id}.`);
 		return frame;
 	};
+	// (the worker's, kept here once asked; a counter of this hub's without it)
 	const frameIds = new Map<string, number>();
 	// what the feed last told of each tab
 	type Seen = {
@@ -309,8 +312,15 @@ export function framesAsTabs<F extends TabFrame>(
 			if (!frame) return null;
 			let frameId = 0;
 			if (!host.isTop(frame, client)) {
-				frameId = frameIds.get(client) ?? frameIds.size + 1;
-				frameIds.set(client, frameId);
+				let known = frameIds.get(client);
+				if (known === undefined) {
+					const asked = Number(await host.frameIdOf?.(client).catch(() => -1));
+					known = asked > 0 ? asked : frameIds.size + 1;
+					frameIds.set(client, known);
+					if (frameIds.size > 4096)
+						frameIds.delete(frameIds.keys().next().value!);
+				}
+				frameId = known;
 			}
 			return { tabId: host.tabIdOf(frame), frameId };
 		},
