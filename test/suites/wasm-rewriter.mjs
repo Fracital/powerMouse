@@ -18,6 +18,12 @@ const bodiesOf = (name) =>
 	bodies.filter(
 		(body) => body?.match(/push\(\[\s*['"](\w+)['"]/)?.[1] === name,
 	);
+/** the bodies of `name` once `count` of them are in: a response's text can come after its script has run */
+async function bodiesFor(name, count = 1) {
+	for (let i = 0; i < 100 && bodiesOf(name).length < count; i++)
+		await sleep(50);
+	return bodiesOf(name);
+}
 
 /** a controller of its own (at an address of its own), logging to window.__log */
 const controller = (id, options = {}) =>
@@ -124,7 +130,7 @@ ok('every thread holds the rewriter', await settled(1));
 		result.by === 'wasm',
 		show(result.by),
 	);
-	const [body] = bodiesOf('p');
+	const [body] = await bodiesFor('p');
 	ok(
 		'what no rewrite touches comes back as written, and the reads go through the access API',
 		body?.includes('/* kept */ function') &&
@@ -160,7 +166,7 @@ ok('the service worker holds the rewriter', await settled(0));
 		result.by === 'wasm',
 		show(result.by),
 	);
-	const seen = bodiesOf('p');
+	const seen = await bodiesFor('p', 2);
 	ok(
 		"the worker's output is byte for byte the service worker's",
 		seen.length === 2 && seen[0] !== null && seen[0] === seen[1],
@@ -178,7 +184,7 @@ ok('the service worker holds the rewriter', await settled(0));
 		'k',
 		'/* kept */ const { 1.5: half, 1e21: big, top: mine } = { 1.5: "h", 1e21: "b", top: "t" }; window.__seen = [half, big, mine];',
 	);
-	const [keyedBody] = bodiesOf('k');
+	const [keyedBody] = await bodiesFor('k');
 	ok(
 		'a pattern key that is no integer is rewritten by the module, and runs',
 		keyed.ran &&
@@ -189,9 +195,11 @@ ok('the service worker holds the rewriter', await settled(0));
 	// a script the module cannot parse runs as it was written (and fails as
 	// it would natively), not as something half rewritten
 	const broken = await load('b', 'window.__seen = 1;\nvar 1x;', 40);
+	const asWritten = (body) => body?.startsWith('window.__seen = 1;\nvar 1x;');
+	for (let i = 0; i < 100 && !bodies.some(asWritten); i++) await sleep(50);
 	ok(
 		'a script that does not parse goes out as it came',
-		bodies.some((body) => body?.startsWith('window.__seen = 1;\nvar 1x;')),
+		bodies.some(asWritten),
 		show(broken),
 	);
 }
@@ -203,7 +211,7 @@ const defaultAccess = await controller('wasm-rewriter-default', {
 });
 {
 	const result = await load('j', SCRIPT);
-	const [body] = bodiesOf('j');
+	const [body] = await bodiesFor('j');
 	ok(
 		'a controller given no rewriter option still rewrites in the module',
 		result.ran &&
