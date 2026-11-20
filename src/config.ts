@@ -396,6 +396,12 @@ export interface Assets {
 	rtc?: string;
 	/** what a document's WebRTC classes do, loaded the first time it uses them */
 	rtcStack?: string;
+	/**
+	 * the extensions' runtime (docs/extensions.md): only a document an
+	 * installed extension reaches loads it, before its inject bundle; the
+	 * service worker names it in that document's shell
+	 */
+	extensionsRuntime?: string;
 	/** the dedicated Workers that rewrite scripts for the service worker */
 	rewriteWorker?: string;
 	/**
@@ -453,6 +459,7 @@ const BUNDLE_ASSETS: Required<Pick<Assets, BundleAsset>> = {
 	rtcWorker: 'rtcWorker.js',
 	rtc: 'rtc.wasm',
 	rtcStack: 'rtcStack.js',
+	extensionsRuntime: 'extensionsRuntime.js',
 	rewriteWorker: 'rewriteWorker.js',
 	core: 'core.wasm',
 	blocker: 'blocker.wasm',

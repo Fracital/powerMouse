@@ -46,6 +46,8 @@ import { warmClientHints } from './clientHints';
 import Cookies, { openCookies, openJarDB, registerCookies } from './Cookies';
 import { DnrHost } from './dnr';
 import { hostErrorPage } from './errorPage';
+import { extensionRegistry } from './extensions/registry';
+import { extensionTransport } from './extensions/serve';
 import { registerIntegrityLoads } from './integrityLoads';
 import { RemoteJar, type JarPort } from './jarDB';
 import { registerKeptLoads } from './keptLoads';
@@ -593,12 +595,18 @@ export default async function createServer(
 				pool,
 			));
 	const shields = new ShieldsStore();
+	// the scope's extensions (docs/extensions.md): their origins are answered
+	// from the package store, beneath everything the request path does, and
+	// chrome.cookies is the scope's jar; their declarativeNetRequest rules
+	// are installed into this server's DnrHost
+	extensionRegistry.cookies = cookies;
 	const dnr = new DnrHost();
+	extensionRegistry.attachDnr(dnr);
 	const { route, setRules, hostReloaded, historyStepped } = registerRewrites(
 		router,
 		init,
 		cookies,
-		transport,
+		extensionTransport(transport, extensionRegistry),
 		cache,
 		log,
 		rewrites,
@@ -612,6 +620,7 @@ export default async function createServer(
 		tellIsolationWanted,
 		tellApartServed,
 		dnr,
+		extensionRegistry,
 	);
 	if (blocker) registerBlocker(router, blocker);
 	registerStorage(router, stores.storage, init.codec);

@@ -1618,6 +1618,13 @@ const builds = [
 		],
 	},
 	{
+		// the extensions' runtime (docs/extensions.md): loaded by a document
+		// an installed extension reaches, before its inject bundle, so it
+		// captures the natives it talks over unhooked
+		entryPoints: { extensionsRuntime: 'src/extensions/runtime/entry.ts' },
+		format: 'iife',
+	},
+	{
 		entryPoints: { SearchBuilder: 'src/bootstrapper/entry.ts' },
 		format: 'iife',
 	},

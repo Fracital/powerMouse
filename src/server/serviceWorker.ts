@@ -1,3 +1,4 @@
+import { BareCompatibleClient } from '@mercuryworkshop/proxy-transports';
 import type { SiteShields } from '../blocker/types';
 import { utf8Bytes } from '../byteString';
 import type GenericCodec from '../Codecs';
@@ -42,6 +43,7 @@ import {
 	ControllerCloseMessage,
 	ControllerInitMessage,
 	ControllerModulesMessage,
+	EXTENSION_CHANGES,
 	IMAGES_SEEN,
 	INIT_PAGE_MODULES,
 	INIT_REMOTE_TRANSPORT,
@@ -110,6 +112,8 @@ import createServer, {
 	StompServer,
 } from './createServer';
 import { hostErrorPage } from './errorPage';
+import { extensionCommand } from './extensions/api';
+import { extensionRegistry } from './extensions/registry';
 import { identityDone, identityState } from './identityStates';
 import { INLINE_MAX, INLINE_TOKEN, putInline } from './inline';
 import { openLoadChannel, servedLoadClient } from './loadGrants';
@@ -560,6 +564,21 @@ function registerController(
 				return [gone, []];
 			},
 			dnr: async (command) => [await (await server).dnr.command(command), []],
+			extensions: async (command) => {
+				await server;
+				return [
+					await extensionCommand(extensionRegistry, command, async (url) => {
+						// the Web Store's download, through this controller's transport
+						const response = await new BareCompatibleClient(transport).fetch(
+							url,
+						);
+						if (response.status !== 200)
+							throw new Error(`the update service answered ${response.status}`);
+						return new Uint8Array(await response.arrayBuffer());
+					}),
+					[],
+				];
+			},
 			cookies: async (command) => {
 				const { cookies } = await server;
 				switch (command.op) {
@@ -741,6 +760,21 @@ serviceWorkers.setEnvironment({
 			.filter((ref) => ref.host)
 			.sort((a, b) => b.serial - a.serial)[0]?.host;
 	},
+});
+
+// every controller's contexts hear what the worker tells an extension's
+// (storage changes), and the controllers what changed of the extensions
+extensionRegistry.channels = () => [...controllers.keys()];
+extensionRegistry.onChange((change) => {
+	try {
+		const bus = new BroadcastChannel(
+			`${EXTENSION_CHANGES}${new URL(self.registration.scope).pathname}`,
+		);
+		bus.postMessage(change);
+		bus.close();
+	} catch (error) {
+		// nobody to tell
+	}
 });
 
 function controllerFor(pathname: string): ControllerRef | undefined {

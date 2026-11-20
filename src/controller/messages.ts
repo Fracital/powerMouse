@@ -5,6 +5,7 @@ import type {
 	SiteShields,
 } from '../blocker/types';
 import type { Assets, Config, ConfigCodec, HostGeometry } from '../config';
+import type { ExtensionsChange } from '../extensions/types';
 import type { HelperNames } from '../helperNames';
 import type { HookErrorInfo, InitHooks } from '../hooks';
 import type {
@@ -249,6 +250,8 @@ export type FrameBound = {
 	adblockRefresh: [undefined, AdblockApplied];
 	/** which of these service worker clients no longer exist (the host's ClientFrames) */
 	goneClients: [string[], string[]];
+	/** the host's `extensions` (docs/extensions.md): a call of the frame controller's hub */
+	extensions: [{ call: string; args: unknown[] }, unknown];
 };
 
 /** the two builds in a mismatch, as the host sees them on `controller.stale` */
@@ -294,4 +297,8 @@ export type HostBound = {
 		{ request: IdentityChooserRequest; port: MessagePort },
 		number,
 	];
+	/** the extensions' hub told a change (an install, an action's badge, a popup's size) */
+	extensionChange: [ExtensionsChange];
+	/** the extensions' hub asks about the host's frames, which are the tabs (HubTabs) */
+	extensionTabs: [{ op: string; args: unknown[] }, unknown];
 };

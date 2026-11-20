@@ -454,6 +454,11 @@ export function injectDocumentJS(url: StompURL, config?: Config) {
 	return `${assetBase(url, config)}${injectDocumentFile(config)}`;
 }
 
+/** the extensions' runtime (docs/extensions.md), by its served name, as the inject bundle is asked for */
+export function extensionsRuntimeJS(url: StompURL, config?: Config) {
+	return `${assetBase(url, config)}${assetName(config?.assets, 'extensionsRuntime')}`;
+}
+
 export function injectWorkerJS(url: StompURL, config?: Config) {
 	const key = cryptoInject(config) ? 'injectWorkerFull' : 'injectWorker';
 	return `${assetBase(url, config)}${assetName(config?.assets, key)}`;
