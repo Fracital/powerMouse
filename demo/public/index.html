@@ -236,8 +236,33 @@
 						></button>
 					</div>
 				</form>
-				<!-- the menu (Fullscreen, About): beside the address box, not in
-				     it; the tab manager has its own button for the same menu -->
+				<!-- the extensions (docs/extensions.md), after the address box as
+				     in Chrome: each one's toolbar button with its badge for the
+				     tab (filled by pm/main.js; none on a phone's bar), then the
+				     puzzle piece, which lists them all and opens the Extensions
+				     page -->
+				<div id="extActions" class="extActions"></div>
+				<button
+					id="toolExtensions"
+					class="toolbtn extbtn"
+					type="button"
+					title="Extensions"
+					aria-label="Extensions"
+					aria-haspopup="dialog"
+					aria-expanded="false"
+					aria-controls="extPanel"
+				>
+					<img
+						src="/pm/icons/extensions.svg"
+						width="24"
+						height="24"
+						alt=""
+						draggable="false"
+					/>
+				</button>
+				<!-- the menu (Fullscreen, Extensions, About): beside the address
+				     box, not in it; the tab manager has its own button for the
+				     same menu -->
 				<button
 					id="toolMenu"
 					class="toolbtn menubtn"
@@ -329,6 +354,13 @@
 				tabindex="-1"
 			></button>
 			<button
+				id="menuExtensions"
+				class="pmMenuItem"
+				type="button"
+				role="menuitem"
+				tabindex="-1"
+			></button>
+			<button
 				id="menuAbout"
 				class="pmMenuItem"
 				type="button"
@@ -336,6 +368,35 @@
 				tabindex="-1"
 			></button>
 		</div>
+
+		<!-- the extensions: the puzzle piece's list (each one's button, its
+		     badge and its menu), the menu of one extension (its own items, then
+		     Options, Manage, Remove), and the popup an action opens, all in the
+		     menu's popover. Built and filled by pm/main.js. -->
+		<div id="extScrim" class="popoverScrim hidden"></div>
+		<div
+			id="extPanel"
+			class="popover pmMenu extPanel hidden"
+			role="dialog"
+			aria-label="Extensions"
+			aria-hidden="true"
+		></div>
+		<div id="extMenuScrim" class="popoverScrim hidden"></div>
+		<div
+			id="extMenu"
+			class="popover pmMenu hidden"
+			role="menu"
+			aria-label="Extension"
+			aria-hidden="true"
+		></div>
+		<div id="extPopupScrim" class="popoverScrim hidden"></div>
+		<div
+			id="extPopup"
+			class="popover extPopup hidden"
+			role="dialog"
+			aria-label="Extension popup"
+			aria-hidden="true"
+		></div>
 
 		<!-- Shields settings pages (Filter Lists and Global Settings): full
 		     overlay views the Shields panel's footer opens, after Brave's

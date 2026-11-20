@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+	<!-- the extensions: a puzzle piece in the Tango style of the bar's other
+	     icons, Aluminium as the menu's bars -->
+	<defs>
+		<linearGradient id="piece" x1="0" y1="0" x2="0" y2="1">
+			<stop offset="0" stop-color="#fff" />
+			<stop offset="1" stop-color="#d3d7cf" />
+		</linearGradient>
+	</defs>
+	<path
+		fill="url(#piece)"
+		stroke="#555753"
+		stroke-linejoin="round"
+		d="M4.5 8.5h3.6a2.4 2.4 0 1 1 4.3-1.6c0 .6-.1 1.1-.5 1.6h3.6v3.6a2.4 2.4 0 1 1 1.6 4.3c-.6 0-1.1-.1-1.6-.5v3.6h-11v-4.2a2.4 2.4 0 1 0 0-3.6z"
+	/>
+</svg>
