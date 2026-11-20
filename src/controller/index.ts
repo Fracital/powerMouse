@@ -20,6 +20,7 @@ import {
 	ConfigCodec,
 	DEFAULT_ASSETS,
 	WASM_ASSETS,
+	type BundleAsset,
 	type HostGeometry,
 } from '../config';
 import {
@@ -169,9 +170,16 @@ import {
 	type SiteFrameInfo,
 	type SiteHistoryCommand,
 } from './sites';
+import { suggestThrough, type SuggestOptions } from './suggest';
 import { debugTransportStored, printNote } from './transportConsole';
 
 export { default as SearchBuilder } from '../bootstrapper/SearchBuilder';
+export {
+	SEARCH_ENGINES,
+	searchEngine,
+	type SearchEngine,
+} from '../bootstrapper/searchEngines';
+export type { SuggestOptions } from './suggest';
 export type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
 export type { Config, ConfigCodec } from '../config';
 
@@ -1026,6 +1034,8 @@ export class StompController extends EventTarget {
 	#loaded: Promise<unknown>;
 	/** settles once the transport exists where it is hosted; the handshake waits for it */
 	#hostReady: Promise<void>;
+	/** settles once the transport is hosted where it will stay (`suggest()` waits for it) */
+	#transportUp: Promise<void>;
 	/** every hook error so far (a hook that threw, a hook URL that failed), newest last; also `hookerror` events */
 	readonly hookErrors: HookErrorInfo[] = [];
 	#init: ControllerInit;
@@ -1103,7 +1113,7 @@ export class StompController extends EventTarget {
 	/**
 	 * the served file names `init.assets` falls back to (the dist names), for
 	 * a classic-script host that names a file itself, such as a service worker
-	 * it registers without `register()`
+	 * it registers without `register()` or the omnibox module (`omnibox`)
 	 */
 	static readonly DEFAULT_ASSETS: Readonly<Required<Assets>> = DEFAULT_ASSETS;
 	/**
@@ -1353,6 +1363,7 @@ export class StompController extends EventTarget {
 				: this.transportHost === 'worker'
 					? this.#startWorker(given)
 					: this.#importInPage(given);
+		this.#transportUp = transportReady.catch(() => {});
 		// the transport is hosted where it will stay (a worker that failed has
 		// fallen back to the page by now, and setTransport keeps the host)
 		// before the first handshake hands the config to any frame
@@ -2122,7 +2133,7 @@ export class StompController extends EventTarget {
 	 * (`adblock`, docs/adblock.md) runs in the service worker alone: its
 	 * bytes go there and nothing here compiles them.
 	 */
-	async #compileModules(names: readonly (keyof Assets)[], compile = true) {
+	async #compileModules(names: readonly BundleAsset[], compile = true) {
 		const compiled: Record<string, WebAssembly.Module> = {};
 		const loaded: Record<string, ArrayBuffer> = {};
 		await Promise.all(
@@ -3073,6 +3084,20 @@ export class StompController extends EventTarget {
 		this.#sites?.apply('forgetStorage', origin);
 		await this.#ready;
 		await this.#call('forgetStorage', origin);
+	}
+	/**
+	 * A search engine's completions for `text`, as the host's own address
+	 * bar shows them (src/controller/suggest.ts): asked through the
+	 * transport from the engine's OpenSearch suggest endpoint, as a request
+	 * of the host's (no proxied page's cookies or partition, no cookies at
+	 * all), with the fields Chrome's omnibox sends. `options.engine` names
+	 * the engine (an id of SEARCH_ENGINES or a SearchBuilder template of
+	 * one, Google by default), `options.endpoint` any other engine's. Needs
+	 * no service worker: it waits only for the transport.
+	 */
+	async suggest(text: string, options: SuggestOptions = {}): Promise<string[]> {
+		await this.#transportUp;
+		return suggestThrough(this.transport, text, options);
 	}
 	/** the proxied URL a frame should navigate to in order to load `url` */
 	async route(url: string): Promise<string> {

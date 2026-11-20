@@ -372,6 +372,13 @@ else if (window === window.parent || !origins.length) {
 					if (!controller) throw new Error('Controller is not initialised');
 					return [await controller.unroute(url), []];
 				},
+				suggest: async ({ text, engine, endpoint, limit }) => {
+					if (!controller) throw new Error('Controller is not initialised');
+					return [
+						await controller.suggest(text, { engine, endpoint, limit }),
+						[],
+					];
+				},
 				// kept here, and by every slot's agent, for the documents of
 				// their origins (./geometry.ts)
 				geometry: async (geometry) => {

@@ -109,6 +109,8 @@
 		"what": "what a row's browser downloads for the proxy machinery (the size scenario): every .js, .mjs, .wasm and .html file in dist/ (not .map, not types/) at /stomp/, plus the transport files at /epoxy/; checked by logging the host server's requests during a boot and a page load per row",
 		"exclude": {
 			"SearchBuilder.js": "only the demo's address bar uses it",
+			"omnibox.js": "only the demo's address bars use it (the classic script)",
+			"omnibox.mjs": "the omnibox module for a host's bundler; the demo loads omnibox.js",
 			"Controller.js": "the classic-script build of the controller; the host page imports controller.mjs",
 			"controllerFrame.html": "only the deployment mode with a separate proxy origin loads it",
 			"controllerFrame.js": "only the deployment mode with a separate proxy origin loads it",

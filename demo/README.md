@@ -164,12 +164,15 @@ holyWisp is started.
    `localStorage['stomp:debug-transport'] = '1'` on the demo's origin and a
    reload, adds a `[net]` line for each connection to a site
    (`debugTransport`), as About's Transport log row says.
-4. **Autocomplete.** Each keystroke in an address bar posts what was typed
-   to `/suggestions` (in the body, so no URL names the site) for public
-   suffixes matching what was typed after
-   the last dot (the server loads the public suffix list at startup, with a
-   built-in fallback). Suffixes that start with the typed text come first,
-   most common first; clicking one swaps it into the address bar.
+4. **Suggestions.** Both address bars are the omnibox module
+   (`dist/omnibox.js`, loaded by the name `STOMP_ASSETS.omnibox` gives, else
+   the controller's `DEFAULT_ASSETS`): the open tabs to switch to (the top
+   bar leaves out the tab on show), the pages the tabs visited (kept in this
+   browser's localStorage under `omnibox:visits`, with the pages of the open
+   tabs' own histories; Shift+Delete forgets one), the bookmarks, and Brave's
+   completions, which `controller.suggest()` asks through the transport, so
+   the demo's server never sees what was typed. Clicking the empty box
+   shows the other tabs and the latest and most visited sites.
 5. **Navigate** with `frame.go(url)` on the active tab. Input goes through `SearchBuilder`, so
    anything that doesn't look like a host becomes a search. The proxied page
    is mirrored into `location.hash` by its route (`#html/<sealed>`, from

@@ -1,7 +1,7 @@
 import type { SiteShields } from '../blocker/types';
 import { utf8Bytes } from '../byteString';
 import type GenericCodec from '../Codecs';
-import { assetName, Config, ConfigCodec, type Assets } from '../config';
+import { assetName, Config, ConfigCodec, type BundleAsset } from '../config';
 import { switchesGroup, type OpenerFacts } from '../coop';
 import type { HopPolicy } from '../csp';
 import { isolationResponseHeaders, SERVED_EMBEDDER_POLICY } from '../isolation';
@@ -2466,7 +2466,7 @@ async function onItsSlot(
 /** the store of the document bundles this worker and the ones before it kept, by URL */
 const BUNDLES = 'stomp-document-bundles';
 /** the bundles' files, by the names this worker's build gave them */
-const OWN_BUNDLES: [keyof Assets, string][] = [
+const OWN_BUNDLES: [BundleAsset, string][] = [
 	['injectDocument', DOCUMENT],
 	['injectDocumentFull', DOCUMENT_FULL],
 ];

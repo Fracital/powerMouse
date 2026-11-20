@@ -1545,6 +1545,18 @@ const builds = [
 		entryPoints: { SearchBuilder: 'src/bootstrapper/entry.ts' },
 		format: 'iife',
 	},
+	{
+		// the host's omnibox (src/omnibox/), a classic script whose global is
+		// `Omnibox` (init.assets.omnibox), and the same as a module for a
+		// host's bundler (`@sysce/stomp/omnibox`); no proxied page loads either
+		entryPoints: { omnibox: 'src/omnibox/entry.ts' },
+		format: 'iife',
+	},
+	{
+		entryPoints: { omnibox: 'src/omnibox/index.ts' },
+		format: 'esm',
+		outExtension: { '.js': '.mjs' },
+	},
 ];
 
 /**

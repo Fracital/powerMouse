@@ -35,6 +35,7 @@ const PAGE_BUNDLES = new Set([
 	'controllerFrame.js',
 	'controllerFrame.html',
 	'SearchBuilder.js',
+	'omnibox.js',
 	'transportWorker.js',
 ]);
 

@@ -63,8 +63,8 @@ site begin alike; nothing of either reads as the site.
 - The demo keeps its active tab in its own fragment as the tab's route
   (`#html/<sealed>`, from `controller.route()`), read back with
   `controller.unroute()`; a fragment holding the URL itself, as the demo
-  wrote it before, still opens. Its address-bar suggestions post what was
-  typed in the body.
+  wrote it before, still opens. Its address-bar suggestions never reach
+  the demo's server: the engine's completions go through the transport.
 
 ## Fragments
 

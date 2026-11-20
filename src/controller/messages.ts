@@ -196,6 +196,11 @@ export type FrameBound = {
 	viewport: [[number, number] | [number, number, string], null];
 	/** the real URL a routed one stands for, null for a non-route (see StompController.unroute) */
 	unroute: [string, string | null];
+	/** a search engine's completions (StompController.suggest), without the signal, which stays with the host */
+	suggest: [
+		{ text: string; engine?: string; endpoint?: string; limit?: number },
+		string[],
+	];
 	setTransport: [TransportDescriptor];
 	/** frames are addressed by their index in the host window's `frames` list */
 	frameInfo: [FrameAddress, FrameInfo];
