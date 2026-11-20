@@ -634,6 +634,7 @@ const DEFERRED_FILES = new Set(
 		'src/inject/dom/instructions.ts',
 		'src/inject/dom/markupMembers.ts',
 		'src/inject/dom/measuredMemory.ts',
+		'src/inject/dom/objectLoads.ts',
 		'src/inject/dom/markupSinks.ts',
 		'src/inject/dom/openerFacts.ts',
 		'src/inject/dom/pictureWindows.ts',

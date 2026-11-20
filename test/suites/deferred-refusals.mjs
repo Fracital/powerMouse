@@ -47,7 +47,8 @@
 // document the page makes in a frame whose shell is a part
 // (src/htmlShell.ts: an srcdoc, a javascript: URL's markup; a data: frame, src/inject/dom/rareAttributes.ts) is never given
 // to the frame, unrewritten or at all, an <object>'s HTML document (its
-// copy's shell is that part too) fails as a failed fetch does natively, an
+// load is a part, src/inject/dom/objectLoads.ts, and its copy's shell that
+// part too) fails as a failed fetch does natively, an
 // error and no document, and a refresh meta has no content
 // for the browser; a base a report-only base-uri refuses is refused, its
 // report being a part. A part is made synchronously within the call that
