@@ -9,7 +9,11 @@
 // 9 ms for the 198,000-line Brave list, against 245 ms to compile it) and
 // the lists are fetched again only when the stored engine is older than the
 // refresh interval. A fetch that fails leaves the stored engine serving;
-// with nothing stored, the blocker is off until a fetch succeeds.
+// with nothing stored, the blocker is off until a fetch succeeds. The default
+// lists have a head start: the directory serves an engine snapshot of uBlock
+// Origin's own lists (assets/adblock-snapshot.dat.gz, docs/adblock.md "The
+// snapshot"), which a worker with no engine stored loads from this origin in
+// milliseconds and serves while it fetches the lists.
 //
 // The crate never discards a compiled regex on wasm (it has no clock), so a
 // long-lived worker's instance only grows: past a ceiling it is replaced by
@@ -44,6 +48,13 @@ const MEMORY_LIMIT = 160 * 1024 * 1024;
  * unfiltered rather than not at all, and the engine serves once it is built
  */
 const FIRST_BUILD_WAIT_MS = 5_000;
+/**
+ * how long a navigation waits for the engine of the default lists with none
+ * stored: for the directory's snapshot, one fetch of this origin's and a
+ * load of a few milliseconds. Past it (or with no snapshot to be had) the
+ * document loads unfiltered, and the lists' engine serves once it is built
+ */
+const SNAPSHOT_WAIT_MS = 1_000;
 /** scriptlet rewrites kept, by their lines (a site's pages share theirs) */
 const SCRIPT_MEMO = 64;
 /**
@@ -236,6 +247,23 @@ export function scriptletKey(script: string): string {
 	return script.split('\n').sort().join('\n');
 }
 
+/**
+ * The bytes of a gzip file, decompressed (DecompressionStream, in every
+ * browser STomp runs in). The engine snapshot is stored gzipped so that it
+ * is small however a host serves it; a host that answered it with
+ * `Content-Encoding: gzip` anyway had the browser decompress it already,
+ * and bytes that are not gzip's (no magic number) are taken as they are.
+ */
+async function gunzipped(
+	bytes: Uint8Array<ArrayBuffer>,
+): Promise<Uint8Array<ArrayBuffer>> {
+	if (bytes[0] !== 0x1f || bytes[1] !== 0x8b) return bytes;
+	const stream = new Blob([bytes])
+		.stream()
+		.pipeThrough(new DecompressionStream('gzip'));
+	return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
 export class Blocker implements BlockerLike {
 	#init: AdblockInit;
 	readonly #fetch: FetchResource;
@@ -247,8 +275,12 @@ export class Blocker implements BlockerLike {
 	#ready = false;
 	/** the first load or build, whichever settles first; false when nothing could be loaded */
 	readonly #settled: Promise<boolean>;
-	/** the engine this browser stored was tried: it serves, or there is none and the lists are being fetched */
-	readonly #restored: Promise<void>;
+	/**
+	 * an engine serves without the lists' servers, the one this browser stored
+	 * or (on by default) the directory's snapshot, or there is neither and the
+	 * lists are being fetched
+	 */
+	readonly #serving: Promise<void>;
 	#tried: () => void = () => {};
 	#key = '';
 	/** (as the store gave them: the bytes the engine takes, not decoded and encoded again) */
@@ -278,7 +310,7 @@ export class Blocker implements BlockerLike {
 		this.#fetch = fetch;
 		this.#given = module;
 		this.#pool = pool;
-		this.#restored = new Promise((resolve) => {
+		this.#serving = new Promise((resolve) => {
 			this.#tried = resolve;
 		});
 		this.#settled = this.#start();
@@ -305,17 +337,21 @@ export class Blocker implements BlockerLike {
 	}
 	/**
 	 * the engine answers, or nothing could be loaded; bounded by `ms` for a
-	 * page that must not wait on a first fetch of the lists. Without `build`
-	 * the wait is for the stored engine alone (milliseconds), never for the
-	 * lists' servers: a blocker that is on by default delays no page
+	 * page that must not wait long on a first fetch of the lists. Without
+	 * `build` (the blocker is on by default) the wait is never for the lists'
+	 * servers: it is for the stored engine or the directory's snapshot, one
+	 * second at the most (SNAPSHOT_WAIT_MS)
 	 */
 	settled(build = true, ms = FIRST_BUILD_WAIT_MS): Promise<boolean> {
 		if (this.#ready) return Promise.resolve(true);
-		if (!build) return this.#restored.then(() => this.#ready);
-		return Promise.race([
-			this.#settled,
-			new Promise<boolean>((resolve) => setTimeout(() => resolve(false), ms)),
-		]);
+		const bound = (ms: number) =>
+			new Promise<boolean>((resolve) => setTimeout(() => resolve(false), ms));
+		if (!build)
+			return Promise.race([
+				this.#serving.then(() => this.#ready),
+				bound(Math.min(ms, SNAPSHOT_WAIT_MS)),
+			]);
+		return Promise.race([this.#settled, bound(ms)]);
 	}
 
 	/**
@@ -387,9 +423,49 @@ export class Blocker implements BlockerLike {
 				return true;
 			}
 		}
+		// no engine stored, on by default: the directory's snapshot serves
+		// (a first navigation waits for it, SNAPSHOT_WAIT_MS) while the lists
+		// are fetched once that navigation has gone, and their engine replaces
+		// it once built
+		if (await this.#snapshot()) {
+			this.#tried();
+			this.#refresh(true);
+			return true;
+		}
 		this.#tried();
 		await this.#refresh(!!this.#init.byDefault);
 		return this.#ready;
+	}
+
+	/**
+	 * load the directory's engine snapshot of the default lists
+	 * (`init.snapshot`, on by default only): one fetch of this origin's, which
+	 * the browser may keep for good (it is asked for by its hash), the file
+	 * gunzipped here, and a load of 3 to 5 ms. Never stored: the lists' own
+	 * engine is, once built
+	 */
+	async #snapshot(): Promise<boolean> {
+		const { snapshot, byDefault, resources } = this.#init;
+		if (!snapshot || !byDefault) return false;
+		const text = this.#fetchText(resources).then((text) => {
+			JSON.parse(text);
+			return text;
+		});
+		let engine: Uint8Array<ArrayBuffer>;
+		try {
+			engine = await gunzipped(
+				new Uint8Array(await (await this.#fetchOk(snapshot)).arrayBuffer()),
+			);
+		} catch (error) {
+			text.catch(() => {});
+			this.lastError = `the engine snapshot could not be fetched: ${String(error)}`;
+			return false;
+		}
+		// without the resources the snapshot still blocks and hides; the
+		// lists' build says so if they cannot be had then either
+		const loaded = this.#load(engine, await text.catch(() => '[]'));
+		if (!loaded) this.lastError ??= 'the engine snapshot could not be loaded';
+		return loaded;
 	}
 
 	/** the stored engine and resources under this key, when both are there */
@@ -504,9 +580,9 @@ export class Blocker implements BlockerLike {
 
 	/**
 	 * fetch the lists and the resources, build, store and swap in the engine;
-	 * with `turn` (a start's: a stored engine serves meanwhile, or the blocker
-	 * is on by default and no navigation waits for it) the downloads wait for
-	 * the worker's first navigation to go first (listTurn)
+	 * with `turn` (a stored engine or the snapshot serves meanwhile, or the
+	 * blocker is on by default and no navigation waits for it) the downloads
+	 * wait for the worker's first navigation to go first (listTurn)
 	 */
 	#refresh(turn = false): Promise<void> {
 		if (!this.#building)
@@ -693,6 +769,8 @@ export class Blocker implements BlockerLike {
 	async #replace(): Promise<void> {
 		const stored = await this.#stored();
 		if (stored) this.#load(stored.engine, stored.resources);
+		// nothing stored yet: the snapshot was serving
+		else await this.#snapshot();
 	}
 	#call(input: string, op: number): string | null {
 		const instance = this.#engine();

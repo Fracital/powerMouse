@@ -1153,7 +1153,7 @@ interface Rewriter {
 	rules: CompiledRule[];
 	/** the built-in blocker, unless the host turned it off (docs/adblock.md) */
 	blocker?: BlockerLike;
-	/** the host asked for the blocker: the first navigation waits for its lists (on by default, none does) */
+	/** the host asked for the blocker: the first navigation waits for its lists (on by default, for the snapshot alone) */
 	blockerAsked?: boolean;
 	/** the per-site shields the controller set (src/server/shields.ts) */
 	shields?: ShieldsStore;
@@ -2642,8 +2642,13 @@ function genericForward(
 		// off for the site would not. STomp's rewriting is untouched
 		const blocks = !rewriter.shields || rewriter.shields.blocks(shieldsHost);
 		// the first navigation after a start waits for the engine: the stored
-		// one, and, when the host asked for the blocker, a first fetch of the
-		// lists, bounded
+		// one or, on by default, the directory's snapshot (a second at the
+		// most), and, when the host asked for the blocker, a first fetch of
+		// the lists, bounded. A document that loads before it is unfiltered
+		// for as long as it is open: its scriptlets run before its first
+		// script or never, and an app's in-app navigations are that
+		// document's (a YouTube watch page played the pre-roll ads of every
+		// related video it went on to)
 		if (blocker && blocks && navigation && !blocker.ready)
 			await blocker.settled(!!rewriter.blockerAsked);
 		const decision = blocks

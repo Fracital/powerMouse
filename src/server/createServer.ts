@@ -163,6 +163,7 @@ function blockerKey(scope: string, init: AdblockInit): string {
 		init.resources,
 		init.engine ?? '',
 		init.refreshMs,
+		init.snapshot ?? '',
 	]);
 }
 

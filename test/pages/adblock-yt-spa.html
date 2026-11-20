@@ -1,0 +1,29 @@
+<!doctype html>
+<title>adblock-yt-spa</title>
+<!-- a YouTube watch page and its in-app navigation to the next video (adblock suite) -->
+<script>
+	// as YouTube's player: fetch and Request taken from a frame of its own,
+	// appended while the page loads, so a wrapper of the page's fetch is passed
+	// by (uBlock Origin's lists answer with trusted-prevent-dom-bypass)
+	const holder = document.createElement('iframe');
+	holder.style.display = 'none';
+	document.documentElement.appendChild(holder);
+	const { fetch: playerFetch, Request: PlayerRequest } = holder.contentWindow;
+	// the next video, after the page loaded: a click on a related video is a
+	// history entry and the player data of the next one, never a document
+	window.__adblockReport = async () => {
+		history.pushState(null, '', '?v=stompNext');
+		const response = await playerFetch(
+			new PlayerRequest('/pages/deep/youtubei/v1/get_watch?prettyPrint=false', {
+				method: 'POST',
+				body: JSON.stringify({ videoId: 'stompNext' }),
+			}),
+		);
+		const [watch] = JSON.parse(await response.text());
+		return {
+			grabbed: playerFetch === window.fetch && PlayerRequest === window.Request,
+			keys: Object.keys(watch.playerResponse),
+			video: watch.playerResponse.videoDetails?.videoId,
+		};
+	};
+</script>

@@ -594,6 +594,10 @@ app.use(
 // first; isolation mode's frame and the site pool's are asked for so too
 // (`controllerFrame.html?<hash>&script=controllerFrame.js%3F<hash>`). And
 // the page names its own scripts so (stampedPage above).
+// The blocker's engine snapshot (`adblock-snapshot.dat.gz?<hash of its
+// bytes>`), which a first visit's worker loads, is kept so too, and is
+// answered as the bytes it is (the worker decompresses it), never as a
+// gzip encoding.
 const keptFiles = [
 	'rewriterLib.js',
 	'core.wasm',
@@ -608,6 +612,7 @@ const keptFiles = [
 	'controllerFrame.html',
 	'controllerFrame.js',
 	'siteFrame.js',
+	'adblock-snapshot.dat.gz',
 ];
 const fileHashes = new Map();
 function hashOf(path) {
@@ -630,13 +635,16 @@ function hashOf(path) {
 	}
 }
 const stompFiles = {
-	setHeaders: (res, path) =>
+	setHeaders: (res, path) => {
+		if (path.endsWith('.dat.gz'))
+			res.set('Content-Type', 'application/octet-stream');
 		res.set(
 			'Cache-Control',
 			keptFiles.includes(basename(path)) && askedByHash(res, path)
 				? KEPT
 				: 'no-cache',
-		),
+		);
+	},
 };
 app.use('/stomp/', express.static(stompPath, stompFiles));
 // A routed script request that reaches this host instead of the service
