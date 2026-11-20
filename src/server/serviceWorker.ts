@@ -85,6 +85,7 @@ import { suffixListPin } from '../wasm/suffix';
 import {
 	adoptModules,
 	heldModules,
+	modulesComing,
 	SERVING_MEMORY_LIMIT,
 	setMemoryLimit,
 } from '../wasm/thread';
@@ -198,6 +199,8 @@ interface ControllerRef {
 	slots?: Map<string, string>;
 	/** this origin is a slot of the site pool (its documents ask for an agent cluster of their own) */
 	slot?: boolean;
+	/** lets go of the wait for the modules its handshake's port brings (portModules) */
+	dropModules?: () => void;
 }
 
 /**
@@ -249,12 +252,54 @@ const SLOT_MEMORY_LIMIT = 16 * 1024 * 1024;
  */
 const remoteBlockers = new Map<string, RemoteBlocker>();
 
+/** the time a handshake's modules get to follow on its port (ControllerInitMessage.modulesOnPort) */
+const PORT_MODULES_MS = 10000;
+/**
+ * The modules a handshake's port brings first (a CONTROLLER_MODULES),
+ * adopted as the handshake's own are (heldModules waits for them);
+ * nothing when the port closes or brings none in PORT_MODULES_MS. The
+ * function returned lets the wait go when this worker closes the port
+ * itself (forget): a port closed at this end hears no close, and a
+ * registration replaced at once kept the blocker's first build waiting
+ */
+function portModules(port: MessagePort): () => void {
+	let drop = () => {};
+	const adopted = new Promise<void>((resolve) => {
+		const stop = () => {
+			port.removeEventListener('message', take);
+			port.removeEventListener('close', none);
+			clearTimeout(timer);
+		};
+		const none = () => {
+			stop();
+			resolve();
+		};
+		const take = (event: MessageEvent) => {
+			const message = (event.data as Record<string, unknown> | null)?.[
+				CONTROLLER_MODULES
+			] as ControllerModulesMessage | undefined;
+			if (typeof message?.modules !== 'object' || message.modules === null)
+				return;
+			stop();
+			heardBlockerBytes(message.modules);
+			resolve(adoptModules(message.modules));
+		};
+		const timer = setTimeout(none, PORT_MODULES_MS);
+		port.addEventListener('message', take);
+		port.addEventListener('close', none);
+		drop = none;
+	});
+	modulesComing(adopted);
+	return drop;
+}
+
 function registerController(
 	{
 		directory,
 		config: given,
 		rewritePool,
 		modules,
+		modulesOnPort,
 		adblock,
 		standby,
 		codecKey,
@@ -280,6 +325,8 @@ function registerController(
 	// compiled behind the handshake, the JavaScript rewriters answer until then
 	heardBlockerBytes(modules);
 	void adoptModules(modules);
+	const dropModules =
+		modulesOnPort && ports[0] ? portModules(ports[0]) : undefined;
 	// the handshake's ports: the rpc's, the transport's when it lives in the
 	// controller's worker, then one per rewrite worker
 	const poolPorts =
@@ -554,7 +601,12 @@ function registerController(
 	// which run of the worker has this controller: its revive, on its way or
 	// still to come, is not for it (a controller of an earlier build has no
 	// such method and checks over the port instead)
-	rpc.call('hello', { instance: INSTANCE }).catch(() => {});
+	rpc
+		.call('hello', {
+			instance: INSTANCE,
+			...(modulesOnPort ? { portModules: true } : {}),
+		})
+		.catch(() => {});
 
 	const ref: ControllerRef = {
 		directory,
@@ -568,6 +620,7 @@ function registerController(
 		owner: client,
 		...(token !== undefined ? { token } : {}),
 		serial: ++serials,
+		...(dropModules ? { dropModules } : {}),
 		// a slot's worker, or the hub's (whose documents of a site with a
 		// slot leave for it too)
 		...(slot || pooled ? { slots: new Map<string, string>() } : {}),
@@ -719,6 +772,7 @@ function forget(ref: ControllerRef, reason: string) {
 	ref.rpc.abort(reason);
 	ref.transport.close(reason);
 	ref.pool?.close();
+	ref.dropModules?.();
 	ref.port.close();
 }
 
