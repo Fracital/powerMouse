@@ -3,6 +3,7 @@
 <div align="center">
   <a href="https://www.npmjs.com/package/@sysce/stomp"><img src="https://img.shields.io/npm/v/@sysce/stomp/nightly.svg?maxAge=3600&label=npm%20nightly" alt="npm nightly version" /></a>
   <a href="https://github.com/Fracital/powerMouse/issues"><img src="https://img.shields.io/github/issues/Fracital/powerMouse?style=flat&color=orange" alt="GitHub issues" /></a>
+  <a href="https://github.com/Fracital/powerMouse/wiki"><img src="https://img.shields.io/badge/docs-wiki-blue?style=flat" alt="Documentation: the wiki" /></a>
   <a href="https://github.com/Fracital/powerMouse/stargazers"><img src="https://img.shields.io/github/stars/Fracital/powerMouse?style=flat&color=orange" alt="GitHub stars" /></a>
 </div>
 
@@ -20,6 +21,27 @@ actual HTTP and WebSocket traffic through a
 transport (for example [epoxy](https://github.com/MercuryWorkshop/EpoxyTransport)
 or [libcurl](https://github.com/MercuryWorkshop/CurlTransport)) that lives in
 the page that owns the proxy. Proxied content is shown in frames.
+
+## Documentation
+
+The [wiki](https://github.com/Fracital/powerMouse/wiki) explains how to use
+STomp and embed it in your own site:
+
+- [Quickstart](https://github.com/Fracital/powerMouse/wiki/Bootstrapper-quickstart):
+  the demo, then the smallest host page
+- [Install into an existing app](https://github.com/Fracital/powerMouse/wiki/Install-into-an-existing-app):
+  serving `dist/`, the service worker, a wisp relay and a transport
+- [Embed STomp in your site](https://github.com/Fracital/powerMouse/wiki/Embed-STomp-in-your-site):
+  tabs, an address bar, history, popups and error pages
+- [Origin isolation](https://github.com/Fracital/powerMouse/wiki/Origin-isolation)
+  and [Deploy STomp](https://github.com/Fracital/powerMouse/wiki/Deploy-STomp)
+  for production
+- [Configure STomp](https://github.com/Fracital/powerMouse/wiki/Configure-STomp):
+  every option, method and event
+- [Transports and Wisp](https://github.com/Fracital/powerMouse/wiki/Transports-and-Wisp)
+  and [Troubleshooting](https://github.com/Fracital/powerMouse/wiki/Troubleshooting)
+
+The sections below are the reference for this commit.
 
 ## Usage
 
