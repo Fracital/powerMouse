@@ -597,8 +597,9 @@ const compat = {
 			return;
 		}
 		if (message.type === 'exec') {
+			const start = performance.now();
 			chrome.scripting.executeScript({ target: { tabId: sender.tab.id, allFrames: true }, func: () => location.pathname })
-				.then((results) => respond({ frames: results.map((result) => result.frameId).sort(), paths: results.map((result) => result.result) }),
+				.then((results) => respond({ frames: results.map((result) => result.frameId).sort(), paths: results.map((result) => result.result), ms: Math.round(performance.now() - start) }),
 					(error) => respond({ error: error.message }));
 			return true;
 		}
@@ -1729,6 +1730,15 @@ for (const [mode, base] of [
 			exec.paths.filter((path) => path === '/pages/ext-compat-frame.html')
 				.length === 2,
 		JSON.stringify(exec),
+	);
+	// it answers once each document ran it, as Chrome's does: a frame's
+	// isolated or USER_SCRIPT world is no document of its own to wait for
+	// (the call waited out its 10 s bound for them, and askCompat's wait
+	// is no longer than that)
+	ok(
+		`${mode}: executeScript answers once its frames ran it, not at its time limit`,
+		typeof exec?.ms === 'number' && exec.ms < 5000,
+		String(exec?.ms),
 	);
 	const frames = await askCompat('frames');
 	ok(

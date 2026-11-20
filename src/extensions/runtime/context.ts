@@ -220,6 +220,13 @@ export interface Presence {
 	/** has runtime.onMessage listeners, runtime.onConnect listeners */
 	m: boolean;
 	c: boolean;
+	/**
+	 * a document's own content context, the one that runs what scripting
+	 * and tabs inject (entry.ts contentContext); its isolated and
+	 * USER_SCRIPT worlds' contexts are content contexts of the same frame
+	 * that never answer an injection
+	 */
+	x?: true;
 }
 
 export type BusMessage = Record<string, unknown> & { t: string };
@@ -233,6 +240,8 @@ export class Context {
 	lastErrorChecked = false;
 	/** a USER_SCRIPT world's: its messages go to runtime.onUserScriptMessage */
 	userScript = false;
+	/** a document's own content context, which answers injections (Presence.x) */
+	injects = false;
 	place: TabPlace = { tabId: -1, frameId: -1, tab: null };
 	/** settles once the hub said where the context is (content scripts, popups) */
 	placed: Promise<void> = natives.Promise.resolve();
@@ -342,6 +351,7 @@ export class Context {
 				has('runtime.onConnect') ||
 				has('runtime.onConnectExternal') ||
 				has('runtime.onUserScriptConnect'),
+			...(this.injects ? { x: true as const } : {}),
 		};
 	}
 

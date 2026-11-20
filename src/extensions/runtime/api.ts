@@ -599,9 +599,13 @@ async function inject(
 			? ((await ctx.worker('css', 'prepare', source)) as string)
 			: '';
 	const frames = target.frameIds ?? (target.allFrames ? null : [0]);
+	// one answer per document: its own context's (a world's context in the
+	// same frame runs nothing injected, and waiting for it held every call
+	// to the 10 s bound)
 	const expected = [...ctx.peers.values()].filter(
 		(presence) =>
 			presence.kind === 'content' &&
+			presence.x === true &&
 			presence.tabId === target.tabId &&
 			(frames === null || frames.includes(presence.frameId)),
 	);

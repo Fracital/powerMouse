@@ -490,6 +490,7 @@ function contentContext(given: RuntimePayload, ext: ShippedExtension) {
 		given.url,
 		given.tokens[ext.id],
 	);
+	ctx.injects = true;
 	receiveMessages(ctx);
 	ctx.placed = ctx
 		.hub('hello', {
