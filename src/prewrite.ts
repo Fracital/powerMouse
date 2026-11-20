@@ -44,10 +44,12 @@ export const scriptPreamble = (source: string) =>
 
 /**
  * A script's rewrite as the table carries it: `rest`, the rewrite with its
- * preamble (a classic script's) and its holder statement (if `holder`) cut
- * out at `at`; or the whole rewrite, when `at` is -1
+ * preamble (a classic script's) and its holder statement (if `holder`, the
+ * text's key, which the worker had: hashed in the page, YouTube's 780 KB
+ * inline script took some 5 ms) cut out at `at`; or the whole rewrite, when
+ * `at` is -1
  */
-export type PackedRewrite = [rest: string, at: number, holder: 0 | 1];
+export type PackedRewrite = [rest: string, at: number, holder: 0 | string];
 
 /** what the worker made of a document's inline scripts and styles */
 export interface Prewritten {
@@ -105,7 +107,7 @@ function unpack(
 	return (
 		rest.slice(0, at) +
 		(kind === 'c' && preamble ? scriptPreamble(source) : '') +
-		(holder ? (holderStatement(access, sourceKey(source), source) ?? '') : '') +
+		(holder ? (holderStatement(access, holder, source) ?? '') : '') +
 		rest.slice(at)
 	);
 }
@@ -122,7 +124,8 @@ export function packRewrite(
 ): PackedRewrite {
 	const whole: PackedRewrite = [output, -1, 0];
 	const preamble = kind === 'c' ? scriptPreamble(source) : '';
-	const holder = holderStatement(access, sourceKey(source), source) ?? '';
+	const key = sourceKey(source);
+	const holder = holderStatement(access, key, source) ?? '';
 	const at = preamble
 		? output.indexOf(preamble)
 		: holder
@@ -134,7 +137,7 @@ export function packRewrite(
 		output.slice(0, at) +
 			output.slice(at + preamble.length + (held ? holder.length : 0)),
 		at,
-		held ? 1 : 0,
+		held ? key : 0,
 	];
 	return unpack(kind, source, packed, access) === output ? packed : whole;
 }
