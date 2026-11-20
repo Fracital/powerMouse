@@ -138,7 +138,8 @@ jobs:
         if: always()
         run: rm -rf "$RUNNER_TEMP/terp-ssh"
 
-  # From GitHub's side, as a visitor sees it (Cloudflare to terp); the gate
+  # From GitHub's side, as a visitor sees it (the edges to terp, no CDN in
+  # front: Cloudflare's proxy is off); the gate
   # already health-checked :8081 on terp itself.
   verify:
     needs: deploy

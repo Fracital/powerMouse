@@ -97,18 +97,19 @@ on every save (use a `git worktree`).
   in a bundle, and the production build fails on any listed name left in
   one. Take such a name off the list. A test reads no listed member either.
 - **The inject's rewriter is a library of its own, often in a detached
-  realm.** meriyah, escodegen, css-tree and tldts reach the inject only
-  through `src/inject/rewriter.ts` (light code reaches modifyJS/modifyCSS
-  through `src/rewriters.ts`). A proxied top evaluates the library in a
-  removed about:blank frame and its frames share that copy
-  (`src/inject/dom/rewriterRealm.ts`). The parsers and the printer are in
-  no bundle: they are `dist/rewriterLib.js` (`src/rewriterLib.ts`), which a
-  top's shell loads before the bundle, and what the bundles carry is the
-  light library (`src/rewriterLight.ts`), which is handed that file's text
-  when a call needs it. Never import meriyah, escodegen, css-tree, tldts,
-  `rewriteJS.ts`, `rewriteCSS.ts` or `suffix.ts` from anything an inject
-  bundle reaches (the light library asks the wasm modules through
-  `src/wasm/`): `frame-cost` fails on the size.
+  realm.** The rewriter is the wasm core module (`core.wasm`, rust/rwjs);
+  no JavaScript parser or printer ships (meriyah, escodegen and css-tree
+  went in 370dc04a). The inject reaches it only through the light library
+  (`src/rewriterLight.ts`, the glue of the wasm modules for scripts,
+  stylesheets and the public suffix list) and `src/inject/rewriter.ts`
+  (light code reaches modifyJS/modifyCSS through `src/rewriters.ts`). A
+  proxied top evaluates the library in a removed about:blank frame and its
+  frames share that copy (`src/inject/dom/rewriterRealm.ts`). Its text is
+  `dist/rewriterLib.js` (built from `src/rewriterLightDocument.ts`), which a
+  top's shell loads before the bundle. Never import tldts, `rewriteJS.ts`,
+  `rewriteCSS.ts` or `suffix.ts` from anything an inject bundle reaches
+  (the light library asks the wasm modules through `src/wasm/`):
+  `frame-cost` fails on the size.
   Never fetch the file with a synchronous request from a document that has
   a top to take it from: the browser reports that request to the page. A
   removed frame's realm still runs code, but its DOM globals answer
@@ -117,7 +118,7 @@ on every save (use a `git worktree`).
   the library reads from the window must be taken in `src/libGlobals.ts`.
   Only strings, numbers and booleans cross; the library never calls out.
   The one exception is a compiled `WebAssembly.Module` the controller hands
-  a proxied top (`rewriter: 'wasm'`, `adopt` in `src/rewriterLib.ts`): the
+  a proxied top (`adopt` in `src/rewriterLight.ts`): the
   library reads no property of it and only passes it to its own realm's
   `WebAssembly.Instance`, which answers from the module's internal slots
   whatever realm made it. The controller leaves it on its own window
@@ -363,8 +364,9 @@ on every save (use a `git worktree`).
   256 KiB like Chrome; the npm package's 16 KiB resets YouTube with
   `PROTOCOL_ERROR`). `build.sh` builds it in a container, `publish.sh` pushes
   the result to the `dist` branches of `Fracital/epoxy-tls` and
-  `Fracital/EpoxyTransport`, and `package.json` pins that commit by
-  `git+https://` URL. Read `deploy/epoxy/README.md` before touching any of it.
+  `Fracital/EpoxyTransport`, and `package.json` pins that commit as a
+  `github:Fracital/EpoxyTransport#<commit>` devDependency (hosts install the
+  same spec, README "Embedding"). Read `deploy/epoxy/README.md` before touching any of it.
   Real ECH needs `ech_dns` (a DoH endpoint) in epoxy's options; the demo
   sets it, a host that does not gets GREASE ECH only.
 - A wisp server bounds the WebSocket messages it accepts and closes the
@@ -522,8 +524,9 @@ vhost and the edge server names are managed by abulxt's ansible
 `.github/workflows/uptime.yml` checks production every ten minutes (and on
 manual dispatch) with `.github/scripts/uptime.mjs`, which reads public URLs
 only: https://stomp.fracit.al/ (2xx, first byte within 5 s, and a
-`cf-cache-status` that is not STALE, since Cloudflare keeps serving its copy
-while terp is down; a 52x or 504 is the edge failing to reach terp),
+`cf-cache-status` that is not STALE, a check from when Cloudflare fronted the
+site, which never fires now that its proxy is off for every Fracital host;
+a 52x or 504 is the edge failing to reach terp),
 `/api/status` with a cache-busting query, and https://holywisp.fracit.al/
 answering 200. A failing round is measured again 30 s later before it counts.
 While production is down it keeps one open issue labelled `outage` (opened,

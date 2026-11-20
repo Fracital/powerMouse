@@ -67,9 +67,6 @@
 //                       request whose Host (or X-Forwarded-Port) names one
 //                       of them is a slot's. Unset: a page that came through
 //                       a front has no pool
-//   STOMP_REWRITER      `wasm` runs the Rust rewriters where a thread holds
-//                       them (the controller's `rewriter` option); the
-//                       JavaScript rewriters otherwise
 //   STOMP_ADBLOCK       `0` turns off the built-in content blocker, which
 //                       is on by default (the controller's `adblock` option,
 //                       docs/adblock.md); a JSON object is that option
@@ -288,7 +285,6 @@ const pageConfig = {
 			? null
 			: process.env.STOMP_ECH_DNS || 'https://cloudflare-dns.com/dns-query',
 	...(process.env.STOMP_TEST_TRANSPORT === '1' && { testTransport: true }),
-	...(process.env.STOMP_REWRITER === 'wasm' && { rewriter: 'wasm' }),
 	// the protective shields are on by default for every site (the demo seeds a
 	// '*' default entry, src/controller/shields.ts DEFAULT_SHIELDS). The native-
 	// parity test suites run the demo with STOMP_SHIELDS_DEFAULTS=0, so a no-

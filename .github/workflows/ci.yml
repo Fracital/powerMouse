@@ -97,6 +97,13 @@ jobs:
         if: steps.head.outputs.superseded != 'true'
         run: node scripts/check-reproducible.mjs
 
+      # the published declarations compile in a consumer under
+      # moduleResolution nodenext, node16 and bundler (after the reproducible
+      # build, which empties dist/)
+      - name: Declarations
+        if: steps.head.outputs.superseded != 'true'
+        run: npx tsc -p tsconfig.types.json && node scripts/types-extensions.mjs && npm run check:types
+
       # the rewriter on the minified shapes real sites broke it with
       # (test/corpus/sample; the rewrite-corpus suite runs the same check)
       - name: Rewrite corpus sample

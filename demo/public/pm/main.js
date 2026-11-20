@@ -93,7 +93,7 @@ const HTTP3 = new URLSearchParams(location.search).has('http3')
 	? new URLSearchParams(location.search).get('http3') !== '0'
 	: CFG.http3 !== false;
 // The site pool (ControllerInit.sitePool, docs/site-pool.md): the server
-// answers on a few more ports (STOMP_SITE_POOL, five by default), and the
+// answers on more ports (STOMP_SITE_POOL, none by default), and the
 // controller shows every proxied site from one of them, so a page and a
 // frame of another site in it get a process each; ?nopool leaves it out for
 // a visit. The slots are ports of the proxy's host: this page's in the same
@@ -107,13 +107,6 @@ const SITE_POOL = (() => {
 	const proxy = ISOLATED ? new URL(PROXY_ORIGIN) : location;
 	return ports.map((port) => `${proxy.protocol}//${proxy.hostname}:${port}`);
 })();
-// the Rust rewriters (docs/rust-plan.md): STOMP_REWRITER=wasm on the server
-// or ?wasm on this page; ?js keeps the JavaScript ones for one load
-const REWRITER = new URLSearchParams(location.search).has('js')
-	? 'js'
-	: CFG.rewriter === 'wasm' || new URLSearchParams(location.search).has('wasm')
-		? 'wasm'
-		: '';
 // the built-in content blocker (docs/adblock.md), on unless something says
 // off. In order: ?noadblock and ?adblock on this page (one load), the toggle
 // beside the transport select (remembered), STOMP_ADBLOCK=0 on the server.
@@ -1062,7 +1055,6 @@ async function startController(name) {
 			serviceWorkers: SERVICE_WORKERS,
 			serviceWorkerTimeout: SERVICE_WORKER_TIMEOUT,
 			serviceWorkerEventDelay: SERVICE_WORKER_EVENT_DELAY,
-			...(REWRITER && { rewriter: REWRITER }),
 			...(SITE_POOL && { sitePool: { origins: SITE_POOL } }),
 			...ADBLOCK,
 			...controllerCallbacks,
@@ -1095,7 +1087,6 @@ async function startController(name) {
 			serviceWorkers: SERVICE_WORKERS,
 			serviceWorkerTimeout: SERVICE_WORKER_TIMEOUT,
 			serviceWorkerEventDelay: SERVICE_WORKER_EVENT_DELAY,
-			...(REWRITER && { rewriter: REWRITER }),
 			...ADBLOCK,
 			...controllerCallbacks,
 		});

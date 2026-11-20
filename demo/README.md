@@ -35,10 +35,9 @@ Environment variables:
 | `HOLYWISP_LOG_LEVEL`      | `error`        | Log level of the built-in holyWisp (`debug` shows every stream and why it closed), printed on stdout                                                                                                                                                                                                                                                                      |
 | `STOMP_HTTP3`             | on             | Set to `0` to turn off HTTP/3 for the epoxy transport (`?http3=0` turns it off for one visit, `?http3` on); docs/http3.md has what it costs and why it is on                                                                                                                                                                                                              |
 | `STOMP_WISP_WEBTRANSPORT` | on             | Set to `0` to keep Wisp on the WebSocket; else epoxy tries the relay's WebTransport session first (docs/webtransport.md, "Wisp over WebTransport"): a URL names it (a public certificate) or, ending in `.json`, its document; the built-in holyWisp's is asked when it serves one (`?wt=0` / `?wt` decides for a visit); About's Transport row says which Wisp rides now |
-| `STOMP_REWRITER`          | unset          | `wasm` runs the Rust rewriters where a thread holds them (the controller's `rewriter` option; `?wasm` does one visit, `?js` the JavaScript ones)                                                                                                                                                                                                                          |
 | `STOMP_ADBLOCK`           | on             | Set to `0` to turn off the content blocker (docs/adblock.md), a JSON object is its `adblock` option; `?noadblock` and `?adblock` do one visit, the toggle is kept                                                                                                                                                                                                         |
 | `STOMP_ECH_DNS`           | Cloudflare DoH | DNS-over-HTTPS endpoint epoxy asks for HTTPS records to offer real Encrypted Client Hello (docs/fingerprint.md), and HTTP/3 asks for a name's first request (docs/http3.md); `off` sends GREASE ECH only (`?noech` does one visit)                                                                                                                                        |
-| `STOMP_SITE_POOL`         | unset          | More ports to answer on, a list or a number of free ones to take: the slots of the site pool (see Site pool; `?nopool` on the page leaves it out for a visit)                                                                                                                                                                                                             |
+| `STOMP_SITE_POOL`         | `0`            | More ports to answer on, a list or a number of free ones to take: the slots of the site pool (see Site pool; `0` or `off` for none, `?nopool` on the page leaves it out for a visit)                                                                                                                                                                                      |
 | `STOMP_TEST_TRANSPORT`    | unset          | Set to `1` to use `/test/mixed-transport.mjs` (epoxy that reaches the suites' fixture hosts: mixed-content's, and the names under a private suffix); test runs only                                                                                                                                                                                                       |
 
 They can also live in a `.env` file next to `package.json` (not committed);
@@ -113,9 +112,11 @@ holyWisp is started.
 `demo/public/pm/main.js`, in order:
 
 1. **Register the service worker** at `/stomp/serviceWorker.js` with scope
-   `/stomp/` and wait until it is `activated`. The landing page itself is
-   outside that scope, which is fine: the controller only needs the
-   `ServiceWorker` object to talk to.
+   `/stomp/` and `updateViaCache: 'none'`, and hand the registration to the
+   controller at once: the controller waits for the worker to activate
+   before its first handshake, so the transport comes up while a first
+   visit's worker installs. The landing page itself is outside that scope,
+   which is fine: the controller only needs the registration to talk to.
 2. **Load a transport.** The choice is remembered in `localStorage`
    (`stomp-demo:transport`). Transports are plain ES modules served from
    `/epoxy/` and `/libcurl/`, imported on demand. The epoxy descriptor has
@@ -341,17 +342,25 @@ Chrome gives a token and a refusal, as Chrome does under DevTools'
 
 ## Transports
 
-Both bundled transports had a defect against `wisp-js` 0.5, the demo's wisp
-server before holyWisp (measured with and without STomp in the path, see the
-changelog's known limitations):
+The transport switch has epoxy (the default) and libcurl, remembered in
+`localStorage` as `stomp-demo:transport`.
 
-- **epoxy** (default): HTTP is fast and reliable; incoming WebSocket frames
-  stop after the first round trip.
-- **libcurl**: WebSockets work; HTTP stops answering after roughly 160
-  requests even with the enlarged connection pool the demo passes
-  (`connections: [500, 400, 200]`).
+- epoxy is the build `deploy/epoxy/` makes, not the npm package: HTTP/1.1,
+  HTTP/2 and HTTP/3, Chrome's TLS and HTTP/2 fingerprint, and WebSocket
+  frames both ways. The npm package held each WebSocket frame the page
+  wrote in the wisp stream until the next write, so incoming frames seemed
+  to stop after the first round trip; the build flushes every frame
+  (epoxy-tls patch 0061, the `websocket-frames` suite runs both
+  transports in both modes).
+- libcurl is `@mercuryworkshop/libcurl-transport` from npm. Against
+  `wisp-js` 0.5.2 its HTTP stopped answering after roughly 70 requests
+  with its default pool and roughly 160 with the larger one the demo passes
+  (`connections: [500, 400, 200]`), and it answers no WebSocket ping (the
+  changelog's known limitations). It has no UDP, so no HTTP/3, WebRTC or
+  WebTransport, and Wisp always rides the WebSocket.
 
-Pick epoxy for browsing, libcurl when you need sockets.
+Use epoxy. libcurl is there to tell a transport bug from a STomp one: a site
+that fails the same way on both fails in STomp.
 
 ## Files
 
@@ -398,26 +407,31 @@ What the isolated mode consists of:
   module (which must also live on the proxy origin) and runs the real
   controller. Its `<meta name="stomp-allowed-origins">` lists the host
   origins allowed to drive it, space separated; left empty, it trusts the
-  page that embedded it (taken from the referrer once, at load). Set it for
-  a real deployment.
-- Proxied frames get
-  `sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock"`.
+  page that embedded it. Set it for a real deployment. Either way the frame
+  reads the host's origin from `document.referrer` once, at load, so the
+  host page must send its origin as the referrer (the default
+  `strict-origin-when-cross-origin` does; `no-referrer` and `same-origin`
+  leave the frame with no host, and it does not start the controller).
+- Proxied frames get `DEFAULT_SANDBOX`:
+  `sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock allow-presentation allow-orientation-lock allow-storage-access-by-user-activation"`
+  (the same list in the same-origin mode).
   `allow-same-origin` is required so the proxy origin's service worker
   controls the frame; `allow-top-navigation` is deliberately absent so
   `top.location = ...` throws instead of navigating the host.
-- The service worker adds `Content-Security-Policy: frame-ancestors <host>`
-  to every proxied document, so only the host application can frame the
-  proxy origin.
+- The service worker sends every proxied document
+  `Content-Security-Policy: frame-ancestors 'self' <host>` (with the site
+  pool's origins when there is one), so only the host application and the
+  proxy origin's own pages can frame the proxy origin.
 - Navigation controls (back, forward, reload) and the address bar's URL and
   title are relayed through the controller frame, which is same-origin with
   the proxied pages; the host page never touches them directly.
 
 ## Site pool
 
-On by default. The server answers on five more free ports
-(`STOMP_SITE_POOL`: a number of free ports, or a list, `8081,8082`; `0` or
-`off` for none), and the controller shows every proxied site from one of
-them (`init.sitePool`, docs/site-pool.md): the browser gives each port's
+Off by default. With `STOMP_SITE_POOL` set the server answers on more
+ports (a number of free ports to take, `5`, or a list, `8081,8082`; `0`,
+the default, or `off` for none), and the controller shows every proxied
+site from one of them (`init.sitePool`, docs/site-pool.md): the browser gives each port's
 origin a process of its own, so a page and a frame of another site in it
 are apart as natively. The `Mode` badge says so, and `?nopool` leaves the
 pool out for a visit. The controller embeds a hidden agent frame on each
@@ -426,9 +440,9 @@ frames on the pool's origins, so the address bar's URL and title come from
 the pages' reports and Back and Forward go through the agents. Both pages
 use it, the same-origin one and isolation mode's.
 
-Behind a front (Cloudflare, OpenResty) the slots are the front's ports:
-`STOMP_SITE_POOL_PUBLIC` lists them (`2053,2083,2087,2096,8443`), the
-front forwards each to the server and says which one with
+Behind a front (a reverse proxy or a CDN) the slots are the front's
+ports: `STOMP_SITE_POOL_PUBLIC` lists them (`8443,8444,8445`), the front
+forwards each to the server and says which one with
 `X-Forwarded-Port`, and everything those ports answer must keep the
 server's `Origin-Agent-Cluster: ?1`. A page that came through a front with
 no `STOMP_SITE_POOL_PUBLIC` has no pool; a slot the browser cannot reach
@@ -476,17 +490,15 @@ measurements.
 
 https://stomp.fracit.al is this directory, deployed by
 `.github/workflows/deploy.yml` on every push to `master`: the workflow builds,
-then asks terp (the Fracital VPS) over SSH to run `deploy/terp-deploy-gate.sh`
-for that commit. The gate clones and builds in `/opt/stomp/stage`, swaps
-`/opt/stomp/repo` to it, restarts the pm2 app `stomp` on :8081 and rolls back
-if `/api/status` does not come up. terp's OpenResty routes the `stomp.fracit.al`
-host to that port (the vhost is in abulxt's `fracital_origin` ansible role,
-`fracital_origin_apps`); the abulxt edge fleet terminates TLS and relays to
-terp, and Cloudflare fronts the edges with a proxied CNAME. terp's
-`/opt/stomp/repo/.env` holds `PORT` and `STOMP_WISP_URL`, which points the
-transports at the edges' keyed wisp relay (`wss://holywisp.fracit.al/pipe/<key>/`,
-served by each edge's own holyWisp instance), so the demo server's built-in
-wisp is off there.
+then asks the server over SSH to run the deploy gate
+(`deploy/terp-deploy-gate.sh`) for that commit. The gate clones and builds a
+staging checkout, swaps the live checkout to it, restarts the Node process
+and rolls back if `/api/status` does not come up. A reverse proxy in front
+terminates TLS and forwards the host name to the server's port, with no CDN
+in between. The server's `.env` holds `PORT` and `STOMP_WISP_URL`, which
+points the transports at the holyWisp relay behind
+`wss://holywisp.fracit.al/`, so the demo server's built-in wisp is off
+there.
 
 For your own deployment:
 
@@ -494,9 +506,9 @@ For your own deployment:
   proxy origin) for `dist/`, the transports, wisp and the proxied content.
   One server can serve both; the demo server does. Set `STOMP_PROXY_ORIGIN`
   to the second one and fill in `stomp-allowed-origins` in
-  `controllerFrame.html`. Cloudflare's universal certificate covers one
-  subdomain level, so prefer `name-proxy.example.com` over
-  `proxy.name.example.com`.
+  `controllerFrame.html`. A wildcard certificate covers one subdomain
+  level, so `name-proxy.example.com` is covered by the same certificate as
+  `name.example.com` where `proxy.name.example.com` is not.
 - For cross-origin isolation, the page and (with two hostnames) the proxy
   origin's files must keep the three headers above through whatever is in
   front of the server; a proxy or CDN that drops them leaves the page not
@@ -524,7 +536,6 @@ For your own deployment:
   reload revalidates only the page, the service worker's script and the
   images the stylesheet names. The page itself stays `no-cache`: it is what
   names the current hashes. The plain names keep working, `no-cache`.
-  The demo also registers with `updateViaCache: 'none'`. Behind Cloudflare,
-  check the zone's Browser Cache TTL: it overrides origin headers unless a
-  cache rule for the host says "respect origin" (stomp.fracit.al and
-  holywisp.fracit.al have one).
+  The demo also registers with `updateViaCache: 'none'`. A CDN in front
+  may apply a browser cache lifetime of its own over the origin's headers:
+  set it to respect the origin's `Cache-Control`.
