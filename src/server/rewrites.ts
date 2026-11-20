@@ -160,6 +160,7 @@ import {
 	OPAQUE_HEADER,
 	OPAQUE_MARKER,
 	PREFLIGHT_HEADER,
+	PROTOCOL_MARKER,
 	RESPONSE_TYPE_HEADER,
 	REVALIDATED_MARKER,
 	SEALER_ROUTE,
@@ -180,6 +181,11 @@ import {
 	REQUEST_QUEUE,
 	SEEN_URGENCY,
 } from '../transport/requestQueue';
+import {
+	factsOf,
+	notingFacts,
+	type ResponseFacts,
+} from '../transport/responseFacts';
 import { fragmentOf, queryOf, withQuery } from '../urlShape';
 import { BUILD, REWRITE_GENERATION } from '../version';
 import { contextText, isLinkRoute, LINK_SEGMENT, linkRoute } from '../visited';
@@ -2886,7 +2892,10 @@ function genericForward(
 			cache: serverRequest.cache,
 			pageLanguage,
 		};
+		// what the transport said of the origin's last answer (responseFacts.ts)
+		let upstreamFacts: ResponseFacts | null = null;
 		const fetchUpstream = (headers: Headers) => {
+			upstreamFacts = null;
 			const id = queueName();
 			const image = !shape.navigation && shape.destination === 'image';
 			const raise = () => requeue(id, 'raise');
@@ -2907,19 +2916,24 @@ function genericForward(
 			if (first) urgency = Math.min(urgency, FIRST_IMAGES_URGENCY);
 			if (image && seenLately(page)) urgency = Math.min(urgency, SEEN_URGENCY);
 			const upstream = upload.then((body) =>
-				rewriter.bare.fetch(url.toString(), {
-					method: serverRequest.method,
-					redirect: 'manual',
-					// redirect: serverRequest.redirect,
-					body,
-					headers: queued(
-						partitioned(chromeOrderedHeaders(headers, shape)),
-						urgency,
-						credentials,
-						id,
-						image,
-					),
-				}),
+				rewriter.bare
+					.fetch(url.toString(), {
+						method: serverRequest.method,
+						redirect: 'manual',
+						// redirect: serverRequest.redirect,
+						body,
+						headers: queued(
+							partitioned(chromeOrderedHeaders(headers, shape)),
+							urgency,
+							credentials,
+							id,
+							image,
+						),
+					})
+					.then((response) => {
+						upstreamFacts = factsOf(response.rawHeaders) ?? null;
+						return response;
+					}),
 			);
 			// a start's list downloads wait for the first navigation's answer
 			if (shape.navigation) navigationUpstream(upstream);
@@ -4358,6 +4372,15 @@ function genericForward(
 			responseHeaders.append('server-timing', REVALIDATED_MARKER);
 		if (memory && !redirect)
 			responseHeaders.append('server-timing', MEMORY_MARKER);
+		// the protocol the origin's answer came over, which the browser has
+		// as none for the worker's answer (PROTOCOL_MARKER; the cast: the
+		// compiler does not follow fetchUpstream's assignment)
+		const answerFacts = upstreamFacts as ResponseFacts | null;
+		if (!cached && !revalidated && !redirect && answerFacts?.protocol)
+			responseHeaders.append(
+				'server-timing',
+				`${PROTOCOL_MARKER};desc="${answerFacts.protocol}"`,
+			);
 		// an XMLHttpRequest's entry names its initiator (XHR_MARKER)
 		if (requestTypeOf(serverRequest) === 'XMLHttpRequest endpoint' && !redirect)
 			responseHeaders.append('server-timing', XHR_MARKER);
@@ -5985,7 +6008,8 @@ export function registerRewrites(
 		directory: init.directory,
 		errorPage: init.errorPage,
 		names: init.names,
-		bare: new BareCompatibleClient(transport),
+		// (what the transport says of each answer is noted: responseFacts.ts)
+		bare: new BareCompatibleClient(notingFacts(transport)),
 	};
 
 	// binary:set is a srcset candidate (routeImageSet), loaded the same way.

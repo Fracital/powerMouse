@@ -87,13 +87,26 @@ const nginxCheck = async ({ module, wisp: wispUrl }) => {
 			const node = doc?.querySelector(selector);
 			return !!node && !node.classList.contains('hidden');
 		};
+		// the protocol resource timing names for the page's check (its XHR to
+		// /test), which the frame reads as natively
+		const protocol = () =>
+			element.contentWindow.performance
+				.getEntriesByType('resource')
+				.findLast((entry) => new URL(entry.name).pathname === '/test')
+				?.nextHopProtocol;
 		if (shown('.quic-support__text_success'))
-			return { verdict: 'h3', loaded, at: Math.round(performance.now() - t0) };
+			return {
+				verdict: 'h3',
+				loaded,
+				at: Math.round(performance.now() - t0),
+				protocol: protocol(),
+			};
 		if (shown('.quic-support__text_fail'))
 			return {
 				verdict: 'not h3',
 				loaded,
 				at: Math.round(performance.now() - t0),
+				protocol: protocol(),
 			};
 		if (performance.now() > deadline)
 			return { verdict: 'no answer', loaded, title: doc?.title };
@@ -111,6 +124,11 @@ const nginxCheck = async ({ module, wisp: wispUrl }) => {
 		result.verdict === 'h3',
 		JSON.stringify(result),
 	);
+	ok(
+		"and the check's resource timing entry names the protocol it came over, h3",
+		result.protocol === 'h3',
+		JSON.stringify(result),
+	);
 	await close();
 }
 
@@ -122,6 +140,11 @@ const nginxCheck = async ({ module, wisp: wispUrl }) => {
 	ok(
 		'through a wisp server that refuses UDP, quic.nginx.org loads and reports not h3',
 		result.verdict === 'not h3',
+		JSON.stringify(result),
+	);
+	ok(
+		"and the check's resource timing entry names h2, as it came",
+		result.protocol === 'h2',
 		JSON.stringify(result),
 	);
 	// the page's check fires 3 s after load; one more round trip after that
