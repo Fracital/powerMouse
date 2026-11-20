@@ -96,6 +96,14 @@ on every save (use a `git worktree`).
   generated script text (`${names.client}.takeNamedBase()`), reads nothing
   in a bundle, and the production build fails on any listed name left in
   one. Take such a name off the list. A test reads no listed member either.
+- **A document bundle reads some property names through a variable.**
+  After esbuild, build.js `poolNames` writes each `a.prototype` (and each
+  read of the other names `POOLED_NAMES` lists) of `injectDocument.js` and
+  `injectDocumentFull.js` as `a[v]`, `v` a variable its IIFE declares
+  first, which no identifier of the bundle names; the source map moves
+  with the text. The read is the same read. A check of the built text
+  finds `[v]` there, not `.prototype`, and a function of the bundle must
+  never be handed to another realm as its source text, which names `v`.
 - **The inject's rewriter is a library of its own, often in a detached
   realm.** The rewriter is the wasm core module (`core.wasm`, rust/rwjs);
   no JavaScript parser or printer ships (meriyah, escodegen and css-tree

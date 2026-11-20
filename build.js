@@ -1490,6 +1490,232 @@ const swPartsHolder = {
 	},
 };
 
+/**
+ * The property names a document bundle reads through a variable of its
+ * IIFE (poolNames): minified, it wrote `.prototype` some 1,040 times, 10
+ * bytes each, nearly all where hooks are installed as a frame starts, and
+ * `a[pn]` is 4. A computed read of the same string is the same read (the
+ * same getter, `this`, assignment, delete and optional chain).
+ */
+const POOLED_NAMES = ['prototype'];
+const NAME_CHARACTERS =
+	'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_$';
+const RESERVED_SHORT = new Set(['do', 'if', 'in']);
+const VLQ = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+/** a source map's mappings as absolute values: per line, its segments */
+function decodeMappings(mappings) {
+	const state = [0, 0, 0, 0, 0];
+	return mappings.split(';').map((line) => {
+		state[0] = 0;
+		return (line ? line.split(',') : []).map((text) => {
+			const segment = [];
+			let value = 0;
+			let shift = 0;
+			for (const character of text) {
+				const digit = VLQ.indexOf(character);
+				value += (digit & 31) * 2 ** shift;
+				if (digit & 32) {
+					shift += 5;
+					continue;
+				}
+				const index = segment.length;
+				state[index] += value % 2 ? -Math.floor(value / 2) : value / 2;
+				segment.push(state[index]);
+				value = 0;
+				shift = 0;
+			}
+			return segment;
+		});
+	});
+}
+
+/** decodeMappings's lines as a source map's mappings */
+function encodeMappings(lines) {
+	const state = [0, 0, 0, 0, 0];
+	return lines
+		.map((segments) => {
+			state[0] = 0;
+			return segments
+				.map((segment) =>
+					segment
+						.map((value, index) => {
+							const delta = value - state[index];
+							state[index] = value;
+							let rest = delta < 0 ? -delta * 2 + 1 : delta * 2;
+							let text = '';
+							do {
+								const digit = rest % 32;
+								rest = Math.floor(rest / 32);
+								text += VLQ[digit + (rest ? 32 : 0)];
+							} while (rest);
+							return text;
+						})
+						.join(''),
+				)
+				.join(',');
+		})
+		.join(';');
+}
+
+/**
+ * A minified IIFE bundle's `text` with every `.name` of POOLED_NAMES read
+ * as `[v]`, `v` a variable its IIFE declares first that no identifier of
+ * the bundle names (so nothing shadows it, and it shadows nothing), and its
+ * source map's columns moved with the text
+ */
+function poolNames(file, text, map) {
+	const source = ts.createSourceFile(
+		file,
+		text,
+		ts.ScriptTarget.Latest,
+		true,
+		ts.ScriptKind.JS,
+	);
+	const taken = new Set();
+	const reads = [];
+	const visit = (node) => {
+		if (ts.isIdentifier(node)) taken.add(node.text);
+		else if (
+			ts.isPropertyAccessExpression(node) &&
+			ts.isIdentifier(node.name) &&
+			POOLED_NAMES.includes(node.name.text)
+		)
+			reads.push(node);
+		ts.forEachChild(node, visit);
+	};
+	visit(source);
+	if (!reads.length) return { text, map };
+	// the IIFE: the outermost function around every read
+	const outermost = (node) => {
+		let found = null;
+		for (let at = node.parent; at; at = at.parent)
+			if (ts.isFunctionLike(at)) found = at;
+		return found;
+	};
+	const iife = outermost(reads[0]);
+	if (
+		!iife ||
+		!(ts.isArrowFunction(iife) || ts.isFunctionExpression(iife)) ||
+		!ts.isBlock(iife.body) ||
+		reads.some((read) => outermost(read) !== iife)
+	)
+		throw new Error(`build: ${file} reads ${POOLED_NAMES} outside its IIFE`);
+	const free = [];
+	for (const first of NAME_CHARACTERS)
+		for (const second of ['', ...NAME_CHARACTERS, ...'0123456789']) {
+			const name = first + second;
+			if (!taken.has(name) && !RESERVED_SHORT.has(name)) free.push(name);
+		}
+	const variables = new Map(POOLED_NAMES.map((name, at) => [name, free[at]]));
+	// after the IIFE's directives
+	let declareAt = iife.body.getStart(source) + 1;
+	for (const statement of iife.body.statements) {
+		if (
+			!ts.isExpressionStatement(statement) ||
+			!ts.isStringLiteral(statement.expression)
+		)
+			break;
+		declareAt = statement.end;
+	}
+	const edits = [
+		{
+			at: declareAt,
+			length: 0,
+			text: `var ${[...variables].map(([name, variable]) => `${variable}=${JSON.stringify(name)}`).join(',')};`,
+		},
+	];
+	for (const read of reads) {
+		const start = read.name.getStart(source);
+		const dot = text.lastIndexOf('.', start);
+		if (dot < read.expression.end || text.slice(dot + 1, start).trim())
+			throw new Error(`build: ${file}: no dot before the name at ${start}`);
+		// (`a?.name` keeps its `?.`)
+		const from = read.questionDotToken ? dot + 1 : dot;
+		edits.push({
+			at: from,
+			length: read.name.end - from,
+			text: `[${variables.get(read.name.text)}]`,
+		});
+	}
+	edits.sort((a, b) => a.at - b.at);
+	let out = '';
+	let last = 0;
+	for (const edit of edits) {
+		out += text.slice(last, edit.at) + edit.text;
+		last = edit.at + edit.length;
+	}
+	out += text.slice(last);
+	if (map === undefined) return { text: out, map };
+	// the edits by line and column, to move the map's generated columns
+	const byLine = new Map();
+	for (const edit of edits) {
+		const { line, character } = source.getLineAndCharacterOfPosition(edit.at);
+		if (!byLine.has(line)) byLine.set(line, []);
+		byLine.get(line).push({ ...edit, column: character });
+	}
+	const parsed = JSON.parse(map);
+	const lines = decodeMappings(parsed.mappings);
+	for (const [line, lineEdits] of byLine) {
+		const segments = lines[line] ?? [];
+		let next = 0;
+		let moved = 0;
+		for (const segment of segments) {
+			while (
+				next < lineEdits.length &&
+				lineEdits[next].column + lineEdits[next].length <= segment[0]
+			) {
+				moved += lineEdits[next].text.length - lineEdits[next].length;
+				next++;
+			}
+			// (one inside a replaced read: at its start)
+			segment[0] =
+				next < lineEdits.length && lineEdits[next].column < segment[0]
+					? lineEdits[next].column + moved
+					: segment[0] + moved;
+		}
+	}
+	parsed.mappings = encodeMappings(lines);
+	return { text: out, map: JSON.stringify(parsed) };
+}
+
+/**
+ * A document bundle's build writes its files itself, the script through
+ * poolNames (not under the watch, which does not minify)
+ *
+ * @type {import('esbuild').Plugin}
+ */
+const pooledNames = {
+	name: 'pooled-names',
+	setup(pluginBuild) {
+		const minified = pluginBuild.initialOptions.minify;
+		pluginBuild.onEnd(async (result) => {
+			if (result.errors.length || !result.outputFiles) return;
+			const maps = new Map(
+				result.outputFiles
+					.filter((file) => file.path.endsWith('.js.map'))
+					.map((file) => [file.path, file.text]),
+			);
+			for (const file of result.outputFiles) {
+				if (file.path.endsWith('.js.map')) continue;
+				await mkdir(dirname(file.path), { recursive: true });
+				if (!minified || !file.path.endsWith('.js')) {
+					await writeFile(file.path, file.contents);
+					continue;
+				}
+				const pooled = poolNames(
+					relative(resolve('.'), file.path),
+					file.text,
+					maps.get(`${file.path}.map`),
+				);
+				await writeFile(file.path, pooled.text);
+				if (pooled.map !== undefined) maps.set(`${file.path}.map`, pooled.map);
+			}
+			for (const [path, text] of maps) await writeFile(path, text);
+		});
+	},
+};
+
 /** the document bundles, built before the others (`bundles`) */
 const DOCUMENT_BUNDLES = ['injectDocument', 'injectDocumentFull'];
 /**
@@ -1533,7 +1759,8 @@ const builds = [
 		...DOCUMENT_GUARD,
 		alias: stubCrypto,
 		inject: [snapshot, domSnapshot],
-		plugins: [rewriterLib, deferredTable],
+		write: false,
+		plugins: [rewriterLib, deferredTable, pooledNames],
 		define: documentDefine,
 	},
 	{
@@ -1541,7 +1768,8 @@ const builds = [
 		format: 'iife',
 		...DOCUMENT_GUARD,
 		inject: [snapshot, domSnapshot],
-		plugins: [rewriterLib, deferredTable],
+		write: false,
+		plugins: [rewriterLib, deferredTable, pooledNames],
 		define: documentDefine,
 	},
 	{
