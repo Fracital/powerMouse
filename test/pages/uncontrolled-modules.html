@@ -7,7 +7,7 @@
 		// into, an about:blank it navigates the child of a frame of another
 		// origin (`?other=`) to, and an about:blank popup it opens. In each it
 		// runs module scripts with static imports (test/pages/um-*.js: inline
-		// and external, relative, path-absolute and absolute, a cycle, a
+		// and external, relative, path-absolute and absolute, two cycles, a
 		// directory up, a JSON module, an import map's bare specifier, a
 		// missing import) and dynamic ones, and keeps what each reported, or
 		// how it failed, in `window.__umReport`: { written, navigated, popup,
@@ -24,6 +24,7 @@
 			relative: `import { b } from './um-b.js'; self.__um('relative', b);`,
 			absolute: `import { b } from '${origin}/pages/um-b.js'; self.__um('absolute', b);`,
 			cycle: `import { both } from '/pages/um-cycle-a.js'; self.__um('cycle', both());`,
+			linked: `import { report } from '/pages/um-link-a.js'; self.__um('linked', report());`,
 			dynamic: `import('/pages/um-a.js').then((module) => self.__um('dynamic', module.a), (error) => self.__um('dynamic', error.name));`,
 		};
 		const external = {
@@ -129,6 +130,7 @@
 					`<script type="importmap">{"imports":{"um-b":"/pages/um-b.js"}}${end}`,
 					`<script type="module">import { b } from 'um-b'; import { a } from './um-a.js'; self.__um('markupInline', a + ' ' + b);${end}`,
 					`<script type="module">import { both } from './um-cycle-a.js'; self.__um('markupCycle', both());${end}`,
+					`<script type="module">import { report } from './um-link-a.js'; self.__um('markupLinked', report());${end}`,
 					`<script type="module" src="/pages/um-entry.js" onload="self.__um('markupExternalEvent', 'load')" onerror="self.__um('markupExternalEvent', 'error')">${end}`,
 					`<script type="module" src="/pages/um-missing.js" onload="self.__um('markupMissingEvent', 'load')" onerror="self.__um('markupMissingEvent', 'error')">${end}`,
 					`<script type="module" onload="self.__um('markupInlineMissingEvent', 'load')" onerror="self.__um('markupInlineMissingEvent', 'error')">import './um-not-there.js'; self.__um('markupInlineMissingRan', 'ran');${end}`,

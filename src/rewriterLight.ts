@@ -62,7 +62,13 @@ let lastApart = '';
 const kept: [key: string, text: string][] = [];
 reportKeptSources((key, text) => kept.push([key, text]));
 
-function run<T>(work: () => T, failed: T): T {
+/** the call stops for a module when this copy holds none (`needs`) */
+export function stopped(): void {
+	if (!hasRewriter()) needed = true;
+}
+
+/** `work` as a call of this copy's: what it logged, threw and stopped for is the call's */
+export function run<T>(work: () => T, failed: T): T {
 	error = '';
 	lastApart = '';
 	needed = false;

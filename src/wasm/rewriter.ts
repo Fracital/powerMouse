@@ -244,6 +244,30 @@ export function printInWasm(
 }
 
 /**
+ * The modules of an import cycle (`modules`, apart by NUL) merged into one
+ * by this thread's module (rust/rwjs/src/link.rs): `{ linked }` with the
+ * merged module and each one's facade apart by NUL, or null for modules
+ * that do not link; null when the thread holds no module or another
+ * revision's.
+ */
+export function linkInWasm(modules: string): { linked: string | null } | null {
+	if (!hasModule(REWRITER)) return null;
+	return withInstance(REWRITER, (instance) => {
+		const cross = crossingOf(modules);
+		if (!cross || !sameRevision(instance)) return null;
+		const answered = instance.call(
+			cross.out(modules),
+			// FLAG_LINK (rust/core-module/src/rewriter.rs), a literal here so
+			// that a bundle without this function keeps its flags as they were
+			2048,
+		);
+		return {
+			linked: 'output' in answered ? cross.back(answered.output) : null,
+		};
+	});
+}
+
+/**
  * What a script that cannot be rewritten is answered with: itself. The
  * browser may still parse it (and rejects it the same way when it cannot),
  * while a `throw` in its place would silently kill every script with that

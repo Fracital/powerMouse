@@ -13,7 +13,8 @@
 //!   rewrite; what it found besides the text (`marks<TAB>key`, and under
 //!   `FLAG_APART` `<TAB>map`) is asked for after it (`FLAG_META`).
 //!   `FLAG_REVISION` answers the revision of what
-//!   the module writes, for a cache of rewrites to key on.
+//!   the module writes, for a cache of rewrites to key on. `FLAG_LINK`
+//!   merges the modules of an import cycle into one (`rwjs::link`).
 //! - `jp()` and `jn()` are the output's pointer and length.
 //! - `jb() -> ptr` is the scratch the host answers an `e.j` call in: routing
 //!   stays with the host (`route(kind, ptr, len) -> len`), which writes the
@@ -68,6 +69,10 @@ const FLAG_POSITIONS: u32 = 512;
 /// output (`FLAG_META`), which carries none: code the inject rewrites,
 /// which it finds the map of by the hash V8 names the script it ran by
 const FLAG_APART: u32 = 1024;
+/// merge the modules of an import cycle into one (`rwjs::link`): the input
+/// is the modules apart by NUL, the output the merged module and each one's
+/// facade, apart by NUL, status `STATUS_PARSE` when they do not link
+const FLAG_LINK: u32 = 2048;
 
 /// statuses besides 0: the configuration or the params did not parse
 const STATUS_CONFIG: i32 = 1;
@@ -191,6 +196,15 @@ pub unsafe extern "C" fn call(ptr: *mut u8, len: usize, flags: u32) -> i32 {
 		return match rwjs::printer::print_expression(text, part) {
 			Some(printed) => {
 				state().output = printed.into_bytes();
+				0
+			}
+			None => STATUS_PARSE,
+		};
+	}
+	if flags & FLAG_LINK != 0 {
+		return match rwjs::link::link(source) {
+			Some(linked) => {
+				state().output = linked.into_bytes();
 				0
 			}
 			None => STATUS_PARSE,
