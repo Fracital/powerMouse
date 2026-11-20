@@ -249,6 +249,7 @@
 	"storage-events": 13,
 	"storage-quota": 27,
 	"storage-turns": 5,
+	"stream-credit": 70,
 	"strict-mode": 2,
 	"stringified-urls": 11,
 	"style-readback": 5,

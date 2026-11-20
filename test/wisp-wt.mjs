@@ -80,6 +80,17 @@
 // `max-streams-per-conn`: a CONNECT past it is closed with 0x49 on its
 // lane and never reaches the wisp server (`stats.refused` counts them,
 // `stats.mostOpen` the most a session had open).
+// Stream credit (0xE2, holyWisp's `stream-credit`), on sessions and the
+// WebSocket fallback alike: by default the relay passes on what the wisp
+// server does; `streamCredit = 'emulate'` offers it when the wisp server
+// does not (the npm holyWisp), keeps each TCP stream's DATA past the limit
+// its client granted until a CREDIT raises it (a CLOSE waits behind it),
+// and takes the extension out of the client's INFO and its CREDITs; false
+// takes it out of the wisp server's INFO, so the client never names it.
+// `stats` counts the INFOs that offered (`creditOffered`) and named it
+// (`creditNamed`), the connections it was emulated on (`creditEmulated`),
+// the CREDITs (`credits`), and the most the relay held back at once
+// (`creditHeldMost`, bytes).
 import { createSocket } from 'node:dgram';
 import { createServer } from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -92,6 +103,8 @@ const CLOSE = 0x04;
 const INFO = 0x05;
 const LANE = 0xe1;
 const LANES_EXTENSION = 0xe1;
+/** stream credit: the extension's id and its packet's type */
+const STREAM_CREDIT = 0xe2;
 const UDP = 0x02;
 const SERVER_STREAM = 'wisp-v2-server-stream';
 const LANE_REFUSED = 1;
@@ -173,6 +186,14 @@ export async function startWispWebTransport(upstream) {
 		bytesByLane: [],
 		gateLost: 0,
 		paused: 0,
+		/** stream credit: INFOs of the wisp server that offered it, and of clients that named it */
+		creditOffered: 0,
+		creditNamed: 0,
+		/** connections the relay emulated it on, and the most it held back at once (bytes) */
+		creditEmulated: 0,
+		creditHeldMost: 0,
+		/** CREDIT packets from clients */
+		credits: 0,
 	};
 	const sockets = new Set();
 	const sessions = new Map();
@@ -222,6 +243,8 @@ export async function startWispWebTransport(upstream) {
 		lossRate: 0,
 		random: seeded(1),
 		maxStreams: 0,
+		/** stream credit (0xE2): true passes on what the wisp server does, 'emulate' adds it, false takes it out */
+		streamCredit: true,
 		/** the leaf's SPKI hash, for --ignore-certificate-errors-spki-list (a dial without hashes) */
 		get spki() {
 			return server.spki;
@@ -321,13 +344,23 @@ export async function startWispWebTransport(upstream) {
 		const up = new WebSocket(upstream, protocols);
 		sockets.add(client).add(up);
 		const queued = [];
+		const credit = streamCredit(
+			relay,
+			stats,
+			(p) => client.readyState === 1 && client.send(p),
+		);
 		up.on('open', () => {
 			for (const m of queued.splice(0)) up.send(m);
 		});
-		client.on('message', (m) =>
-			up.readyState === WebSocket.OPEN ? up.send(m) : queued.push(m),
+		client.on('message', (m) => {
+			m = credit.fromClient(Buffer.isBuffer(m) ? m : Buffer.from(m));
+			if (!m) return;
+			if (up.readyState === WebSocket.OPEN) up.send(m);
+			else queued.push(m);
+		});
+		up.on('message', (m) =>
+			credit.fromServer(Buffer.isBuffer(m) ? m : Buffer.from(m)),
 		);
-		up.on('message', (m) => client.readyState === 1 && client.send(m));
 		let ended = false;
 		const end = () => {
 			if (!ended) stats.wsClosed++;
@@ -532,6 +565,8 @@ export async function startWispWebTransport(upstream) {
 	}
 
 	function forward(session, packet) {
+		packet = session.credit.fromClient(packet);
+		if (!packet) return;
 		if (session.ws.readyState === WebSocket.OPEN) session.ws.send(packet);
 		else session.queued.push(packet);
 	}
@@ -640,6 +675,7 @@ export async function startWispWebTransport(upstream) {
 				heldLanes: [],
 				unsent: 0,
 			};
+			session.credit = streamCredit(relay, stats, (p) => toClient(session, p));
 			sessions.set(id, session);
 			if (value.protocol === SERVER_STREAM) {
 				const stream = api.openBidi(id);
@@ -653,7 +689,7 @@ export async function startWispWebTransport(upstream) {
 			ws.on('open', () => {
 				for (const p of session.queued.splice(0)) ws.send(p);
 			});
-			ws.on('message', (m) => toClient(session, Buffer.from(m)));
+			ws.on('message', (m) => session.credit.fromServer(Buffer.from(m)));
 			const close = () => end(session);
 			ws.on('close', close);
 			ws.on('error', close);
@@ -784,4 +820,167 @@ export async function startWispWebTransport(upstream) {
 		gate.close();
 	};
 	return relay;
+}
+
+/** an INFO's extensions (id, payload), after its version */
+function extensionsOf(packet) {
+	const out = [];
+	for (let at = 7; at + 5 <= packet.length;) {
+		const length = packet.readUInt32LE(at + 1);
+		out.push({
+			id: packet[at],
+			payload: packet.subarray(at + 5, at + 5 + length),
+		});
+		at += 5 + length;
+	}
+	return out;
+}
+
+/** the INFO `packet` with `extensions` instead of its own */
+function infoWith(packet, extensions) {
+	return Buffer.concat([
+		packet.subarray(0, 7),
+		...extensions.flatMap(({ id, payload }) => {
+			const head = Buffer.alloc(5);
+			head[0] = id;
+			head.writeUInt32LE(payload.length, 1);
+			return [head, payload];
+		}),
+	]);
+}
+
+/**
+ * stream credit (0xE2) on one Wisp connection, between the wisp server
+ * and `toClient`: passed through when the server offers it, emulated
+ * (`relay.streamCredit = 'emulate'`) when it does not, or taken out of
+ * the server's INFO (`relay.streamCredit = false`)
+ */
+function streamCredit(relay, stats, toClient) {
+	/** 'pass', 'emulate', or null (off) */
+	let mode = null;
+	let window = 0;
+	/** emulated: each TCP stream's bytes sent, its limit, and what waits for credit */
+	const streams = new Map();
+	let held = 0;
+	const hold = (stream, packet) => {
+		stream.held.push(packet);
+		held += packet.length;
+		stats.creditHeldMost = Math.max(stats.creditHeldMost, held);
+	};
+	/** what waits on stream `id` goes out as far as its limit lets */
+	const release = (id, stream) => {
+		while (stream.held.length) {
+			const packet = stream.held[0];
+			if (packet[0] === CLOSE) {
+				held -= packet.length;
+				streams.delete(id);
+				toClient(packet);
+				return;
+			}
+			const room = stream.limit - stream.sent;
+			if (room <= 0) return;
+			if (packet.length - 5 > room) {
+				toClient(Buffer.from(packet.subarray(0, 5 + room)));
+				stream.held[0] = Buffer.concat([
+					packet.subarray(0, 5),
+					packet.subarray(5 + room),
+				]);
+				stream.sent += room;
+				held -= room;
+				return;
+			}
+			stream.held.shift();
+			held -= packet.length;
+			stream.sent += packet.length - 5;
+			toClient(packet);
+		}
+	};
+	return {
+		/** a packet from the wisp server, on to the client as credit lets it */
+		fromServer(packet) {
+			const type = packet[0];
+			const id = packet.length >= 5 ? idOf(packet) : -1;
+			if (type === INFO && id === 0) {
+				const extensions = extensionsOf(packet);
+				const offered = extensions.some((x) => x.id === STREAM_CREDIT);
+				if (offered) stats.creditOffered++;
+				if (relay.streamCredit === false) {
+					if (offered)
+						packet = infoWith(
+							packet,
+							extensions.filter((x) => x.id !== STREAM_CREDIT),
+						);
+				} else if (offered) mode = 'pass';
+				else if (relay.streamCredit === 'emulate') {
+					mode = 'emulate';
+					packet = infoWith(packet, [
+						...extensions,
+						{ id: STREAM_CREDIT, payload: Buffer.alloc(0) },
+					]);
+				}
+				return toClient(packet);
+			}
+			const stream = mode === 'emulate' ? streams.get(id) : undefined;
+			if (!stream || (type !== DATA && type !== CLOSE)) return toClient(packet);
+			if (stream.held.length) return hold(stream, packet);
+			if (type === CLOSE) {
+				streams.delete(id);
+				return toClient(packet);
+			}
+			const room = stream.limit - stream.sent;
+			if (packet.length - 5 <= room) {
+				stream.sent += packet.length - 5;
+				return toClient(packet);
+			}
+			if (room > 0) {
+				toClient(Buffer.from(packet.subarray(0, 5 + room)));
+				stream.sent += room;
+				packet = Buffer.concat([
+					packet.subarray(0, 5),
+					packet.subarray(5 + room),
+				]);
+			}
+			hold(stream, packet);
+		},
+		/** a packet from the client: what goes on to the wisp server (null: nothing) */
+		fromClient(packet) {
+			const type = packet[0];
+			const id = packet.length >= 5 ? idOf(packet) : -1;
+			if (type === INFO && id === 0) {
+				const extensions = extensionsOf(packet);
+				const credit = extensions.find((x) => x.id === STREAM_CREDIT);
+				if (credit) stats.creditNamed++;
+				if (!credit) mode = null;
+				else if (mode === 'emulate' && credit.payload.length >= 4) {
+					window = credit.payload.readUInt32LE(0);
+					stats.creditEmulated++;
+					return infoWith(
+						packet,
+						extensions.filter((x) => x.id !== STREAM_CREDIT),
+					);
+				}
+				return packet;
+			}
+			if (type === STREAM_CREDIT && packet.length >= 13) {
+				stats.credits++;
+				if (mode !== 'emulate') return packet;
+				const stream = streams.get(id);
+				const limit = Number(packet.readBigUInt64LE(5));
+				if (stream && limit > stream.limit) {
+					stream.limit = limit;
+					release(id, stream);
+				}
+				return null;
+			}
+			if (mode === 'emulate' && window) {
+				if (type === CONNECT && packet[5] !== UDP)
+					streams.set(id, { sent: 0, limit: window, held: [] });
+				else if (type === CLOSE) {
+					for (const p of streams.get(id)?.held ?? []) held -= p.length;
+					streams.delete(id);
+				}
+			}
+			return packet;
+		},
+	};
 }
