@@ -220,6 +220,10 @@ const dump = (page) =>
 			...document.querySelectorAll('*'),
 		]) {
 			if (el.closest('head') || el.localName === 'script') continue;
+			// the landing's recent commits come from GitHub through
+			// /api/commits: none offline (CI), so neither they nor the note
+			// that says why are part of the fixture
+			if (el.closest('#commitList, #commitsNote')) continue;
 			const cs = getComputedStyle(el);
 			if (cs.display === 'none') continue;
 			const row = {};

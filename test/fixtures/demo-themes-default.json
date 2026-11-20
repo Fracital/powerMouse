@@ -1,14 +1,8 @@
 {
 	"views": {
 		"landing": {
-			"digest": "ff6dfa770a0318db60e6588c4d6e910697cb534c62146502295d76f7905f41f0",
+			"digest": "a143eb7bdc80649dc79dfc672fb3642844c98b1d923d14612cb3adf04425c1f5",
 			"common": {
-				"::afterbackground-color": null,
-				"::afterbackground-image": null,
-				"::aftercolor": null,
-				"::beforebackground-color": null,
-				"::beforebackground-image": null,
-				"::beforecolor": null,
 				"::placeholderbackground-color": "rgba(0, 0, 0, 0)",
 				"::placeholderbackground-image": "none",
 				"::placeholdercolor": "rgb(255, 255, 255)",
@@ -186,27 +180,6 @@
 					"caret-color": "rgb(76, 169, 251)",
 					"color": "rgb(76, 169, 251)",
 					"outline-color": "rgb(76, 169, 251)"
-				},
-				"ol#commitList>li:0": {
-					"::afterbackground-color": "rgb(232, 237, 88)",
-					"::afterbackground-image": "none",
-					"::aftercolor": "rgb(255, 255, 255)",
-					"::beforebackground-color": "rgb(58, 58, 58)",
-					"::beforebackground-image": "none",
-					"::beforecolor": "rgb(255, 255, 255)"
-				},
-				"ol#commitList>li:0>a.commit>img.commitAvatar": {
-					"background-color": "rgb(34, 34, 34)"
-				},
-				"ol#commitList>li:0>a.commit>code.commitSha": {
-					"::placeholdercolor": "rgb(232, 237, 88)",
-					"border-bottom-color": "rgb(232, 237, 88)",
-					"border-left-color": "rgb(232, 237, 88)",
-					"border-right-color": "rgb(232, 237, 88)",
-					"border-top-color": "rgb(232, 237, 88)",
-					"caret-color": "rgb(232, 237, 88)",
-					"color": "rgb(232, 237, 88)",
-					"outline-color": "rgb(232, 237, 88)"
 				},
 				"input#adblock": {
 					"::placeholdercolor": "rgb(0, 0, 0)",
@@ -415,14 +388,8 @@
 			}
 		},
 		"browser": {
-			"digest": "2057d31a477439d46cd979fd3f3227e3148928b67d8bad7bffef93bd083a1ca4",
+			"digest": "da6253ad41ab4e2b6872114ebbade3c2af33c15022c7196335c0e7a8b19f624a",
 			"common": {
-				"::afterbackground-color": null,
-				"::afterbackground-image": null,
-				"::aftercolor": null,
-				"::beforebackground-color": null,
-				"::beforebackground-image": null,
-				"::beforecolor": null,
 				"::placeholderbackground-color": "rgba(0, 0, 0, 0)",
 				"::placeholderbackground-image": "none",
 				"::placeholdercolor": "rgb(255, 255, 255)",
@@ -600,27 +567,6 @@
 					"caret-color": "rgb(76, 169, 251)",
 					"color": "rgb(76, 169, 251)",
 					"outline-color": "rgb(76, 169, 251)"
-				},
-				"ol#commitList>li:0": {
-					"::afterbackground-color": "rgb(232, 237, 88)",
-					"::afterbackground-image": "none",
-					"::aftercolor": "rgb(255, 255, 255)",
-					"::beforebackground-color": "rgb(58, 58, 58)",
-					"::beforebackground-image": "none",
-					"::beforecolor": "rgb(255, 255, 255)"
-				},
-				"ol#commitList>li:0>a.commit>img.commitAvatar": {
-					"background-color": "rgb(34, 34, 34)"
-				},
-				"ol#commitList>li:0>a.commit>code.commitSha": {
-					"::placeholdercolor": "rgb(232, 237, 88)",
-					"border-bottom-color": "rgb(232, 237, 88)",
-					"border-left-color": "rgb(232, 237, 88)",
-					"border-right-color": "rgb(232, 237, 88)",
-					"border-top-color": "rgb(232, 237, 88)",
-					"caret-color": "rgb(232, 237, 88)",
-					"color": "rgb(232, 237, 88)",
-					"outline-color": "rgb(232, 237, 88)"
 				},
 				"input#adblock": {
 					"::placeholdercolor": "rgb(0, 0, 0)",
@@ -841,14 +787,11 @@
 			}
 		},
 		"shields": {
-			"digest": "e37a7f6a3477f3acba9e67c8da4bcf1b06cd5d733c704f62b979a4f85672cc69",
+			"digest": "7ab623bdfbdf38c8807776b92eb6f06cac8e7df0cd4393e244dc3a5b5c076794",
 			"common": {
 				"::afterbackground-color": null,
 				"::afterbackground-image": null,
 				"::aftercolor": null,
-				"::beforebackground-color": null,
-				"::beforebackground-image": null,
-				"::beforecolor": null,
 				"::placeholderbackground-color": "rgba(0, 0, 0, 0)",
 				"::placeholderbackground-image": "none",
 				"::placeholdercolor": "rgb(255, 255, 255)",
@@ -858,10 +801,10 @@
 				"background-position": "0% 0%",
 				"background-repeat": "repeat",
 				"background-size": "auto",
-				"border-bottom-color": "rgb(255, 255, 255)",
-				"border-left-color": "rgb(255, 255, 255)",
-				"border-right-color": "rgb(255, 255, 255)",
-				"border-top-color": "rgb(255, 255, 255)",
+				"border-bottom-color": "rgb(228, 228, 229)",
+				"border-left-color": "rgb(228, 228, 229)",
+				"border-right-color": "rgb(228, 228, 229)",
+				"border-top-color": "rgb(228, 228, 229)",
 				"box-shadow": "none",
 				"caret-color": "rgb(255, 255, 255)",
 				"color": "rgb(255, 255, 255)",
@@ -886,7 +829,11 @@
 				},
 				"html>body.browsing": {
 					"background-color": "rgb(0, 0, 0)",
-					"background-image": "url(\"/pm/noise.png\")"
+					"background-image": "url(\"/pm/noise.png\")",
+					"border-bottom-color": "rgb(255, 255, 255)",
+					"border-left-color": "rgb(255, 255, 255)",
+					"border-right-color": "rgb(255, 255, 255)",
+					"border-top-color": "rgb(255, 255, 255)"
 				},
 				"div#landing>div.head:0": {
 					"background-color": "rgb(0, 0, 0)",
@@ -896,7 +843,12 @@
 					"border-right-color": "rgb(182, 182, 182)",
 					"border-top-color": "rgb(182, 182, 182)"
 				},
-				"div#landing>div.head:0>h1": {},
+				"div#landing>div.head:0>h1": {
+					"border-bottom-color": "rgb(255, 255, 255)",
+					"border-left-color": "rgb(255, 255, 255)",
+					"border-right-color": "rgb(255, 255, 255)",
+					"border-top-color": "rgb(255, 255, 255)"
+				},
 				"div#landing>div.head:0>a": {
 					"::placeholdercolor": "rgb(0, 0, 238)",
 					"border-bottom-color": "rgb(0, 0, 238)",
@@ -1027,27 +979,6 @@
 					"color": "rgb(76, 169, 251)",
 					"outline-color": "rgb(76, 169, 251)"
 				},
-				"ol#commitList>li:0": {
-					"::afterbackground-color": "rgb(232, 237, 88)",
-					"::afterbackground-image": "none",
-					"::aftercolor": "rgb(255, 255, 255)",
-					"::beforebackground-color": "rgb(58, 58, 58)",
-					"::beforebackground-image": "none",
-					"::beforecolor": "rgb(255, 255, 255)"
-				},
-				"ol#commitList>li:0>a.commit>img.commitAvatar": {
-					"background-color": "rgb(34, 34, 34)"
-				},
-				"ol#commitList>li:0>a.commit>code.commitSha": {
-					"::placeholdercolor": "rgb(232, 237, 88)",
-					"border-bottom-color": "rgb(232, 237, 88)",
-					"border-left-color": "rgb(232, 237, 88)",
-					"border-right-color": "rgb(232, 237, 88)",
-					"border-top-color": "rgb(232, 237, 88)",
-					"caret-color": "rgb(232, 237, 88)",
-					"color": "rgb(232, 237, 88)",
-					"outline-color": "rgb(232, 237, 88)"
-				},
 				"input#adblock": {
 					"::placeholdercolor": "rgb(0, 0, 0)",
 					"accent-color": "rgb(76, 169, 251)",
@@ -1073,7 +1004,10 @@
 				"div#browser>div.chrome:0": {
 					"background-color": "rgb(0, 0, 0)",
 					"background-image": "url(\"/pm/header-background.png\")",
-					"border-bottom-color": "rgb(182, 182, 182)"
+					"border-bottom-color": "rgb(182, 182, 182)",
+					"border-left-color": "rgb(255, 255, 255)",
+					"border-right-color": "rgb(255, 255, 255)",
+					"border-top-color": "rgb(255, 255, 255)"
 				},
 				"button#toolBack": {
 					"::placeholdercolor": "rgba(16, 16, 16, 0.3)",
@@ -1108,7 +1042,11 @@
 					"outline-color": "rgb(0, 0, 0)"
 				},
 				"span#chromeStatus": {
-					"background-color": "rgb(138, 138, 138)"
+					"background-color": "rgb(138, 138, 138)",
+					"border-bottom-color": "rgb(255, 255, 255)",
+					"border-left-color": "rgb(255, 255, 255)",
+					"border-right-color": "rgb(255, 255, 255)",
+					"border-top-color": "rgb(255, 255, 255)"
 				},
 				"button#toolShields": {
 					"::placeholdercolor": "rgb(0, 0, 0)",
@@ -1136,7 +1074,11 @@
 					"outline-color": "rgb(0, 0, 0)"
 				},
 				"div#frames>iframe.frame": {
-					"background-color": "rgb(255, 255, 255)"
+					"background-color": "rgb(255, 255, 255)",
+					"border-bottom-color": "rgb(255, 255, 255)",
+					"border-left-color": "rgb(255, 255, 255)",
+					"border-right-color": "rgb(255, 255, 255)",
+					"border-top-color": "rgb(255, 255, 255)"
 				},
 				"span#recentsCount": {
 					"background-color": "rgba(0, 0, 0, 0.25)",
@@ -1146,38 +1088,60 @@
 					"border-top-color": "rgba(255, 255, 255, 0.35)"
 				},
 				"div#dock": {
+					"border-bottom-color": "rgb(255, 255, 255)",
+					"border-left-color": "rgb(255, 255, 255)",
+					"border-right-color": "rgb(255, 255, 255)",
 					"border-top-color": "rgba(255, 255, 255, 0.15)"
 				},
 				"div#dock>button.bnt-orange.dockButton:0": {
 					"background-color": "rgb(239, 239, 239)",
 					"background-image": "linear-gradient(0deg, rgb(210, 97, 42) 0%, rgb(222, 152, 91) 100%)",
+					"border-bottom-color": "rgb(255, 255, 255)",
+					"border-left-color": "rgb(255, 255, 255)",
 					"border-right-color": "rgba(0, 0, 0, 0.35)",
+					"border-top-color": "rgb(255, 255, 255)",
 					"text-shadow": "rgba(0, 0, 0, 0.2) 0px -1px 0px"
 				},
 				"div#dock>button.bnt-green.dockButton:1": {
 					"background-color": "rgb(239, 239, 239)",
 					"background-image": "linear-gradient(0deg, rgb(42, 210, 76) 0%, rgb(91, 222, 118) 100%)",
+					"border-bottom-color": "rgb(255, 255, 255)",
+					"border-left-color": "rgb(255, 255, 255)",
 					"border-right-color": "rgba(0, 0, 0, 0.35)",
+					"border-top-color": "rgb(255, 255, 255)",
 					"text-shadow": "rgba(0, 0, 0, 0.2) 0px -1px 0px"
 				},
 				"div#dock>button.bnt-red.dockButton:2": {
 					"background-color": "rgb(239, 239, 239)",
 					"background-image": "linear-gradient(0deg, rgb(210, 42, 42) 0%, rgb(222, 91, 91) 100%)",
+					"border-bottom-color": "rgb(255, 255, 255)",
+					"border-left-color": "rgb(255, 255, 255)",
 					"border-right-color": "rgba(0, 0, 0, 0.35)",
+					"border-top-color": "rgb(255, 255, 255)",
 					"text-shadow": "rgba(0, 0, 0, 0.2) 0px -1px 0px"
 				},
 				"div#dock>button.bnt-blue.dockButton:3": {
 					"background-color": "rgb(239, 239, 239)",
 					"background-image": "linear-gradient(0deg, rgb(42, 76, 210) 0%, rgb(91, 154, 222) 100%)",
+					"border-bottom-color": "rgb(255, 255, 255)",
+					"border-left-color": "rgb(255, 255, 255)",
+					"border-right-color": "rgb(255, 255, 255)",
+					"border-top-color": "rgb(255, 255, 255)",
 					"text-shadow": "rgba(0, 0, 0, 0.2) 0px -1px 0px"
 				},
 				"section#requests": {
 					"background-color": "rgba(18, 13, 26, 0.92)",
+					"border-bottom-color": "rgb(255, 255, 255)",
+					"border-left-color": "rgb(255, 255, 255)",
+					"border-right-color": "rgb(255, 255, 255)",
 					"border-top-color": "rgba(255, 255, 255, 0.15)",
 					"box-shadow": "rgba(0, 0, 0, 0.6) 0px -10px 40px 0px"
 				},
 				"section#requests>div.requestsTop:0": {
-					"border-bottom-color": "rgba(255, 255, 255, 0.1)"
+					"border-bottom-color": "rgba(255, 255, 255, 0.1)",
+					"border-left-color": "rgb(255, 255, 255)",
+					"border-right-color": "rgb(255, 255, 255)",
+					"border-top-color": "rgb(255, 255, 255)"
 				},
 				"span#requestsCount": {
 					"::placeholdercolor": "rgba(255, 255, 255, 0.6)",
@@ -1192,10 +1156,6 @@
 				"div#shieldsPanel": {
 					"::placeholdercolor": "rgb(228, 228, 229)",
 					"background-color": "rgb(28, 28, 29)",
-					"border-bottom-color": "rgb(228, 228, 229)",
-					"border-left-color": "rgb(228, 228, 229)",
-					"border-right-color": "rgb(228, 228, 229)",
-					"border-top-color": "rgb(228, 228, 229)",
 					"box-shadow": "rgba(0, 0, 0, 0.55) 0px 12px 40px 0px, rgba(255, 255, 255, 0.06) 0px 0px 0px 1px",
 					"caret-color": "rgb(228, 228, 229)",
 					"color": "rgb(228, 228, 229)",
@@ -1205,19 +1165,12 @@
 					"::placeholdercolor": "rgb(228, 228, 229)",
 					"background-color": "rgb(37, 37, 39)",
 					"border-bottom-color": "rgb(48, 48, 50)",
-					"border-left-color": "rgb(228, 228, 229)",
-					"border-right-color": "rgb(228, 228, 229)",
-					"border-top-color": "rgb(228, 228, 229)",
 					"caret-color": "rgb(228, 228, 229)",
 					"color": "rgb(228, 228, 229)",
 					"outline-color": "rgb(228, 228, 229)"
 				},
 				"div#shieldsPanel>div.shieldsCard:0>div.shieldsHead:0": {
 					"::placeholdercolor": "rgb(228, 228, 229)",
-					"border-bottom-color": "rgb(228, 228, 229)",
-					"border-left-color": "rgb(228, 228, 229)",
-					"border-right-color": "rgb(228, 228, 229)",
-					"border-top-color": "rgb(228, 228, 229)",
 					"caret-color": "rgb(228, 228, 229)",
 					"color": "rgb(228, 228, 229)",
 					"outline-color": "rgb(228, 228, 229)"
@@ -1229,10 +1182,6 @@
 					"background-position": "50% 50%",
 					"background-repeat": "no-repeat",
 					"background-size": "20px 20px",
-					"border-bottom-color": "rgb(228, 228, 229)",
-					"border-left-color": "rgb(228, 228, 229)",
-					"border-right-color": "rgb(228, 228, 229)",
-					"border-top-color": "rgb(228, 228, 229)",
 					"box-shadow": "rgba(0, 0, 0, 0.4) 0px 1px 4px 0px",
 					"caret-color": "rgb(228, 228, 229)",
 					"color": "rgb(228, 228, 229)",
@@ -1344,9 +1293,6 @@
 				},
 				"div#shieldsPanel>div.shieldsFooter:2": {
 					"::placeholdercolor": "rgb(228, 228, 229)",
-					"border-bottom-color": "rgb(228, 228, 229)",
-					"border-left-color": "rgb(228, 228, 229)",
-					"border-right-color": "rgb(228, 228, 229)",
 					"border-top-color": "rgb(48, 48, 50)",
 					"caret-color": "rgb(228, 228, 229)",
 					"color": "rgb(228, 228, 229)",
@@ -1387,11 +1333,16 @@
 				},
 				"div#bookmarksScrim": {
 					"background-color": "rgba(0, 0, 0, 0.55)",
+					"border-bottom-color": "rgb(255, 255, 255)",
+					"border-left-color": "rgb(255, 255, 255)",
+					"border-right-color": "rgb(255, 255, 255)",
+					"border-top-color": "rgb(255, 255, 255)",
 					"opacity": "0"
 				},
 				"aside#bookmarks": {
 					"background-color": "rgb(0, 0, 0)",
 					"border-bottom-color": "rgb(182, 182, 182)",
+					"border-left-color": "rgb(255, 255, 255)",
 					"border-right-color": "rgb(182, 182, 182)",
 					"border-top-color": "rgb(182, 182, 182)",
 					"box-shadow": "rgba(0, 0, 0, 0.6) 10px 0px 40px 0px"
@@ -1414,7 +1365,11 @@
 					"outline-color": "rgb(154, 154, 154)"
 				},
 				"html>body.browsing>nav.navbar": {
-					"background-color": "rgb(0, 0, 0)"
+					"background-color": "rgb(0, 0, 0)",
+					"border-bottom-color": "rgb(255, 255, 255)",
+					"border-left-color": "rgb(255, 255, 255)",
+					"border-right-color": "rgb(255, 255, 255)",
+					"border-top-color": "rgb(255, 255, 255)"
 				},
 				"button#back": {
 					"::placeholdercolor": "rgb(221, 221, 221)",
