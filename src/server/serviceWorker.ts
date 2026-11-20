@@ -138,6 +138,7 @@ import { RewriteCache } from './rewriteCache';
 import { RewritePool } from './rewritePool';
 import {
 	abortRequest,
+	blobResponses,
 	bundleRequested,
 	departingMixedContent,
 	imagesSeen,
@@ -2677,14 +2678,22 @@ self.addEventListener('fetch', (event: FetchEvent) => {
  * the body is written. Chrome activates a waiting worker the moment the
  * active one has no event in progress, and stops the old one there and
  * then: a document it was still writing never ended, and its frame showed
- * nothing for good.
+ * nothing for good. A body that is a Blob is whole already and goes as it
+ * is (blobResponses): the browser reads it, not this worker.
  */
 function lasting(
 	event: FetchEvent,
 	answer: Promise<Response>,
 ): Promise<Response> {
 	return answer.then((response) => {
-		if (!response.body || response.type !== 'default') return response;
+		// (before its body is asked for: WebKit's getter makes the Blob a
+		// stream this worker reads)
+		if (
+			blobResponses.has(response) ||
+			response.type !== 'default' ||
+			!response.body
+		)
+			return response;
 		const { readable, writable } = new TransformStream<Uint8Array>();
 		event.waitUntil(response.body.pipeTo(writable).catch(() => {}));
 		return new Response(readable, {

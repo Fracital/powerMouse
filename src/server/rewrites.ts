@@ -364,6 +364,16 @@ const CACHE_GENERATION = REWRITE_GENERATION || BUILD;
 
 export const statusEmpty = [101, 204, 205, 304];
 
+/**
+ * The forward's responses whose body is a Blob: whole before they go out, so
+ * the browser reads them and this worker writes nothing of them once handed
+ * over (a navigation's need not last for its body, src/server/serviceWorker.ts).
+ * WebKit refuses this worker reading such a Blob in a frame of another
+ * site's page ("Blob loading failed"), and its body getter alone makes the
+ * Blob a stream this worker reads: lasting asks for neither.
+ */
+export const blobResponses = new WeakSet<Response>();
+
 const integrityHeaders: string[] = ['Content-MD5'];
 
 declare const clients: Clients | undefined;
@@ -4857,11 +4867,13 @@ function genericForward(
 		}
 
 		sendReport();
-		return new Response(body, {
+		const made = new Response(body, {
 			status: response.status,
 			statusText: response.statusText,
 			headers: responseHeaders,
 		});
+		if (body instanceof Blob) blobResponses.add(made);
+		return made;
 	};
 	// a transport failure surfaces wherever the connection's promise was
 	// awaited (the headers, the body, a cache write): for a document it is one
