@@ -604,6 +604,7 @@ const keptFiles = [
 	'blocker.wasm',
 	'Controller.js',
 	'SearchBuilder.js',
+	'omnibox.js',
 	'controllerFrame.html',
 	'controllerFrame.js',
 	'siteFrame.js',

@@ -2203,15 +2203,27 @@ function visitTitle(tab, url) {
 }
 
 function loadOmnibox() {
-	return new Promise((resolve, reject) => {
+	const loaded = (script) =>
+		new Promise((resolve, reject) => {
+			script.addEventListener('load', () => resolve(globalThis.Omnibox));
+			script.addEventListener('error', () =>
+				reject(new Error(`${script.src} did not load`)),
+			);
+		});
+	const byName = () => {
 		const script = document.createElement('script');
 		script.src = `${DIRECTORY}${assetName('omnibox')}`;
-		script.addEventListener('load', () => resolve(globalThis.Omnibox));
-		script.addEventListener('error', () =>
-			reject(new Error(`${script.src} did not load`)),
-		);
+		const done = loaded(script);
 		document.head.append(script);
-	});
+		return done;
+	};
+	if (globalThis.Omnibox) return Promise.resolve(globalThis.Omnibox);
+	// the page names the module itself, deferred, so the demo's server
+	// stamps it with the file's hash and a reload asks for it nowhere; a page
+	// without the tag, or whose tag fails, loads it by the name the host
+	// serves it under
+	const named = document.querySelector('script[data-omnibox]');
+	return named ? loaded(named).catch(byName) : byName();
 }
 
 function attachOmniboxes(Omnibox) {
