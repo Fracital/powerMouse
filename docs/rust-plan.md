@@ -1826,6 +1826,26 @@ Measured the same day and not taken: `+simd128` (no snip, both builds) is
 their scripts, gains nothing measurable (section 6's table prices it at 4
 to 12% for one site's load at a time).
 
+The walk built for speed (2026-11-19). With the parser at `opt-level = 3`
+and the rest at `z`, a warm rewrite of the twelve largest scripts spent
+6% of its time in the early checks and 6% in the shape questions the walk
+asks, mostly in calls that a build for speed inlines. The walk (`rwjs`)
+and the edits (`edits`) are now built at 3 as well, but for the linker and
+the printer, which run rarely and keep `#[optimize(size)]` on each
+function. Over the site corpus (4,018 scripts, 323 MB) through the rewrite
+worker's glue, alternated, median of 5: 50.0 to 54.5 MB a second (8.3%
+less time), the outputs the same; the twelve largest 9.9% less (least of
+7). The module is 928,476 bytes, 287,536 brotli (171,665 and 27,413 more).
+The first rewrite after a compile pays for the larger functions about
+1 ms more in node 24 (6.6 to 7.8 ms over the second for a 5 KB script,
+13.9 to 14.3 for a 204 KB one), not the 3 to 8 ms this section once
+priced the walk at `s` with. Measured and not taken: `wasm-opt -O3` in
+place of `-Oz` (no difference in time, 9 KB more); the walk at `s` (7%
+less time for 105 KB); marking only the hottest functions of the walk,
+the early checks and the shape questions for speed (3.4% for 32 KB: the
+time is spread across the crate); `dlmalloc` at 3 (the build-std crate
+takes no profile of the workspace).
+
 What a cold rewrite holds (2026-11-19). A script that grows an instance
 past `SERVING_MEMORY_LIMIT` is rewritten on a fresh one every time, so
 for the large scripts the peak and the cold time are what serving pays:

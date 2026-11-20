@@ -7,6 +7,9 @@
 //! rewriter handed the helper. It is the port of src/callPrinter.ts, held to it
 //! byte for byte (rust/host/printer.mjs over a corpus); the host side is the
 //! `print` member of src/inject/rewriter.ts, over the module.
+//!
+//! Its functions are built for size (`#[optimize(size)]`) in a crate built
+//! for speed (rust/Cargo.toml): it runs only when something already threw.
 use oxc::allocator::Allocator;
 use oxc::ast::ast::*;
 use oxc::parser::{ParseOptions, Parser};
@@ -18,6 +21,7 @@ use crate::shape::{Mem, unparen};
 const INTERMEDIATE: &str = "(intermediate value)";
 
 /// what CallPrinter prints for `e` where it prints it (Find(node, true))
+#[optimize(size)]
 fn shown(e: &Expression) -> String {
 	let text = visit(e);
 	if text.is_empty() {
@@ -28,6 +32,7 @@ fn shown(e: &Expression) -> String {
 }
 
 /// '' becomes the placeholder, as `shown` has it
+#[optimize(size)]
 fn or_intermediate(text: String) -> String {
 	if text.is_empty() {
 		INTERMEDIATE.to_owned()
@@ -44,6 +49,7 @@ enum Folded {
 }
 
 /// ToUint32 of a number, as `|`, `<<` and the rest coerce it
+#[optimize(size)]
 fn to_uint32(n: f64) -> u32 {
 	if !n.is_finite() {
 		return 0;
@@ -51,10 +57,12 @@ fn to_uint32(n: f64) -> u32 {
 	n.trunc().rem_euclid(4_294_967_296.0) as u32
 }
 
+#[optimize(size)]
 fn to_int32(n: f64) -> i32 {
 	to_uint32(n) as i32
 }
 
+#[optimize(size)]
 fn folded(e: &Expression) -> Option<Folded> {
 	match unparen(e) {
 		Expression::NumericLiteral(n) => Some(Folded::Num(n.value)),
@@ -105,6 +113,7 @@ fn folded(e: &Expression) -> Option<Folded> {
 	}
 }
 
+#[optimize(size)]
 fn folded_text(f: Folded) -> String {
 	match f {
 		Folded::Num(n) => n.to_js_string(),
@@ -113,6 +122,7 @@ fn folded_text(f: Folded) -> String {
 }
 
 /// the name a member's key prints as (a string literal, as V8 has it)
+#[optimize(size)]
 fn named_key<'a>(m: Mem<'_, 'a>) -> Option<&'a str> {
 	match m {
 		Mem::Static(s) => Some(s.property.name.as_str()),
@@ -130,6 +140,7 @@ fn named_key<'a>(m: Mem<'_, 'a>) -> Option<&'a str> {
 }
 
 /// the V8 flags of a regular expression, in V8's own order (`dgimsuvy`)
+#[optimize(size)]
 fn regex_flags(flags: RegExpFlags) -> String {
 	let mut out = String::new();
 	for (flag, letter) in [
@@ -149,6 +160,7 @@ fn regex_flags(flags: RegExpFlags) -> String {
 	out
 }
 
+#[optimize(size)]
 fn literal(e: &Expression) -> String {
 	match e {
 		Expression::RegExpLiteral(r) => {
@@ -167,6 +179,7 @@ fn literal(e: &Expression) -> String {
 /// as one (`a + b + c`, and `(a + b) + c` too). `#a in o` is a BinaryExpression
 /// of `in` to V8 (meriyah's tree), so it flattens into an `in` chain with its
 /// private name as an operand, which oxc's own PrivateInExpression is not.
+#[optimize(size)]
 fn chain(e: &Expression, operator: &str, out: &mut Vec<String>) {
 	match unparen(e) {
 		Expression::BinaryExpression(b) if b.operator.as_str() == operator => {
@@ -185,6 +198,7 @@ fn chain(e: &Expression, operator: &str, out: &mut Vec<String>) {
 	}
 }
 
+#[optimize(size)]
 fn member(m: Mem) -> String {
 	let object = shown(m.object());
 	let dot = if m.optional() { "?." } else { "." };
@@ -205,6 +219,7 @@ fn member(m: Mem) -> String {
 }
 
 /// what CallPrinter prints for an assignment's target (an expression to V8)
+#[optimize(size)]
 fn target(t: &AssignmentTarget) -> String {
 	if let AssignmentTarget::AssignmentTargetIdentifier(id) = t {
 		return id.name.to_string();
@@ -215,6 +230,7 @@ fn target(t: &AssignmentTarget) -> String {
 	}
 }
 
+#[optimize(size)]
 fn simple_target(t: &SimpleAssignmentTarget) -> String {
 	if let SimpleAssignmentTarget::AssignmentTargetIdentifier(id) = t {
 		return id.name.to_string();
@@ -225,6 +241,7 @@ fn simple_target(t: &SimpleAssignmentTarget) -> String {
 	}
 }
 
+#[optimize(size)]
 fn visit(e: &Expression) -> String {
 	if let Expression::ParenthesizedExpression(p) = e {
 		return visit(&p.expression);
@@ -339,6 +356,7 @@ fn visit(e: &Expression) -> String {
 /// the ESTree node type V8's error message would carry, as src/callPrinter.ts
 /// reads it (meriyah's tree: one `MemberExpression`, one `Literal`, a
 /// `MetaProperty` for `new.target` and `import.meta`)
+#[optimize(size)]
 fn estree_type(e: &Expression) -> &'static str {
 	if Mem::of(e).is_some() {
 		return "MemberExpression";
@@ -388,6 +406,7 @@ enum Call<'b, 'a> {
 	Other(&'b Expression<'a>),
 }
 
+#[optimize(size)]
 fn call_of<'b, 'a>(node: &'b Expression<'a>) -> Call<'b, 'a> {
 	let node = unparen(node);
 	if let Expression::ChainExpression(c) = node {
@@ -406,12 +425,14 @@ fn call_of<'b, 'a>(node: &'b Expression<'a>) -> Call<'b, 'a> {
 }
 
 /// whether a call's arguments spread other than once at the end
+#[optimize(size)]
 fn spreads(args: &[Argument]) -> bool {
 	let count = args.iter().filter(|a| matches!(a, Argument::SpreadElement(_))).count();
 	count > 1 || (count == 1 && !matches!(args.last(), Some(Argument::SpreadElement(_))))
 }
 
 /// the name V8 gives a destructuring's first property in its message, if any
+#[optimize(size)]
 fn first_key(node: &Expression) -> String {
 	let Expression::AssignmentExpression(a) = node else {
 		return String::new();
@@ -439,6 +460,7 @@ fn first_key(node: &Expression) -> String {
 }
 
 /// the expression a parsed partial holds, past the wrappers it was parsed in
+#[optimize(size)]
 fn expression_of<'b, 'a>(program: &'b Program<'a>) -> Option<&'b Expression<'a>> {
 	let mut statement = program.body.last()?;
 	// `class C { async *m() { (partial) } }` and `async function* f() { ... }`
@@ -463,6 +485,7 @@ fn expression_of<'b, 'a>(program: &'b Program<'a>) -> Option<&'b Expression<'a>>
 }
 
 /// the private names a source uses (`#a`), for the class wrapping
+#[optimize(size)]
 fn private_names(source: &str) -> Vec<&str> {
 	let bytes = source.as_bytes();
 	let mut names: Vec<&str> = Vec::new();
@@ -494,6 +517,7 @@ fn private_names(source: &str) -> Vec<&str> {
 }
 
 /// a partial parsed as an expression (the attempt's wrapping around it removed)
+#[optimize(size)]
 fn parse_in<'a>(
 	allocator: &'a Allocator,
 	source: &'a str,
@@ -518,6 +542,7 @@ fn parse_in<'a>(
 }
 
 /// what a parsed partial answers for `part`
+#[optimize(size)]
 fn reprint(node: &Expression, part: &str) -> Option<String> {
 	match part {
 		"callee" => match call_of(node) {
@@ -560,6 +585,7 @@ fn reprint(node: &Expression, part: &str) -> Option<String> {
 /// `part`: 'callee', 'spread' ('1' when a call spreads other than once at the
 /// end), 'type' (the call's ESTree node type), 'key'/'init' (a destructuring
 /// assignment's first property name and its source), else the expression.
+#[optimize(size)]
 pub fn print_expression(source: &str, part: &str) -> Option<String> {
 	let wrapped = format!("({source}\n)");
 	let privates = private_names(source);
