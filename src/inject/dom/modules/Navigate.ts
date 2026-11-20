@@ -43,11 +43,17 @@ export default class NavigateModule extends Module<DocumentClient> {
 		};
 		// about: and blob: documents have no proxy-origin URL to ask. The
 		// worker that served the document's navigation knows it already and
-		// its shell said so (DocumentClient.servedClient), heard after apply
-		// as an answer is; one of an earlier worker's is asked, a request
-		// and a pass of the worker's router for every document
+		// its shell said so (DocumentClient.servedClient); one of an earlier
+		// worker's is asked, a request and a pass of the worker's router for
+		// every document. A top-level document's first report carries the
+		// served id: told at once, after apply and before the page's markup
+		// is written, it went out with no title, and the report the page's
+		// parse makes went out again with it (navigate-events). The answer to
+		// `whoami` came after that parse. A frame of the page tells only the
+		// id, heard after apply as an answer is
 		const served = moduleClient.servedClient;
-		if (/^https?:$/.test(global.location.protocol))
+		if (served && !moduleClient.nested) client = served;
+		else if (/^https?:$/.test(global.location.protocol))
 			(served
 				? Promise.resolve(served)
 				: fetch(
