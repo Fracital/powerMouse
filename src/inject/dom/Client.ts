@@ -111,6 +111,7 @@ import PageStream, {
 	empty,
 	FIRST_PASS_MS,
 	FRAME_WAIT_MS,
+	hasBody,
 	now,
 	PASS_MS,
 	readMarkup,
@@ -118,6 +119,7 @@ import PageStream, {
 	WRITE_CHARS,
 	WRITE_MAX,
 	WRITE_MS,
+	YIELD_MS,
 } from './pageStream';
 import type { PolicyChecks } from './policyChecks';
 import { Pool, type PoolState } from './pool';
@@ -4369,9 +4371,17 @@ export default class DocumentClient extends Client {
 		// promise reactions run before the next script. Nothing does between
 		// the scripts of one write, so each piece after the first is written
 		// from a microtask queued after those of the piece before. The next
-		// pass is a task of its own, after which the page may paint.
+		// pass is a task of its own, after which the page may paint. Once the
+		// body has begun, a piece that ran long (a script the cache had ready
+		// runs inside the write: YouTube's player, 700 ms, back from another
+		// page) is followed by a frame before the next, as the network's
+		// parser yields to rendering once it has run a while: the page
+		// painted only once every script of the pass had run, a second later
+		// than natively. (In the head there is nothing to paint, and a frame
+		// is a style pass for nothing: CNN's 3 MB of head CSS.)
 		const pass = () => {
 			due = false;
+			let since = now();
 			const document = this.global.document;
 			const page = job.stream;
 			if (
@@ -4437,9 +4447,18 @@ export default class DocumentClient extends Client {
 				state.between = true;
 				root ??= rootOf(document);
 				if (index + 1 < pieces.length) {
-					Reflect.apply(this.#queueMicrotask, this.global, [
-						this.ownCallback(() => next(index + 1)),
-					]);
+					const go = this.ownCallback(() => next(index + 1));
+					if (now() - since < YIELD_MS || !hasBody(document))
+						Reflect.apply(this.#queueMicrotask, this.global, [go]);
+					else {
+						// (no pass runs in between: the rest of this one is due)
+						due = yielded = true;
+						afterFrame(() => {
+							due = false;
+							since = now();
+							go();
+						});
+					}
 					return;
 				}
 				if (ended) {
@@ -4449,8 +4468,10 @@ export default class DocumentClient extends Client {
 				// an object's or an embed's load is not the worker's
 				// (writtenLoads); the rest of the page waits for its markup
 				if (loads) this.writtenLoads?.(document);
-				if (more) schedule();
+				// (markup that came while it waited for a frame is taken next)
+				if (more || yielded) schedule();
 			};
+			let yielded = false;
 			if (pieces[0]) next(0);
 			else if (ended) finish(document);
 			// reported as it was before the page was written as it is parsed
@@ -4471,6 +4492,10 @@ export default class DocumentClient extends Client {
 				return;
 			}
 			drawn = writes;
+			afterFrame(run);
+		};
+		// `run` in a task after the next frame (FRAME_WAIT_MS at most)
+		const afterFrame = (run: () => void) => {
 			let ran = false;
 			const once = () => {
 				if (ran) return;

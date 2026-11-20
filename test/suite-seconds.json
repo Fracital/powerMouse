@@ -162,6 +162,7 @@
 	"optional-chains": 3,
 	"own-getters": 3,
 	"page-apis": 2,
+	"paint-between-scripts": 6,
 	"parent-read": 3,
 	"partition": 12,
 	"passkeys-safety": 3,

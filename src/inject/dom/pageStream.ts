@@ -68,6 +68,9 @@ const bodyOf = Reflect.getOwnPropertyDescriptor(
 	Document.prototype,
 	'body',
 )!.get!;
+/** whether `document` has a body (by the browser's own) */
+export const hasBody = (document: Document) =>
+	Reflect.apply(bodyOf, document, []) !== null;
 const doctypeOf = Reflect.getOwnPropertyDescriptor(
 	Document.prototype,
 	'doctype',
@@ -100,6 +103,8 @@ export const FIRST_PASS_MS = 4;
 export const PASS_MS = 20;
 /** how long the pass after the page's first write waits for the frame that draws it */
 export const FRAME_WAIT_MS = 50;
+/** how long the writes of one task may run before the next piece waits for a frame */
+export const YIELD_MS = 50;
 /**
  * what is copied is written once there is this much of it (a quarter of
  * what is written already, from WRITE_CHARS up to WRITE_MAX), or once the
@@ -383,8 +388,7 @@ export default class PageStream {
 				Reflect.apply(namespaceURI, child, []) === HTML &&
 				RAW_TEXT.includes(` ${Reflect.apply(localName, child, []) as string} `)
 			);
-		if (type === 1 && isNamed(child, 'head'))
-			return Reflect.apply(bodyOf, this.#parse, []) !== null;
+		if (type === 1 && isNamed(child, 'head')) return hasBody(this.#parse);
 		if (type === 1 && isNamed(child, 'body')) return false;
 		// foster parenting adds to a text right before an open table
 		if (
