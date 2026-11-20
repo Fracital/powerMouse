@@ -31,6 +31,7 @@
 // prevented), and submit() throws.
 import { createServer, request } from 'node:http';
 import {
+	clickInView,
 	done,
 	FIXTURE,
 	launch,
@@ -171,31 +172,6 @@ const read = (frame, expression) =>
 	frame.evaluate(expression).catch(() => null);
 
 /**
- * Click `selector` in `frame`, and once more when its document saw no
- * mousedown (an out-of-process frame's new place may not be hit-tested yet:
- * the site-pool suite's click)
- */
-async function click(frame, selector) {
-	for (let attempt = 0; attempt < 2; attempt++) {
-		await frame.evaluate(() => {
-			window.__sprPressed = false;
-			addEventListener('mousedown', () => (window.__sprPressed = true), {
-				capture: true,
-				once: true,
-			});
-		});
-		await frame.click(selector);
-		for (let i = 0; i < 10; i++) {
-			const pressed = await frame
-				.evaluate(() => window.__sprPressed !== false)
-				.catch(() => true); // the document went: it navigated
-			if (pressed) return;
-			await sleep(100);
-		}
-	}
-}
-
-/**
  * One mode's runs: `open(url)` shows the page of A at `url` as a top and
  * answers a function that answers its frame (a promise of it). Each run is a
  * page of A whose frame shows B
@@ -288,8 +264,8 @@ async function runs(label, open) {
 			result[way] = 'not shown';
 			continue;
 		}
-		if (way === 'link') await click(run.child, '#aimed');
-		else if (way === 'form') await click(run.child, '#send');
+		if (way === 'link') await clickInView(run.child, '#aimed');
+		else if (way === 'form') await clickInView(run.child, '#send');
 		else result.submitCall = await call(run.child, 'submit');
 		const landed = await documentOf(
 			run.element,

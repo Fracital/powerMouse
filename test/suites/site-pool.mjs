@@ -27,7 +27,16 @@
 //   natively, and a frame or a redirect it refuses is refused with Chrome's
 //   violation, which names no slot.
 import { caseURL, OTHER, report, shape } from '../csp-lib.mjs';
-import { done, FIXTURE, launch, ok, PROXY, REWRITER, sleep } from '../lib.mjs';
+import {
+	clickInView,
+	done,
+	FIXTURE,
+	launch,
+	ok,
+	PROXY,
+	REWRITER,
+	sleep,
+} from '../lib.mjs';
 
 const A = FIXTURE;
 const B = FIXTURE.replace('127.0.0.1', 'localhost');
@@ -84,37 +93,6 @@ async function frameOf(element, test = () => true, ms = 45000) {
 		}
 		if (Date.now() > until) return frame;
 		await sleep(100);
-	}
-}
-
-/**
- * Click `selector` in `frame`, and once more when the frame's document saw
- * no mousedown. The suite's page grows with every frame it shows, so a
- * frame's button is often below the fold: Playwright scrolls it in and
- * clicks at once, and under load the browser's hit testing has not yet
- * taken the out-of-process frame's new place, so the click goes to the
- * frame element of the document above it (measured, sp-focus 2026-11-15:
- * the top's document got the mousedown on its #child element, the frame's
- * document nothing; the form aimed at the top failed 2 runs in 40).
- */
-async function click(frame, selector) {
-	for (let attempt = 0; attempt < 2; attempt++) {
-		await frame.evaluate(() => {
-			window.__spPressed = false;
-			addEventListener('mousedown', () => (window.__spPressed = true), {
-				capture: true,
-				once: true,
-			});
-		});
-		await frame.click(selector);
-		for (let i = 0; i < 10; i++) {
-			const pressed = await frame
-				.evaluate(() => window.__spPressed !== false)
-				.catch(() => true); // the document went: it navigated
-			if (pressed) return;
-			await sleep(100);
-		}
-		console.log(`a click on ${selector} missed its frame (try ${attempt + 1})`);
 	}
 }
 
@@ -215,7 +193,7 @@ for (const [way, button] of Object.entries(TOP_WAYS)) {
 	const frame = await childOf(native, (u) => u.startsWith(B));
 	await Promise.all([
 		native.waitForURL(`${B}echo-headers**`),
-		click(frame, button),
+		clickInView(frame, button),
 	]);
 	nativeTop[way] = await recorded(key);
 }
@@ -638,7 +616,7 @@ const link = await show(
 	`${A}${PAGE}?to=${encodeURIComponent(`${B}echo-headers?k=${linkKey}`)}`,
 	inPool([slotA]),
 );
-await click(link.frame, '#to');
+await clickInView(link.frame, '#to');
 const linked = await frameOf(link.element, inPool([slotB]));
 ok(
 	'a link to another site leaves for that site slot',
@@ -687,7 +665,7 @@ const nav = await show(
 	`${A}${PAGE}?to=${encodeURIComponent(`${B}${PAGE}?landed`)}`,
 	inPool([slotA]),
 );
-await click(nav.frame, '#to');
+await clickInView(nav.frame, '#to');
 const landed = await frameOf(nav.element, inPool([slotB]));
 ok(
 	'the new document has the real location and referrer',
@@ -720,7 +698,7 @@ const toolbar = await show(
 	`${A}${PAGE}?to=${encodeURIComponent(`${B}${PAGE}?toolbar`)}`,
 	inPool([slotA]),
 );
-await click(toolbar.frame, '#to');
+await clickInView(toolbar.frame, '#to');
 await frameOf(toolbar.element, inPool([slotB]));
 await sleep(500);
 const stepped = await page.evaluate(async () => {
@@ -763,7 +741,7 @@ for (const [way, button] of Object.entries(TOP_WAYS)) {
 		const frame = await childOf(shown.frame, (url) =>
 			mode === 'pool' ? inPool([slotB])(url) : url.includes('/stomp/'),
 		);
-		await click(frame, button);
+		await clickInView(frame, button);
 		seen[mode] = (await recorded(key)) ?? {};
 		await sleep(500);
 		const top = await shown.element.contentFrame();
@@ -804,7 +782,7 @@ const topLink = await show(
 	`${A}${PAGE}?tl&child=${encodeURIComponent(`${B}${PAGE}?target=_top&to=${encodeURIComponent(`${B}${PAGE}?top-landed`)}`)}`,
 	inPool([slotA]),
 );
-await click(await childOf(topLink.frame, inPool([slotB])), '#to');
+await clickInView(await childOf(topLink.frame, inPool([slotB])), '#to');
 const topLanded = await frameOf(topLink.element, inPool([slotB]));
 await sleep(500);
 ok(
@@ -1100,7 +1078,7 @@ const crossed = await show(
 );
 await cdp.send('ServiceWorker.stopAllWorkers');
 await sleep(500);
-await click(crossed.frame, '#to');
+await clickInView(crossed.frame, '#to');
 const crossedTo = await frameOf(crossed.element, inPool([slotB]));
 ok(
 	'a link to another site still leaves for its slot after the workers stopped',
@@ -1170,7 +1148,7 @@ await asPage(
 	partedChild,
 	"document.getElementById('to').rel = 'noreferrer'; return null",
 );
-await click(partedChild, '#to');
+await clickInView(partedChild, '#to');
 const arrived = await childOf(parted.frame, (url) => url.includes('parted-to'));
 const afterGates = await stompGlobals(arrived);
 ok(

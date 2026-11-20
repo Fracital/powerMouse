@@ -581,6 +581,65 @@ export async function evaluateQuietly(frame, expression) {
 }
 
 /**
+ * Click `selector` in `frame` (a Playwright Frame) once the frame's own
+ * document sees it in view, and once more when that document saw no
+ * mousedown (logged). A page that grows with the frames it shows has them
+ * below the fold: Playwright scrolls one in and clicks at once, and when
+ * the page has not yet drawn an out-of-process frame at its new place,
+ * Chrome hit-tests the click to the frame's element in the document above
+ * it, and the frame's document gets nothing (measured: site-pool's sp-focus
+ * 2026-11-15, 2 runs in 40; site-pool-fallback 2026-11-20, 2 in 16 four at
+ * a time). A frame in view that has just loaded can miss the same way
+ * (passkeys' #go, natively, at the top of the page: a refusal that settles
+ * in a microtask came back never done, so the click's handler never ran).
+ * So the frame's document scrolls the element in itself, and the click
+ * waits until its IntersectionObserver sees it and two frames are drawn.
+ * `evaluate(fn, arg)` runs `fn` in the frame's page: Playwright's by
+ * default, which gives the page a user activation; pass one that does not
+ * where that matters.
+ */
+export async function clickInView(
+	frame,
+	selector,
+	evaluate = (fn, arg) => frame.evaluate(fn, arg),
+) {
+	await evaluate(
+		(selector) =>
+			new Promise((resolve) => {
+				const element = document.querySelector(selector);
+				if (!element) return resolve();
+				const observer = new IntersectionObserver((entries) => {
+					if (!entries.some((entry) => entry.isIntersecting)) return;
+					observer.disconnect();
+					requestAnimationFrame(() => requestAnimationFrame(resolve));
+				});
+				observer.observe(element);
+				element.scrollIntoView({ block: 'center' });
+				setTimeout(resolve, 5000);
+			}),
+		selector,
+	).catch(() => {});
+	for (let attempt = 0; attempt < 2; attempt++) {
+		await evaluate(() => {
+			window.__stompTestPressed = false;
+			addEventListener('mousedown', () => (window.__stompTestPressed = true), {
+				capture: true,
+				once: true,
+			});
+		});
+		await frame.click(selector);
+		for (let i = 0; i < 10; i++) {
+			const pressed = await evaluate(
+				() => window.__stompTestPressed !== false,
+			).catch(() => true); // the document went: it navigated
+			if (pressed) return;
+			await sleep(100);
+		}
+		console.log(`a click on ${selector} missed its frame (try ${attempt + 1})`);
+	}
+}
+
+/**
  * CDP events of the frames of `page` that run in processes of their own (a
  * proxied document shown from a site pool's slot, docs/site-pool.md, is one:
  * the page's own CDP session sees none of its requests). Each such frame is

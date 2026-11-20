@@ -60,6 +60,7 @@
 // stale), and an unlisted failure fails the suite.
 import { createHash, randomBytes } from 'node:crypto';
 import {
+	clickInView,
 	done,
 	HOST,
 	launch,
@@ -580,13 +581,16 @@ const framedA = (allow) =>
 	`&frame=${encodeURIComponent(
 		`${ORIGIN.a}/pk/page?id=k${++serial}&top=${encodeURIComponent(ORIGIN.b)}`,
 	)}${allow ? `&allow=${encodeURIComponent(allow)}` : ''}`;
-/** a harness function run from a real click of the frame's #go */
+/**
+ * a harness function run from a real click of the frame's #go (once its
+ * document sees it in view: clickInView)
+ */
 async function armed(frame, name, ...args) {
 	const id = await quiet(frame, ([n, a]) => window.__pk.arm(n, ...a), [
 		name,
 		args,
 	]);
-	await frame.click('#go');
+	await clickInView(frame, '#go', (fn, arg) => quiet(frame, fn, arg));
 	for (let i = 0; i < 400; i++) {
 		const state = await quiet(frame, (n) => window.__pk.read(n), id);
 		if (state?.done) return state.value;

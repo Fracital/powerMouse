@@ -34,6 +34,7 @@
 // The demo runs with `?passkeys=test`: timeouts are taken as given, as
 // Chrome takes them with a virtual authenticator.
 import {
+	clickInView,
 	done,
 	HOST,
 	launch,
@@ -95,13 +96,17 @@ async function outcome(frame, id) {
 	}
 	return { harness: 'never done' };
 }
-/** `name` run from a real click in the frame (a user activation) */
+/**
+ * `name` run from a real click in the frame (a user activation): an
+ * out-of-process frame that has just loaded may not take a click at once
+ * (clickInView)
+ */
 async function armed(frame, name, ...args) {
 	const id = await frame.evaluate(
 		([n, a]) => window.__pk.arm(n, ...a),
 		[name, args],
 	);
-	await frame.click('#go');
+	await clickInView(frame, '#go');
 	return outcome(frame, id);
 }
 
