@@ -555,7 +555,7 @@ function library(): RewriterLib {
  * call is made again. A frame's rewrite adopts into its top's shared library,
  * so one fetch serves the frames too.
  */
-function ask<T>(work: (lib: RewriterLib) => T): [RewriterLib, T] {
+export function ask<T>(work: (lib: RewriterLib) => T): [RewriterLib, T] {
 	const lib = library();
 	const result = work(lib);
 	if (lib.needs() !== true) return [lib, result];

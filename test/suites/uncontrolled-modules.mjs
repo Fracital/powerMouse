@@ -6,13 +6,14 @@
 // frame whose markup it writes with document.write
 // (test/pages/uncontrolled-modules.html). In each, inline and external
 // module scripts with static imports (relative, path-absolute, absolute, a
-// directory up, a cycle, a JSON module, an import map's bare specifier, a
-// missing one), dynamic imports from a module and from a classic script,
-// and what `import.meta.url` reads. Natively the document's loads are the
-// network's; through the proxy no service worker serves them (WebKit hands
-// the frame its parent's worker, which serves none of its routes), so the
-// inject loads the graph itself. Every case must read as natively, in both
-// modes.
+// directory up, two cycles, one of three modules and what each sees of the
+// others (test/pages/um-link-a.js), a JSON module, an import map's bare
+// specifier, a missing one), dynamic imports from a module and from a
+// classic script, and what `import.meta.url` reads. Natively the document's
+// loads are the network's; through the proxy no service worker serves them
+// (WebKit hands the frame its parent's worker, which serves none of its
+// routes), so the inject loads the graph itself. Every case must read as
+// natively, in both modes.
 import { proxiedGo, withFirefox, withWebKit } from '../engines.mjs';
 import {
 	done,
@@ -36,18 +37,7 @@ const REPORT = 'window.__umReport';
 
 // Differences known and left, by engine, mode and part, with why. One that
 // now reads as natively fails too: take it off.
-const FIREFOX_CYCLE =
-	'a cycle is closed by an import map the inject adds once the copies are made, and Firefox takes no import map once a module of the document has loaded (Chrome and WebKit do); a blob: URL cannot name a module before it is made';
-const KNOWN = Object.fromEntries(
-	['same-origin', 'isolated'].flatMap((mode) =>
-		[
-			'written: cycle',
-			'navigated: cycle',
-			'popup: cycle',
-			'markup: markupCycle',
-		].map((part) => [`Firefox ${mode}: ${part}`, FIREFOX_CYCLE]),
-	),
-);
+const KNOWN = {};
 
 /** a report's parts, by name: each document's cases */
 const parts = (report) => {

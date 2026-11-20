@@ -463,19 +463,20 @@ truth for the thing most likely to leak an origin.
 
 The flags of `r`, and what each call takes and answers:
 
-| Flag | Input                          | Answer                                                            |
-| ---- | ------------------------------ | ----------------------------------------------------------------- |
-| 0    | a classic script               | the rewritten script                                              |
-| 1    | text                           | the host's routing of it (the round trip)                         |
-| 2    | a module                       | the rewritten module                                              |
-| 4    | (with 0 or 2)                  | the holder statement is written too                               |
-| 8    | `url`, `key`, `shifts`, `lead` | nothing: they hold for the next rewrite                           |
-| 16   | nothing                        | `marks<TAB>key` of the last rewrite (under 1024, then `<TAB>map`) |
-| 32   | nothing                        | the revision of what the module writes                            |
-| 64   | a classic script               | `1` when it parses, `0` when not                                  |
-| 128  | a classic script               | `1` when it is one expression statement                           |
-| 512  | (with 0 or 2)                  | the position map statement is written too                         |
-| 1024 | (with 0 or 2)                  | the map is made apart, for 16 to answer                           |
+| Flag | Input                           | Answer                                                            |
+| ---- | ------------------------------- | ----------------------------------------------------------------- |
+| 0    | a classic script                | the rewritten script                                              |
+| 1    | text                            | the host's routing of it (the round trip)                         |
+| 2    | a module                        | the rewritten module                                              |
+| 4    | (with 0 or 2)                   | the holder statement is written too                               |
+| 8    | `url`, `key`, `shifts`, `lead`  | nothing: they hold for the next rewrite                           |
+| 16   | nothing                         | `marks<TAB>key` of the last rewrite (under 1024, then `<TAB>map`) |
+| 32   | nothing                         | the revision of what the module writes                            |
+| 64   | a classic script                | `1` when it parses, `0` when not                                  |
+| 128  | a classic script                | `1` when it is one expression statement                           |
+| 512  | (with 0 or 2)                   | the position map statement is written too                         |
+| 1024 | (with 0 or 2)                   | the map is made apart, for 16 to answer                           |
+| 2048 | a cycle's modules, apart by NUL | the merged module and each one's facade, apart by NUL (`link.rs`) |
 
 `lead` is what runs before the script's own code (the worker bootstrap, a
 module's `import.meta` lines, the caller's preamble), built by `scriptLead`
@@ -490,7 +491,10 @@ what it cannot parse (`unrewritten` in `src/wasm/rewriter.ts`: the script as
 it was, or a `throw` under `allowInvalidJs: false`) without running that
 rewriter. Flags 64 and 128 ask the parser alone, for `parsesAsScript` and
 `singleExpression`, whose answer is the module's wherever the thread holds
-it. The revision (`REVISION` in `rewrite.rs`) is raised
+it. Flag 2048 merges the modules of an import cycle in a document no
+service worker controls (`link.rs`, `src/inject/dom/moduleGraph.ts`);
+status 4 when they do not link, and the host closes the cycle with an
+import map. The revision (`REVISION` in `rewrite.rs`) is raised
 whenever the output for any script changes, so a cache of rewrites keyed on
 the backend and the revision never serves an older module's text;
 `rust/host/parity.mjs --cases` holds it to the outputs

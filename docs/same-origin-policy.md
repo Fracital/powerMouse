@@ -969,13 +969,27 @@ Filled in commit by commit; see the CHANGELOG for each.
     external one gets its graph's copy as its URL, one written in markup
     after the write (a module does not hold up the parser, and one the
     parser made with neither src nor text has not started); `import()`
-    imports the copy. A cycle has no leaf: the import that closes it keeps
-    its absolute route, and an import map the inject adds names that
-    route's copy. Chrome and WebKit take an import map at any time (measured:
-    several, mapping an absolute URL to a `blob:` URL, applied to a `blob:`
-    module's imports); Firefox takes none once a module of the document has
-    loaded, and a `blob:` URL cannot name a module before it is made, so a
-    cycle in such a document fails in Firefox (a known difference). WebKit
+    imports the copy. A cycle has no leaf, and a `blob:` URL cannot name a
+    module before it is made, so the rewriter's linker
+    (`rust/rwjs/src/link.rs`, flag 2048 of the core module) merges a
+    cycle's modules into one module, copied once, and each of them is
+    copied as a module that exports what it did from that one, as live
+    bindings. Each module keeps its own top-level names (one another module
+    of the cycle declares, or reads as a global, is renamed, by a scope
+    walk of each module, with its function's `name` kept), its own
+    `import.meta`, and the order the browser runs a cycle in; a function
+    one declares is hoisted across the cycle, and an import of another
+    reads that one's binding itself, in its temporal dead zone until it
+    runs (measured on a cycle of three modules: `test/pages/um-link-a.js`).
+    Left: a `*` import of a module of the cycle reads an object of getters
+    (its properties are accessors, and it is not the namespace an
+    `import()` of the module answers), and the modules outside the cycle
+    run before all of its own. A cycle the linker declines (an import of a
+    name the module does not export, a namespace whose names a module
+    outside the cycle decides) is closed as before: the import that closes
+    it keeps its absolute route, and an import map the inject adds names
+    that route's copy, which Chrome and WebKit take at any time and Firefox
+    not once a module of the document has loaded. WebKit
     hands an about:blank frame its parent's service worker
     (`navigator.serviceWorker.controller` is set once the frame is made), and
     a module route loaded from it fails: an about:blank document, opened or
