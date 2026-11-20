@@ -689,7 +689,7 @@ export default class Cookies {
 	private db: JarDB;
 	#publicSuffix: PublicSuffix;
 	/** called after the jar changed for a domain ('' for every host) */
-	onChange?: (domain: string) => void;
+	onChange?: (domain: string, receipt?: string) => void;
 	/** the last creation time handed out, so two sets in one ms keep their order */
 	#lastCreated = 0;
 	/** each document's next asynchronous script write */
@@ -906,6 +906,7 @@ export default class Cookies {
 		// what each cookie did to the jar: its id and the cookie as stored,
 		// or null when it deleted one (none for a cookie the jar refused)
 		outcomes?: [string, JarCookie | null][],
+		receipt?: string,
 	): Promise<void> {
 		partitionKey = partitionKeyOf(partitionKey);
 		url = new URL(url);
@@ -945,7 +946,7 @@ export default class Cookies {
 					continue;
 			}
 
-			const stored = await this.#put(cookie, source, now);
+			const stored = await this.#put(cookie, source, now, receipt);
 			if (stored !== undefined) outcomes?.push([cookie.id, stored]);
 		}
 	}
@@ -957,6 +958,7 @@ export default class Cookies {
 		cookie: JarCookie,
 		source: CookieSource,
 		now: number,
+		receipt?: string,
 	): Promise<JarCookie | null | undefined> {
 		const existing = (await this.db.get(STORE, cookie.id)) as
 			JarCookie | undefined;
@@ -965,7 +967,7 @@ export default class Cookies {
 		if (expired(cookie, now)) {
 			// Max-Age=0 or a past Expires: the site is deleting it
 			await this.db.delete(STORE, cookie.id);
-			this.onChange?.(cookie.domain);
+			this.onChange?.(cookie.domain, receipt);
 			return null;
 		}
 		// Chrome keeps the old creation time only when the value is
@@ -977,7 +979,7 @@ export default class Cookies {
 			this.#lastCreated = cookie.created;
 		}
 		await this.db.put(STORE, cookie);
-		this.onChange?.(cookie.domain);
+		this.onChange?.(cookie.domain, receipt);
 		return cookie;
 	}
 }
@@ -1002,9 +1004,9 @@ const telling = new Set<Promise<void>>();
  * is not told (the page's Cookies module would drop the message): see
  * windowURL.
  */
-function broadcastChange(domain: string) {
+function broadcastChange(domain: string, receipt?: string) {
 	if (typeof clients === 'undefined') return;
-	const told = postChange(domain).catch(() => {});
+	const told = postChange({ domain, receipt }).catch(() => {});
 	telling.add(told);
 	void told.finally(() => telling.delete(told));
 }
@@ -1027,13 +1029,13 @@ export function changesTold(ms: number): Promise<void> {
 	]);
 }
 
-async function postChange(domain: string) {
+async function postChange(change: CookiesChange) {
 	if (typeof clients === 'undefined') return;
 	const windows = await clients.matchAll({
 		type: 'window',
 		includeUncontrolled: true,
 	});
-	const change: CookiesChange = { domain };
+	const { domain } = change;
 	for (const client of windows) {
 		const host = domain === '' ? null : windowURL(client.url)?.hostname;
 		if (host && host !== domain && !host.endsWith(`.${domain}`)) continue;
@@ -1271,14 +1273,14 @@ export async function openCookies(
 	publicSuffix: PublicSuffix,
 	remote?: RemoteJar,
 ): Promise<Cookies> {
+	const heard = (domain: string, receipt?: string) => {
+		broadcastChange(domain, receipt);
+		for (const listener of jarListeners) listener(domain);
+	};
 	if (remote) {
 		const cookies = new Cookies(remote, publicSuffix);
-		const heard = (domain: string) => {
-			broadcastChange(domain);
-			for (const listener of jarListeners) listener(domain);
-		};
-		cookies.onChange = (domain) => {
-			heard(domain);
+		cookies.onChange = (domain, receipt) => {
+			heard(domain, receipt);
 			remote.changed(domain);
 		};
 		remote.onChanged = heard;
@@ -1294,10 +1296,7 @@ export async function openCookies(
 		new KeptJar(db as unknown as JarDB),
 		publicSuffix,
 	);
-	cookies.onChange = (domain) => {
-		broadcastChange(domain);
-		for (const listener of jarListeners) listener(domain);
-	};
+	cookies.onChange = heard;
 
 	return cookies;
 }
@@ -1323,8 +1322,10 @@ export function registerCookies(router: Router, cookies: Cookies): Cookies {
 				// a document's own write: what it did to the jar, which the
 				// document applies to what it knows, so its next read of
 				// document.cookie needs no round trip of its own
-				outcomes?: boolean,
+				outcomes?: boolean | 'receipt',
 			) => {
+				const receipt =
+					outcomes === 'receipt' ? crypto.randomUUID() : undefined;
 				const done: [string, JarCookie | null][] | undefined = outcomes
 					? []
 					: undefined;
@@ -1335,8 +1336,9 @@ export function registerCookies(router: Router, cookies: Cookies): Cookies {
 					partitionKey ?? undefined,
 					false,
 					done,
+					receipt,
 				);
-				return done;
+				return receipt ? { outcomes: done, receipt } : done;
 			},
 		),
 	);

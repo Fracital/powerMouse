@@ -533,6 +533,8 @@ export const COOKIES_CHANGED = '$stomp$cookiesChanged';
 export const JAR_WRITES = '$stomp$jarWrites';
 export interface CookiesChange {
 	domain: string;
+	/** The receipt for one synchronous write, also returned to its writer. */
+	receipt?: string;
 }
 /** proxied page -> dedicated worker, with [port]: the worker's transport port */
 export const TRANSPORT_INIT = '$stomp$transportInit';

@@ -62,6 +62,8 @@ interface View {
 	version: string;
 	/** JAR_TURN_COOKIE as the jar was read */
 	turn: string;
+	/** The last synchronous write this view applied from the worker's answer. */
+	receipt: string | undefined;
 }
 const views = new LazyMap<string, View>();
 /** this realm leaves the stamps' lists (stampHolders): its views read again */
@@ -99,7 +101,13 @@ export class CookiesModule extends Module<DocumentClient> {
 		if (!view)
 			views.set(
 				key,
-				(view = { known: null, fresh: false, version: '', turn: '' }),
+				(view = {
+					known: null,
+					fresh: false,
+					version: '',
+					turn: '',
+					receipt: undefined,
+				}),
 			);
 		return view;
 	}
@@ -498,7 +506,7 @@ export class CookiesModule extends Module<DocumentClient> {
 				client.url.toString(),
 				'script',
 				this.#partitionKey,
-				true,
+				'receipt',
 			);
 		if (answer) {
 			// the jar answers with what the write did (the cookie as stored, a
@@ -507,7 +515,10 @@ export class CookiesModule extends Module<DocumentClient> {
 			// right after writing it, and every such read was a round trip of
 			// its own. Other documents of the site read the jar again (the new
 			// version)
-			const outcomes = answer.value as [string, JarCookie | null][] | null;
+			// Older workers return the outcomes alone, with no receipt.
+			const written = Array.isArray(answer.value) ? null : answer.value;
+			const outcomes = (written ? written.outcomes : answer.value) as
+				[string, JarCookie | null][] | null;
 			const view = this.#view;
 			if (this.#writes) {
 				const now = Date.now();
@@ -529,6 +540,7 @@ export class CookiesModule extends Module<DocumentClient> {
 					if (stored) view.known.push(stored);
 				}
 				this.#restamp();
+				view.receipt = written?.receipt;
 			} else {
 				// kept for a read the bridge cannot make later
 				const now = Date.now();
@@ -594,7 +606,11 @@ export class CookiesModule extends Module<DocumentClient> {
 				// the proxy origin's storage, an event in every document of
 				// the origin (apnews.com: 4,800 writes in 36 s, 170,000
 				// events)
-				this.#view.fresh = false;
+				// The writing document hears the worker too, after applying the
+				// outcome. Only that exact write leaves this view fresh.
+				const view = this.#view;
+				if (!view.receipt || change.receipt !== view.receipt)
+					view.fresh = false;
 				this.#changed();
 			}
 		});
