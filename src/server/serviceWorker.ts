@@ -578,6 +578,7 @@ function registerController(
 			serviceWorkers.setEventDelay(config.serviceWorkerEventDelay);
 	});
 	controllers.set(directory, ref);
+	closed.delete(directory);
 	for (const wake of [...registrationWaiters]) wake();
 	// the controller's side of the port went away (it shook hands again over
 	// a new channel; Chrome does not fire this when the tab itself goes, the
@@ -717,6 +718,40 @@ function forget(ref: ControllerRef, reason: string) {
 	ref.transport.close(reason);
 	ref.pool?.close();
 	ref.port.close();
+}
+
+/**
+ * The controllers whose tab said it is going (CONTROLLER_CLOSE), by
+ * address, for CLOSED_MS. Chrome runs the host page's pagehide before its
+ * frames', so what a proxied document asks as it unloads comes after the
+ * close: a page's storage read in its pagehide (Twitch's) found no
+ * controller, went to the host's server and spun to the bridge's 10 s limit,
+ * on the renderer the reloaded host page needed to commit (a reload, a hard
+ * one most often, waited 10 s with nothing on screen), and its writes there
+ * were lost. A document's request at such an address is still answered by
+ * its controller's server, whose transport is closed: what needs the
+ * network fails at once. A navigation to it is an orphan's, as before.
+ */
+const closed = new Map<string, ControllerRef>();
+const CLOSED_MS = 15000;
+
+function closeController(ref: ControllerRef) {
+	forget(ref, 'Controller closed');
+	closed.set(ref.directory, ref);
+	setTimeout(() => {
+		if (closed.get(ref.directory) === ref) closed.delete(ref.directory);
+	}, CLOSED_MS);
+}
+
+/** the closed controller that still answers a document's `request` at `pathname` (closed) */
+function closedFor(
+	request: Request,
+	pathname: string,
+): ControllerRef | undefined {
+	if (request.mode === 'navigate') return undefined;
+	for (const ref of closed.values())
+		if (pathname.startsWith(ref.directory)) return ref;
+	return undefined;
 }
 
 /** the longest a registration being let go keeps a request in flight waiting before it closes */
@@ -1535,7 +1570,7 @@ function handleMessage(event: ExtendableMessageEvent) {
 		// page is a client too, and must not be able to kill its host's)
 		const { directory } = data[CONTROLLER_CLOSE] as ControllerCloseMessage;
 		const ref = controllers.get(directory);
-		if (ref && ref.owner === sender) forget(ref, 'Controller closed');
+		if (ref && ref.owner === sender) closeController(ref);
 	} else if (BLOCKER_SERVE in data) {
 		// the hub of a site pool: from the registering tab
 		// only, a port on which a slot's worker asks this worker's engine
@@ -2133,7 +2168,7 @@ function answerFor(
 	event: FetchEvent,
 	pathname: string,
 ): Promise<Response> | null {
-	const ref = controllerFor(pathname);
+	const ref = controllerFor(pathname) ?? closedFor(event.request, pathname);
 	if (ref) {
 		// the server is still opening its databases: decide once it's up
 		if (ref.ready && !ref.ready.router.willRoute(event.request.url))
@@ -2608,6 +2643,7 @@ self.addEventListener('fetch', (event: FetchEvent) => {
 	// waits for it, before another controller could take it over as an orphan
 	if (
 		!controllerFor(pathname) &&
+		!closedFor(event.request, pathname) &&
 		Date.now() - STARTED_AT < REVIVE_HOLD_MS &&
 		addressShaped(pathname)
 	) {
