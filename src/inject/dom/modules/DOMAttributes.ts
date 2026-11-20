@@ -4,6 +4,7 @@ import {
 	routeCSS,
 } from '../../../cssURLs';
 import { handlerMark, keepSource, sourceKey } from '../../../functionSource';
+import { accessExpression, helperNames } from '../../../helperNames';
 import type { modifyHTML } from '../../../htmlShell';
 import { JS_MIME_TYPES } from '../../../prewrite';
 import { isXMLDocumentMime, routeHTML } from '../../../rewriteHTML';
@@ -621,7 +622,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					// the browser compiles the code as a function's body: marked,
 					// so the function reads back with the page's code in it
 					// (its positions read as its own, as natively: of its tag in the
-					// page's markup, ./violations.ts handlerPlace)
+					// page's markup, ./violations.ts handlerPlace). The page's
+					// policy judges it again as it first runs, by the policies in
+					// force then (DocumentClient.codeRuns)
 					const key = sourceKey(source);
 					keepSource(key, source);
 					const head = handlerMark(key);
@@ -633,7 +636,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 								moduleClient.baseURL,
 								moduleClient.config,
 								'generic',
-								'',
+								`if(${accessExpression(helperNames(moduleClient.config).access)}.csp(this,"${key}"))return;`,
 								{
 									head,
 									place: moduleClient.markupCopy

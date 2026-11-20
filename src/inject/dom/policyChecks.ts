@@ -27,15 +27,23 @@ import {
 	integrityMatches,
 	type CodeItem,
 } from '../../cspJudge';
+import { keptText } from '../../functionSource';
 import { proxyBlobURL } from '../../routeURL';
 import { digest } from '../../sha';
 import ProxyModule from '../modules/Proxy';
 import UnrouteModule from '../modules/Unroute';
 import { LazySet, LazyWeakMap } from '../ownCollections';
 import type DocumentClient from './Client';
-import { nativeSetTimeout, nonceOf } from './Client';
+import {
+	nativeGetAttribute,
+	nativeRemoveAttribute,
+	nativeSetTimeout,
+	nonceOf,
+} from './Client';
+import { nativeGetAttributeNames, nativeNodeType } from './cloneNode';
 import { deferred } from './deferred';
 import { nativeConsoleError, nativeConsoleInfo } from './modules/Context';
+import { markerPrefix } from './modules/MutationObserver';
 import type { Site } from './violations';
 
 /** what Chrome names a refused load of `url` by (a script's, a style's) */
@@ -66,6 +74,7 @@ function dispatchViolation(
 	documentURI?: string,
 	statusCode?: number,
 	site?: Site,
+	once?: string,
 ) {
 	const global = client.global as typeof globalThis;
 	const Event = global.SecurityPolicyViolationEvent;
@@ -80,6 +89,7 @@ function dispatchViolation(
 		documentURI,
 		statusCode,
 		site,
+		once,
 	);
 	nativeSetTimeout(() => {
 		try {
@@ -109,8 +119,9 @@ function dispatchViolation(
  * no place: measured). A document reports each report once: one that reads
  * as one it made before (the same code refused again at the same place, a
  * script file run twice) is not made again, though its event fires
- * (measured). One with no place is always made: natively it has a place of
- * its own.
+ * (measured). One with no place is always made, where natively it has a
+ * place of its own; one whose report names none natively either is made
+ * once (`once`).
  */
 const madeBodies = new LazyWeakMap<DocumentClient, LazySet<string>>();
 function makeReport(
@@ -122,6 +133,12 @@ function makeReport(
 	documentURI?: string,
 	statusCode?: number,
 	site?: Site,
+	/**
+	 * reported once though it has no place, as Chrome's is: a handler's as
+	 * the parser inserts it, whose report names none (every one that reads
+	 * the same is one), measured
+	 */
+	once?: string,
 ) {
 	const global = client.global as typeof globalThis;
 	const made = client.getModule(UnrouteModule)?.madeReports;
@@ -143,11 +160,11 @@ function makeReport(
 		disposition: policy.disposition,
 		statusCode: statusCode ?? 200,
 	};
-	if (site) {
+	if (site || once !== undefined) {
 		let bodies = madeBodies.get(client);
 		if (!bodies) madeBodies.set(client, (bodies = new LazySet()));
 		// (no global of the page's makes the key)
-		const key = `${site[0]}\n${site[1]}\n${site[2]}\n${body.documentURL}\n${body.referrer}\n${blocked}\n${directive}\n${policy.text}\n${sample}\n${policy.disposition}\n${body.statusCode}`;
+		const key = `${site ?? once}\n${body.documentURL}\n${body.referrer}\n${blocked}\n${directive}\n${policy.text}\n${sample}\n${policy.disposition}\n${body.statusCode}`;
 		if (bodies.has(key)) return;
 		bodies.add(key);
 	}
@@ -237,16 +254,21 @@ function elementIntegrity(element: Element): string | null {
 
 /**
  * Chrome's console message for a script element `policy` refuses at
- * script-src-elem (`governed`: the directive that governs it), printed by
- * the console's native method, which no page hook sees, as the browser's
- * own (measured, Chrome 157): an inline one's names the hash of the page's
- * text, an external one's its URL
+ * script-src-elem (`governed`: the directive that governs it), a handler at
+ * script-src-attr or a javascript: URL (`lead`), printed by the console's
+ * native method, which no page hook sees, as the browser's own (measured,
+ * Chrome 157): an inline script's names the hash of the page's text, an
+ * external one's its URL; a handler's and a URL's no hash, and that a hash
+ * takes 'unsafe-hashes'
  */
 function logScriptRefusal(
 	policy: Policy,
 	governed: { name: string; sources: string[] },
-	item: CodeItem,
+	item: CodeItem & { lead?: string },
+	attr: boolean,
 ) {
+	const lead =
+		item.lead ?? (attr ? 'Executing inline event handler' : undefined);
 	const { name, sources } = governed;
 	const directive = sources.length ? `${name} ${sources.join(' ')}` : name;
 	const enforced = policy.disposition === 'enforce';
@@ -258,11 +280,11 @@ function logScriptRefusal(
 		message = `Loading the script '${item.url.href}' violates the following Content Security Policy directive: "${directive}".${name === 'script-src-elem' ? '' : ` Note that 'script-src-elem' was not explicitly set, so '${name}' is used as a fallback.`}`;
 	} else {
 		const lower = sources.map((source) => source.toLowerCase());
-		message = `Executing inline script violates the following Content Security Policy directive '${directive}'.${
+		message = `${lead ?? 'Executing inline script'} violates the following Content Security Policy directive '${directive}'.${
 			lower.includes("'unsafe-inline'") &&
 			sources.some((source) => /^'(nonce-|sha(256|384|512)-)/i.test(source))
 				? " Note that 'unsafe-inline' is ignored if either a hash or nonce value is present in the source list."
-				: ` Either the 'unsafe-inline' keyword, a hash ('sha256-${digest('sha256', item.text ?? '')}'), or a nonce ('nonce-...') is required to enable inline execution.${name === 'default-src' ? " Note also that 'script-src' was not explicitly set, so 'default-src' is used as a fallback." : ''}`
+				: ` Either the 'unsafe-inline' keyword, a hash ('sha256-${lead ? '...' : digest('sha256', item.text ?? '')}'), or a nonce ('nonce-...') is required to enable inline execution.${lead ? " Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present." : ''}${name === 'default-src' ? " Note also that 'script-src' was not explicitly set, so 'default-src' is used as a fallback." : ''}`
 		}`;
 	}
 	try {
@@ -303,7 +325,7 @@ function codeRefused(
 	directive: string,
 	blocked: string,
 	node: Node | null,
-	item: CodeItem & { sample?: string | null },
+	item: CodeItem & { sample?: string | null; lead?: string; once?: string },
 	/**
 	 * The load reaches the service worker (an http(s) external script or
 	 * style), which reports a report-only refusal itself (reportRefusal): the
@@ -344,14 +366,97 @@ function codeRefused(
 			undefined,
 			undefined,
 			site,
+			item.once,
 		);
-		if (directive === 'script-src-elem')
-			logScriptRefusal(policy, governed, item);
+		if (directive.startsWith('script-src-'))
+			logScriptRefusal(policy, governed, item, directive.endsWith('-attr'));
 	}
 	return refused;
 }
 
+/** each handler's verdict as it first ran, by the key of its text (runRefused) */
+const handlerVerdicts = new LazyWeakMap<object, Record<string, boolean>>();
+
 export const policyChecks = {
+	/**
+	 * Judge each handler of `element`, of the page's markup, as the parser
+	 * inserts it in the written page (DocumentClient judgeParsed), as Chrome
+	 * judges a handler attribute as it is set: by the policies in force then.
+	 * A refused one keeps no attribute for the browser, which compiles
+	 * nothing; the page reads its own back
+	 */
+	parsedHandlers(client: DocumentClient, element: Element) {
+		const prefix = markerPrefix();
+		for (const name of Reflect.apply(nativeGetAttributeNames, element, [])) {
+			if (!name.startsWith(`${prefix}on`)) continue;
+			const text = Reflect.apply(nativeGetAttribute, element, [name]);
+			if (
+				codeRefused(
+					client,
+					'script-src-attr',
+					'inline',
+					element,
+					{ text, sample: text, once: '' },
+					false,
+				)
+			)
+				Reflect.apply(nativeRemoveAttribute, element, [
+					name.slice(prefix.length),
+				]);
+		}
+	},
+	/**
+	 * Whether the page's policy refuses, as it runs, a handler of `that` (its
+	 * element, or the window of a body's handler) whose text is kept by
+	 * `code`, or (`that` 0) a javascript: URL whose sample is `code`, firing
+	 * the violations (DocumentClient.codeRuns). Chrome judges a handler as
+	 * it compiles it, at its first run, by the policies in force then, which
+	 * holds for every later run; a javascript: URL as the navigation starts
+	 * and again as it runs (a report-only policy reports both), measured
+	 */
+	runRefused(client: DocumentClient, that: unknown, code: string): boolean {
+		if (that === 0) {
+			// (where the page's code that navigated was is not known here; as
+			// it runs, the place is the document's first line)
+			const judged = (site?: Site) =>
+				codeRefused(
+					client,
+					'script-src-elem',
+					'inline',
+					null,
+					{
+						parser: true,
+						sample: code,
+						lead: 'Running the JavaScript URL',
+					},
+					false,
+					site,
+				);
+			return (
+				judged() || judged([client.url.url.href.replace(/[?#].*$/s, ''), 1, 0])
+			);
+		}
+		const verdicts = handlerVerdicts.get(that as object) ?? {};
+		handlerVerdicts.set(that as object, verdicts);
+		if (code in verdicts) return verdicts[code]!;
+		const text = keptText(code)?.[0] ?? '';
+		// (a body's handler of the window's runs with the window as this)
+		let element = (client.global as typeof globalThis).document.body;
+		try {
+			if (Reflect.apply(nativeNodeType, that, []) === 1)
+				element = that as HTMLElement;
+		} catch (error) {
+			// the window
+		}
+		return (verdicts[code] = codeRefused(
+			client,
+			'script-src-attr',
+			'inline',
+			element,
+			{ text, sample: text },
+			false,
+		));
+	},
 	/**
 	 * Where a load of the document that no worker sees goes instead of `url`
 	 * when the page's enforced policy refuses it for `directive`, or null

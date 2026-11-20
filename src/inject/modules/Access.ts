@@ -1556,6 +1556,10 @@ export default class AccessModule extends Module<Client> {
 						? Reflect.apply(method, holder, args)
 						: errors.call(method, holder, args, partial);
 			},
+			// a handler (`that` its this) or a javascript: URL (`that` 0) the
+			// page's policy refuses as it runs: the rewrite returns at once
+			csp: (that: unknown, code: string): boolean =>
+				moduleClient.codeRuns(that, code),
 			// `with (o) body` whose body says `postMessage` is printed
 			// `with (scope(o)) with (scoped()) body`: the head as written, and
 			// inside it a scope that answers that one name when the head is a
