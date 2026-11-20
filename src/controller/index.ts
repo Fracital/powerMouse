@@ -1129,8 +1129,9 @@ export class StompController extends EventTarget {
 	config: Config;
 	/**
 	 * set while the service worker serving this controller is another build
-	 * than the controller (a deploy the browser has not finished installing);
-	 * null once the builds agree
+	 * than the controller (a deploy the browser has not finished installing,
+	 * or a page that loaded before a deploy: `newer` says which); null once
+	 * the builds agree
 	 */
 	stale: StaleInfo | null = null;
 	/** the directory the host gave: the service worker's scope and the asset base (`config.scope`) */
@@ -2000,13 +2001,29 @@ export class StompController extends EventTarget {
 	 * that never settles).
 	 */
 	async #heal(build: string) {
-		const settle = () => {
+		const settle = async (latest = false) => {
 			this.#healing = false;
-			if (!this.stale)
+			// which side is the newer build: the worker, when an update check
+			// found nothing newer than it (the page loaded before a deploy and
+			// only a reload brings the builds together), the controller, when
+			// a newer worker is installing; unknown otherwise
+			const registration = latest
+				? undefined
+				: await this.#findRegistration().catch(() => undefined);
+			const newer: StaleInfo['newer'] = latest
+				? 'worker'
+				: registration?.installing || registration?.waiting
+					? 'controller'
+					: null;
+			if (this.stale?.worker !== build)
 				console.warn(
-					`Stomp: the controller is build ${BUILD}, the service worker is build ${build}; the new worker has not activated yet, continuing with the old one and switching when it does`,
+					newer === 'worker'
+						? `Stomp: this page runs build ${BUILD} and the service worker is build ${build}, the newest the server has: the page loaded before a deploy. Continuing on the newer worker; reload the page to run build ${build}.`
+						: newer === 'controller'
+							? `Stomp: the controller is build ${BUILD}, the service worker is build ${build}; the new worker has not activated yet, continuing with the old one and switching when it does`
+							: `Stomp: the controller is build ${BUILD}, the service worker is build ${build}, and no other worker could be found; continuing with the worker at hand`,
 				);
-			this.stale = { controller: BUILD, worker: build };
+			this.stale = { controller: BUILD, worker: build, newer };
 			this.config = { ...this.config, build };
 			this.isReady = true;
 			this.#readySettled = true;
@@ -2024,7 +2041,7 @@ export class StompController extends EventTarget {
 				this.#updatedWorker(),
 				sleep(UPDATE_GRACE_MS).then(() => null),
 			]);
-			if (!worker) return settle();
+			if (!worker || worker === 'latest') return settle(worker === 'latest');
 			await this.rebind(worker);
 		} catch (error) {
 			settle();
@@ -2032,10 +2049,13 @@ export class StompController extends EventTarget {
 	}
 	/**
 	 * The registration's newer worker, activated: one the browser already
-	 * found, or one an update finds now. Null when there is nothing newer
-	 * than the worker this controller talks to.
+	 * found, or one an update finds now. `latest` when an update check ran
+	 * and found nothing newer than the worker this controller talks to,
+	 * which is the registration's active one: that worker is the newest the
+	 * server has. Null when there is nothing newer and no check could say so
+	 * (no registration, an update that failed).
 	 */
-	async #updatedWorker(): Promise<ServiceWorker | null> {
+	async #updatedWorker(): Promise<ServiceWorker | 'latest' | null> {
 		const registration = await this.#findRegistration();
 		if (!registration) return null;
 		// the registration's active worker is not the one we were handed (the
@@ -2044,6 +2064,7 @@ export class StompController extends EventTarget {
 		if (active && active !== this.serviceworker) return active;
 		let worker: ServiceWorker | null =
 			registration.installing || registration.waiting;
+		let checked = false;
 		if (!worker) {
 			const found = new Promise<ServiceWorker | null>((resolve) =>
 				registration.addEventListener(
@@ -2052,7 +2073,10 @@ export class StompController extends EventTarget {
 					{ once: true },
 				),
 			);
-			await registration.update().catch(() => {});
+			checked = await registration.update().then(
+				() => true,
+				() => false,
+			);
 			worker = await Promise.race([
 				found,
 				sleep(UPDATE_FOUND_MS).then(
@@ -2061,7 +2085,9 @@ export class StompController extends EventTarget {
 			]);
 		}
 		if (worker) return activated(worker);
-		return null;
+		return checked && registration.active === this.serviceworker
+			? 'latest'
+			: null;
 	}
 	/**
 	 * Talk to another service worker from now on (default: the registration's
