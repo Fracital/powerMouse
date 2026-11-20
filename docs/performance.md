@@ -143,6 +143,7 @@ task never names `PerformanceLongTaskTiming`, as natively.
 | -------------------------------------------------------------------------------- | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
 | `LargestContentfulPaint.url`, `PerformanceElementTiming.url` (and `toJSON`)      | the image's URL                                                   | its routed URL                                                                                                                                                                                                 | EntryTiming.ts                               |
 | a long animation frame's `scripts[]`: `sourceURL`, `invoker`                     | the script's URL; `IMG[src="/as/written.png"].onload`             | the routed URL; the routed `src`                                                                                                                                                                               | LongFrames.ts                                |
+| a long animation frame's `scripts[]`: `sourceCharPosition` of a script file      | the function's place in the page's text                           | its place in the rewrite, which carries the map of itself to the page's text (rust/rwjs/src/positions.rs)                                                                                                      | LongFrames.ts, positionMaps.ts               |
 | scripts of the host's page, another tab, a frame of another origin               | not listed (another origin's scripts never are)                   | could be listed, each with its `window`: a frame lists the scripts of other windows of its origin that ran in it (measured natively with a same-origin frame's function), and every proxied site is one origin | LongFrames.ts (not pinned by a fixture case) |
 | the inject bundle as a script                                                    | no such script                                                    | listed by its URL                                                                                                                                                                                              | LongFrames.ts                                |
 | a long task of the page itself: `attribution[0]`                                 | `containerType` "window", no source, id or name                   | the host's frame element: "iframe", the routed URL (same-origin mode)                                                                                                                                          | LongTasks.ts                                 |
@@ -158,11 +159,6 @@ task never names `PerformanceLongTaskTiming`, as natively.
 
 Listed in the suite, which fails when one reads as natively:
 
-- **A function's position in a long animation frame's script**
-  (`sourceCharPosition`) is its place in the script as the rewriter printed
-  it, as the columns of an error's stack are: the entry names no function
-  object to read the page's own position from, and the page's realm keeps
-  no map from one text to the other.
 - **A callback run from a promise the inject made** (the reaction to
   `fetch()`) is listed without a source (`sourceURL` empty, position -1)
   where natively it has the page's script: the browser records where the
