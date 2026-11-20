@@ -498,11 +498,32 @@ export class ExtensionRegistry {
 			value === undefined ? undefined : localize(value, catalogs, special);
 		const raw = record.manifest;
 		const action = raw.action ?? raw.browser_action ?? raw.page_action;
+		// the keys Chrome localizes, and the locale it read them in (what
+		// getManifest answers, measured on Chrome 157: version_name and the
+		// rest stay as written)
+		const commands = raw.commands;
+		const omnibox = raw.omnibox as { keyword?: string } | undefined;
 		const manifest: Manifest = {
 			...raw,
 			name: text(raw.name) ?? raw.name,
 			...(raw.short_name ? { short_name: text(raw.short_name) } : {}),
 			...(raw.description ? { description: text(raw.description) } : {}),
+			...(raw.default_locale ? { current_locale: uiLocale } : {}),
+			...(commands
+				? {
+						commands: Object.fromEntries(
+							Object.entries(commands).map(([name, command]) => [
+								name,
+								typeof command?.description === 'string'
+									? { ...command, description: text(command.description) }
+									: command,
+							]),
+						),
+					}
+				: {}),
+			...(typeof omnibox?.keyword === 'string'
+				? { omnibox: { ...omnibox, keyword: text(omnibox.keyword) } }
+				: {}),
 			...(action?.default_title
 				? {
 						[raw.action
@@ -640,7 +661,7 @@ export class ExtensionRegistry {
 			version: loaded.manifest.version ?? '',
 			manifestVersion: Number(loaded.manifest.manifest_version) || 2,
 			origin: extensionOrigin(loaded.record.id),
-			manifest: loaded.record.manifest,
+			manifest: loaded.manifest,
 			messages: loaded.catalogs,
 			uiLocale: loaded.uiLocale,
 			permissions: [...loaded.granted],

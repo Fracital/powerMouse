@@ -51,7 +51,11 @@ await frame.go(controller.extensions.resolveUrl(options.displayUrl));
 
 `controller.tabIdOf(frame)` is the tab id the extensions know a frame by, and
 `controller.activeTab` (a frame or null) is the tab `chrome.tabs.query({ active: true })`
-answers; a host with tabs sets it as the user switches.
+answers; a host with tabs sets it as the user switches. The extensions'
+`tabs.onCreated`, `onActivated`, `onHighlighted` and `onRemoved` follow
+`controller.frames` and `controller.activeTab`: push a frame (or call
+`createFrame`) and put its element in the page to open a tab, splice it out
+to close one.
 
 The demo (`demo/public/pm/main.js`, its "extensions" section) is a host
 built on these calls: the bar's buttons with their badges, popups in a
@@ -115,13 +119,33 @@ controller.extensions  --RPC-->  ExtensionHub (with the controller)    Extension
   runtime puts it on the window while the script's top level runs. MAIN
   scripts run as page code. USER_SCRIPT scripts (`userScripts.register`
   and `userScripts.execute`) get no `chrome` unless
-  `userScripts.configureWorld({ messaging: true })`, and then one with
-  `runtime.id`, `sendMessage` and `connect`, on the window too while they
-  run.
+  `userScripts.configureWorld({ messaging: true })`, and then Chrome's:
+  the page's `csi` and `loadTimes`, and a `runtime` of `id`, `dynamicId`,
+  `sendMessage`, `connect`, `onMessage`, `onConnect` and the runtime's
+  enums, on the window too while they run.
 - **Policies.** Content scripts load as script elements from routes, never
   through the page's `Function` or `eval`, so a page's CSP and Trusted Types
   do not refuse them (the browser enforces neither on proxied documents;
-  the inject enforces them against the page's own code).
+  the inject enforces them against the page's own code). An extension's
+  own resources (its web accessible scripts, styles and images) load past
+  the page's CSP, as Chrome lets `chrome-extension:` URLs past it;
+  `frame-ancestors` still holds. The worker tells the extension's origin
+  which origin asked for a file (`EXTENSION_INITIATOR`), so
+  web_accessible_resources' `matches` judge it when the page's referrer
+  policy sends no Referer. In a sandboxed frame without
+  `allow-scripts`, scripts that `executeScript` injects carry the nonce of
+  STomp's sandbox policy, so they run there as they do in Chrome.
+- **Text documents.** A JSON or text document (`application/json`, `+json`
+  types, `text/plain` and the other text types Chrome renders) that an
+  extension's content scripts match is served as the HTML Chrome makes of
+  it: the text in a `<pre>`, with Chrome's head, and `document.contentType`
+  reads the original type. A document no extension matches is passed
+  through untouched.
+- **Localized manifest.** `runtime.getManifest()` answers the manifest as
+  Chrome localizes it: `name`, `short_name`, `description`, the action's
+  `default_title`, commands' descriptions and the omnibox keyword, with
+  `current_locale`. As in Chrome, `__MSG_` placeholders in an extension
+  page's HTML are left as they are.
 - **Extension pages and backgrounds.** A popup, options page or tab is a
   proxied document of the extension's origin; its window gets `chrome`. An
   MV2 background page and an MV3 service worker run in hidden frames of the
@@ -157,11 +181,31 @@ controller.extensions  --RPC-->  ExtensionHub (with the controller)    Extension
   Chrome 157 (the extensions suite): a sendMessage round trip from a
   content script to the service worker and a port round trip both take
   well under a millisecond on an idle machine.
+- **Popups.** A popup is sized as Chrome sizes one: its root's min-content
+  width and its height at that width, plus a scrollbar across a side the
+  800 by 600 bound cuts, measured again on every change to its document,
+  its body's size, its load and its fonts, then clamped to 25 by 25 up to
+  800 by 600.
 - **The hub.** The controller's ExtensionHub starts and stops backgrounds,
   keeps the action's state per tab, the tabs (its controller's frames,
   `HubTabs`), offscreen documents, context menus and notifications, and
   answers the contexts' calls over the same channel. A RemoteController's
   hub is its controller frame's; the host page's frames are the tabs.
+- **Tabs' and webNavigation's events.** The host page watches its frames
+  (`framesAsTabs`): a frame that appears, is shown or goes away, each top
+  document's first report (its commit), its URL moving within the
+  document, its title and icon, and the frame element's load. The hub
+  turns those into `tabs.onCreated`, `onUpdated` (status, URL, title,
+  `favIconUrl`), `onActivated`, `onHighlighted` and `onRemoved`, and for an
+  extension with `webNavigation` into `onBeforeNavigate`, `onCommitted`,
+  `onDOMContentLoaded`, `onCompleted`, `onHistoryStateUpdated` and
+  `onReferenceFragmentUpdated`, in Chrome's order, with the tab ids the hub
+  knows and a `documentId` per document. A frame below a tab's top is told
+  by the extension's content scripts in it: its commit when they say
+  hello, its DOMContentLoaded and load from there. Listeners' URL filters
+  are applied as Chrome applies them. `webNavigation.getFrame` and
+  `getAllFrames` answer the tab's top and the frames the extensions'
+  content scripts reached.
 - **webRequest.** A background's listeners are registered with the worker,
   which asks them as requests pass (`pipeline.ts`): onBeforeRequest,
   onBeforeSendHeaders, onSendHeaders, onHeadersReceived, onResponseStarted,
@@ -204,13 +248,29 @@ document changes, which getMatchedRules reads.
 
 - Backgrounds share the controller document's thread and heap; an MV3
   service worker is emulated in a page, not a worker.
+- An extension's pages read their emulated origin, `https://<id>.invalid`,
+  in `location`, `runtime.getURL` and a message sender's `url` and
+  `origin`, where Chrome gives `chrome-extension://<id>`. An extension
+  that checks the scheme refuses its own pages: Tampermonkey's popup asks
+  its background for the tab's scripts, is refused as no extension page,
+  and stays empty.
 - An isolated world shares the page's realm: its top-level declarations
   stay its own (each entry is a function), but globals and prototypes are
   the page's, and separate content_scripts entries do not share
   declarations. The page cannot see `chrome`.
-- No content scripts in documents STomp does not inject (JSON, text and
-  image viewer documents) or in about:blank frames
-  (`match_about_blank`, `match_origin_as_fallback`).
+- No content scripts in documents STomp does not inject (image viewer
+  documents) or in about:blank frames (`match_about_blank`,
+  `match_origin_as_fallback`). A text document is served as UTF-8, so
+  `document.characterSet` reads UTF-8 whatever the response's charset, and
+  document_start runs after the first write, not with the body already
+  there.
+- webNavigation sees a frame below a tab's top only where the extension's
+  content scripts run, gives such a frame `parentFrameId` 0 however deep
+  it is, and tells its top document's DOMContentLoaded at the frame's load.
+  A top document's `transitionType` is `typed` for a tab's first document,
+  `reload` for the same URL again and `link` otherwise, with no
+  qualifiers. A navigation that fails tells no `onErrorOccurred`.
+  `onCreated` gives no `openerTabId`.
 - declarativeNetRequest gives a main frame's own request its tab when the
   host sent it (`frame.go()`) or a document of the tab started it; a
   navigation a tab starts in no other way (a link the page's own markup

@@ -36,6 +36,8 @@ export interface ShellDocument {
 	top: boolean;
 	/** the controller's address */
 	directory: string;
+	/** a text document served as the HTML Chrome renders it in: the type it came as */
+	contentType?: string;
 }
 
 export interface ShellDeps {
@@ -148,6 +150,7 @@ export async function documentShell(
 		url: doc.url,
 		top: doc.top,
 		tokens: {},
+		...(doc.contentType ? { contentType: doc.contentType } : {}),
 	};
 	const routes: string[] = [];
 	const own = extensionOfURL(doc.url);

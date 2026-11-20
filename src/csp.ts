@@ -442,7 +442,9 @@ export function ancestorAllowed(
 ): boolean {
 	if (origin === 'null') return false;
 	try {
-		return sourcesMatch(sources, new URL(`${origin}/`), self);
+		// (an extension's page as the ancestor is judged as any origin)
+		const ancestor = new URL(`${origin}/`);
+		return sources.some((source) => sourceMatches(source, ancestor, self));
 	} catch (error) {
 		return false;
 	}
@@ -574,13 +576,24 @@ function hostSourceMatches(
 	return true;
 }
 
-/** whether `url` matches a directive's `sources` ('none' alone, or nothing, matches nothing) */
+/**
+ * An extension's resource (its emulated origin, `https://<id>.invalid`,
+ * src/extensions/origin.ts): Chrome lets `chrome-extension:` loads
+ * through every page's policy (the scheme bypasses Content Security
+ * Policy), so an extension's script a content script adds to a page runs
+ * under the page's script-src (measured, Chrome 157)
+ */
+const EXTENSION_RESOURCE = /^[a-p]{32}\.invalid$/;
+
+/** whether `url` matches a directive's `sources` ('none' alone, or nothing, matches nothing; an extension's resource, everything) */
 export function sourcesMatch(
 	sources: string[],
 	url: URL,
 	self: URL,
 	redirected = false,
 ): boolean {
+	if (url.protocol === 'https:' && EXTENSION_RESOURCE.test(url.hostname))
+		return true;
 	return sources.some((source) => sourceMatches(source, url, self, redirected));
 }
 

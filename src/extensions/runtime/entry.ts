@@ -27,6 +27,32 @@ type Defined = (...args: unknown[]) => unknown;
 
 let payload: RuntimePayload | null = null;
 let nonce = '';
+/**
+ * The nonce of the script policy the inject gives a document its sandbox
+ * lets run no script (src/inject/dom/sandbox.ts guardDocument): what an
+ * injection's script carries there, as Chrome runs an extension's scripts
+ * in such a frame too. Read from the policy's meta as the page's document
+ * opens (the meta goes with the shell's markup, the policy stays).
+ */
+let guardNonce = '';
+const GUARD_POLICY = /^script-src 'nonce-([\w+/=-]+)' 'wasm-unsafe-eval'$/;
+function readGuardNonce(): string {
+	const metas = call<NodeListOf<Element>>(
+		natives.querySelectorAll,
+		natives.document,
+		'meta[http-equiv="Content-Security-Policy" i]',
+	);
+	for (let index = 0; index < metas.length; index++) {
+		const content = call<string | null>(
+			natives.getAttribute,
+			metas[index],
+			'content',
+		);
+		const found = GUARD_POLICY.exec(content ?? '');
+		if (found) return found[1];
+	}
+	return '';
+}
 let started = false;
 const defined = new Map<string, Defined>();
 const waiting = new Map<string, (fn: Defined) => void>();
@@ -79,6 +105,8 @@ natives.defineProperty(global, RUNTIME_GLOBAL, {
 const nativeOpen = natives.documentOpen;
 const wrapped = {
 	open(this: Document, ...args: unknown[]) {
+		if (!started && this === natives.document && payload)
+			guardNonce = readGuardNonce();
 		const result = natives.Reflect.apply(nativeOpen, this, args);
 		if (!started && this === natives.document && payload) {
 			started = true;
@@ -202,7 +230,8 @@ function loadRoute(id: string, key: string, route: string): Promise<Defined> {
 		natives.document,
 		'script',
 	);
-	if (nonce) call(natives.setAttribute, script, 'nonce', nonce);
+	if (guardNonce || nonce)
+		call(natives.setAttribute, script, 'nonce', guardNonce || nonce);
 	call(natives.setAttribute, script, 'src', route);
 	const parent = natives.documentElement(natives.document) ?? natives.document;
 	let finished = false;
@@ -259,7 +288,29 @@ function inWorld<T>(chrome: unknown, run: () => T): T {
 	}
 }
 
-/** a USER_SCRIPT world's `chrome`: messaging alone, where configureWorld allowed it */
+/**
+ * What a USER_SCRIPT world's `chrome.runtime` has where configureWorld
+ * gave it messaging (Chrome 157): its id, its messaging both ways (it hears
+ * tabs.sendMessage and tabs.connect on its own onMessage and onConnect) and
+ * the runtime's enums
+ */
+const USER_SCRIPT_RUNTIME = [
+	'ContextType',
+	'OnInstalledReason',
+	'OnRestartRequiredReason',
+	'PlatformArch',
+	'PlatformNaclArch',
+	'PlatformOs',
+	'RequestUpdateCheckStatus',
+	'connect',
+	'dynamicId',
+	'id',
+	'onConnect',
+	'onMessage',
+	'sendMessage',
+];
+
+/** a USER_SCRIPT world's `chrome`: the page's own members and messaging, where configureWorld allowed it */
 function userScriptChrome(ctx: Context, given: RuntimePayload): unknown {
 	if (!ctx.ext.userScriptMessaging) return undefined;
 	const world = new Context(
@@ -272,16 +323,20 @@ function userScriptChrome(ctx: Context, given: RuntimePayload): unknown {
 	world.userScript = true;
 	world.placed = ctx.placed.then(() => {
 		world.place = ctx.place;
+		// (what it listens to is told with the tab it is in)
+		world.announce();
 	});
 	receiveMessages(world);
 	const runtime = buildChrome(world).runtime as Record<string, unknown>;
-	return {
-		runtime: {
-			id: runtime.id,
-			sendMessage: runtime.sendMessage,
-			connect: runtime.connect,
-		},
-	};
+	const own: Record<string, unknown> = {};
+	for (const name of USER_SCRIPT_RUNTIME) own[name] = runtime[name];
+	// (the world's chrome has the page's csi and loadTimes, as every world's)
+	const page = global.chrome as Record<string, unknown> | undefined;
+	const chrome: Record<string, unknown> = {};
+	for (const name of ['csi', 'loadTimes'])
+		if (page && typeof page[name] === 'function') chrome[name] = page[name];
+	chrome.runtime = own;
+	return chrome;
 }
 
 function runEntry(
@@ -333,6 +388,30 @@ function schedule(runAt: string, run: () => void) {
 	});
 }
 
+/** a frame's DOMContentLoaded and load, told to the hub (webNavigation) */
+function subframeLifecycle(ctx: Context) {
+	const tell = (state: string) => () => {
+		ctx.hub('nav', state).catch(() => {});
+	};
+	const state = natives.readyState(natives.document);
+	if (state === 'loading')
+		call(
+			natives.addEventListener,
+			natives.document,
+			'DOMContentLoaded',
+			tell('dom'),
+			{
+				once: true,
+			},
+		);
+	else tell('dom')();
+	if (state === 'complete') tell('load')();
+	else
+		call(natives.addEventListener, global, 'load', tell('load'), {
+			once: true,
+		});
+}
+
 function contentContext(given: RuntimePayload, ext: ShippedExtension) {
 	const ctx = new Context(
 		ext,
@@ -353,6 +432,10 @@ function contentContext(given: RuntimePayload, ext: ShippedExtension) {
 		.then((place) => {
 			if (place) ctx.place = place as Context['place'];
 			ctx.announce();
+			// a document below its tab's top: its webNavigation events past the
+			// commit are the hub's to tell from here (the host sees only tops)
+			if (ctx.place.frameId > 0 && ext.permissions.includes('webNavigation'))
+				subframeLifecycle(ctx);
 		})
 		.catch(() => {
 			ctx.announce();
@@ -485,43 +568,123 @@ function pageContext(given: RuntimePayload) {
 	return ctx;
 }
 
-/** a popup tells the hub its size, and closes through it */
+/**
+ * a popup tells the hub its size, and closes through it. Chrome sizes a
+ * popup to its content on every layout (FrameViewAutoSizeInfo): the root's
+ * min-content width and the root box's scroll height at that width, plus a
+ * scrollbar across a dimension the 800x600 bound cuts. Any change can move
+ * that size (a script setting the body's width once the popup knows its
+ * tab, text a framework renders late, a font), so the popup measures again
+ * after each one.
+ */
 function popupPage(ctx: Context) {
-	const report = () => {
-		const root = natives.documentElement(natives.document);
-		if (!root) return;
-		// the width it would take with room to spare (Chrome lays a popup out
-		// unconstrained and shrinks it to its content), not the frame's: a
-		// popup of fluid width is still 25 px wide before its first size
-		let width = natives.scrollWidth(root);
-		const style = (root as HTMLElement).style;
-		if (style) {
-			const was = style.getPropertyValue('width');
-			const priority = style.getPropertyPriority('width');
-			style.setProperty('width', 'max-content', 'important');
-			width = Math.ceil(root.getBoundingClientRect().width) || width;
-			if (was) style.setProperty('width', was, priority);
-			else style.removeProperty('width');
+	if (popupWatched) return;
+	popupWatched = true;
+	const doc = natives.document;
+	let last = '';
+	let queued = false;
+	let mutations: MutationObserver | null = null;
+	// the root at its min-content width, by a sheet of the runtime's: no
+	// attribute of the page's changes (a page that watches its root's
+	// style sees nothing, and answers nothing)
+	let sheet: CSSStyleSheet | null = null;
+	const narrow = (on: boolean) => {
+		if (!natives.adoptedStyleSheets?.get) return false;
+		const list = call<CSSStyleSheet[]>(natives.adoptedStyleSheets.get, doc);
+		if (!sheet) {
+			sheet = new natives.CSSStyleSheet();
+			sheet.replaceSync(':root { width: min-content !important }');
 		}
-		ctx
-			.hub('popup.size', {
-				width,
-				height: natives.scrollHeight(root),
-			})
-			.catch(() => {});
+		sheet.disabled = !on;
+		if (!list.includes(sheet))
+			call(natives.adoptedStyleSheets.set!, doc, [...list, sheet]);
+		return true;
 	};
-	const watch = () => {
-		report();
-		try {
-			new ResizeObserver(report).observe(
-				natives.documentElement(natives.document)!,
-			);
-		} catch (error) {
-			// no observer: the load's size stands
+	const measure = () => {
+		queued = false;
+		const root = natives.documentElement(doc) as HTMLElement | null;
+		const body = doc.body;
+		if (!root || !body || !narrow(true)) return;
+		const box = root.getBoundingClientRect();
+		const computed = getComputedStyle(root);
+		const margins = (first: string, second: string) =>
+			(parseFloat(computed.getPropertyValue(first)) || 0) +
+			(parseFloat(computed.getPropertyValue(second)) || 0);
+		let width = Math.ceil(box.width + margins('margin-left', 'margin-right'));
+		// the box's scroll height: its own height, or what overflows the view
+		const scrolled = natives.scrollHeight(root);
+		let height = Math.ceil(
+			scrolled > root.clientHeight
+				? scrolled
+				: box.height + margins('margin-top', 'margin-bottom'),
+		);
+		// a scrollbar across what the bound cuts: as wide as the one the
+		// frame shows now (the root's client box is the view's, less it)
+		const scrollbar = Math.max(0, innerWidth - root.clientWidth);
+		narrow(false);
+		const overflowY = getComputedStyle(body).overflowY;
+		if (
+			height > 600 &&
+			computed.overflowY !== 'hidden' &&
+			overflowY !== 'hidden'
+		)
+			width += scrollbar;
+		else if (width > 800 && computed.overflowX !== 'hidden')
+			height += Math.max(0, innerHeight - root.clientHeight);
+		mutations?.takeRecords();
+		const size = `${width}x${height}`;
+		if (size === last) return;
+		last = size;
+		ctx.hub('popup.size', { width, height }).catch(() => {});
+	};
+	const queue = () => {
+		if (queued) return;
+		queued = true;
+		natives.setTimeout(measure, 0);
+	};
+	let resizes: ResizeObserver | null = null;
+	try {
+		resizes = new ResizeObserver(queue);
+	} catch (error) {
+		// no observer: the mutations' sizes stand
+	}
+	let observedRoot: Element | null = null;
+	let observedBody: Element | null = null;
+	const observe = () => {
+		const root = natives.documentElement(doc);
+		if (root && resizes && root !== observedRoot) {
+			resizes.observe(root);
+			observedRoot = root;
+		}
+		const body = doc.body;
+		if (body && resizes && body !== observedBody) {
+			resizes.observe(body);
+			observedBody = body;
 		}
 	};
-	if (natives.readyState(natives.document) === 'complete') watch();
-	else call(natives.addEventListener, global, 'load', watch, { once: true });
+	const settled = () => {
+		observe();
+		queue();
+	};
+	try {
+		mutations = new MutationObserver(settled);
+		mutations.observe(doc, {
+			subtree: true,
+			childList: true,
+			attributes: true,
+			characterData: true,
+		});
+	} catch (error) {
+		// no observer: the load's size and the resizes stand
+	}
+	call(natives.addEventListener, doc, 'DOMContentLoaded', settled);
+	call(natives.addEventListener, global, 'load', settled);
+	try {
+		call(natives.addEventListener, doc.fonts, 'loadingdone', settled);
+	} catch (error) {
+		// no font set
+	}
+	settled();
 	natives.defineProperty(global, 'close', {
 		value: function close() {
 			ctx.hub('popup.close').catch(() => {});
@@ -530,6 +693,7 @@ function popupPage(ctx: Context) {
 		configurable: true,
 	});
 }
+let popupWatched = false;
 
 /** a background: runtime.onInstalled once its scripts ran; an emulated service worker's events too */
 function backgroundPage(ctx: Context, given: RuntimePayload) {
@@ -631,6 +795,32 @@ function serviceWorkerShims(ctx: Context) {
 
 function start(given: RuntimePayload) {
 	delete global[RUNTIME_GLOBAL];
+	if (given.contentType) textDocumentType(given.contentType);
 	if (given.page) pageContext(given);
 	for (const ext of given.content ?? []) contentContext(given, ext);
+}
+
+/**
+ * a text document the worker served as Chrome's HTML of it reads the type
+ * it came as (application/json, text/plain), as Chrome's text document
+ * does. Set once the inject has taken the native getter, which it asks
+ * for whether a node is in an HTML document
+ */
+function textDocumentType(type: string) {
+	const prototype = global.Document.prototype;
+	const native = natives.getOwnPropertyDescriptor(prototype, 'contentType');
+	if (!native?.get) return;
+	const get = native.get;
+	// (a getter named as the native's, get contentType)
+	const shaped = natives.getOwnPropertyDescriptor(
+		{
+			get contentType() {
+				return this === natives.document
+					? type
+					: (natives.Reflect.apply(get, this, []) as string);
+			},
+		},
+		'contentType',
+	)!.get;
+	natives.defineProperty(prototype, 'contentType', { ...native, get: shaped });
 }

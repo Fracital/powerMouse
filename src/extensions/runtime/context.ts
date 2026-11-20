@@ -30,6 +30,90 @@ export const copy = <T>(value: T): T =>
 		? value
 		: (natives.JSON.parse(natives.JSON.stringify(value) ?? 'null') as T);
 
+/**
+ * Whether a URL passes an event's filters (events.UrlFilter, as
+ * webNavigation's listeners give them): any one filter, all of its
+ * conditions; no filters, every URL
+ */
+export function urlFiltersMatch(filters: unknown, href: string): boolean {
+	if (!Array.isArray(filters) || !filters.length) return true;
+	let url: URL;
+	try {
+		url = new URL(href);
+	} catch (error) {
+		return false;
+	}
+	const host = url.hostname;
+	// the URL without its fragment, its port spelled out only when not the scheme's own
+	const whole = href.split('#')[0];
+	const path = url.pathname;
+	const query = url.search.replace(/^\?/, '');
+	const port = Number(url.port) || DEFAULT_PORTS[url.protocol] || 0;
+	const text = (value: unknown) => (typeof value === 'string' ? value : null);
+	const test = (
+		filter: Record<string, unknown>,
+		key: string,
+		check: (value: string) => boolean,
+	) => {
+		const value = text(filter[key]);
+		return value === null || check(value);
+	};
+	return filters.some((raw) => {
+		if (!raw || typeof raw !== 'object') return false;
+		const filter = raw as Record<string, unknown>;
+		const dotted = `.${host}`;
+		const matches = (value: string) => {
+			try {
+				return new RegExp(value).test(whole);
+			} catch (error) {
+				return false;
+			}
+		};
+		return (
+			test(filter, 'hostContains', (value) => dotted.includes(value)) &&
+			test(filter, 'hostEquals', (value) => host === value.toLowerCase()) &&
+			test(filter, 'hostPrefix', (value) => host.startsWith(value)) &&
+			test(filter, 'hostSuffix', (value) => host.endsWith(value)) &&
+			test(filter, 'pathContains', (value) => path.includes(value)) &&
+			test(filter, 'pathEquals', (value) => path === value) &&
+			test(filter, 'pathPrefix', (value) => path.startsWith(value)) &&
+			test(filter, 'pathSuffix', (value) => path.endsWith(value)) &&
+			test(filter, 'queryContains', (value) => query.includes(value)) &&
+			test(filter, 'queryEquals', (value) => query === value) &&
+			test(filter, 'queryPrefix', (value) => query.startsWith(value)) &&
+			test(filter, 'querySuffix', (value) => query.endsWith(value)) &&
+			test(filter, 'urlContains', (value) => whole.includes(value)) &&
+			test(filter, 'urlEquals', (value) => whole === value) &&
+			test(filter, 'urlMatches', matches) &&
+			test(filter, 'originAndPathMatches', (value) => {
+				try {
+					return new RegExp(value).test(url.origin + path);
+				} catch (error) {
+					return false;
+				}
+			}) &&
+			test(filter, 'urlPrefix', (value) => whole.startsWith(value)) &&
+			test(filter, 'urlSuffix', (value) => whole.endsWith(value)) &&
+			(!Array.isArray(filter.schemes) ||
+				filter.schemes.includes(url.protocol.slice(0, -1))) &&
+			(!Array.isArray(filter.ports) ||
+				filter.ports.some((entry) =>
+					Array.isArray(entry)
+						? port >= Number(entry[0]) && port <= Number(entry[1])
+						: port === Number(entry),
+				))
+		);
+	});
+}
+
+const DEFAULT_PORTS: Record<string, number> = {
+	'http:': 80,
+	'https:': 443,
+	'ws:': 80,
+	'wss:': 443,
+	'ftp:': 21,
+};
+
 type Listener = { fn: (...args: unknown[]) => unknown; options?: unknown };
 
 /** one chrome.* event in one context */
@@ -188,9 +272,23 @@ export class Context {
 		// notification's or a menu's click)
 		this.on('event', (message) => {
 			if (this.kind === 'content') return;
+			// a filtered event (webNavigation's): each listener's own URL filters
+			const url = typeof message.url === 'string' ? message.url : null;
 			this.events
 				.get(String(message.name))
-				?.dispatch(Array.isArray(message.args) ? message.args : []);
+				?.dispatch(
+					Array.isArray(message.args) ? message.args : [],
+					url === null
+						? undefined
+						: (options) =>
+								urlFiltersMatch(
+									(Array.isArray(options)
+										? (options[0] as { url?: unknown } | undefined)
+										: undefined
+									)?.url,
+									url,
+								),
+				);
 		});
 		this.on('hubr', (message) => {
 			if (message.to !== this.id) return;

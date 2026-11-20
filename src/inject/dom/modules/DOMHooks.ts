@@ -783,6 +783,10 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 	apply() {
 		const moduleClient = this.client;
 		const realm = moduleClient.global;
+		// the browser's Text, as the hooks below make text nodes with it: a
+		// page may put a global of its own by that name (a bundle's top-level
+		// `var Text`, Grammarly's popup), which the browser never uses
+		const TextNode = realm.Text;
 		// all hooks are in, now apply them
 
 		const proxyModule = moduleClient.getModule(ProxyModule)!;
@@ -1193,9 +1197,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 
 					// the empty string leaves no text node, as natively
 					if (text === '') return;
-					that.append(
-						new realm.Text(moduleClient.prepareScriptText(that, text)),
-					);
+					that.append(new TextNode(moduleClient.prepareScriptText(that, text)));
 				},
 			),
 		});
@@ -1320,7 +1322,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 						that instanceof realm.HTMLScriptElement
 							? moduleClient.prepareScriptText(that, written)
 							: written;
-					(that as Element).append(new realm.Text(text));
+					(that as Element).append(new TextNode(text));
 				},
 			),
 		});
@@ -1349,7 +1351,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 					const nodes: Node[] = [];
 					for (const [index, line] of text.split(/\r\n|\r|\n/).entries()) {
 						if (index) nodes.push(realm.document.createElement('br'));
-						if (line !== '') nodes.push(new realm.Text(line));
+						if (line !== '') nodes.push(new TextNode(line));
 					}
 					that.append(...nodes);
 				},
@@ -1369,7 +1371,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				outerTextDescriptor.set!,
 				(target, that: Element, args) => {
 					requireElement(that);
-					that.replaceWith(new realm.Text(args[0]));
+					that.replaceWith(new TextNode(args[0]));
 				},
 			),
 		});
