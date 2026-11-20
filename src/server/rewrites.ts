@@ -29,6 +29,7 @@ import {
 	type ScriptFacts,
 } from '../csp';
 import type { DnrOutcome } from '../extensions/dnr';
+import { EXTENSION_INITIATOR, extensionOfHost } from '../extensions/origin';
 import { CONTENT_SCRIPT_ROUTE, EXTENSION_API_ROUTE } from '../extensions/types';
 import { freshFrameDocument } from '../freshFrame';
 import { sourceKey } from '../functionSource';
@@ -324,6 +325,7 @@ import {
 	type ExtensionRequest,
 } from './extensions/pipeline';
 import type { ExtensionRegistry } from './extensions/registry';
+import { textDocumentBody, textDocumentKind } from './extensions/textDocument';
 import {
 	AdditionalFilter,
 	browserBytes,
@@ -2241,6 +2243,14 @@ function genericForward(
 				!BODY_ILLEGAL.includes(serverRequest.method))
 		)
 			requestHeaders.set('origin', opaque ? 'null' : initiator!.origin);
+		// an extension's origin judges its web_accessible_resources by who
+		// asked, as Chrome judges the initiator (a strict referrer policy
+		// leaves no Referer to say it; ./extensions/serve.ts)
+		if (extensionOfHost(url.url.hostname)) {
+			if (initiator && !opaque)
+				requestHeaders.set(EXTENSION_INITIATOR, initiator.origin);
+			else requestHeaders.delete(EXTENSION_INITIATOR);
+		}
 
 		// Sec-Fetch-Site: `none` for a navigation nobody in a page started (the
 		// host's, which the user typed or picked); a subresource whose client
@@ -7863,8 +7873,70 @@ export function registerRewrites(
 					pageHeaders = new Headers(pageHeaders);
 					pageHeaders.append('content-security-policy', request.requiredCSP!);
 				}
-				const contentType = responseHeaders.get('content-type');
-				const mime = getMime(contentType || '');
+				let contentType = responseHeaders.get('content-type');
+				let mime = getMime(contentType || '');
+				// a proxied top (not a document a page routed as nested): its
+				// shell loads the rewriter library
+				const top =
+					request.navigation &&
+					nestedTopOf(
+						new URL(request.routed).pathname,
+						rewriter.directory,
+						rewriter.codec,
+					) === null;
+				// the extensions whose content scripts the document runs, or
+				// the extension page it is (docs/extensions.md): nothing for a
+				// document no extension reaches
+				const extensionShellOf = (documentType?: string) =>
+					documentShell(
+						rewriter.extensions!,
+						{
+							url: url.url.href,
+							client: request.clientId ?? '',
+							top,
+							directory: rewriter.directory,
+							...(documentType ? { contentType: documentType } : {}),
+						},
+						{
+							runtime: extensionsRuntimeJS(url, rewriter.config),
+							rewriteCSS: (css, file) =>
+								modifyCSS(
+									css,
+									new StompURL(file, rewriter.codec, rewriter.directory),
+								),
+						},
+					);
+				// a text document Chrome renders (JSON, plain text, a script)
+				// that an extension reaches is served as the HTML Chrome makes
+				// of it, so the extension's content scripts run there as
+				// natively (./extensions/textDocument.ts). Its document reads
+				// the type it came as. One no extension reaches, one that
+				// downloads, a fetch and an extension's own file pass through
+				// untouched
+				const textKind =
+					rewriter.extensions?.any &&
+					(request.mode === 'navigate' || request.navigation) &&
+					/^https?:$/.test(url.url.protocol) &&
+					!/^\s*attachment/i.test(
+						response.headers.get('content-disposition') ?? '',
+					)
+						? textDocumentKind(mime)
+						: null;
+				const textShell = textKind ? await extensionShellOf(mime) : null;
+				if (textKind && textShell) {
+					const headers = new Headers(response.headers);
+					headers.set('content-type', 'text/html; charset=utf-8');
+					response = new Response(
+						textDocumentBody(response.body, contentType, textKind),
+						{
+							status: response.status,
+							statusText: response.statusText,
+							headers,
+						},
+					);
+					contentType = 'text/html; charset=utf-8';
+					mime = 'text/html';
+				}
 				// a type that says nothing is sniffed by the browser as it
 				// would sniff the origin's answer (src/server/sniff.ts): a
 				// body the worker passes through as not a document that the
@@ -7940,15 +8012,6 @@ export function registerRewrites(
 				// what it loads that names no encoding is in its own
 				if (request.navigation)
 					rememberDocumentEncoding(request.clientId, encoding);
-				// a proxied top (not a document a page routed as nested): its
-				// shell loads the rewriter library
-				const top =
-					request.navigation &&
-					nestedTopOf(
-						new URL(request.routed).pathname,
-						rewriter.directory,
-						rewriter.codec,
-					) === null;
 				// the page's own policies, as far as the browser can apply them
 				// to the proxy's URLs (src/csp.ts); the inject is told which
 				// page policy each one stands for
@@ -8240,28 +8303,9 @@ export function registerRewrites(
 								...(seed ? { syncSeed: seed } : {}),
 							}
 						: rewriter.config;
-				// the extensions whose content scripts the document runs, or
-				// the extension page it is (docs/extensions.md): nothing for a
-				// document no extension reaches
-				const extensionShell: ExtensionShell | null = rewriter.extensions?.any
-					? await documentShell(
-							rewriter.extensions,
-							{
-								url: url.url.href,
-								client: request.clientId ?? '',
-								top,
-								directory: rewriter.directory,
-							},
-							{
-								runtime: extensionsRuntimeJS(url, rewriter.config),
-								rewriteCSS: (css, file) =>
-									modifyCSS(
-										css,
-										new StompURL(file, rewriter.codec, rewriter.directory),
-									),
-							},
-						)
-					: null;
+				const extensionShell: ExtensionShell | null =
+					textShell ??
+					(rewriter.extensions?.any ? await extensionShellOf() : null);
 				const partition =
 					mayKeep({
 						method: request.method,

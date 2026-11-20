@@ -16,7 +16,11 @@
 // - extension pages' cross-origin XHR through the transport, the cookies API
 //   on STomp's jar;
 // - no runtime request on a page no extension reaches; disable, remove and
-//   the errors install() throws.
+//   the errors install() throws;
+// - a third probe for what extensions found missing against Chrome: a
+//   localized getManifest, the user script world's runtime, tabs' and
+//   webNavigation's events, a web accessible script under the page's CSP,
+//   executeScript into a sandboxed frame, a popup sized to its content.
 import { crc32, deflateRawSync } from 'node:zlib';
 import {
 	done,
@@ -118,12 +122,22 @@ const probe = {
 				css: ['cs/style.css'],
 				run_at: 'document_idle',
 			},
+			{
+				matches: ['*://*/pages/ext-data.json*'],
+				js: ['cs/text.js'],
+				run_at: 'document_end',
+			},
 		],
 		web_accessible_resources: [
 			{ resources: ['war.txt'], matches: ['<all_urls>'] },
 		],
 	}),
 	'war.txt': 'accessible',
+	'cs/text.js': `const pre = document.querySelector('body > pre');
+	document.documentElement.dataset.text = JSON.stringify({
+		type: document.contentType, title: document.title,
+		first: document.body?.firstElementChild?.tagName, text: pre?.textContent,
+		id: chrome.runtime.id });`,
 	'rules.json': JSON.stringify([
 		{
 			id: 1,
@@ -325,6 +339,100 @@ const probe = {
 	});`,
 };
 
+// the compat probe: what extensions found missing against Chrome (a
+// localized name, the user script world's runtime, tabs' and
+// webNavigation's events, a web accessible script under the page's CSP,
+// executeScript into a sandboxed frame, a popup sized to its content)
+const compatPages = [
+	'*://*/pages/ext-compat.html*',
+	'*://*/pages/ext-compat-frame.html*',
+];
+const compat = {
+	'manifest.json': JSON.stringify({
+		manifest_version: 3,
+		name: '__MSG_extName__',
+		default_locale: 'en',
+		version: '1.0',
+		permissions: ['tabs', 'webNavigation', 'scripting', 'userScripts'],
+		host_permissions: ['http://127.0.0.1/*'],
+		background: { service_worker: 'sw.js' },
+		action: { default_popup: 'words.html' },
+		content_scripts: [
+			{
+				matches: compatPages,
+				js: ['cs.js'],
+				all_frames: true,
+				run_at: 'document_start',
+			},
+		],
+		web_accessible_resources: [
+			{ resources: ['war.js'], matches: ['<all_urls>'] },
+		],
+	}),
+	'_locales/en/messages.json': JSON.stringify({
+		extName: { message: 'Compat Probe' },
+	}),
+	'war.js': `document.documentElement.dataset.war = 'ran';`,
+	'cs.js': `if (window === top) {
+		document.documentElement.dataset.name = chrome.runtime.getManifest().name;
+		const script = document.createElement('script');
+		script.src = chrome.runtime.getURL('war.js');
+		document.documentElement.append(script);
+		new MutationObserver(async () => {
+			const ask = document.documentElement.dataset.ask;
+			if (!ask) return;
+			delete document.documentElement.dataset.ask;
+			document.documentElement.dataset[ask] = JSON.stringify(await chrome.runtime.sendMessage({ type: ask }));
+		}).observe(document.documentElement, { attributes: true, attributeFilter: ['data-ask'] });
+	}`,
+	'words.html':
+		'<!doctype html><html><body style="margin:0;height:40px;font:16px monospace"><p id="words" style="margin:0">aaaa bbbb cccc dddd</p><script src="words.js"></script></body></html>',
+	// a bundle's top-level var Text is the page's global (Grammarly's popup)
+	'words.js': `var Text = { bundled: true };
+	const style = document.createElement('style');
+	document.head.append(style);
+	try {
+		style.textContent = '#words { color: rgb(4, 5, 6) }';
+		document.body.dataset.styled = getComputedStyle(document.getElementById('words')).color;
+	} catch (error) {
+		document.body.dataset.styled = String(error);
+	}`,
+	'sw.js': `const log = [];
+	const note = (name) => (...args) => log.push([name, ...args]);
+	for (const name of ['onCreated', 'onUpdated', 'onActivated', 'onRemoved'])
+		chrome.tabs[name].addListener(note('tabs.' + name));
+	for (const name of ['onBeforeNavigate', 'onCommitted', 'onDOMContentLoaded', 'onCompleted', 'onHistoryStateUpdated', 'onReferenceFragmentUpdated'])
+		chrome.webNavigation[name].addListener(note('webNavigation.' + name));
+	chrome.webNavigation.onCompleted.addListener(note('filtered'), { url: [{ pathSuffix: 'ext-compat.html' }] });
+	chrome.runtime.onInstalled.addListener(async () => {
+		await chrome.userScripts.configureWorld({ messaging: true });
+		await chrome.userScripts.register([{
+			id: 'shape',
+			matches: ['*://*/pages/ext-compat.html*'],
+			runAt: 'document_start',
+			js: [{ code: "document.documentElement.dataset.us = JSON.stringify({ keys: Object.keys(chrome).sort(), runtime: Object.keys(chrome.runtime).sort(), onMessage: typeof (chrome.runtime.onMessage && chrome.runtime.onMessage.addListener) });" }],
+		}]);
+	});
+	chrome.runtime.onMessage.addListener((message, sender, respond) => {
+		if (message.type === 'log') {
+			respond({ tab: sender.tab.id, log });
+			return;
+		}
+		if (message.type === 'exec') {
+			chrome.scripting.executeScript({ target: { tabId: sender.tab.id, allFrames: true }, func: () => location.pathname })
+				.then((results) => respond({ frames: results.map((result) => result.frameId).sort(), paths: results.map((result) => result.result) }),
+					(error) => respond({ error: error.message }));
+			return true;
+		}
+		if (message.type === 'frames') {
+			chrome.webNavigation.getAllFrames({ tabId: sender.tab.id })
+				.then((frames) => respond(frames.map((frame) => [frame.frameId, frame.parentFrameId, new URL(frame.url).pathname])),
+					(error) => respond({ error: error.message }));
+			return true;
+		}
+	});`,
+};
+
 // the MV2 blocker, as a .zip
 const blocker = zip({
 	'manifest.json': JSON.stringify({
@@ -404,6 +512,7 @@ async function poll(page, path, read, timeout = 20000) {
 const TARGET = 'extension target';
 const OTHER = 'no extension here';
 const TRUSTED = 'trusted types target';
+const COMPAT = 'compat target';
 
 const datasetOf = (key) =>
 	new Function(
@@ -551,6 +660,29 @@ for (const [mode, base] of [
 		`${mode}: a page no extension reaches loads no runtime`,
 		runtimeLoads.length === loadsBefore,
 		runtimeLoads.slice(loadsBefore).join(' '),
+	);
+
+	// a JSON answer is a text document Chrome renders, where content scripts
+	// run as in any page (JSON viewers read its <pre>)
+	await page.evaluate(
+		(url) => window.__frame.go(url),
+		`${FIXTURE}pages/ext-data.json`,
+	);
+	let json = null;
+	for (let tries = 0; tries < 100 && !json; tries++) {
+		for (const frame of page.frames())
+			json ??= await frame.evaluate(datasetOf('text')).catch(() => null);
+		if (!json) await sleep(150);
+	}
+	json = JSON.parse(json ?? 'null');
+	ok(
+		`${mode}: content scripts run in a JSON document, which reads as Chrome's`,
+		json?.id === probeId &&
+			json.type === 'application/json' &&
+			json.title === '' &&
+			json.first === 'PRE' &&
+			JSON.parse(json.text ?? 'null')?.probe === 'json <&> text',
+		JSON.stringify(json),
 	);
 
 	await page.evaluate((url) => window.__frame.go(url), target);
@@ -825,6 +957,234 @@ for (const [mode, base] of [
 		`${mode}: content scripts run on a page that requires Trusted Types`,
 		ttIdle?.includes('"color":"rgb(1, 2, 3)"'),
 		ttIdle,
+	);
+
+	// the compat probe (see `compat`), in a page whose CSP allows only its own scripts
+	const compatInfo = await page.evaluate(
+		(files) =>
+			window.__controller.extensions.install(files, { filename: 'compat' }),
+		compat,
+	);
+	const compatId = compatInfo.id;
+	await sleep(1500);
+	await page.evaluate(
+		(url) => window.__frame.go(url),
+		`${FIXTURE}pages/ext-compat.html`,
+	);
+	const war = await poll(page, COMPAT, datasetOf('war'), 15000);
+	const compatTop = await documentAt(page, COMPAT);
+	const askCompat = async (type) => {
+		const frame = await documentAt(page, COMPAT);
+		await frame
+			?.evaluate((type) => {
+				delete document.documentElement.dataset[type];
+				document.documentElement.dataset.ask = type;
+			}, type)
+			.catch(() => {});
+		for (let tries = 0; tries < 100; tries++) {
+			const value = await frame?.evaluate(datasetOf(type)).catch(() => null);
+			if (value) return JSON.parse(value);
+			await sleep(100);
+		}
+		return null;
+	};
+	ok(
+		`${mode}: getManifest's name is localized, as Chrome gives it`,
+		(await compatTop?.evaluate(datasetOf('name'))) === 'Compat Probe',
+		String(await compatTop?.evaluate(datasetOf('name'))),
+	);
+	const userWorld = JSON.parse(
+		(await compatTop?.evaluate(datasetOf('us')).catch(() => null)) ?? 'null',
+	);
+	ok(
+		`${mode}: a user script's world with messaging has Chrome's runtime, onMessage included`,
+		userWorld?.onMessage === 'function' &&
+			userWorld.keys.includes('runtime') &&
+			userWorld.runtime.join() ===
+				'ContextType,OnInstalledReason,OnRestartRequiredReason,PlatformArch,PlatformNaclArch,PlatformOs,RequestUpdateCheckStatus,connect,dynamicId,id,onConnect,onMessage,sendMessage',
+		JSON.stringify(userWorld),
+	);
+	ok(
+		`${mode}: a content script's web accessible script runs past the page's CSP and referrer policy`,
+		war === 'ran',
+		String(war),
+	);
+	const exec = await askCompat('exec');
+	ok(
+		`${mode}: executeScript with allFrames runs in a sandboxed frame too`,
+		exec?.frames?.length === 3 &&
+			exec.paths.filter((path) => path === '/pages/ext-compat-frame.html')
+				.length === 2,
+		JSON.stringify(exec),
+	);
+	const frames = await askCompat('frames');
+	ok(
+		`${mode}: webNavigation.getAllFrames lists the tab's top and its frames`,
+		Array.isArray(frames) &&
+			frames.some(([id, parent]) => id === 0 && parent === -1) &&
+			frames.some(
+				([id, parent, path]) =>
+					id > 0 && parent === 0 && path === '/pages/ext-compat-frame.html',
+			),
+		JSON.stringify(frames),
+	);
+	// the tab's history, its title, and a second tab shown and closed
+	await compatTop?.evaluate(() => history.pushState({}, '', '?pushed'));
+	await sleep(400);
+	await compatTop?.evaluate(() => (document.title = 'compat target again'));
+	await sleep(400);
+	await page.evaluate(async (url) => {
+		const controller = window.__controller;
+		const frame = controller.createFrame();
+		document.body.append(frame.element);
+		controller.activeTab = frame;
+		window.__second = frame;
+		await frame.go(url);
+	}, target);
+	await sleep(2500);
+	await page.evaluate(() => {
+		const controller = window.__controller;
+		controller.activeTab = window.__frame;
+		window.__second.element.remove();
+		controller.frames.splice(controller.frames.indexOf(window.__second), 1);
+	});
+	await sleep(800);
+	const told = await askCompat('log');
+	const log = told?.log ?? [];
+	const tabId = told?.tab;
+	const top = (name, test = () => true) =>
+		log.some(
+			([event, details]) =>
+				event === name &&
+				details.tabId === tabId &&
+				details.frameId === 0 &&
+				test(details),
+		);
+	const updated = (test) =>
+		log.some(
+			([event, id, change]) =>
+				event === 'tabs.onUpdated' && id === tabId && test(change),
+		);
+	const page2 = log.find(([event]) => event === 'tabs.onCreated')?.[1]?.id;
+	ok(
+		`${mode}: webNavigation tells a tab's top document's commit, load and history`,
+		typeof tabId === 'number' &&
+			top('webNavigation.onBeforeNavigate', (details) =>
+				details.url.endsWith('/pages/ext-compat.html'),
+			) &&
+			top(
+				'webNavigation.onCommitted',
+				(details) =>
+					details.url.endsWith('/pages/ext-compat.html') &&
+					/^[0-9A-F]{32}$/.test(details.documentId) &&
+					typeof details.transitionType === 'string',
+			) &&
+			top('webNavigation.onCompleted') &&
+			top('webNavigation.onHistoryStateUpdated', (details) =>
+				details.url.endsWith('?pushed'),
+			),
+		JSON.stringify(log.map(([event]) => event)),
+	);
+	ok(
+		`${mode}: webNavigation tells a frame's commit below the top`,
+		log.some(
+			([event, details]) =>
+				event === 'webNavigation.onCommitted' &&
+				details.tabId === tabId &&
+				details.frameId > 0 &&
+				details.parentFrameId === 0 &&
+				details.url.endsWith('/pages/ext-compat-frame.html'),
+		),
+		JSON.stringify(log.filter(([event]) => event.startsWith('webNav'))),
+	);
+	ok(
+		`${mode}: a webNavigation listener's URL filters pick its events`,
+		log.some(([event]) => event === 'filtered') &&
+			log.every(
+				([event, details]) =>
+					event !== 'filtered' || details.url.endsWith('ext-compat.html'),
+			),
+		JSON.stringify(log.filter(([event]) => event === 'filtered')),
+	);
+	ok(
+		`${mode}: tabs.onUpdated tells a tab's loading, URL, title and completion`,
+		updated(
+			(change) =>
+				change.status === 'loading' &&
+				change.url?.endsWith('/pages/ext-compat.html'),
+		) &&
+			updated((change) => change.status === 'complete') &&
+			updated((change) => change.title === 'compat target again'),
+		JSON.stringify(log.filter(([event]) => event === 'tabs.onUpdated')),
+	);
+	ok(
+		`${mode}: tabs.onCreated, onActivated and onRemoved follow the host's tabs`,
+		typeof page2 === 'number' &&
+			page2 !== tabId &&
+			log.some(
+				([event, info]) => event === 'tabs.onActivated' && info.tabId === page2,
+			) &&
+			log.some(
+				([event, info]) => event === 'tabs.onActivated' && info.tabId === tabId,
+			) &&
+			log.some(([event, id]) => event === 'tabs.onRemoved' && id === page2),
+		JSON.stringify(
+			log.filter(
+				([event]) => event.startsWith('tabs.on') && event !== 'tabs.onUpdated',
+			),
+		),
+	);
+	// a popup is as wide as its content's narrowest layout, and follows it
+	await page.evaluate(async (id) => {
+		window.__popup = await window.__controller.extensions.openPopup(id);
+	}, compatId);
+	const popupSize = () =>
+		page.evaluate(() => {
+			const element = [...document.querySelectorAll('iframe')].find((frame) =>
+				frame.name.startsWith('ext-context:popup'),
+			);
+			return element?.style.width
+				? {
+						width: parseInt(element.style.width),
+						height: parseInt(element.style.height),
+					}
+				: null;
+		});
+	let words = null;
+	for (let tries = 0; tries < 100 && !words; tries++) {
+		await sleep(150);
+		for (const frame of page.frames())
+			if (
+				await frame
+					.evaluate(() => !!document.getElementById('words'))
+					.catch(() => false)
+			)
+				words = frame;
+	}
+	await sleep(800);
+	const styled = await words
+		?.evaluate(() => document.body.dataset.styled ?? null)
+		.catch(() => null);
+	ok(
+		`${mode}: a page's own global named Text leaves a style's text to work`,
+		styled === 'rgb(4, 5, 6)',
+		String(styled),
+	);
+	const narrow = await popupSize();
+	await words
+		?.evaluate(() => (document.body.style.width = '480px'))
+		.catch(() => {});
+	await sleep(800);
+	const wide = await popupSize();
+	ok(
+		`${mode}: a popup takes its content's min-content width, and follows a later change`,
+		narrow?.width < 100 && wide?.width === 480,
+		JSON.stringify({ narrow, wide }),
+	);
+	await page.evaluate(() => window.__popup?.close());
+	await page.evaluate(
+		(id) => window.__controller.extensions.remove(id),
+		compatId,
 	);
 
 	// disable, enable, remove

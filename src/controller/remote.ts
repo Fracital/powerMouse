@@ -39,7 +39,12 @@ import type { CarrierInfo } from '../transport/wispWebTransport';
 import { BUILD, CONTROLLER_FRAME_SCRIPT } from '../version';
 import { drawAccountChooser } from './accountChooser';
 import { ClientFrames } from './clientFrames';
-import { Extensions, framesAsTabs, type HubTabs } from './extensions';
+import {
+	Extensions,
+	framesAsTabs,
+	watchedList,
+	type FramesAsTabs,
+} from './extensions';
 import { watchFrame } from './frameWatch';
 import { GeometryWatch } from './geometry';
 import {
@@ -263,7 +268,26 @@ export class RemoteController extends EventTarget {
 	stale: StaleInfo | null = null;
 	/** the inner controller's `carrier` (see StompController), with its `carrier` event */
 	carrier: CarrierInfo | null = null;
-	frames: RemoteFrame[] = [];
+	#frames: RemoteFrame[] = watchedList([], () =>
+		this.#extensionTabs?.changed(),
+	);
+	/** the host's frames (createFrame adds one); the extensions see them as tabs */
+	get frames(): RemoteFrame[] {
+		return this.#frames;
+	}
+	set frames(list: RemoteFrame[]) {
+		this.#frames = watchedList(list, () => this.#extensionTabs?.changed());
+		this.#tabsChanged();
+	}
+	#tabsQueued = false;
+	#tabsChanged() {
+		if (this.#tabsQueued) return;
+		this.#tabsQueued = true;
+		queueMicrotask(() => {
+			this.#tabsQueued = false;
+			this.#extensionTabs?.changed();
+		});
+	}
 	/** the handover listeners (StompController.onHandover, relayed by the controller frame) */
 	#handovers = new Set<() => void>();
 	/** @internal see StompController.onHandover */
@@ -271,8 +295,15 @@ export class RemoteController extends EventTarget {
 		this.#handovers.add(listener);
 		return () => this.#handovers.delete(listener);
 	}
+	#activeTab: RemoteFrame | null = null;
 	/** the frame the host shows now: the extensions' active tab (see StompController.activeTab) */
-	activeTab: RemoteFrame | null = null;
+	get activeTab(): RemoteFrame | null {
+		return this.#activeTab;
+	}
+	set activeTab(frame: RemoteFrame | null) {
+		this.#activeTab = frame;
+		this.#tabsChanged();
+	}
 	/**
 	 * The extensions (docs/extensions.md): their hub is the controller
 	 * frame's, asked over its RPC; their tabs are this page's frames
@@ -282,7 +313,7 @@ export class RemoteController extends EventTarget {
 	#nextTab = 1;
 	/** the client of each frame's top document, as its reports said */
 	#topClients = new WeakMap<RemoteFrame, string>();
-	#extensionTabs: HubTabs;
+	#extensionTabs: FramesAsTabs<RemoteFrame> | null = null;
 	/**
 	 * The host's browser window as its frames' documents see it
 	 * (./geometry.ts), kept by the controller frame (and its slots' agents)
@@ -356,6 +387,14 @@ export class RemoteController extends EventTarget {
 				const change: ExtensionsChange = { type: 'tab', url };
 				this.extensions.changed(change);
 				this.dispatchEvent(new CustomEvent('extensions', { detail: change }));
+			},
+			// the hub is the controller frame's: in order, over its RPC
+			events: (event) => {
+				this.#ready
+					.then(() =>
+						this.#rpc.call('extensions', { call: 'tabEvent', args: [event] }),
+					)
+					.catch(() => {});
 			},
 		});
 		const hub = (call: string, ...args: unknown[]) =>
@@ -549,7 +588,9 @@ export class RemoteController extends EventTarget {
 						string,
 						((...values: unknown[]) => Promise<unknown>) | undefined
 					>;
-					const run = Object.hasOwn(tabs, op) ? tabs[op] : undefined;
+					// (the feed's own calls are this page's to make)
+					const feed = op === 'changed' || op === 'navigated';
+					const run = !feed && Object.hasOwn(tabs, op) ? tabs[op] : undefined;
 					if (typeof run !== 'function')
 						throw new Error(`${op} is not a tabs call`);
 					return [await run(...args), []];
@@ -655,6 +696,7 @@ export class RemoteController extends EventTarget {
 						)
 						.catch(() => {});
 				}
+				this.#extensionTabs?.navigated(frame, navigate);
 				if (navigate.client && this.#isolationWanted.has(navigate.client))
 					navigate.isolation = 'wanted';
 				// where the frame's history can go is the controller frame's to

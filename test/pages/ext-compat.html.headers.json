@@ -1,0 +1,4 @@
+{
+	"content-security-policy": "script-src 'self'",
+	"referrer-policy": "no-referrer"
+}

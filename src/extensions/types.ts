@@ -277,7 +277,7 @@ export interface ShippedExtension {
 	manifestVersion: number;
 	/** the extension's origin, `https://<id>.invalid` */
 	origin: string;
-	/** the manifest (content scripts get it too: getManifest is synchronous) */
+	/** the manifest as getManifest answers it: localized as Chrome localizes it (content scripts get it too: getManifest is synchronous) */
 	manifest: Manifest;
 	/** i18n messages, most specific locale first (lowercased keys) */
 	messages: Record<
@@ -314,6 +314,8 @@ export interface RuntimePayload {
 	page?: ShippedExtension & { kind: ContextKind };
 	/** an extension page that emulates an MV3 service worker: its script, module or classic */
 	serviceWorker?: { url: string; module: boolean };
+	/** a text document (JSON, plain text) served as Chrome's HTML of it: the type document.contentType reads */
+	contentType?: string;
 }
 
 /** the kinds of extension context */

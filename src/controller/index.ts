@@ -131,7 +131,10 @@ import {
 	ExtensionHub,
 	Extensions,
 	framesAsTabs,
+	watchedList,
+	type FramesAsTabs,
 	type HubTabs,
+	type TabEvent,
 } from './extensions';
 import { GeometryWatch, sharedGeometry, shareGeometry } from './geometry';
 import {
@@ -1182,7 +1185,26 @@ export class StompController extends EventTarget {
 	 * proxied page is told.
 	 */
 	carrier: CarrierInfo | null = null;
-	frames: Frame[] = [];
+	#frames: Frame[] = watchedList([], () => this.#tabFeed?.changed());
+	/** the host's frames (createFrame adds one); the extensions see them as tabs */
+	get frames(): Frame[] {
+		return this.#frames;
+	}
+	set frames(list: Frame[]) {
+		this.#frames = watchedList(list, () => this.#tabFeed?.changed());
+		this.#tabsChanged();
+	}
+	/** the extensions' tabs' feed (framesAsTabs): what this page's frames did */
+	#tabFeed: FramesAsTabs<Frame> | null = null;
+	#tabsQueued = false;
+	#tabsChanged() {
+		if (this.#tabsQueued) return;
+		this.#tabsQueued = true;
+		queueMicrotask(() => {
+			this.#tabsQueued = false;
+			this.#tabFeed?.changed();
+		});
+	}
 	/**
 	 * The host's browser window as its frames' documents see it
 	 * (./geometry.ts), kept on this window and every slot's agent's
@@ -1303,8 +1325,15 @@ export class StompController extends EventTarget {
 	/** each frame's tab id, as the extensions see it */
 	#tabIds = new WeakMap<Frame, number>();
 	#nextTab = 1;
+	#activeTab: Frame | null = null;
 	/** the tab the host shows (extensions: tabs.query({ active: true })) */
-	activeTab: Frame | null = null;
+	get activeTab(): Frame | null {
+		return this.#activeTab;
+	}
+	set activeTab(frame: Frame | null) {
+		this.#activeTab = frame;
+		this.#tabsChanged();
+	}
 	/** the blocker's lists in force, while it is on (docs/adblock.md); its module is `#modules.blocker` */
 	#adblock: AdblockInit | null = null;
 	/**
@@ -1778,6 +1807,7 @@ export class StompController extends EventTarget {
 					this.#clients.attribute(navigate.client, frame);
 					this.#extensionHub.place(navigate.client, this.tabIdOf(frame));
 				}
+				this.#tabFeed?.navigated(frame, navigate);
 				// (the controller's word, never the page's: navigateReport takes
 				// no such field from it)
 				if (navigate.client && this.#isolationWanted.has(navigate.client))
@@ -3357,6 +3387,8 @@ export class StompController extends EventTarget {
 			case 'place':
 				hub.place(args[0] as string, args[1] as number);
 				return Promise.resolve();
+			case 'tabEvent':
+				return hub.tabEvent(args[0] as TabEvent);
 			case 'expectPopup':
 				return Promise.resolve(
 					hub.expectPopup(
@@ -3389,7 +3421,7 @@ export class StompController extends EventTarget {
 	}
 	/** the frames as the extensions' tabs */
 	#extensionTabs(): HubTabs {
-		return framesAsTabs<Frame>({
+		return (this.#tabFeed = framesAsTabs<Frame>({
 			frames: () => this.frames,
 			closed: (frame) => {
 				this.frames = this.frames.filter((other) => other !== frame);
@@ -3407,7 +3439,10 @@ export class StompController extends EventTarget {
 				this.extensions.changed(change);
 				this.dispatchEvent(new CustomEvent('extensions', { detail: change }));
 			},
-		});
+			events: (event) => {
+				void this.#extensionHub.tabEvent(event).catch(() => {});
+			},
+		}));
 	}
 	/** replace the request rules the service worker applies (see ControllerInit.rules) */
 	async setRules(rules: RequestRule[]): Promise<void> {

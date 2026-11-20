@@ -126,6 +126,8 @@ export function runtimeApi(ctx: Context) {
 	const content = ctx.kind === 'content';
 	const api: Record<string, unknown> = {
 		id: ext.id,
+		// (an extension that asks for no dynamic URL has its id there)
+		dynamicId: ext.id,
 		getURL: ctx.sync((path: unknown) =>
 			extensionURL(ext.id, cleanPath(String(path ?? ''))),
 		),
@@ -166,6 +168,32 @@ export function runtimeApi(ctx: Context) {
 			LINUX: 'linux',
 			OPENBSD: 'openbsd',
 			FUCHSIA: 'fuchsia',
+		},
+		PlatformArch: {
+			ARM: 'arm',
+			ARM64: 'arm64',
+			X86_32: 'x86-32',
+			X86_64: 'x86-64',
+			MIPS: 'mips',
+			MIPS64: 'mips64',
+			RISCV64: 'riscv64',
+		},
+		PlatformNaclArch: {
+			ARM: 'arm',
+			X86_32: 'x86-32',
+			X86_64: 'x86-64',
+			MIPS: 'mips',
+			MIPS64: 'mips64',
+		},
+		OnRestartRequiredReason: {
+			APP_UPDATE: 'app_update',
+			OS_UPDATE: 'os_update',
+			PERIODIC: 'periodic',
+		},
+		RequestUpdateCheckStatus: {
+			THROTTLED: 'throttled',
+			NO_UPDATE: 'no_update',
+			UPDATE_AVAILABLE: 'update_available',
 		},
 	};
 	if (!content) {
@@ -762,6 +790,59 @@ export function tabsApi(ctx: Context) {
 				'onDetached',
 				'onZoomChange',
 			].map((name) => [name, ctx.event(`tabs.${name}`).api]),
+		),
+	};
+}
+
+/** webNavigation: the hub's events of the tabs' documents, and the frames it knows of them */
+export function webNavigationApi(ctx: Context) {
+	const m = ctx.method.bind(ctx);
+	const names = (list: string[]) =>
+		Object.fromEntries(list.map((name) => [name.toUpperCase(), name]));
+	return {
+		TransitionType: names([
+			'link',
+			'typed',
+			'auto_bookmark',
+			'auto_subframe',
+			'manual_subframe',
+			'generated',
+			'start_page',
+			'form_submit',
+			'reload',
+			'keyword',
+			'keyword_generated',
+		]),
+		TransitionQualifier: names([
+			'client_redirect',
+			'server_redirect',
+			'forward_back',
+			'from_address_bar',
+		]),
+		getFrame: m(
+			(details: { tabId?: number; frameId?: number; documentId?: string }) =>
+				ctx.hub(
+					'webNavigation.getFrame',
+					details?.tabId,
+					details?.frameId,
+					details?.documentId,
+				),
+		),
+		getAllFrames: m((details: { tabId: number }) =>
+			ctx.hub('webNavigation.getAllFrames', details?.tabId),
+		),
+		...Object.fromEntries(
+			[
+				'onBeforeNavigate',
+				'onCommitted',
+				'onDOMContentLoaded',
+				'onCompleted',
+				'onErrorOccurred',
+				'onCreatedNavigationTarget',
+				'onReferenceFragmentUpdated',
+				'onTabReplaced',
+				'onHistoryStateUpdated',
+			].map((name) => [name, ctx.event(`webNavigation.${name}`).api]),
 		),
 	};
 }
@@ -1495,6 +1576,8 @@ export function buildChrome(ctx: Context): Record<string, unknown> {
 	});
 	if (granted.has('declarativeContent'))
 		chrome.declarativeContent = declarativeContentApi(ctx);
+	if (granted.has('webNavigation'))
+		chrome.webNavigation = webNavigationApi(ctx);
 	if (granted.has('userScripts'))
 		chrome.userScripts = workerNamespace(
 			ctx,

@@ -38,6 +38,8 @@ export interface HubTab {
 	url: string;
 	title: string;
 	active: boolean;
+	/** a document is loading in it (the feed saw it commit, not load) */
+	status?: 'loading';
 }
 
 /** what the hub asks of its controller about tabs */
@@ -81,10 +83,81 @@ export interface TabFrames<F extends TabFrame> {
 	open?: (url: string, opener: F) => void;
 	/** a new tab with no tab to open it from: the host is told (a `tab` change) */
 	request?: (url: string) => void;
+	/** where the feed's events go (the hub, or the controller frame's over RPC); none: no feed */
+	events?: (event: TabEvent) => void;
 }
 
+/**
+ * What the host's frames did, for the hub's tabs and webNavigation events:
+ * Chrome's tab strip and navigation stack, which only the host sees (the
+ * tabs it opens, shows and closes, each top document's commit and load)
+ */
+export type TabEvent =
+	| { e: 'created'; tabId: number; url: string; active: boolean }
+	| { e: 'activated'; tabId: number }
+	| { e: 'removed'; tabId: number }
+	| {
+			e: 'commit';
+			tabId: number;
+			url: string;
+			title: string;
+			client: string;
+			transition: string;
+	  }
+	| { e: 'history'; tabId: number; url: string; fragment: boolean }
+	| { e: 'title'; tabId: number; title: string }
+	| { e: 'icon'; tabId: number; icon: string }
+	| { e: 'complete'; tabId: number };
+
+/** a top document's navigate report, as the feed reads it */
+export interface TabReport {
+	url: string;
+	title: string;
+	icon?: string | null;
+	client?: string;
+}
+
+/** a controller's frames as the hub's tabs: the hub's calls, and the feed of what they did */
+export interface FramesAsTabs<F extends TabFrame> extends HubTabs {
+	/** the frames, or which one is shown, changed */
+	changed(): void;
+	/** a frame's top document reported (navigateReport) */
+	navigated(frame: F, report: TabReport): void;
+}
+
+/**
+ * An array that calls `changed` (once a task) when it is written to: the
+ * controllers' `frames`, which their hosts push to and splice
+ */
+export function watchedList<T>(list: T[], changed: () => void): T[] {
+	let queued = false;
+	return new Proxy(list, {
+		set(target, key, value, receiver) {
+			const done = Reflect.set(target, key, value, receiver);
+			if (!queued) {
+				queued = true;
+				queueMicrotask(() => {
+					queued = false;
+					changed();
+				});
+			}
+			return done;
+		},
+		deleteProperty(target, key) {
+			const done = Reflect.deleteProperty(target, key);
+			changed();
+			return done;
+		},
+	});
+}
+
+const sameDocumentURL = (from: string, to: string) =>
+	from.split('#')[0] === to.split('#')[0];
+
 /** a controller's frames as the hub's tabs, in both host modes */
-export function framesAsTabs<F extends TabFrame>(host: TabFrames<F>): HubTabs {
+export function framesAsTabs<F extends TabFrame>(
+	host: TabFrames<F>,
+): FramesAsTabs<F> {
 	const shown = () =>
 		host.frames().filter((frame) => frame.element.isConnected);
 	const byId = (id: number) => {
@@ -93,15 +166,143 @@ export function framesAsTabs<F extends TabFrame>(host: TabFrames<F>): HubTabs {
 		return frame;
 	};
 	const frameIds = new Map<string, number>();
+	// what the feed last told of each tab
+	type Seen = {
+		tabId: number;
+		client: string | null;
+		url: string;
+		title: string;
+		icon: string | null;
+		complete: boolean;
+		/** a load came before its document reported (the commit completes at once) */
+		loaded: number;
+	};
+	const seen = new Map<F, Seen>();
+	let active: F | null = null;
+	const send = (event: TabEvent) => {
+		try {
+			host.events?.(event);
+		} catch (error) {
+			// the hub's host is gone
+		}
+	};
+	const loaded = (frame: F) => {
+		const state = seen.get(frame);
+		if (!state) return;
+		if (state.client && !state.complete) {
+			state.complete = true;
+			send({ e: 'complete', tabId: state.tabId });
+		} else if (state.client) state.loaded = Date.now();
+	};
+	const changed = () => {
+		if (!host.events) return;
+		const now = shown();
+		for (const frame of now)
+			if (!seen.has(frame)) {
+				const tabId = host.tabIdOf(frame);
+				seen.set(frame, {
+					tabId,
+					client: null,
+					url: frame.url ?? '',
+					title: frame.title ?? '',
+					icon: null,
+					complete: false,
+					loaded: 0,
+				});
+				frame.element.addEventListener('load', () => loaded(frame));
+				send({
+					e: 'created',
+					tabId,
+					url: frame.url ?? '',
+					active: frame === host.active(),
+				});
+			}
+		for (const [frame, state] of seen)
+			if (!now.includes(frame)) {
+				seen.delete(frame);
+				send({ e: 'removed', tabId: state.tabId });
+			}
+		// a tab the host shows before its frame is in the page: once it is
+		const wanted = host.active();
+		const shownNow = wanted
+			? now.includes(wanted)
+				? wanted
+				: active
+			: (now[0] ?? null);
+		if (shownNow !== active) {
+			active = shownNow;
+			if (shownNow) send({ e: 'activated', tabId: host.tabIdOf(shownNow) });
+		}
+	};
 	return {
+		changed,
+		navigated: (frame, report) => {
+			if (!host.events) return;
+			changed();
+			const state = seen.get(frame);
+			if (!state) return;
+			if (report.client && report.client !== state.client) {
+				const first = state.client === null;
+				const reload = !first && report.url === state.url;
+				state.client = report.client;
+				state.url = report.url;
+				state.title = report.title;
+				state.icon = report.icon ?? null;
+				state.complete = false;
+				send({
+					e: 'commit',
+					tabId: state.tabId,
+					url: report.url,
+					title: report.title,
+					client: report.client,
+					transition: first ? 'typed' : reload ? 'reload' : 'link',
+				});
+				// its load came first: the frame's element said so before the
+				// report (the document says, when the host may read it)
+				let done: boolean | null = null;
+				try {
+					const doc = frame.element.contentDocument;
+					if (doc) done = doc.readyState === 'complete';
+				} catch (error) {
+					// another origin's
+				}
+				const early = !!state.loaded && Date.now() - state.loaded < 1000;
+				state.loaded = 0;
+				if (done ?? early) {
+					state.complete = true;
+					send({ e: 'complete', tabId: state.tabId });
+				}
+				return;
+			}
+			if (report.url !== state.url) {
+				const fragment = sameDocumentURL(state.url, report.url);
+				state.url = report.url;
+				send({ e: 'history', tabId: state.tabId, url: report.url, fragment });
+			}
+			if (report.title !== state.title) {
+				state.title = report.title;
+				send({ e: 'title', tabId: state.tabId, title: report.title });
+			}
+			const icon = report.icon ?? null;
+			if (icon && icon !== state.icon) {
+				state.icon = icon;
+				send({ e: 'icon', tabId: state.tabId, icon });
+			}
+		},
 		list: async () => {
 			const active = host.active() ?? shown()[0] ?? null;
-			return shown().map((frame) => ({
-				id: host.tabIdOf(frame),
-				url: frame.url ?? '',
-				title: frame.title ?? '',
-				active: frame === active,
-			}));
+			return shown().map((frame) => {
+				const state = seen.get(frame);
+				return {
+					id: host.tabIdOf(frame),
+					url: frame.url ?? '',
+					title: frame.title ?? '',
+					active: frame === active,
+					...(state && state.client && !state.complete
+						? { status: 'loading' as const }
+						: {}),
+				};
+			});
 		},
 		ofClient: async (client) => {
 			const frame = host.frameOf(client);
@@ -385,6 +586,10 @@ export class ExtensionHub {
 			});
 			return;
 		}
+		if (message?.t === 'bye') {
+			this.#subframes.delete(String(message.ctx));
+			return;
+		}
 		if (message?.t !== 'hub') return;
 		const reply = (value: unknown, error?: string) =>
 			this.#post(ext, {
@@ -399,11 +604,288 @@ export class ExtensionHub {
 					ext,
 					String(message.call),
 					(message.args as unknown[]) ?? [],
+					String(message.from ?? ''),
 				),
 			);
 		} catch (error) {
 			reply(undefined, error instanceof Error ? error.message : String(error));
 		}
+	}
+
+	/** each tab as the feed told it: Chrome's status, top document and icon of it */
+	#tabState = new Map<
+		number,
+		{ status: 'loading' | 'complete'; documentId: string; icon: string | null }
+	>();
+	/**
+	 * the documents below a tab's top that an extension's content scripts
+	 * reached, by the contexts that said hello from them (getAllFrames, their
+	 * webNavigation events)
+	 */
+	#subframes = new Map<
+		string,
+		{
+			tabId: number;
+			frameId: number;
+			url: string;
+			documentId: string;
+			ext: string;
+		}
+	>();
+
+	/** a document's id as webNavigation gives it (32 upper-case hex digits) */
+	static documentId(client: string): string {
+		const hex = client.replace(/-/g, '').toUpperCase();
+		if (/^[0-9A-F]{32}$/.test(hex)) return hex;
+		let hash = 0x811c9dc5;
+		let out = '';
+		for (let round = 0; round < 4; round++) {
+			for (let index = 0; index < client.length; index++)
+				hash = Math.imul(hash ^ client.charCodeAt(index), 0x01000193) >>> 0;
+			hash = Math.imul(hash ^ round, 0x01000193) >>> 0;
+			out += hash.toString(16).toUpperCase().padStart(8, '0');
+		}
+		return out;
+	}
+
+	/** tell every extension (with `permission`, when one is needed) a chrome.* event */
+	#broadcast(name: string, args: unknown[], permission?: string, url?: string) {
+		for (const ext of this.#extensions.values())
+			if (!permission || ext.info.permissions.includes(permission))
+				this.#post(ext, {
+					t: 'event',
+					name,
+					args,
+					...(url === undefined ? {} : { url }),
+				});
+	}
+
+	#navigation(
+		tabId: number,
+		frameId: number,
+		url: string,
+		documentId: string | null,
+		more: Record<string, unknown> = {},
+	): Record<string, unknown> {
+		const top = this.#tabState.get(tabId)?.documentId;
+		return {
+			...(documentId ? { documentId } : {}),
+			documentLifecycle: 'active',
+			frameId,
+			frameType: frameId === 0 ? 'outermost_frame' : 'sub_frame',
+			...(frameId !== 0 && top ? { parentDocumentId: top } : {}),
+			parentFrameId: frameId === 0 ? -1 : 0,
+			processId: documentId ? tabId : -1,
+			tabId,
+			timeStamp: performance.timeOrigin + performance.now(),
+			url,
+			...more,
+		};
+	}
+
+	/** a webNavigation event of a frame: the extensions that may see it */
+	#webNavigation(
+		name: string,
+		details: Record<string, unknown>,
+		only?: HubExtension,
+	) {
+		const event = `webNavigation.${name}`;
+		if (only) {
+			if (only.info.permissions.includes('webNavigation'))
+				this.#post(only, {
+					t: 'event',
+					name: event,
+					args: [details],
+					url: details.url,
+				});
+		} else
+			this.#broadcast(event, [details], 'webNavigation', String(details.url));
+	}
+
+	/** tabs.onUpdated: what changed, and the tab after it */
+	async #updated(tabId: number, change: Record<string, unknown>) {
+		if (!this.#extensions.size) return;
+		let tab: Record<string, unknown>;
+		try {
+			tab = await this.#tab(tabId);
+		} catch (error) {
+			return;
+		}
+		this.#broadcast('tabs.onUpdated', [tabId, change, tab]);
+	}
+
+	/**
+	 * What the host's frames did (framesAsTabs' feed): tabs' and
+	 * webNavigation's events, in Chrome's order of them
+	 */
+	async tabEvent(event: TabEvent) {
+		// one at a time: a tab's events come in the order they happened
+		const run = async () => {
+			if (event.e === 'removed') {
+				this.#tabState.delete(event.tabId);
+				for (const [key, frame] of this.#subframes)
+					if (frame.tabId === event.tabId) this.#subframes.delete(key);
+			}
+			const tabId = event.tabId;
+			switch (event.e) {
+				case 'created': {
+					if (!this.#extensions.size) return;
+					let tab: Record<string, unknown>;
+					try {
+						tab = await this.#tab(tabId);
+					} catch (error) {
+						return;
+					}
+					this.#broadcast('tabs.onCreated', [
+						{
+							...tab,
+							status: 'loading',
+							url: '',
+							title: '',
+							...(event.url ? { pendingUrl: event.url } : {}),
+						},
+					]);
+					return;
+				}
+				case 'activated':
+					this.#broadcast('tabs.onActivated', [{ tabId, windowId: 1 }]);
+					this.#broadcast('tabs.onHighlighted', [
+						{ tabIds: [tabId], windowId: 1 },
+					]);
+					return;
+				case 'removed':
+					this.#broadcast('tabs.onRemoved', [
+						tabId,
+						{ isWindowClosing: false, windowId: 1 },
+					]);
+					return;
+				case 'commit': {
+					const documentId = ExtensionHub.documentId(event.client);
+					this.#webNavigation(
+						'onBeforeNavigate',
+						this.#navigation(tabId, 0, event.url, null),
+					);
+					this.#tabState.set(tabId, {
+						status: 'loading',
+						documentId,
+						icon: null,
+					});
+					for (const [key, frame] of this.#subframes)
+						if (frame.tabId === tabId) this.#subframes.delete(key);
+					await this.#updated(tabId, { status: 'loading', url: event.url });
+					this.#webNavigation(
+						'onCommitted',
+						this.#navigation(tabId, 0, event.url, documentId, {
+							transitionQualifiers: [],
+							transitionType: event.transition,
+						}),
+					);
+					if (event.title) await this.#updated(tabId, { title: event.title });
+					return;
+				}
+				case 'complete': {
+					const state = this.#tabState.get(tabId);
+					if (!state || state.status === 'complete') return;
+					state.status = 'complete';
+					if (!this.#extensions.size) return;
+					const tab = await this.#tab(tabId).catch(() => null);
+					const url = String(tab?.url ?? '');
+					for (const name of ['onDOMContentLoaded', 'onCompleted'])
+						this.#webNavigation(
+							name,
+							this.#navigation(tabId, 0, url, state.documentId),
+						);
+					await this.#updated(tabId, { status: 'complete' });
+					return;
+				}
+				case 'history': {
+					const state = this.#tabState.get(tabId);
+					const status = state?.status;
+					if (state) state.status = 'loading';
+					await this.#updated(tabId, { status: 'loading', url: event.url });
+					this.#webNavigation(
+						event.fragment
+							? 'onReferenceFragmentUpdated'
+							: 'onHistoryStateUpdated',
+						this.#navigation(tabId, 0, event.url, state?.documentId ?? null, {
+							transitionQualifiers: [],
+							transitionType: 'link',
+						}),
+					);
+					if (state) state.status = status ?? 'complete';
+					if (status !== 'loading')
+						await this.#updated(tabId, { status: 'complete' });
+					return;
+				}
+				case 'title':
+					await this.#updated(tabId, { title: event.title });
+					return;
+				case 'icon': {
+					const state = this.#tabState.get(tabId);
+					if (state) state.icon = event.icon;
+					await this.#updated(tabId, { favIconUrl: event.icon });
+					return;
+				}
+			}
+		};
+		const next = this.#tabEvents.then(run, run);
+		this.#tabEvents = next.catch(() => {});
+		return next;
+	}
+	#tabEvents: Promise<void> = Promise.resolve();
+
+	/** a document below a tab's top said hello: its frame is known, and committed */
+	#subframeHello(
+		ext: HubExtension,
+		from: string,
+		place: { tabId: number; frameId: number },
+		url: string,
+		client: string,
+	) {
+		const documentId = ExtensionHub.documentId(client || from);
+		this.#subframes.set(from, {
+			tabId: place.tabId,
+			frameId: place.frameId,
+			url,
+			documentId,
+			ext: ext.info.id,
+		});
+		this.#webNavigation(
+			'onBeforeNavigate',
+			this.#navigation(place.tabId, place.frameId, url, null),
+			ext,
+		);
+		this.#webNavigation(
+			'onCommitted',
+			this.#navigation(place.tabId, place.frameId, url, documentId, {
+				transitionQualifiers: [],
+				transitionType: 'auto_subframe',
+			}),
+			ext,
+		);
+	}
+
+	/** webNavigation.getAllFrames: the tab's top, and the documents below it the extensions reached */
+	async #frames(tabId: number): Promise<Record<string, unknown>[]> {
+		const tab = await this.#tab(tabId);
+		const state = this.#tabState.get(tabId);
+		const frames: Record<string, unknown>[] = [
+			this.#navigation(tabId, 0, String(tab.url), state?.documentId ?? null, {
+				errorOccurred: false,
+			}),
+		];
+		const seen = new Set<number>([0]);
+		for (const frame of this.#subframes.values())
+			if (frame.tabId === tabId && !seen.has(frame.frameId)) {
+				seen.add(frame.frameId);
+				frames.push(
+					this.#navigation(tabId, frame.frameId, frame.url, frame.documentId, {
+						errorOccurred: false,
+					}),
+				);
+			}
+		for (const frame of frames) delete frame.timeStamp;
+		return frames;
 	}
 
 	async #tab(id: number): Promise<Record<string, unknown>> {
@@ -428,7 +910,10 @@ export class ExtensionHub {
 			mutedInfo: { muted: false },
 			url: tab.url,
 			title: tab.title,
-			status: 'complete',
+			...(this.#tabState.get(tab.id)?.icon
+				? { favIconUrl: this.#tabState.get(tab.id)!.icon }
+				: {}),
+			status: this.#tabState.get(tab.id)?.status ?? tab.status ?? 'complete',
 			incognito: false,
 			width: innerWidth,
 			height: innerHeight,
@@ -453,6 +938,7 @@ export class ExtensionHub {
 		ext: HubExtension,
 		call: string,
 		args: unknown[],
+		from: string,
 	): Promise<unknown> {
 		const tabs = this.#host.tabs;
 		switch (call) {
@@ -499,7 +985,59 @@ export class ExtensionHub {
 				} catch (error) {
 					// a tab that just closed
 				}
+				if (place.frameId > 0 && hello.url)
+					this.#subframeHello(
+						ext,
+						from,
+						place,
+						hello.url,
+						String(hello.client ?? ''),
+					);
 				return { ...place, tab };
+			}
+			case 'nav': {
+				// a document below a tab's top: its DOMContentLoaded, its load
+				const frame = this.#subframes.get(from);
+				if (!frame) return undefined;
+				this.#webNavigation(
+					args[0] === 'load' ? 'onCompleted' : 'onDOMContentLoaded',
+					this.#navigation(
+						frame.tabId,
+						frame.frameId,
+						frame.url,
+						frame.documentId,
+					),
+					ext,
+				);
+				return undefined;
+			}
+			case 'webNavigation.getAllFrames':
+				return this.#frames(Number(args[0])).catch(() => null);
+			case 'webNavigation.getFrame': {
+				const [tabId, frameId, documentId] = args as [
+					number | undefined,
+					number | undefined,
+					string | undefined,
+				];
+				const tabIds =
+					typeof tabId === 'number'
+						? [tabId]
+						: (await this.#host.tabs.list()).map((tab) => tab.id);
+				for (const id of tabIds) {
+					const frames = await this.#frames(id).catch(() => []);
+					const found = frames.find((frame) =>
+						documentId
+							? frame.documentId === documentId
+							: frame.frameId === (frameId ?? 0),
+					);
+					if (found) {
+						const details = { ...found };
+						for (const key of ['frameId', 'tabId', 'processId'])
+							delete details[key];
+						return details;
+					}
+				}
+				return null;
 			}
 			case 'wake':
 				if (ext.info.background === 'none') return false;

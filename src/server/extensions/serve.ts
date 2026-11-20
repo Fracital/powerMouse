@@ -13,6 +13,7 @@ import type {
 } from '@mercuryworkshop/proxy-transports';
 import {
 	cleanPath,
+	EXTENSION_INITIATOR,
 	extensionOfHost,
 	extensionURL,
 } from '../../extensions/origin';
@@ -137,6 +138,8 @@ export async function serviceWorkerDocument(loaded: Loaded): Promise<string> {
 
 /** the origin of the document that asked, from the headers the proxy sends for it */
 function initiatorOf(headers: RawHeaders): string | null {
+	const told = header(headers, EXTENSION_INITIATOR);
+	if (told) return told;
 	const origin = header(headers, 'origin');
 	if (origin && origin !== 'null') return origin;
 	const referer = header(headers, 'referer');

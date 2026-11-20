@@ -19,6 +19,14 @@ export function extensionURL(id: string, path = ''): string {
 	return `${extensionOrigin(id)}/${clean}`;
 }
 
+/**
+ * The header the worker gives a request to an extension's origin: the
+ * origin of the document that asked, which web_accessible_resources'
+ * `matches` judge (Chrome judges the request's initiator, which a page's
+ * referrer policy does not hide; the transport never sends it on)
+ */
+export const EXTENSION_INITIATOR = 'x-stomp-extension-initiator';
+
 /** the extension a host is the origin of, or null */
 export function extensionOfHost(host: string): string | null {
 	return HOST.exec(host)?.[1] ?? null;
