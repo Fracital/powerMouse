@@ -3365,9 +3365,21 @@ export class StompController extends EventTarget {
 						args[2] as string,
 					),
 				);
+			case 'expect':
+				hub.expect(args[0] as string, args[1] as number);
+				return Promise.resolve();
 			default:
 				return Promise.reject(new Error(`${call} is not an extensions call`));
 		}
+	}
+	/**
+	 * A frame is sent to `url` (its go()): the worker gives the main frame's
+	 * request the frame's tab id (declarativeNetRequest). For Frame.
+	 * @internal
+	 */
+	expectNavigation(frame: Frame, url: string) {
+		if (this.#extensionHub.any)
+			this.#extensionHub.expect(url, this.tabIdOf(frame));
 	}
 	/** the tab id the extensions know a frame by */
 	tabIdOf(frame: Frame): number {
@@ -4539,6 +4551,8 @@ export class Frame extends EventTarget {
 			this.element.clientWidth,
 			this.element.clientHeight,
 		);
+		// the extensions' tab id for its main frame's request
+		this.controller.expectNavigation(this, url);
 		let routed = await this.controller.route(url);
 		// the site pool: the route on the origin of the URL's site, whose
 		// worker is up by now

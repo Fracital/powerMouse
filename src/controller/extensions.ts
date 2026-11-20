@@ -792,6 +792,10 @@ export class ExtensionHub {
 		const ext = this.#found(id);
 		const state = await this.actionState(id, tabId);
 		if (!state.enabled) return 'disabled';
+		// the click grants activeTab for the tab, until it navigates
+		// (declarativeNetRequest's rules for the tab, as in Chrome)
+		if (tabId !== null && ext.info.permissions.includes('activeTab'))
+			await this.command({ op: 'grant', id, tabId }).catch(() => {});
 		if (state.popupUrl) return 'popup';
 		this.#startBackground(ext);
 		await ext.backgroundReady;
@@ -827,6 +831,18 @@ export class ExtensionHub {
 		this.ready.then(() => {
 			if (started && this.#extensions.size)
 				this.command({ op: 'place', client, tabId }).catch(() => {});
+		});
+	}
+
+	/**
+	 * The host sends a tab to `url` (a frame's go): its main frame's request
+	 * is that tab's, before any document of it can say so
+	 */
+	expect(url: string, tabId: number) {
+		const started = this.#started;
+		this.ready.then(() => {
+			if (started && this.#extensions.size)
+				this.command({ op: 'expect', url, tabId }).catch(() => {});
 		});
 	}
 

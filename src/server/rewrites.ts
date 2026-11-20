@@ -2907,6 +2907,13 @@ function genericForward(
 								serverRequest.method === 'POST'),
 						clientId: context?.clientId,
 						resultingClientId: context?.resultingClientId,
+						// the routed document that started it, which has a place in
+						// the frame tree (a frame's src it set: its parent); not
+						// one that may go to another window (a popup, a target)
+						startedBy:
+							hint?.client && hint.own && !hint.opens
+								? { client: hint.client, frameSrc: hint.framing === true }
+								: null,
 					});
 		const dnrFlow: DnrFlow | null = dnrStep?.flow ?? null;
 		const dnrAnswer = async (outcome: DnrOutcome): Promise<Response> => {

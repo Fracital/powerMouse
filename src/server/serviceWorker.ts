@@ -1355,6 +1355,13 @@ function handleMessage(event: ExtendableMessageEvent) {
 				directory: message.directory,
 				nested: typeof message.nested === 'string' ? message.nested : false,
 				own: message.own !== false,
+				client: (event.source as Client).id,
+				...(message.opens === true ? { opens: true } : {}),
+				// a frame's src the document set carries the frame's ancestors,
+				// and not as the frame's own navigation (`parent`) does
+				...(csp && Array.isArray(csp.ancestors) && csp.parent !== true
+					? { framing: true }
+					: {}),
 			});
 		} catch (error) {
 			// not a URL: nothing to record

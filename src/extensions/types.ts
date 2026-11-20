@@ -431,4 +431,8 @@ export type ExtensionCommand =
 			args: unknown[];
 	  }
 	/** a hub tells which tab a client's document is in (declarativeNetRequest's tab ids) */
-	| { op: 'place'; client: string; tabId: number };
+	| { op: 'place'; client: string; tabId: number }
+	/** the host sends a tab to a URL: the main frame's request is that tab's */
+	| { op: 'expect'; url: string; tabId: number }
+	/** a click on the extension's button granted it activeTab for the tab */
+	| { op: 'grant'; id: string; tabId: number };

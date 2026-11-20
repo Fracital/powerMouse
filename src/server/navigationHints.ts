@@ -19,6 +19,12 @@ export interface NavigationHint {
 	nested: string | false;
 	/** whether that document is the routed one itself: its address is then the navigation's referrer */
 	own: boolean;
+	/** the client that sent it (declarativeNetRequest's frame tree and tab ids) */
+	client?: string;
+	/** the navigation may be another window's than that client's (a popup, a target) */
+	opens?: boolean;
+	/** that client set a frame's src: it is the frame's parent */
+	framing?: boolean;
 }
 
 const hints = new Map<string, NavigationHint & { at: number }>();

@@ -9,12 +9,17 @@
 // The frames the rules' allowAllRequests and topDomains read are the
 // worker's clients: a document's frame is the client its navigation made
 // (resultingClientId), a subresource's the client that asks (clientId).
-// The worker does not see which document frames a nested one, so a nested
+// The worker does not see which document frames a nested one. The
+// document that started the navigation says (NavigationHint, `startedBy`):
+// a document that set a frame's src is its parent, and a frame that
+// navigated itself keeps its parent. Without a word from one, a nested
 // frame's parent is the latest document committed on the origin its
 // navigation came from (the one that referred it), which is exact for one
 // frame of a site per tab and approximate past it. Tab ids come from the
-// extensions layer (`tabOf`), -1 without one, as Chrome gives a request no
-// tab owns.
+// extensions layer (`tabOf`, a tab's top document), a frame being in its
+// parent's tab; a main frame's own request is in the tab the host sent it to
+// (`hostNavigationTab`) or the tab of the document that started it. A
+// request no tab owns is -1, as in Chrome.
 
 import {
 	compileStatic,
@@ -123,6 +128,12 @@ export interface DnrRequestInfo {
 	ping?: boolean;
 	clientId?: string;
 	resultingClientId?: string;
+	/**
+	 * a navigation: the client of the document that told the worker it
+	 * started it (NavigationHint), and whether it set a frame's src (it is
+	 * then the frame's parent; otherwise the frame navigated itself)
+	 */
+	startedBy?: { client: string; frameSrc: boolean } | null;
 }
 
 /** a request between its stages */
@@ -131,6 +142,8 @@ export interface DnrFlow {
 	info: DnrRequestInfo;
 	frame: string | null;
 	parent: string | null;
+	/** the tab the request was matched in (-1 for none) */
+	tabId: number;
 }
 
 const ALLOWED: PageAccess = 'allowed';
@@ -253,7 +266,16 @@ interface Frame {
 	origin: string | null;
 	/** the outermost frame's URL */
 	top: string;
+	/** the client of the document that frames it, null at the top */
+	parent: string | null;
+	/** the tab its navigation was matched in, -1 for none */
+	tab: number;
+	/** a tab's top document (frame id 0) */
+	main: boolean;
 }
+
+/** the frames a tab id is looked for up the tree, at most */
+const MAX_DEPTH = 32;
 
 export class DnrHost {
 	readonly engine: DnrEngine;
@@ -273,6 +295,11 @@ export class DnrHost {
 	parentOf: (clientId: string) => string | null | undefined = () => undefined;
 	/** the tab a client belongs to (the extensions layer's tabs); -1 for none */
 	tabOf: (clientId: string) => number = () => -1;
+	/**
+	 * the tab a top-level navigation the host started itself goes to (a
+	 * frame's go(), the address bar), by the navigation's URL; -1 for none
+	 */
+	hostNavigationTab: (url: string) => number = () => -1;
 	/** the state the engine keeps for an extension changed: the extensions layer stores it */
 	onPersist: ((extensionId: string, state: ExtensionState) => void) | null =
 		null;
@@ -570,6 +597,7 @@ export class DnrHost {
 		let frame: string | null = null;
 		let parent: string | null = null;
 		let topUrl: string | null = null;
+		let tabId = -1;
 		if (info.navigation) {
 			// a navigation is matched in its parent's frame (a main frame's in none)
 			if (!info.topLevel) {
@@ -579,33 +607,90 @@ export class DnrHost {
 				parent =
 					known !== undefined
 						? known
-						: sourceOrigin
-							? (this.latestByOrigin.get(sourceOrigin) ?? null)
-							: null;
+						: (this.parentFromStarter(info.startedBy) ??
+							(sourceOrigin
+								? (this.latestByOrigin.get(sourceOrigin) ?? null)
+								: null));
 				frame = parent;
 				topUrl = parent ? (this.frames.get(parent)?.top ?? null) : null;
+				// a frame's document is in its parent's tab
+				tabId = this.tabFor(parent);
+			} else {
+				// a main frame's own request is its tab's: the one the host sent
+				// it to, else the tab of the document that started it
+				tabId = this.hostNavigationTab(info.url);
+				if (tabId < 0) tabId = this.tabFor(info.startedBy?.client);
 			}
 		} else if (info.clientId && this.frames.has(info.clientId)) {
 			frame = info.clientId;
 			topUrl = this.frames.get(frame)!.top;
 		}
-		const tabClient = info.navigation ? info.resultingClientId : info.clientId;
+		if (!info.navigation) tabId = this.tabFor(info.clientId);
+		// frame ids: a tab's top document is 0 (a nested one's id is the
+		// extensions layer's, which the worker does not keep)
+		const { frameId, parentFrameId } = this.frameIdsOf(info, parent);
 		const request: DnrRequest = {
 			url: info.url,
 			initiator: sourceOrigin,
 			type: resourceTypeOf(info),
 			method: info.method,
-			tabId: tabClient ? this.tabOf(tabClient) : -1,
+			tabId,
 			topUrl:
 				info.navigation && info.topLevel
 					? info.url
 					: (topUrl ?? info.source ?? null),
 			frame,
+			frameId,
+			parentFrameId,
 		};
 		const { state, outcome } = this.engine.beforeRequest(request);
 		this.samples[this.sampled++ % REQUEST_SAMPLES] =
 			(performance.now() - start) * 1000;
-		return { flow: { state, info, frame, parent }, outcome };
+		return { flow: { state, info, frame, parent, tabId }, outcome };
+	}
+
+	/**
+	 * The tab a client is in: the extensions layer's, else the one its frame's
+	 * navigation was matched in, else its parent's, up the tree
+	 */
+	private tabFor(client: string | null | undefined): number {
+		for (let at = client, depth = 0; at && depth < MAX_DEPTH; depth++) {
+			const tab = this.tabOf(at);
+			if (tab >= 0) return tab;
+			const frame = this.frames.get(at);
+			if (frame && frame.tab >= 0) return frame.tab;
+			at = frame?.parent;
+		}
+		return -1;
+	}
+
+	/** a request's frameId and parentFrameId, as far as the worker knows them */
+	private frameIdsOf(
+		info: DnrRequestInfo,
+		parent: string | null,
+	): { frameId?: number; parentFrameId?: number } {
+		if (info.navigation)
+			return info.topLevel
+				? { frameId: 0, parentFrameId: -1 }
+				: parent && this.frames.get(parent)?.main
+					? { parentFrameId: 0 }
+					: {};
+		return info.clientId && this.frames.get(info.clientId)?.main
+			? { frameId: 0, parentFrameId: -1 }
+			: {};
+	}
+
+	/**
+	 * A nested navigation's parent, from the document that told the worker it
+	 * started it: that document when it set the frame's src, the parent of
+	 * its own frame when the frame navigated itself; null when neither is known
+	 */
+	private parentFromStarter(
+		startedBy: DnrRequestInfo['startedBy'],
+	): string | null {
+		if (!startedBy) return null;
+		if (startedBy.frameSrc) return startedBy.client;
+		return this.frames.get(startedBy.client)?.parent ?? null;
 	}
 
 	/**
@@ -658,10 +743,18 @@ export class DnrHost {
 		const top = info.topLevel
 			? info.url
 			: (parentFrame?.top ?? info.source ?? info.url);
-		this.remember(key, { url: info.url, origin, top });
+		const parent = info.topLevel ? null : flow.parent;
+		this.remember(key, {
+			url: info.url,
+			origin,
+			top,
+			parent,
+			tab: flow.tabId,
+			main: info.topLevel,
+		});
 		this.engine.onNavigationCommitted({
 			frame: key,
-			parent: info.topLevel ? null : flow.parent,
+			parent,
 			url: info.url,
 			origin: origin ?? 'null',
 			parentOrigin: info.topLevel
@@ -670,7 +763,7 @@ export class DnrHost {
 			topOrigin: originOf(top),
 			isPost: info.method.toUpperCase() === 'POST',
 			errorPage,
-			tabId: this.tabOf(key),
+			tabId: this.tabFor(key),
 			responseHeaders: lines,
 		});
 	}

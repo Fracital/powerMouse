@@ -11,8 +11,8 @@
 // - the background service worker's relative importScripts and fetch;
 // - blocking webRequest (cancel, redirect, response headers) and onCompleted;
 // - declarativeNetRequest in the worker's DnrHost: a static rule blocks, a
-//   dynamic one redirects to an extensionPath, the calls answer, and a
-//   disabled extension's rules stop;
+//   dynamic one redirects to an extensionPath, the calls answer, matches
+//   carry the tab and frame ids, and a disabled extension's rules stop;
 // - extension pages' cross-origin XHR through the transport, the cookies API
 //   on STomp's jar;
 // - no runtime request on a page no extension reaches; disable, remove and
@@ -94,6 +94,7 @@ const probe = {
 			'tabs',
 			'cookies',
 			'declarativeNetRequest',
+			'declarativeNetRequestFeedback',
 		],
 		host_permissions: ['http://127.0.0.1/*'],
 		background: { service_worker: 'bg/sw.js' },
@@ -130,6 +131,24 @@ const probe = {
 			condition: {
 				urlFilter: 'ext-plain.txt?dnr-static',
 				resourceTypes: ['xmlhttprequest'],
+			},
+		},
+		// allow rules, matched only for the requests' tab and frame ids
+		// (onRuleMatchedDebug)
+		{
+			id: 3,
+			action: { type: 'allow' },
+			condition: {
+				urlFilter: 'pages/ext-target.html',
+				resourceTypes: ['main_frame'],
+			},
+		},
+		{
+			id: 4,
+			action: { type: 'allow' },
+			condition: {
+				urlFilter: '?ext-tab-probe=',
+				resourceTypes: ['sub_frame', 'xmlhttprequest'],
 			},
 		},
 	]),
@@ -190,6 +209,17 @@ const probe = {
 			dynamic: await text('/pages/ext-plain.txt?dnr-dynamic'),
 			none: await text('/pages/ext-plain.txt?dnr-none'),
 		};
+		out.step = 'tab ids';
+		// (a frame of the page's, then a request of its document)
+		await new Promise((resolve) => {
+			const frame = document.createElement('iframe');
+			const timer = setTimeout(resolve, 5000);
+			frame.addEventListener('load', () => { clearTimeout(timer); frame.remove(); resolve(); });
+			frame.src = '/pages/ext-other.html?ext-tab-probe=frame';
+			document.body.append(frame);
+		});
+		await text('/pages/ext-plain.txt?ext-tab-probe=xhr');
+		out.matched = await chrome.runtime.sendMessage({ type: 'matched' });
 		delete out.step;
 		document.documentElement.dataset.idle = JSON.stringify(out);
 	})().catch((error) => {
@@ -202,6 +232,11 @@ const probe = {
 	'bg/sw.js': `importScripts('lib.js');
 	importScripts(chrome.runtime.getURL('bg/root.js'));
 	const fetched = fetch('../war.txt').then((response) => response.text());
+	const matched = [];
+	chrome.declarativeNetRequest.onRuleMatchedDebug.addListener(({ rule, request }) => {
+		if (rule.ruleId >= 3 && matched.length < 20)
+			matched.push({ rule: rule.ruleId, type: request.type, tabId: request.tabId, frameId: request.frameId, parentFrameId: request.parentFrameId });
+	});
 	chrome.runtime.onInstalled.addListener(() => {
 		chrome.action.setBadgeText({ text: '7' });
 		chrome.action.setBadgeBackgroundColor({ color: '#00ff00' });
@@ -238,6 +273,17 @@ const probe = {
 				.then(() => Promise.all([dnr.getDynamicRules(), dnr.getEnabledRulesets(), dnr.isRegexSupported({ regex: '[' })]))
 				.then(([dynamic, enabled, regex]) => respond({ dynamic: dynamic.map((rule) => rule.id), enabled, regex: regex.isSupported }),
 					(error) => respond({ error: error.message }));
+			return true;
+		}
+		if (message.type === 'matched') {
+			// (the matches come on their own channel: wait for all three kinds)
+			const until = Date.now() + 3000;
+			const answer = () => {
+				const kinds = new Set(matched.map((entry) => entry.type));
+				if (kinds.size >= 3 || Date.now() > until) respond({ tab: sender.tab.id, matched });
+				else setTimeout(answer, 50);
+			};
+			answer();
 			return true;
 		}
 		if (message.type === 'fetched') {
@@ -597,6 +643,27 @@ for (const [mode, base] of [
 			idle.dnr.dynamic === 'accessible' &&
 			idle.dnr.none === 'plain',
 		JSON.stringify(idle?.dnr),
+	);
+	const kinds = Object.fromEntries(
+		(idle?.matched?.matched ?? []).map((entry) => [entry.type, entry]),
+	);
+	ok(
+		`${mode}: declarativeNetRequest's matches carry the tab's id: the main frame the host sent, a frame in it, a request of its document`,
+		typeof idle?.matched?.tab === 'number' &&
+			idle.matched.tab >= 0 &&
+			['main_frame', 'sub_frame', 'xmlhttprequest'].every(
+				(type) => kinds[type]?.tabId === idle.matched.tab,
+			),
+		JSON.stringify(idle?.matched),
+	);
+	ok(
+		`${mode}: their frame ids: the main frame 0, the frame's parent 0, the top document's request 0`,
+		kinds.main_frame?.frameId === 0 &&
+			kinds.main_frame.parentFrameId === -1 &&
+			kinds.sub_frame?.parentFrameId === 0 &&
+			kinds.xmlhttprequest?.frameId === 0 &&
+			kinds.xmlhttprequest.parentFrameId === -1,
+		JSON.stringify(kinds),
 	);
 	ok(
 		`${mode}: messaging round trips stay under 5 ms (median)`,

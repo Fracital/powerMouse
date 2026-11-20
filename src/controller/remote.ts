@@ -801,6 +801,19 @@ export class RemoteController extends EventTarget {
 		if (id === undefined) this.#tabIds.set(frame, (id = this.#nextTab++));
 		return id;
 	}
+	/**
+	 * A frame is sent to `url` (see StompController.expectNavigation). For
+	 * RemoteFrame.
+	 * @internal
+	 */
+	expectNavigation(frame: RemoteFrame, url: string) {
+		const tabId = this.tabIdOf(frame);
+		this.#ready
+			.then(() =>
+				this.#rpc.call('extensions', { call: 'expect', args: [url, tabId] }),
+			)
+			.catch(() => {});
+	}
 	async route(url: string): Promise<string> {
 		await this.#ready;
 		return this.#rpc.call('route', url);
@@ -1125,6 +1138,8 @@ export class RemoteFrame extends EventTarget {
 	/** navigate the frame; resolves when the new document first reports (see Frame.go) */
 	async go(url: string): Promise<void> {
 		const reported = this.#nextReport();
+		// the extensions' tab id for its main frame's request
+		this.controller.expectNavigation(this, url);
 		this.controller.reportViewport(
 			this.element.clientWidth,
 			this.element.clientHeight,

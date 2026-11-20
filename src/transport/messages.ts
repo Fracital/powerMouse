@@ -804,6 +804,8 @@ export interface NavigationHintMessage {
 	 * another document, in another frame
 	 */
 	own?: boolean;
+	/** the navigation may be another window's (window.open, a link's or a form's target, a modifier key) */
+	opens?: boolean;
 	/**
 	 * The page's policies that judge the navigation's later hops (a form's
 	 * form-action, a frame's parent's frame-src; src/csp.ts HopPolicy), and

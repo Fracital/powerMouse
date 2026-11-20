@@ -152,6 +152,12 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 					...(allow !== undefined ? { allow } : {}),
 					nested: moduleClient.nestedRoute,
 					own: routed === moduleClient,
+					// (a target or a modifier: another window may navigate)
+					...(opens === true ||
+					(opens &&
+						(opens[1] || !/^(_self|_top|_parent)?$/i.test(opens[0] ?? '')))
+						? { opens: true }
+						: {}),
 					...(csp ? { csp } : {}),
 					...(coop ? { coop } : {}),
 				},

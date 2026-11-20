@@ -193,8 +193,12 @@ request, as its headers go out, as the response's arrive) and webRequest
 after it, Chrome's order. A WebSocket or WebTransport handshake, which
 never passes the worker, is asked about by the controller while any
 extension is enabled. Tab ids come from the hubs: each top document's
-client is placed in its tab as it reports its navigation, and the action
-count badge goes to the extension's action for that tab.
+client is placed in its tab as it reports its navigation, a frame's
+requests are in its parent's tab, and a main frame's own request is in
+the tab `frame.go()` sent it to (the hub tells the worker first). The
+action count badge goes to the extension's action for that tab. A click on
+an extension's button grants it activeTab for the tab until the tab's top
+document changes, which getMatchedRules reads.
 
 ## Limits
 
@@ -207,11 +211,12 @@ count badge goes to the extension's action for that tab.
 - No content scripts in documents STomp does not inject (JSON, text and
   image viewer documents) or in about:blank frames
   (`match_about_blank`, `match_origin_as_fallback`).
-- declarativeNetRequest knows a document's tab once its navigation is
-  reported, so a main frame's own request, and nested frames' requests,
-  have tab id -1 (`tabIds` conditions and per-tab counts miss them). With
-  several controllers in one scope, a rule's action count goes to the same
-  tab id under each.
+- declarativeNetRequest gives a main frame's own request its tab when the
+  host sent it (`frame.go()`) or a document of the tab started it; a
+  navigation a tab starts in no other way (a link the page's own markup
+  holds, a form) has tab id -1 until its document reports. A WebSocket's
+  or WebTransport session's handshake is tab -1. With several controllers
+  in one scope, a rule's action count goes to the same tab id under each.
 - `scripting.executeScript({ files })` runs the files but answers no
   result (a `func` answers its return value, as in Chrome).
 - A module a content script loads with `import()` runs as page code,

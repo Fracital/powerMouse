@@ -34,6 +34,7 @@ dnr.uninstall(id);
 dnr.call(id, 'updateDynamicRules', [options]); // any chrome.declarativeNetRequest function, Chrome's errors
 dnr.tabOf = (clientId) => tabId;     // -1 without tabs
 dnr.parentOf = (clientId) => parent; // the client that frames a nested document, when known
+dnr.hostNavigationTab = (url) => tabId; // the tab the host sent to url (a frame's go()), -1 for none
 dnr.onPersist = (id, state) => {...}; // store it with the extension
 dnr.hooks = { debug, badge, withheld, validTab, activeTabGranted };
 ```
@@ -67,7 +68,8 @@ match(request, compiled) => DnrAction[]       // one block, collapse, redirect, 
 new DnrEngine(hooks)                          // several extensions, the whole API and the request path
 ```
 
-A `DnrRequest` is `{ url, initiator, type, method, tabId, topUrl, frame }`.
+A `DnrRequest` is `{ url, initiator, type, method, tabId, topUrl, frame,
+frameId?, parentFrameId? }`.
 A `DnrAction` is `{ type, extensionId, rulesetId, ruleId, priority,
 redirectUrl?, requestHeaders?, responseHeaders? }`.
 
@@ -263,14 +265,23 @@ of test/dnr/cases.mjs):
 **Not exact, and why:**
 
 - **Frames.** A service worker sees which client makes a request, but not
-  which document frames a nested one. A nested frame's parent is taken to
-  be the most recently committed document of the origin its navigation
-  came from. That is exact for one frame of a site per tab, and the
-  extensions layer, which knows the frame tree, gives the real parent
-  through `parentOf`.
+  which document frames a nested one. The document that starts a nested
+  navigation tells the worker (its navigation hint): a document that set
+  a frame's src is the frame's parent, and a frame that navigated itself
+  keeps its parent. Without that word (a navigation no hooked document
+  started), the parent is the most recently committed document of the
+  origin the navigation came from, which is exact for one frame of a site
+  per tab. `parentOf`, when set, answers first.
 - **Tabs.** tabIds, getMatchedRules by tab and the badge need the
-  extensions layer's tabs (`tabOf`). Without it every request is tab -1,
-  as Chrome treats a request no tab owns.
+  extensions layer's tabs (`tabOf`). A frame is in its parent's tab, a
+  main frame's own request in the tab the host sent it to
+  (`hostNavigationTab`, from a frame's `go()`) or in the tab of the
+  document that started it. Without the extensions layer every request is
+  tab -1, as Chrome treats a request no tab owns.
+- **Frame ids.** A tab's top document is frame 0 for its own requests and
+  as the parent of its frames. A nested document's own frame id is the
+  extensions layer's, which the worker does not keep, so its requests and
+  its frames' report -1.
 - **Collapse is a block.** Collapsing the element would mean inject code
   in every page. The request is blocked as Chrome blocks it, and the empty
   element stays.
