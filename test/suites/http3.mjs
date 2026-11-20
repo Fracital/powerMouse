@@ -333,9 +333,13 @@ const sites = [
 }
 
 // an HTTPS record instead of an Alt-Svc: Cloudflare's /cdn-cgi/trace never
-// sends one, but cloudflare-quic.com's record (alpn h3,h2) names h3
+// sends one, but cloudflare-quic.com's record (alpn h3,h2) names h3, and as
+// in Chrome it does for the very first request, once stomp-h3 has loaded
+// (the session's first name whose record names h3, www.cloudflare.com here,
+// loads it and is served over h2 meanwhile)
 {
 	const { p, close } = await page();
+	const first = 'https://www.cloudflare.com/cdn-cgi/trace';
 	const url = 'https://cloudflare-quic.com/cdn-cgi/trace';
 	const { results, info } = await p
 		.evaluate(raw, {
@@ -344,8 +348,9 @@ const sites = [
 			wisp: DEMO_WISP,
 			options: { dns: 'https://cloudflare-dns.com/dns-query' },
 			plan: [
+				{ url: first },
+				{ wait: 10000, origin: 'https://www.cloudflare.com' },
 				{ url },
-				{ wait: 10000, origin: 'https://cloudflare-quic.com' },
 				{ url },
 			],
 		})
@@ -354,9 +359,11 @@ const sites = [
 		(e) => e.origin === 'https://cloudflare-quic.com',
 	);
 	ok(
-		'an HTTPS DNS record (dns option) is enough: the trace goes over h3 with no Alt-Svc seen',
+		'an HTTPS DNS record (dns option) is enough: once stomp-h3 has loaded, the first trace already goes over h3, with no Alt-Svc seen',
 		results[0]?.trace === 'http=http/2' &&
 			results[1]?.trace === 'http=http/3' &&
+			results[1].via === 'h3' &&
+			results[2]?.trace === 'http=http/3' &&
 			entry?.source === 'dns',
 		JSON.stringify({ results, entry }),
 	);

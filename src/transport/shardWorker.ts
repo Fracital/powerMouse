@@ -8,7 +8,10 @@
 // host directly. Nothing here queues, decorates or rewrites a request: the
 // transport worker did that before the request came (serveTransport.ts),
 // as for its own transport.
-import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
+import type {
+	ProxyTransport,
+	RawHeaders,
+} from '@mercuryworkshop/proxy-transports';
 import { sendBody } from './bodyPort';
 import { withEchCache } from './echCache';
 import { base64url, httpsQuery } from './http3/dnsHttps';
@@ -125,6 +128,19 @@ export function serveShard(scope: DedicatedWorkerGlobalScope) {
 				await client.replace_stream_provider();
 				if (entry.resolver)
 					void warmResolver(entry.transport, entry.resolver).catch(() => {});
+			},
+			httpsAnswer: async ({ instance, host, headers }) => {
+				const { transport } = get(instance);
+				const answer =
+					(await (
+						transport as {
+							httpsAnswer?: (
+								host: string,
+								headers?: RawHeaders,
+							) => Promise<ArrayBuffer | null>;
+						}
+					).httpsAnswer?.(host, headers)) ?? null;
+				return [answer, answer ? [answer] : []];
 			},
 			request: async ({ instance, remote, method, body, headers }) => {
 				const { transport } = get(instance);
