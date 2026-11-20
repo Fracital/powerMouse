@@ -10,7 +10,9 @@
 // names are under co.uk, served by test/private-sites.mjs: a site
 // (stomp-a), two names under it (www, two) and another site (stomp-b).
 // Every scenario in a tab of its own; natively, then through the demo in
-// both modes.
+// both modes. Some have the outermost page's code walk every frame's
+// parents between the steps, as the demo host does when a frame hands it a
+// key: the walk changes nothing a document reaches.
 import {
 	done,
 	HOST,
@@ -172,6 +174,57 @@ const SCENARIOS = {
 				parent: await call(id('f'), 'peekParent'),
 			};
 		},
+	// the demo host walks a frame's parents when it hands the host a key
+	// (isFrameOf in demo/public/pm/main.js), before the page set anything:
+	// what the page reaches afterwards is its own business, never the walk's
+	'Origin-Agent-Cluster: ?0, same origin, walked from outside, the frame alone sets its own name':
+		async (go, call, id, walk) => {
+			await go(pageURL('a', id('top'), 0));
+			await call(id('top'), 'frame', pageURL('a', id('f'), 0));
+			await walk();
+			const set = await call(id('f'), 'setDomain', SITE);
+			await walk();
+			const alone = {
+				domain: [
+					await call(id('top'), 'domain'),
+					await call(id('f'), 'domain'),
+				],
+				peek: await call(id('top'), 'peek', 0),
+				parent: await call(id('f'), 'peekParent'),
+			};
+			const both = await call(id('top'), 'setDomain', SITE);
+			await walk();
+			return {
+				oac: [await call(id('top'), 'oac'), await call(id('f'), 'oac')],
+				set,
+				alone,
+				both,
+				peek: await call(id('top'), 'peek', 0),
+				parent: await call(id('f'), 'peekParent'),
+			};
+		},
+	'Origin-Agent-Cluster: ?0, same origin, walked from outside, the parent alone sets its own name':
+		async (go, call, id, walk) => {
+			await go(pageURL('a', id('top'), 0));
+			await call(id('top'), 'frame', pageURL('a', id('f'), 0));
+			await walk();
+			const set = await call(id('top'), 'setDomain', SITE);
+			await walk();
+			const alone = {
+				peek: await call(id('top'), 'peek', 0),
+				parent: await call(id('f'), 'peekParent'),
+			};
+			const both = await call(id('f'), 'setDomain', SITE);
+			await walk();
+			return {
+				oac: [await call(id('top'), 'oac'), await call(id('f'), 'oac')],
+				set,
+				alone,
+				both,
+				peek: await call(id('top'), 'peek', 0),
+				parent: await call(id('f'), 'peekParent'),
+			};
+		},
 	'Origin-Agent-Cluster: ?0 on the parent, the frame default, both set the site':
 		async (go, call, id) => {
 			await go(pageURL('a', id('top'), 0));
@@ -321,8 +374,31 @@ const SCENARIOS = {
 	},
 };
 
-/** what every scenario read, run in `context` with `visit` loading a top */
-async function runAll(context, visit, tag, only = () => true) {
+/**
+ * Every window's way up by `parent`, from each window below the outermost
+ * page, read by that page's own code: the demo host's when proxied (as
+ * isFrameOf does with a key a frame hands it), natively the top's. Neither
+ * is any document's code, and natively the reads change nothing
+ */
+function walkParents() {
+	const down = (window, depth) => {
+		for (let up = window, steps = 0; steps < 16; steps++) {
+			if (up === up.parent) break;
+			up = up.parent;
+		}
+		if (depth < 4)
+			for (let index = 0; index < window.length; index++)
+				down(window[index], depth + 1);
+	};
+	down(window, 0);
+	return 'walked';
+}
+
+/**
+ * what every scenario read, run in `context` with `visit` loading a top;
+ * `outside` is the page whose code walks every frame's parents (walkParents)
+ */
+async function runAll(context, visit, tag, outside, only = () => true) {
 	const { call } = driver(context);
 	const out = {};
 	for (const [name, scenario] of Object.entries(SCENARIOS)) {
@@ -330,7 +406,15 @@ async function runAll(context, visit, tag, only = () => true) {
 		const n = ++serial;
 		const id = (role) => `${tag}-${n}-${role}`;
 		try {
-			out[name] = await scenario((url) => visit(url), call, id);
+			out[name] = await scenario(
+				(url) => visit(url),
+				call,
+				id,
+				async () => {
+					if ((await outside().evaluate(walkParents)) !== 'walked')
+						throw new Error('no walk');
+				},
+			);
 		} catch (error) {
 			out[name] = { error: String(error).split('\n')[0] };
 		}
@@ -350,6 +434,7 @@ const native = await runAll(
 		await current.goto(url);
 	},
 	'native',
+	() => current,
 );
 await nativeBrowser.close();
 for (const [name, value] of Object.entries(native))
@@ -382,6 +467,7 @@ for (const [mode, base] of [
 			await submitLanding(page, url);
 		},
 		mode,
+		() => page,
 		(name) => !name.includes('popup'),
 	);
 	for (const [name, value] of Object.entries(native)) {

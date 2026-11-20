@@ -318,13 +318,17 @@ export default class ContextModule extends Module<DocumentClient> {
 	 * it. A popup's about:blank is its opener's document and holds the
 	 * opener as itself; the site the popup was opened to is another origin's
 	 * document in a window that natively is a new one, holding nothing (it
-	 * read its opener's globals, document and location through the hold)
+	 * read its opener's globals, document and location through the hold).
+	 * That document's page runs in this realm: its set is one whose methods
+	 * it cannot replace, as the first one (a page's `WeakSet.prototype.has`
+	 * answering true had every window handed out as one it held)
 	 */
 	#holds(): WeakSet<Context> {
 		const document = this.client.global.document;
 		if (this.#heldIn?.document !== document) {
 			const key = this.client.originKey;
-			if (this.#heldIn && this.#heldIn.key !== key) this.held = new WeakSet();
+			if (this.#heldIn && this.#heldIn.key !== key)
+				this.held = new OwnWeakSet();
 			this.#heldIn = { document, key };
 		}
 		return this.held;
@@ -332,6 +336,32 @@ export default class ContextModule extends Module<DocumentClient> {
 	/** a window this realm now holds as itself (see `held`) */
 	hold(context: Context) {
 		this.#holds().add(context);
+	}
+	/**
+	 * Whether this realm still holds `context` as itself. A hold is no proof
+	 * the page has the window: it is made by whatever code read it through
+	 * one of this realm's getters, the host's as much as the page's (the
+	 * demo host walks a frame's `parent` chain when the frame hands it a
+	 * key), and natively the browser checks every access anew. So once
+	 * either document has set document.domain the two are judged again,
+	 * and a hold they no longer reach by is dropped: two documents of one
+	 * origin, one of which set it alone, reached each other raw for good
+	 * when anything had read the window before the write. (A page that did
+	 * keep the window still has it; what it reads from then on is the
+	 * stand-in, as every read natively throws.)
+	 */
+	#holding(context: Context): boolean {
+		const holds = this.#holds();
+		if (!holds.has(context)) return false;
+		const other = this.#clientOf(context);
+		if (
+			other === undefined ||
+			(this.client.documentDomain === null && other.documentDomain === null) ||
+			this.#reaches(context)
+		)
+			return true;
+		holds.delete(context);
+		return false;
 	}
 	/**
 	 * What every stand-in answers `true` under, whichever document's module
@@ -1074,7 +1104,7 @@ export default class ContextModule extends Module<DocumentClient> {
 		return this.#handle(context) ?? restricted;
 	}
 	#pending(context: Context, url: unknown): RestrictedContext {
-		if (this.#holds().has(context)) return context;
+		if (this.#holding(context)) return context;
 		if (!this.#foreignNext(url)) return this.newRestricted(context);
 		// (the site pool too: the other site may share this document's slot,
 		// a pool of one slot or more sites than slots, and then the browser
@@ -1162,7 +1192,7 @@ export default class ContextModule extends Module<DocumentClient> {
 					: context;
 		}
 
-		if (this.#holds().has(context)) return context;
+		if (this.#holding(context)) return context;
 
 		const other = (context as any)[moduleClient.names.client] as DocumentClient;
 		// a window this realm holds a stand-in of: its own again once the two

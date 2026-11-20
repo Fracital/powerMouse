@@ -878,14 +878,33 @@ addEventListener('message', (event) => {
 		}),
 	);
 });
-/** whether `source` is the window of `element` or a frame inside it */
+/**
+ * Whether `source` is the window of `element` or a frame inside it, found
+ * from the tab down: by index into each window's frames, which no page
+ * script answers, and a count read with this page's own getter. Never up
+ * by `parent`: in same-origin mode that read runs the frame's own getter,
+ * as the page's own read would, and nothing this page reads may change
+ * what a page sees
+ */
+const frameCount = Object.getOwnPropertyDescriptor(window, 'length').get;
 function isFrameOf(element, source) {
-	for (let window = source, depth = 0; window && depth < 16; depth++) {
-		if (window === element.contentWindow) return true;
-		if (window === window.parent) return false;
-		window = window.parent;
-	}
-	return false;
+	const search = (window, depth) => {
+		if (window === source) return true;
+		if (depth >= 16) return false;
+		let count = 0;
+		try {
+			count = Reflect.apply(frameCount, window, []);
+		} catch {
+			// a window of another origin (isolated mode): its count is the
+			// browser's whatever its page did
+			count = window.length;
+		}
+		for (let index = 0; index < count; index++)
+			if (search(window[index], depth + 1)) return true;
+		return false;
+	};
+	const tab = element.contentWindow;
+	return tab !== null && search(tab, 0);
 }
 
 // A bookmark keeps its site's icon as a small picture. The host page cannot
