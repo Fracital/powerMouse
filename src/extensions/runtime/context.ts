@@ -12,7 +12,7 @@ import {
 	type ContextKind,
 	type ShippedExtension,
 } from '../types';
-import { call, natives } from './natives';
+import { listen, natives } from './natives';
 
 export const NO_RECEIVER =
 	'Could not establish connection. Receiving end does not exist.';
@@ -300,7 +300,7 @@ export class Context {
 				waiting.reject(new ApiError(message.error));
 			else waiting.resolve(message.value);
 		});
-		call(natives.addEventListener, globalThis, 'pagehide', () =>
+		listen(natives.global, 'pagehide', () =>
 			this.post({ t: 'bye', ctx: this.id }),
 		);
 	}
@@ -369,7 +369,7 @@ export class Context {
 	}
 
 	listenerError(error: unknown) {
-		console.error(`${this.ext.name}: Error in event handler:`, error);
+		natives.console.error(`${this.ext.name}: Error in event handler:`, error);
 	}
 
 	/** a call of the controller's hub (it answers over the bus) */
@@ -402,7 +402,8 @@ export class Context {
 				}),
 			},
 		);
-		const answer = (await response.json()) as {
+		// (read as text and parsed here: an isolated world's values are its own realm's)
+		const answer = natives.JSON.parse(await response.text()) as {
 			value?: unknown;
 			error?: string;
 		};
@@ -443,7 +444,9 @@ export class Context {
 			this.listenerError(thrown);
 		} finally {
 			if (this.lastError && !this.lastErrorChecked)
-				console.error(`Unchecked runtime.lastError: ${this.lastError.message}`);
+				natives.console.error(
+					`Unchecked runtime.lastError: ${this.lastError.message}`,
+				);
 			this.lastError = undefined;
 		}
 	}

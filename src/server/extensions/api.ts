@@ -14,7 +14,13 @@ import {
 	type ExtensionCommand,
 	type WebRequestListener,
 } from '../../extensions/types';
-import { definition, documentToken, isolatedSource } from './contentScripts';
+import {
+	definition,
+	documentToken,
+	injectionSource,
+	isolatedSource,
+	worldDefinition,
+} from './contentScripts';
 import { fetchEvents } from './fetchEvents';
 import type { ExtensionRegistry } from './registry';
 import { scriptCache } from './store';
@@ -345,17 +351,33 @@ async function prepareExecution(
 	const cache = await caches.open(scriptCache(id));
 	if (!(await cache.match(url))) {
 		// the last expression's value is the result, as Chrome reports it:
-		// the code's completion value becomes the function's return
-		const body = rewriteJS(
-			world === 'MAIN' ? code : isolatedSource(code),
-			extensionURL(id, file || 'injected.js'),
-		);
+		// the code's completion value becomes the function's return (an
+		// isolated world's code is its world's: worldDefinition)
+		const at = extensionURL(id, file || 'injected.js');
+		const script =
+			world === 'ISOLATED'
+				? worldDefinition(id, key, code, at)
+				: definition(
+						id,
+						key,
+						world,
+						rewriteJS(world === 'MAIN' ? code : isolatedSource(code), at),
+						true,
+					);
 		await cache.put(
 			url,
-			new Response(definition(id, key, world, body, true), {
+			new Response(script, {
 				headers: { 'content-type': 'text/javascript; charset=utf-8' },
 			}),
 		);
+		// (and the code, for a document that makes no world: SHARED)
+		if (world === 'ISOLATED')
+			await cache.put(
+				injectionSource(url),
+				new Response(JSON.stringify({ code, url: at }), {
+					headers: { 'content-type': 'application/json' },
+				}),
+			);
 	}
 	return { route, key };
 }

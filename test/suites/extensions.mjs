@@ -133,10 +133,16 @@ const probe = {
 			},
 		],
 		web_accessible_resources: [
-			{ resources: ['war.txt'], matches: ['<all_urls>'] },
+			{
+				resources: ['war.txt', 'cs/mod.js', 'cs/dep.js'],
+				matches: ['<all_urls>'],
+			},
+			// (exposed to another site only: no page here may read it)
+			{ resources: ['cs/secret.js'], matches: ['https://only.example/*'] },
 		],
 	}),
 	'war.txt': 'accessible',
+	'cs/secret.js': `export const secret = 'secret';`,
 	'cs/text.js': `const pre = document.querySelector('body > pre');
 	document.documentElement.dataset.text = JSON.stringify({
 		type: document.contentType, title: document.title,
@@ -190,9 +196,77 @@ const probe = {
 	'cs/start.js': `document.documentElement.dataset.start = JSON.stringify({
 		chrome: typeof chrome, id: chrome.runtime.id, self: self.chrome === chrome,
 		window: window.chrome === chrome, globalThis: globalThis.chrome === chrome,
-		root: !!document.documentElement, ready: document.readyState });`,
-	'cs/end.js': `document.documentElement.dataset.end = JSON.stringify({
-		ready: document.readyState, target: !!document.getElementById('target') });`,
+		root: !!document.documentElement, ready: document.readyState });
+	var startVar = 1;`,
+	'cs/dep.js': `export const depValue = 'dep';
+	export default function twice(text) { return text + text; }`,
+	'cs/mod.js': `import twice, { depValue } from './dep.js';
+	export let count = 0;
+	export function bump() { count++; }
+	export const describe = () => ({
+		dep: depValue, twice: twice('a'), id: chrome.runtime.id,
+		title: document.title.slice(0, 9), meta: import.meta.url.endsWith('/cs/mod.js'),
+		page: typeof window.__pageVar });`,
+	'cs/end.js': `const target = document.getElementById('target');
+	// what the page made and changed after document_start, which an
+	// isolated world does not see; and what it makes, which the page does not
+	const events = {};
+	const show = () => (document.documentElement.dataset.events = JSON.stringify(events));
+	document.addEventListener('page-ping', (event) => {
+		events.detail = JSON.stringify(event.detail);
+		events.detailOwn = event.detail instanceof Object && event.detail.list instanceof Array;
+		show();
+	});
+	window.addEventListener('message', (event) => {
+		if (!event.data || event.data.from !== 'page') return;
+		events.message = event.data.from;
+		events.messageOwn = event.data instanceof Object;
+		show();
+	});
+	document.addEventListener('world-ping', () => {});
+	if (target) target.worldExpando = 'world';
+	// a handler the page can read back: a native to it, as the world's
+	// functions it holds are
+	if (target) target.onmouseleave = function worldLeave() {};
+	window.__worldVar = 1;
+	var worldVar = 2;
+	Array.prototype.__worldPolluted = 1;
+	const tt = {};
+	try {
+		target.insertAdjacentHTML('beforeend', '<b id="world-html">w</b>');
+		tt.html = !!document.getElementById('world-html');
+	} catch (error) { tt.html = String(error); }
+	try {
+		const script = document.createElement('script');
+		script.src = chrome.runtime.getURL('war.txt');
+		tt.src = 'set';
+	} catch (error) { tt.src = String(error); }
+	try {
+		const element = document.createElement('div');
+		element.innerHTML = '<i>x</i>';
+		tt.inner = element.firstChild.nodeName;
+	} catch (error) { tt.inner = String(error); }
+	document.documentElement.dataset.end = JSON.stringify({
+		ready: document.readyState, target: !!target,
+		pageVar: typeof window.__pageVar,
+		pagePolluted: [].__pagePolluted === undefined,
+		pageExpando: !!target && target.pageExpando === undefined,
+		sheets: typeof document.styleSheets.length === 'number',
+		windowInstance: window instanceof Window && self === window,
+		nodeInstance: target instanceof HTMLElement && target instanceof Node,
+		builtins: Object.getPrototypeOf([]) === Array.prototype,
+		declaration: (() => {
+			const probe = document.createElement('i');
+			probe.style.color = 'rgb(4, 5, 6)';
+			return probe.style.cssText + ' ' + probe.style.length;
+		})(),
+		chains: Object.getPrototypeOf(target.style) === CSSStyleDeclaration.prototype &&
+			Object.getPrototypeOf(document.body.classList) === DOMTokenList.prototype &&
+			Object.getPrototypeOf(CSSStyleDeclaration.prototype) === Object.prototype,
+		shared: typeof startVar === 'number',
+		path: location.pathname,
+		href: window.location.href === document.location.href && String(location) === location.href,
+		tt });`,
 	'cs/style.css': '#target { color: rgb(1, 2, 3) }',
 	'cs/idle.js': `${median}
 	const out = {};
@@ -227,6 +301,14 @@ const probe = {
 		out.storage = await chrome.storage.local.get('fromContent');
 		out.step = 'war';
 		out.war = await (await fetch(chrome.runtime.getURL('war.txt'))).text();
+		out.step = 'module';
+		const mod = await import(chrome.runtime.getURL('cs/mod.js'));
+		mod.bump();
+		out.module = { ...mod.describe(), live: mod.count };
+		out.module.secret = await import(chrome.runtime.getURL('cs/secret.js')).then(
+			() => 'loaded',
+			() => 'refused',
+		);
 		out.step = 'tabs';
 		chrome.runtime.onMessage.addListener((message, sender, respond) => {
 			if (message.type === 'hello-tab') respond({ back: true });
@@ -842,6 +924,88 @@ async function poll(page, path, read, timeout = 20000) {
 	return null;
 }
 
+/**
+ * Ask for a world's module routes as a page that got past the inject would:
+ * one exposed to every site, and one exposed to https://only.example only
+ * with a query naming that origin. The routes are the ones `frame`'s world
+ * loaded, read from its resource timing in a DevTools world (the inject
+ * does not hook it); the asking document is one the worker controls that
+ * is no routed page, so the worker can name no origin for it, and its
+ * fetch is unhooked
+ */
+async function forgedModules(page, frame, id) {
+	if (!frame) return null;
+	let session;
+	try {
+		session = await page.context().newCDPSession(frame);
+	} catch (error) {
+		// (a frame of the page's process: the page's session has it)
+		session = await page.context().newCDPSession(page);
+	}
+	let route;
+	try {
+		const { frameTree } = await session.send('Page.getFrameTree');
+		const find = (tree) =>
+			tree.frame.url === frame.url()
+				? tree.frame.id
+				: (tree.childFrames ?? []).map(find).find(Boolean);
+		const { executionContextId } = await session.send(
+			'Page.createIsolatedWorld',
+			{ frameId: find(frameTree), worldName: 'routes' },
+		);
+		const loaded = (
+			await session.send('Runtime.evaluate', {
+				expression: `performance.getEntriesByType('resource').map((entry) => entry.name).find((name) => name.includes(${JSON.stringify(`/extcs/${id}/`)}) && name.endsWith('/m/cs/mod.js'))`,
+				contextId: executionContextId,
+				returnByValue: true,
+			})
+		).result.value;
+		if (!loaded) return { error: 'no module route in resource timing' };
+		route = loaded.slice(0, -'mod.js'.length);
+	} catch (error) {
+		return { error: String(error) };
+	} finally {
+		await session.detach().catch(() => {});
+	}
+	const channel = route.slice(0, route.indexOf('/extcs/') + 1);
+	const forge = `?o=${encodeURIComponent('https://only.example')}`;
+	const forger = await page.context().newPage();
+	try {
+		// (a file of the worker's scope the server answers as it is, with no
+		// policy to refuse a fetch: a controlled document at no routed URL)
+		const scope = channel.replace(/[^/]+\/$/, '');
+		await forger
+			.goto(`${scope}controller.mjs`, { waitUntil: 'load' })
+			.catch(() => {});
+		// status and body length: a refusal of the worker's has no body, a
+		// request it passed on gets the server's error page
+		const read = (url) =>
+			forger.evaluate(
+				(at) =>
+					fetch(at).then(
+						async (response) =>
+							`${response.status}:${(await response.text()).length}`,
+						(error) => String(error),
+					),
+				url,
+			);
+		return {
+			controlled: await forger.evaluate(
+				() => !!navigator.serviceWorker.controller,
+			),
+			// (an entry's script, which the worker gives any document: its
+			// routes answer this one)
+			entry: await read(route.replace(/m\/cs\/$/, 'm0.js')),
+			exposed: await read(`${route}mod.js`),
+			forged: await read(`${route}secret.js${forge}`),
+		};
+	} catch (error) {
+		return { error: String(error) };
+	} finally {
+		await forger.close().catch(() => {});
+	}
+}
+
 const TARGET = 'extension target';
 const OTHER = 'no extension here';
 const TRUSTED = 'trusted types target';
@@ -1060,6 +1224,42 @@ for (const [mode, base] of [
 		end?.target === true && end.ready !== 'loading',
 		JSON.stringify(end),
 	);
+	ok(
+		`${mode}: an isolated world sees none of the page's globals, prototype changes or expandos`,
+		end?.pageVar === 'undefined' &&
+			end.pagePolluted === true &&
+			end.pageExpando === true &&
+			end.sheets === true,
+		JSON.stringify(end),
+	);
+	ok(
+		`${mode}: an isolated world's DOM objects, builtins and location are its own, its scripts share their globals`,
+		end?.windowInstance === true &&
+			end.nodeInstance === true &&
+			end.builtins === true &&
+			end.chains === true &&
+			end.declaration === 'color: rgb(4, 5, 6); 1' &&
+			end.shared === true &&
+			end.path === '/pages/ext-target.html' &&
+			end.href === true,
+		JSON.stringify(end),
+	);
+	const events = JSON.parse(
+		(await poll(page, TARGET, () => {
+			const seen = document.documentElement.dataset.events;
+			return seen && seen.includes('message') && seen.includes('detail')
+				? seen
+				: null;
+		})) ?? 'null',
+	);
+	ok(
+		`${mode}: an event's detail and a message's data reach an isolated world as its own`,
+		events?.detail === '{"list":[1,2]}' &&
+			events.detailOwn === true &&
+			events.message === 'page' &&
+			events.messageOwn === true,
+		JSON.stringify(events),
+	);
 	const idle = JSON.parse(
 		(await poll(page, TARGET, datasetOf('idle'), 30000)) ?? 'null',
 	);
@@ -1068,6 +1268,54 @@ for (const [mode, base] of [
 		idle?.color === 'rgb(1, 2, 3)',
 		JSON.stringify(idle),
 	);
+	ok(
+		`${mode}: a content script's import() loads the extension's module in its world`,
+		idle?.module?.dep === 'dep' &&
+			idle.module.twice === 'aa' &&
+			idle.module.id === probeId &&
+			idle.module.title === 'extension' &&
+			idle.module.meta === true &&
+			idle.module.page === 'undefined' &&
+			idle.module.live === 1 &&
+			idle.module.secret === 'refused',
+		JSON.stringify(idle?.module),
+	);
+	// a document that asks for a world's module itself, past the inject:
+	// judged by its own origin (none the worker can name, here), whatever
+	// origin its query names
+	const forged = await forgedModules(
+		page,
+		await documentAt(page, TARGET),
+		probeId,
+	);
+	ok(
+		`${mode}: a world's module is refused to a document whose origin the worker cannot name, whatever origin its query names`,
+		forged?.controlled === true &&
+			/^200:[1-9]/.test(forged.entry) &&
+			forged.exposed === '404:0' &&
+			forged.forged === '404:0',
+		JSON.stringify(forged),
+	);
+	// what the page saw of the worlds: no frame, node, load or global of
+	// theirs, and none of their changes (the blocker's world was made at
+	// document_end, after the page's observer was there)
+	const pageSaw = await (
+		await documentAt(page, TARGET)
+	)?.evaluate(() => ({
+		...window.__seen,
+		length: window.length,
+		frames: frames.length,
+		worldVar: typeof window.__worldVar,
+		worldVar2: typeof window.worldVar,
+		polluted: [].__worldPolluted === undefined,
+		expando: document.getElementById('target').worldExpando === undefined,
+		handler: String(document.getElementById('target').onmouseleave),
+		handlerName: document.getElementById('target').onmouseleave?.name,
+		adds: window.__pageAdds,
+		names: Object.getOwnPropertyNames(window).filter(
+			(name) => !name.startsWith('__'),
+		),
+	}));
 	ok(
 		`${mode}: runtime.sendMessage reaches the service worker, whose relative and getURL importScripts ran`,
 		idle?.pong?.pong === true &&
@@ -1337,6 +1585,35 @@ for (const [mode, base] of [
 	);
 	await page.evaluate(() => window.__popup.close());
 
+	// (the global names of a document no extension reaches, against what
+	// the target's page saw above: the frame goes to the target after)
+	await page.evaluate((url) => window.__frame.go(url), other);
+	await poll(page, OTHER, () => document.readyState === 'complete');
+	const control = await (
+		await documentAt(page, OTHER)
+	)?.evaluate(() =>
+		Object.getOwnPropertyNames(window).filter((name) => !name.startsWith('__')),
+	);
+	const extra = pageSaw?.names.filter((name) => !control?.includes(name));
+	ok(
+		`${mode}: the page sees nothing of an isolated world: no frame, node, load event or global`,
+		pageSaw?.length === 0 &&
+			pageSaw.frames === 0 &&
+			pageSaw.lengths.every((length) => length === 0) &&
+			pageSaw.added.length === 0 &&
+			pageSaw.loads.length === 0 &&
+			pageSaw.worldVar === 'undefined' &&
+			pageSaw.worldVar2 === 'undefined' &&
+			pageSaw.polluted &&
+			pageSaw.expando &&
+			pageSaw.adds === 0 &&
+			/^function worldLeave\(\) \{\s*\[native code\]\s*\}$/.test(
+				pageSaw.handler,
+			) &&
+			pageSaw.handlerName === 'worldLeave' &&
+			extra?.length === 0,
+		JSON.stringify({ ...pageSaw, names: undefined, extra }),
+	);
 	// the cookie reaches the page's document.cookie
 	await page.evaluate((url) => window.__frame.go(url), target);
 	const cookie = await poll(page, TARGET, () => document.cookie || null, 8000);
@@ -1374,6 +1651,25 @@ for (const [mode, base] of [
 		`${mode}: content scripts run on a page that requires Trusted Types`,
 		ttIdle?.includes('"color":"rgb(1, 2, 3)"'),
 		ttIdle,
+	);
+	const ttEnd = JSON.parse(
+		(await poll(page, TRUSTED, datasetOf('end'))) ?? 'null',
+	);
+	const ttPage = await (
+		await documentAt(page, TRUSTED)
+	)?.evaluate(() => ({
+		own: window.__ownWrite,
+		violations: window.__violations,
+		list: window.__violationList,
+	}));
+	ok(
+		`${mode}: an isolated world writes markup and script URLs under the page's Trusted Types, which still refuse the page's own`,
+		ttEnd?.tt?.html === true &&
+			ttEnd.tt.src === 'set' &&
+			ttEnd.tt.inner === 'I' &&
+			ttPage?.own === 'refused' &&
+			ttPage.violations === 1,
+		JSON.stringify({ tt: ttEnd?.tt, page: ttPage }),
 	);
 
 	// the compat probe (see `compat`), in a page whose CSP allows only its own scripts

@@ -13,6 +13,12 @@ export const EXTENSIONS_DATABASE = 'extension-store';
 export const FILE_CACHE = 'extension-files';
 /** the content scripts' rewritten functions, by their route (src/server/extensions/contentScripts.ts) */
 export const SCRIPT_CACHE = 'extension-scripts';
+/**
+ * what the routes' scripts are made as: a script kept as another build made
+ * it is no script of this one's (an ISOLATED script's route is its world's
+ * source since 2)
+ */
+const SCRIPT_FORMAT = 2;
 
 /** an installed extension as the database keeps it */
 export interface StoredExtension {
@@ -173,7 +179,8 @@ export type PackIndex = Record<string, PackedFile>;
 /** each extension's own Cache Storage cache: its package is one entry of it */
 const fileCache = (id: string) => `${FILE_CACHE}:${id}`;
 /** each extension's rewritten content scripts (contentScripts.ts, api.ts) */
-export const scriptCache = (id: string) => `${SCRIPT_CACHE}:${id}`;
+export const scriptCache = (id: string) =>
+	`${SCRIPT_CACHE}:${SCRIPT_FORMAT}:${id}`;
 const packageURL = (id: string) => extensionURL(id, '.archive');
 
 async function inflated(data: Blob, length: number): Promise<Uint8Array> {
@@ -253,6 +260,8 @@ class PackageFiles {
 		this.#indexes.delete(id);
 		await caches.delete(fileCache(id));
 		await caches.delete(scriptCache(id));
+		// (and what an earlier build kept)
+		await caches.delete(`${SCRIPT_CACHE}:${id}`);
 	}
 }
 

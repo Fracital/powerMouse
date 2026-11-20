@@ -1,3 +1,4 @@
+import { RUNTIME_GLOBAL } from '../../../extensions/types';
 import { attributeMarker } from '../../../helperNames';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
@@ -644,6 +645,9 @@ export default class MutationObserverModule extends Module<DocumentClient> {
 	apply() {
 		const client = this.client;
 		const global = client.global;
+		// the extensions' runtime, when the shell loaded one, makes its
+		// isolated worlds' frames out of the page's observers' hearing
+		(global as any)[RUNTIME_GLOBAL]?.hidden?.(hiddenMutation);
 		const NativeObserver = global.MutationObserver;
 		if (typeof NativeObserver !== 'function') return;
 		const proxyModule = client.getModule(ProxyModule)!;

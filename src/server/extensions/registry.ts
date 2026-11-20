@@ -699,6 +699,7 @@ export class ExtensionRegistry {
 			uiLocale: loaded.uiLocale,
 			permissions: [...loaded.granted],
 			blocking: loaded.blocking,
+			generation: loaded.record.generation,
 			...(loaded.worlds.some((world) => !world.worldId && world.messaging)
 				? { userScriptMessaging: true }
 				: {}),

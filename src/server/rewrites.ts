@@ -6769,8 +6769,33 @@ export function registerRewrites(
 			);
 		router.routes.set(
 			new RegExp(`^/${CONTENT_SCRIPT_ROUTE}/`),
-			(request, path) =>
-				contentScriptResponse(extensions, request, path, rewriteScript),
+			(request, path, context) =>
+				contentScriptResponse(
+					extensions,
+					request,
+					path,
+					rewriteScript,
+					// the requesting document's real origin, by its client
+					async () => {
+						const id = context?.clientId;
+						if (!id) return null;
+						const known = clientURLs.get(id);
+						if (known) return known.origin;
+						const found =
+							typeof clients !== 'undefined' ? await clients.get(id) : null;
+						if (!found) return null;
+						try {
+							return parseRoutedURL(
+								found.url,
+								rewriter.codec,
+								`${new URL(found.url).origin}${rewriter.directory}`,
+							).url.url.origin;
+						} catch (error) {
+							// a client at no routed URL names no origin
+							return null;
+						}
+					},
+				),
 		);
 		router.routes.set(
 			new RegExp(`^/${EXTENSION_API_ROUTE}$`),
@@ -7941,6 +7966,7 @@ export function registerRewrites(
 						},
 						{
 							runtime: extensionsRuntimeJS(url, rewriter.config),
+							access: helperNames(rewriter.config).access,
 							rewriteCSS: (css, file) =>
 								modifyCSS(
 									css,

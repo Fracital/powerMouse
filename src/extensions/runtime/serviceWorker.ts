@@ -17,8 +17,16 @@ import { call, masking, natives } from './natives';
 import { getterLike, methodLike, setterLike } from './present';
 
 const global = globalThis as typeof globalThis & Record<string, unknown>;
-const { defineProperty, getOwnPropertyDescriptor } = natives;
-const apply = natives.Reflect.apply;
+// (read at each call: the runtime's natives are filled after its modules load)
+const defineProperty = (
+	object: object,
+	key: PropertyKey,
+	descriptor: PropertyDescriptor,
+) => natives.defineProperty(object, key, descriptor);
+const getOwnPropertyDescriptor = (object: object, key: PropertyKey) =>
+	natives.getOwnPropertyDescriptor(object, key);
+const apply = (fn: Function, that: unknown, args: ArrayLike<unknown>) =>
+	natives.Reflect.apply(fn, that, args);
 
 const member = { configurable: true, enumerable: true };
 

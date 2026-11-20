@@ -6,9 +6,11 @@
 // right before it writes the page's markup, and runs document_start once
 // the first write made the page's root element: the inject writes the
 // markup in pieces that each end before a `</script`, so no script of the
-// page has run there (Chrome's DidCreateDocumentElement point). A content
-// script runs as a function of its world's `chrome`; an extension page gets
-// `chrome` on its window.
+// page has run there (Chrome's DidCreateDocumentElement point). An
+// ISOLATED script runs in its extension's isolated world (./world/), a
+// realm of its own made here; a USER_SCRIPT one as a function of its world's
+// `chrome`, a MAIN one as the page's code; an extension page gets `chrome`
+// on its window.
 import {
 	cleanPath,
 	displayExtensionURL,
@@ -27,11 +29,22 @@ import {
 import { buildChrome } from './api';
 import { Context, copy, messageOf } from './context';
 import { receiveMessages } from './messaging';
-import { call, masking, natives } from './natives';
+import {
+	call,
+	masking,
+	natives,
+	scriptNatives,
+	useNatives,
+	webNatives,
+} from './natives';
 import { methodLike, presentExtensionPage } from './present';
 import { workerContainer, workerGlobal } from './serviceWorker';
+import type { World } from './world/index';
+import { makeWorld, pageSide } from './worlds';
 
-type Defined = (...args: unknown[]) => unknown;
+/** a route's function, or an isolated world's source and the URL it is code at */
+type Defined = ((...args: unknown[]) => unknown) | WorldSource;
+type WorldSource = { source: string; url: string };
 
 let payload: RuntimePayload | null = null;
 let nonce = '';
@@ -66,6 +79,10 @@ const defined = new Map<string, Defined>();
 const waiting = new Map<string, (fn: Defined) => void>();
 
 const global = globalThis as typeof globalThis & Record<string, unknown>;
+const web = webNatives(global);
+useNatives({ ...web, ...scriptNatives(global) });
+/** what an isolated world is handed of the page's, taken before the inject runs */
+const page = pageSide(global, web, () => payload?.access ?? '');
 /** the frame's name as the hub gave it, read before the inject runs (it shadows the name for the page) */
 const frameName = natives.windowName(global) ?? '';
 
@@ -78,18 +95,23 @@ const runtime = {
 		nonce = script?.nonce ?? '';
 	},
 	/**
-	 * a route's function: taken only from the route's own script element, so
-	 * nothing the page runs can stand in for an extension's code
+	 * a route's function (an isolated world's: its source, and the URL it is
+	 * code at): taken only from the route's own script element, so nothing
+	 * the page runs can stand in for an extension's code
 	 */
-	define(id: string, key: string, fn: Defined) {
+	define(id: string, key: string, given: unknown, url?: unknown) {
 		const script = natives.currentScript(natives.document);
 		const src = script ? natives.scriptSrc(script) : '';
 		if (
-			typeof fn !== 'function' ||
+			(typeof given !== 'function' && typeof given !== 'string') ||
 			!src.includes(`/${CONTENT_SCRIPT_ROUTE}/${id}/`) ||
 			!src.split('?')[0].endsWith(`/${key}.js`)
 		)
 			return;
+		const fn: Defined =
+			typeof given === 'string'
+				? { source: given, url: String(url ?? '') }
+				: (given as Defined);
 		const name = `${id}|${key}`;
 		const waiter = waiting.get(name);
 		if (waiter) {
@@ -97,7 +119,17 @@ const runtime = {
 			waiter(fn);
 		} else defined.set(name, fn);
 	},
+	/**
+	 * The inject's hiddenMutation (src/inject/dom/modules/MutationObserver.ts),
+	 * handed over as the inject's client is made: a world's frame made after
+	 * the page's scripts ran is one no observer of the page's hears of
+	 */
+	hidden(given: unknown) {
+		if (typeof given === 'function' && !hiddenRun)
+			hiddenRun = given as unknown as typeof hiddenRun;
+	},
 };
+let hiddenRun: (<T>(run: () => T) => T) | null = null;
 
 natives.defineProperty(global, RUNTIME_GLOBAL, {
 	value: runtime,
@@ -268,7 +300,7 @@ function loadRoute(id: string, key: string, route: string): Promise<Defined> {
 }
 
 /**
- * Run an isolated world's code with the window's `chrome` the extension's:
+ * Run a USER_SCRIPT world's code with the window's `chrome` its world's:
  * what the script reads of `window.chrome`, `self.chrome` or
  * `globalThis.chrome` as it runs (the worker rewrote the plain forms of
  * those to its `chrome` already, for what reads them later)
@@ -347,28 +379,58 @@ function userScriptChrome(ctx: Context, given: RuntimePayload): unknown {
 	return chrome;
 }
 
+/** what a document's isolated scripts run in: the extension's world, or the page's realm where none can be made */
+interface Isolated {
+	world(): World | null;
+	/** the `chrome` of an ISOLATED script that runs in the page's realm */
+	chrome(): unknown;
+}
+
 function runEntry(
 	ctx: Context,
-	chrome: unknown,
 	entry: ShippedEntry,
+	route: string,
 	userChrome: () => unknown,
+	isolated: Isolated,
 ) {
 	if (!entry.js) return;
-	definedFn(ctx.ext.id, entry.key).then((fn) => {
+	definedFn(ctx.ext.id, entry.key).then(async (fn) => {
 		try {
-			if (entry.world === 'MAIN') natives.Reflect.apply(fn, global, []);
-			else if (entry.world === 'USER_SCRIPT') {
+			if (typeof fn !== 'function') {
+				const world = isolated.world();
+				if (world) return world.run(fn.source, fn.url);
+				const shared = await sharedFn(ctx.ext.id, entry.key, route);
+				const own = isolated.chrome();
+				inWorld(own, () =>
+					natives.Reflect.apply(shared, global, [own, undefined]),
+				);
+			} else if (entry.world === 'MAIN') natives.Reflect.apply(fn, global, []);
+			else {
 				// its window's chrome is its world's too (`const { chrome } = window`)
 				const own = userChrome();
 				inWorld(own, () => natives.Reflect.apply(fn, global, [own, undefined]));
-			} else
-				inWorld(chrome, () =>
-					natives.Reflect.apply(fn, global, [chrome, undefined]),
-				);
+			}
 		} catch (error) {
 			console.error(error);
 		}
 	});
+}
+
+/**
+ * An ISOLATED script's route as a function of `chrome` the page's realm
+ * runs (src/server/extensions/contentScripts.ts SHARED), as every ISOLATED
+ * script ran before isolated worlds: for a document whose policy lets no
+ * world be made
+ */
+function sharedFn(
+	id: string,
+	key: string,
+	route: string,
+): Promise<(...args: unknown[]) => unknown> {
+	defined.delete(`${id}|${key}`);
+	return loadRoute(id, key, `${route}?shared`) as Promise<
+		(...args: unknown[]) => unknown
+	>;
 }
 
 /**
@@ -428,7 +490,6 @@ function contentContext(given: RuntimePayload, ext: ShippedExtension) {
 		given.url,
 		given.tokens[ext.id],
 	);
-	const chrome = buildChrome(ctx);
 	receiveMessages(ctx);
 	ctx.placed = ctx
 		.hub('hello', {
@@ -453,8 +514,40 @@ function contentContext(given: RuntimePayload, ext: ShippedExtension) {
 	let userChrome: { value: unknown } | null = null;
 	const userWorld = () =>
 		(userChrome ??= { value: userScriptChrome(ctx, given) }).value;
+	// the extension's isolated world, made where its first script runs
+	let world: World | null | undefined;
+	let shared: unknown = null;
+	const isolated: Isolated = {
+		world: () => world ?? makeIsolated(),
+		chrome: () => (shared ??= buildChrome(ctx)),
+	};
+	const makeIsolated = () => {
+		if (world !== undefined) return world;
+		world = makeWorld(
+			page,
+			{
+				ext: natives.JSON.stringify(ext),
+				channel: given.channel,
+				url: given.url,
+				token: given.tokens[ext.id],
+			},
+			hiddenRun,
+		);
+		const made = world;
+		if (made)
+			ctx.placed.then(() => made.placed(natives.JSON.stringify(ctx.place)));
+		return made;
+	};
 	for (const entry of ext.entries ?? [])
-		schedule(entry.runAt, () => runEntry(ctx, chrome, entry, userWorld));
+		schedule(entry.runAt, () =>
+			runEntry(
+				ctx,
+				entry,
+				`${given.channel}${CONTENT_SCRIPT_ROUTE}/${ext.id}/${ext.generation ?? 0}/${entry.key}.js`,
+				userWorld,
+				isolated,
+			),
+		);
 	// what the extension's other contexts inject (scripting, tabs)
 	const sheets = new Map<string, CSSStyleSheet>();
 	ctx.on('exec', async (message) => {
@@ -492,14 +585,30 @@ function contentContext(given: RuntimePayload, ext: ShippedExtension) {
 			const take = (value: unknown) => {
 				result = value;
 			};
-			// a MAIN world's function takes only the result's callback; a
-			// USER_SCRIPT world's chrome is its own (userScripts.execute)
-			const own = message.world === 'USER_SCRIPT' ? userWorld() : chrome;
-			if (fn.length < 3) natives.Reflect.apply(fn, global, [take]);
-			else
+			// an isolated world's is its code; a MAIN world's function takes
+			// only the result's callback; a USER_SCRIPT world's chrome is its
+			// own (userScripts.execute)
+			if (typeof fn !== 'function') {
+				const world = isolated.world();
+				if (world) result = world.exec(fn.source, fn.url);
+				else {
+					const shared = await sharedFn(
+						ctx.ext.id,
+						String(message.key),
+						String(message.route),
+					);
+					const own = isolated.chrome();
+					inWorld(own, () =>
+						natives.Reflect.apply(shared, global, [own, undefined, take]),
+					);
+				}
+			} else if (fn.length < 3) natives.Reflect.apply(fn, global, [take]);
+			else {
+				const own = userWorld();
 				inWorld(own, () =>
 					natives.Reflect.apply(fn, global, [own, undefined, take]),
 				);
+			}
 			if (result && typeof (result as Promise<unknown>).then === 'function')
 				result = await result;
 			reply({ result: copy(result) });
@@ -798,8 +907,21 @@ function start(given: RuntimePayload) {
 	delete global[RUNTIME_GLOBAL];
 	if (given.contentType) textDocumentType(given.contentType);
 	if (given.page) pageContext(given);
+	// what an isolated world reads of the page's members is what they are
+	// now, before the page's scripts and its MAIN world's run
+	if (given.content?.some(isolates)) page.snapshot();
 	for (const ext of given.content ?? []) contentContext(given, ext);
 }
+
+/** whether an extension may run code in an isolated world of the document (its entries', or an injection's) */
+const isolates = (ext: ShippedExtension) =>
+	(ext.entries ?? []).some(
+		(entry) =>
+			entry.js && entry.world !== 'MAIN' && entry.world !== 'USER_SCRIPT',
+	) ||
+	ext.permissions.some(
+		(name) => name === 'scripting' || name === 'tabs' || name === 'activeTab',
+	);
 
 /**
  * a text document the worker served as Chrome's HTML of it reads the type
