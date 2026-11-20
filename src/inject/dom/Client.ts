@@ -2486,10 +2486,17 @@ export default class DocumentClient extends Client {
 	/**
 	 * This document's origin as the page sees it: its real site's, or "null"
 	 * for an opaque one (a data: document, a frame sandboxed without
-	 * allow-same-origin)
+	 * allow-same-origin). An extension's page is of `chrome-extension://<id>`
+	 * as in Chrome, not its emulated origin (src/extensions/origin.ts): what
+	 * its messages come from, and the origin a message to it names.
 	 */
 	get origin(): string {
-		return this.sandboxedOpaque ? 'null' : this.url.url.origin;
+		return this.sandboxedOpaque
+			? 'null'
+			: this.url.url.origin.replace(
+					/^https:\/\/([a-p]{32})\.invalid$/,
+					'chrome-extension://$1',
+				);
 	}
 	/**
 	 * The window's origin as the browser has it: the proxy origin (an

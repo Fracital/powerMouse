@@ -65,6 +65,29 @@ export function displayExtensionURL(url: string): string {
 	}
 }
 
+/** an emulated origin as Chrome's, `chrome-extension://<id>`; any other origin as it is */
+export function displayExtensionOrigin(origin: string): string {
+	return origin.replace(
+		/^https:\/\/([a-p]{32})\.invalid$/,
+		'chrome-extension://$1',
+	);
+}
+
+/**
+ * The URL `chrome.runtime.getURL(path)` answers, as Chrome makes it
+ * (measured, 157): `chrome-extension://<id>/` and the path without one
+ * leading slash, parsed, so dot segments go and the query and fragment
+ * stay (`https://x` is a path there, `//x` two slashes of one)
+ */
+export function chromeExtensionURL(id: string, path: unknown): string {
+	const url = `chrome-extension://${id}/${String(path ?? '').replace(/^\//, '')}`;
+	try {
+		return new URL(url).href;
+	} catch (error) {
+		return url;
+	}
+}
+
 /** a path of the extension's, clean: no leading slash, no `..` past the root */
 export function cleanPath(path: string): string {
 	const parts: string[] = [];

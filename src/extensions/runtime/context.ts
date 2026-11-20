@@ -6,6 +6,7 @@
 // where every context lived in the host page; here each is in its own
 // document and they meet on a BroadcastChannel.
 import { EXTENSION_BUS_PREFIX } from '../../transport/messages';
+import { displayExtensionURL } from '../origin';
 import {
 	EXTENSION_API_ROUTE,
 	type ContextKind,
@@ -409,13 +410,15 @@ export class Context {
 		return answer?.value ?? undefined;
 	}
 
-	/** the sender a message of this context carries */
+	/** the sender a message of this context carries: an extension page's at chrome-extension://, as in Chrome */
 	sender(): Record<string, unknown> {
 		const origin =
-			this.kind === 'content' ? new URL(this.url).origin : this.ext.origin;
+			this.kind === 'content'
+				? new URL(this.url).origin
+				: `chrome-extension://${this.ext.id}`;
 		return {
 			id: this.ext.id,
-			url: this.url,
+			url: displayExtensionURL(this.url),
 			origin,
 			...(this.place.tab ? { tab: copy(this.place.tab) } : {}),
 			...(this.place.frameId >= 0 ? { frameId: this.place.frameId } : {}),

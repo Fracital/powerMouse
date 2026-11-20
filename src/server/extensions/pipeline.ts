@@ -2,7 +2,10 @@
 // each step is a synchronous "no" while no extension has rules or listeners,
 // so a scope without extensions pays a property read per request.
 import type { RawHeaders } from '@mercuryworkshop/proxy-transports';
-import { extensionOfHost } from '../../extensions/origin';
+import {
+	displayExtensionOrigin,
+	extensionOfHost,
+} from '../../extensions/origin';
 import type {
 	WebRequestDetails,
 	WebRequestListener,
@@ -164,7 +167,8 @@ export class ExtensionPipeline {
 			url: init.url,
 			method: init.method,
 			type: webRequestType(init.destination, init.navigation, init.top),
-			initiator: init.initiator,
+			// an extension's page asks from chrome-extension://, as in Chrome
+			initiator: init.initiator && displayExtensionOrigin(init.initiator),
 			site: init.site,
 			client,
 		};

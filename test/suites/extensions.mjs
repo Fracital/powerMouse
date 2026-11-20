@@ -20,7 +20,9 @@
 // - a third probe for what extensions found missing against Chrome: a
 //   localized getManifest, the user script world's runtime, tabs' and
 //   webNavigation's events, a web accessible script under the page's CSP,
-//   executeScript into a sandboxed frame, a popup sized to its content.
+//   executeScript into a sandboxed frame, a popup sized to its content;
+// - a fourth for the extension's origin, chrome-extension://<id>, in a
+//   content script, the service worker and an extension page.
 import { crc32, deflateRawSync } from 'node:zlib';
 import {
 	done,
@@ -525,6 +527,112 @@ const compat = {
 	});`,
 };
 
+// the origin probe: what an extension reads of its own origin in its page,
+// its service worker and a content script, which Chrome gives as
+// chrome-extension://<id> (the same files make the native reference)
+const originPages = ['*://*/pages/ext-origin.html*'];
+
+const originProbe = {
+	'manifest.json': JSON.stringify({
+		manifest_version: 3,
+		name: 'Origin Probe',
+		version: '1.0',
+		permissions: ['tabs'],
+		host_permissions: ['http://127.0.0.1/*'],
+		background: { service_worker: 'sw.js' },
+		content_scripts: [{ matches: originPages, js: ['cs.js'] }],
+		web_accessible_resources: [
+			{
+				resources: ['o-frame.html', 'o-frame.js', 'war.txt', 'x.svg'],
+				matches: ['<all_urls>'],
+			},
+		],
+	}),
+	'war.txt': 'war body',
+	'x.svg':
+		'<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>',
+	'sw.js': `chrome.runtime.onMessage.addListener((message, sender, respond) => {
+		if (message === 'sender') respond({
+			url: sender.url, origin: sender.origin, tab: sender.tab ? sender.tab.url : null,
+			swHref: location.href, swOrigin: location.origin, swHost: location.host, self: self.origin,
+			getURL: chrome.runtime.getURL(''),
+		});
+	});`,
+	'o.html':
+		'<!doctype html><html><head><title>origin page</title></head><body><iframe id="f" src="o-frame.html"></iframe><script src="o.js"></script></body></html>',
+	'o-frame.html':
+		'<!doctype html><html><head><title>origin frame</title></head><body><script src="o-frame.js"></script></body></html>',
+	'o-frame.js': `addEventListener('message', (event) => {
+		if (event.data === 'ping') event.source.postMessage('pong', event.origin === 'null' ? '*' : event.origin);
+	});
+	parent.postMessage({ frame: location.href, origin: location.origin }, '*');`,
+	'o.js': `(async () => {
+		const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+		const within = (promise, ms) => Promise.race([promise, sleep(ms).then(() => 'none')]);
+		const loaded = (element) => new Promise((resolve) => { element.onload = () => resolve(true); element.onerror = () => resolve(false); });
+		const out = {};
+		out.href = location.href;
+		out.origin = location.origin;
+		out.protocol = location.protocol;
+		out.host = location.host;
+		out.string = String(location);
+		out.url = document.URL;
+		out.documentURI = document.documentURI;
+		out.baseURI = document.baseURI;
+		out.self = self.origin;
+		out.domain = document.domain;
+		out.getURL = chrome.runtime.getURL('x.svg');
+		const blob = URL.createObjectURL(new Blob(['blob body']));
+		out.blob = blob.replace(/[0-9a-f-]{36}$/, 'U');
+		out.blobText = await (await fetch(blob)).text();
+		const img = new Image();
+		img.src = chrome.runtime.getURL('x.svg');
+		out.img = img.src;
+		out.imgLoaded = await loaded(img);
+		const response = await fetch(chrome.runtime.getURL('war.txt'));
+		out.fetched = (await response.text()).trim();
+		out.responseURL = response.url;
+		out.byOrigin = (await (await fetch(location.origin + '/war.txt')).text()).trim();
+		const frame = document.getElementById('f');
+		if (!frame.contentDocument || frame.contentDocument.readyState !== 'complete') await within(loaded(frame), 5000);
+		const pong = new Promise((resolve) => addEventListener('message', (event) => event.data === 'pong' && resolve(event.origin)));
+		frame.contentWindow.postMessage('ping', location.origin);
+		out.pong = await within(pong, 3000);
+		out.sender = await chrome.runtime.sendMessage('sender');
+		out.tabs = await chrome.tabs.query({ url: chrome.runtime.getURL('o.html') + '*' }).then((tabs) => tabs.map((tab) => tab.url), (error) => String(error));
+		const moved = loaded(frame);
+		frame.contentWindow.location.href = location.origin + '/o-frame.html?moved';
+		await within(moved, 5000);
+		out.moved = frame.contentWindow.location.href;
+		document.documentElement.dataset.origin = JSON.stringify(out);
+	})().catch((error) => { document.documentElement.dataset.origin = JSON.stringify({ error: String(error && error.stack || error) }); });`,
+	'cs.js': `if (window === top) (async () => {
+		const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+		const within = (promise, ms) => Promise.race([promise, sleep(ms).then(() => 'none')]);
+		const loaded = (element) => new Promise((resolve) => { element.onload = () => resolve(true); element.onerror = () => resolve(false); });
+		const out = {};
+		out.getURL = chrome.runtime.getURL('x.svg');
+		const parsed = new URL(chrome.runtime.getURL('x.svg?q#h'));
+		out.parsed = [parsed.protocol, parsed.host, parsed.origin, parsed.pathname, parsed.search, parsed.hash];
+		const img = document.createElement('img');
+		img.src = chrome.runtime.getURL('x.svg');
+		out.img = img.src;
+		document.documentElement.append(img);
+		out.imgLoaded = await loaded(img);
+		out.fetched = (await (await fetch(chrome.runtime.getURL('war.txt'))).text()).trim();
+		const hello = new Promise((resolve) => addEventListener('message', (event) => event.data && event.data.frame && resolve({ origin: event.origin, frame: event.data.frame, frameOrigin: event.data.origin })));
+		const frame = document.createElement('iframe');
+		frame.src = chrome.runtime.getURL('o-frame.html');
+		document.documentElement.append(frame);
+		out.hello = await within(hello, 8000);
+		const pong = new Promise((resolve) => addEventListener('message', (event) => event.data === 'pong' && resolve(event.origin)));
+		frame.contentWindow.postMessage('ping', chrome.runtime.getURL('').slice(0, -1));
+		out.pong = await within(pong, 3000);
+		out.sender = await chrome.runtime.sendMessage('sender');
+		document.documentElement.dataset.origin = JSON.stringify(out);
+	})().catch((error) => { document.documentElement.dataset.origin = JSON.stringify({ error: String(error && error.stack || error) }); });`,
+};
+
 // the MV2 blocker, as a .zip
 const blocker = zip({
 	'manifest.json': JSON.stringify({
@@ -637,6 +745,8 @@ const TARGET = 'extension target';
 const OTHER = 'no extension here';
 const TRUSTED = 'trusted types target';
 const COMPAT = 'compat target';
+const ORIGIN = 'origin target';
+const ORIGIN_PAGE = 'origin page';
 
 const datasetOf = (key) =>
 	new Function(
@@ -1441,6 +1551,100 @@ for (const [mode, base] of [
 			tabRules: unannounced?.tabRules,
 			main: unannounced?.matched?.matched?.main,
 		}),
+	);
+
+	// the origin probe (see `originProbe`): chrome-extension:// wherever
+	// Chrome shows it, in a content script, the service worker and a page
+	const originInfo = await page.evaluate(
+		(files) =>
+			window.__controller.extensions.install(files, { filename: 'origin' }),
+		originProbe,
+	);
+	const originId = originInfo.id;
+	const own = `chrome-extension://${originId}`;
+	await sleep(1500);
+	await page.evaluate(
+		(url) => window.__frame.go(url),
+		`${FIXTURE}pages/ext-origin.html`,
+	);
+	const inContent = JSON.parse(
+		(await poll(page, ORIGIN, datasetOf('origin'), 20000)) ?? 'null',
+	);
+	ok(
+		`${mode}: a content script's getURL is at chrome-extension:// and loads there`,
+		inContent?.getURL === `${own}/x.svg` &&
+			inContent.parsed?.join() ===
+				`chrome-extension:,${originId},${own},/x.svg,?q,#h` &&
+			inContent.imgLoaded === true &&
+			inContent.fetched === 'war body',
+		JSON.stringify(inContent),
+	);
+	ok(
+		`${mode}: an extension frame in a page is of chrome-extension://, to its messages and to the page`,
+		inContent?.hello?.origin === own &&
+			inContent.hello.frameOrigin === own &&
+			inContent.hello.frame === `${own}/o-frame.html` &&
+			inContent.pong === own,
+		JSON.stringify(inContent?.hello) + JSON.stringify(inContent?.pong),
+	);
+	ok(
+		`${mode}: the service worker's location is its script's at chrome-extension://`,
+		inContent?.sender?.swHref === `${own}/sw.js` &&
+			inContent.sender.swOrigin === own &&
+			inContent.sender.swHost === originId &&
+			inContent.sender.self === own &&
+			inContent.sender.getURL === `${own}/`,
+		JSON.stringify(inContent?.sender),
+	);
+	await page.evaluate(
+		(url) => window.__frame.go(window.__controller.extensions.resolveUrl(url)),
+		`${own}/o.html`,
+	);
+	const inPage = JSON.parse(
+		(await poll(page, ORIGIN_PAGE, datasetOf('origin'), 20000)) ?? 'null',
+	);
+	const pageURL = `${own}/o.html`;
+	ok(
+		`${mode}: an extension page's location and document read chrome-extension://`,
+		inPage?.href === pageURL &&
+			inPage.origin === own &&
+			inPage.protocol === 'chrome-extension:' &&
+			inPage.host === originId &&
+			inPage.string === pageURL &&
+			inPage.url === pageURL &&
+			inPage.documentURI === pageURL &&
+			inPage.baseURI === pageURL &&
+			inPage.self === own &&
+			inPage.domain === originId,
+		JSON.stringify(inPage),
+	);
+	ok(
+		`${mode}: an extension page's own URLs read back at chrome-extension:// and load`,
+		inPage?.getURL === `${own}/x.svg` &&
+			inPage.img === `${own}/x.svg` &&
+			inPage.imgLoaded === true &&
+			inPage.fetched === 'war body' &&
+			inPage.responseURL === `${own}/war.txt` &&
+			inPage.byOrigin === 'war body' &&
+			inPage.moved === `${own}/o-frame.html?moved`,
+		JSON.stringify(inPage),
+	);
+	ok(
+		`${mode}: an extension page's messages are from chrome-extension://, and reach a frame of it`,
+		inPage?.pong === own &&
+			inPage.sender?.url === pageURL &&
+			inPage.sender.origin === own &&
+			inPage.sender.tab === pageURL &&
+			JSON.stringify(inPage.tabs) === JSON.stringify([pageURL]),
+		JSON.stringify({
+			pong: inPage?.pong,
+			sender: inPage?.sender,
+			tabs: inPage?.tabs,
+		}),
+	);
+	await page.evaluate(
+		(id) => window.__controller.extensions.remove(id),
+		originId,
 	);
 
 	// disable, enable, remove

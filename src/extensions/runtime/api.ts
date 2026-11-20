@@ -6,12 +6,27 @@
 // the hub; messaging is the bus. Ported from STicks (src/api/*).
 import { getMessage } from '../manifest';
 import { matchesAny } from '../match';
-import { cleanPath, extensionURL } from '../origin';
+import {
+	chromeExtensionURL,
+	cleanPath,
+	displayExtensionURL,
+	extensionOfURL,
+	extensionURL,
+	resolveExtensionURL,
+} from '../origin';
 import { ApiError, copy, type Context } from './context';
 import { connect, sendMessage } from './messaging';
 import { natives } from './natives';
 
 type Fn = (...args: any[]) => unknown;
+
+/** a path of the extension's, given as one or as its URL (getURL's chrome-extension:// one too) */
+const ownPath = (given: string) =>
+	cleanPath(
+		extensionOfURL(given)
+			? new URL(resolveExtensionURL(given)).pathname
+			: given,
+	);
 
 const EXTENSION_ID = /^[a-p]{32}$/;
 
@@ -128,9 +143,7 @@ export function runtimeApi(ctx: Context) {
 		id: ext.id,
 		// (an extension that asks for no dynamic URL has its id there)
 		dynamicId: ext.id,
-		getURL: ctx.sync((path: unknown) =>
-			extensionURL(ext.id, cleanPath(String(path ?? ''))),
-		),
+		getURL: ctx.sync((path: unknown) => chromeExtensionURL(ext.id, path)),
 		getManifest: ctx.sync(() => copy(ext.manifest)),
 		sendMessage: m((...args: unknown[]) => {
 			const { target, message } = messageArgs(args);
@@ -236,10 +249,7 @@ export function runtimeApi(ctx: Context) {
 						tabId: presence.tabId,
 						windowId: presence.tabId >= 0 ? 1 : -1,
 						frameId: presence.frameId,
-						documentUrl: presence.url.replace(
-							ext.origin,
-							`chrome-extension://${ext.id}`,
-						),
+						documentUrl: displayExtensionURL(presence.url),
 						documentOrigin: `chrome-extension://${ext.id}`,
 						incognito: false,
 					}))
@@ -342,9 +352,7 @@ export function i18nApi(ctx: Context) {
 
 export function extensionApi(ctx: Context) {
 	const api: Record<string, unknown> = {
-		getURL: ctx.sync((path: unknown) =>
-			extensionURL(ctx.ext.id, cleanPath(String(path ?? ''))),
-		),
+		getURL: ctx.sync((path: unknown) => chromeExtensionURL(ctx.ext.id, path)),
 		inIncognitoContext: false,
 		getBackgroundPage: () => null,
 		getViews: () => [],
@@ -506,11 +514,13 @@ export function actionApi(ctx: Context, kind: string) {
 					);
 					if (data) iconUrl = imageDataUrl(data);
 				} else if (details.path) {
+					// (getURL's chrome-extension:// URL is the emulated origin's)
 					const path = pickSize(details.path);
-					if (path)
-						iconUrl = /^(data|blob|https?):/.test(path)
-							? path
-							: extensionURL(ctx.ext.id, cleanPath(path));
+					const url = path && resolveExtensionURL(path);
+					if (url)
+						iconUrl = /^(data|blob|https?):/.test(url)
+							? url
+							: extensionURL(ctx.ext.id, cleanPath(url));
 				}
 				if (!iconUrl)
 					throw new ApiError('Either path or imageData must be specified.');
@@ -526,7 +536,7 @@ export function actionApi(ctx: Context, kind: string) {
 		}, v),
 		getPopup: m(async (details: Details) => {
 			const popup = (await get(details, 'popup')) as string | null;
-			return popup ? extensionURL(ctx.ext.id, popup) : '';
+			return popup ? chromeExtensionURL(ctx.ext.id, popup) : '';
 		}),
 		enable: m((tabId?: number) => set(tabArg(tabId), { enabled: true }), v),
 		disable: m((tabId?: number) => set(tabArg(tabId), { enabled: false }), v),
@@ -1495,7 +1505,7 @@ export function offscreenApi(ctx: Context) {
 		),
 		createDocument: m(
 			(parameters: { url: string }) =>
-				ctx.hub('offscreen.create', cleanPath(String(parameters?.url ?? ''))),
+				ctx.hub('offscreen.create', ownPath(String(parameters?.url ?? ''))),
 			{ voidResult: true },
 		),
 		closeDocument: m(() => ctx.hub('offscreen.close'), { voidResult: true }),

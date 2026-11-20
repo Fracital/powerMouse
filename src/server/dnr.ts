@@ -40,6 +40,7 @@ import {
 	type PageAccess,
 	type ResourceType,
 } from '../extensions/dnr';
+import { displayExtensionOrigin } from '../extensions/origin';
 
 /** one extension's rules, as the extensions layer hands them over */
 export interface DnrExtension {
@@ -374,6 +375,8 @@ export class DnrHost {
 			(!request.initiator ||
 				request.initiator === 'null' ||
 				request.type === 'main_frame' ||
+				// (the extension's own pages need no permission for themselves)
+				request.initiator === `chrome-extension://${extensionId}` ||
 				can(request.initiator, patterns));
 		if (check(extension.hostPermissions)) return ALLOWED;
 		if (
@@ -695,7 +698,8 @@ export class DnrHost {
 		const { frameId, parentFrameId } = this.frameIdsOf(info, parent, requester);
 		const request: DnrRequest = {
 			url: info.url,
-			initiator: sourceOrigin,
+			// an extension's page asks from chrome-extension://, as in Chrome
+			initiator: sourceOrigin && displayExtensionOrigin(sourceOrigin),
 			type: resourceTypeOf(info),
 			method: info.method,
 			tabId,
