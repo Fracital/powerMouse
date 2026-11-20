@@ -81,6 +81,7 @@ import {
 	hasBase,
 	inlineSources,
 	packRewrite,
+	packStyle,
 	scriptPreamble,
 	type Prewritten,
 } from '../prewrite';
@@ -6540,11 +6541,13 @@ export function registerRewrites(
 				// as the client's prepareStyleText makes them
 				const styleOutputs = styles.map(
 					([source, start, end]): Prewritten['styles'][number] => {
+						let output: string;
 						try {
-							return [start, end, modifyCSS(source, url, 'stylesheet', {})];
+							output = modifyCSS(source, url, 'stylesheet', {});
 						} catch (error) {
-							return [start, end, rewriteCSSValueURLs(source, url)];
+							output = rewriteCSSValueURLs(source, url);
 						}
+						return [start, end, packStyle(source, output)];
 					},
 				);
 				const done = await Promise.all(outputs);
