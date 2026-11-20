@@ -28,12 +28,15 @@ import {
 	type CodeItem,
 } from '../../cspJudge';
 import { keptText, sourceKey } from '../../functionSource';
+import { routeHTML } from '../../rewriteHTML';
 import { proxyBlobURL } from '../../routeURL';
 import { digest } from '../../sha';
+import StompURL from '../../StompURL';
 import ProxyModule from '../modules/Proxy';
 import UnrouteModule from '../modules/Unroute';
 import { LazySet, LazyWeakMap, LazyWeakSet } from '../ownCollections';
 import type DocumentClient from './Client';
+import type { JsNote } from './Client';
 import {
 	nativeGetAttribute,
 	nativeQuerySelectorAll,
@@ -43,6 +46,7 @@ import {
 } from './Client';
 import { nativeGetAttributeNames, nativeNodeType } from './cloneNode';
 import { deferred } from './deferred';
+import { nativeContentWindow, nativeFrameElement } from './longEntryNatives';
 import { nativeConsoleError, nativeConsoleInfo } from './modules/Context';
 import { markerPrefix } from './modules/MutationObserver';
 import type { Site } from './violations';
@@ -254,6 +258,27 @@ function elementIntegrity(element: Element): string | null {
 }
 
 /**
+ * The console methods of a window this bundle opened (open()), taken as it
+ * opened, before the page had it, with its initial document: that document
+ * runs this bundle, and a message of its own is its console's, as natively
+ * (openedConsole)
+ */
+const openedConsoles = new LazyWeakMap<
+	object,
+	[Function, Function, Document]
+>();
+
+/** the native console method a message of `client`'s document is printed with (error where enforced, else info) */
+function consoleOf(client: DocumentClient, enforced: boolean): Function {
+	const own = openedConsoles.get(client.global);
+	return own && own[2] === client.global.document
+		? own[enforced ? 0 : 1]
+		: enforced
+			? nativeConsoleError
+			: nativeConsoleInfo;
+}
+
+/**
  * Chrome's console message for a script element `policy` refuses at
  * script-src-elem (`governed`: the directive that governs it), a handler at
  * script-src-attr or a javascript: URL (`lead`), printed by the console's
@@ -263,6 +288,7 @@ function elementIntegrity(element: Element): string | null {
  * takes 'unsafe-hashes'
  */
 function logScriptRefusal(
+	client: DocumentClient,
 	policy: Policy,
 	governed: { name: string; sources: string[] },
 	item: CodeItem & { lead?: string },
@@ -289,11 +315,7 @@ function logScriptRefusal(
 		}`;
 	}
 	try {
-		Reflect.apply(
-			enforced ? nativeConsoleError : nativeConsoleInfo,
-			undefined,
-			[message + action],
-		);
+		Reflect.apply(consoleOf(client, enforced), undefined, [message + action]);
 	} catch (error) {
 		// no console
 	}
@@ -371,13 +393,47 @@ function codeRefused(
 			item.once,
 		);
 		if (directive.startsWith('script-src-'))
-			logScriptRefusal(policy, governed, item, directive.endsWith('-attr'));
+			logScriptRefusal(
+				client,
+				policy,
+				governed,
+				item,
+				directive.endsWith('-attr'),
+			);
 	}
 	return refused;
 }
 
 /** the attribute that marks an element of the page's whose handlers wait to be judged as parsed (DocumentClient refuseHandler) */
 const parsedMark = () => `${markerPrefix()}parsed`;
+
+/** where a javascript: URL's code runs, as its violation names it: the document's first line (a frame's initial about:blank, `about`) */
+function violationSite(client: DocumentClient): Site {
+	const uri = violationDocument(client).documentURI;
+	const global = client.global as Record<string, unknown>;
+	return [
+		uri === 'about' && global.parent === global
+			? ''
+			: uri.replace(/[?#].*$/s, ''),
+		1,
+		0,
+	];
+}
+
+/** `note` kept in `notes`, at most 8 (the oldest, a navigation that never ran, let go) */
+function keepNote(notes: JsNote[], note: JsNote) {
+	if (notes.length >= 8) notes.shift();
+	notes.push(note);
+}
+
+/** the first of `notes` of a javascript: URL whose sample is `sample`, taken */
+function takeNote(
+	notes: JsNote[] | undefined,
+	sample: string,
+): JsNote | undefined {
+	const index = notes?.findIndex((note) => note.sample === sample) ?? -1;
+	return index === -1 ? undefined : notes!.splice(index, 1)[0];
+}
 
 /** a javascript: URL's sample, as its rewrite hands it to the access API's `csp` (src/rewriteHTML.ts) */
 function jsSample(url: string): string {
@@ -501,6 +557,19 @@ function hookHandlers(client: DocumentClient) {
 }
 
 export const policyChecks = {
+	/** a window open() opened, which this bundle runs in (consoleOf) */
+	openedConsole(window: typeof globalThis) {
+		try {
+			const console = window.console;
+			openedConsoles.set(window, [
+				console.error,
+				console.info,
+				window.document,
+			]);
+		} catch (error) {
+			// a window of another origin
+		}
+	},
 	/**
 	 * Judge each handler of `element`, of the page's markup, as the parser
 	 * inserts it in the written page (DocumentClient judgeParsed), as Chrome
@@ -553,88 +622,132 @@ export const policyChecks = {
 		}
 	},
 	/**
-	 * The page's code (`client`'s) starts a navigation of `target` (a window
-	 * or a name) to the javascript: URL `url` (DocumentClient.jsStarts): the
-	 * window it runs in is handed the check Chrome makes as the navigation
+	 * The page's code (`client`'s) starts a navigation of `target` (a window,
+	 * a name, a frame's element) to the javascript: URL `url`
+	 * (DocumentClient.jsStarts): the check Chrome makes as the navigation
 	 * starts, by this document's policies, at the place of that code (a
-	 * frame's targets the frame's element), which it makes as it runs, if
-	 * the navigation started (`event`: the click of a link, which a
-	 * listener may cancel)
+	 * frame's targets the frame's element; a frame of the markup's, or a
+	 * window open() makes, is checked twice, measured), is made a moment
+	 * later, if the navigation started (`event`: a link's click, which a
+	 * listener may cancel), or as the URL runs if that is sooner. The window
+	 * it runs in takes it as a note (runRefused); one with no client yet (a
+	 * new window, a fresh frame) finds it here, by the URL's sample
 	 */
 	jsStarts(
 		client: DocumentClient,
 		target: unknown,
 		url: string,
 		event?: Event,
+		/** open()'s, of a new window where none has the name */
+		opens?: boolean,
 	) {
 		let window: typeof globalThis | null = null;
 		let targetClient: DocumentClient | undefined;
+		let frame: Element | null = null;
 		try {
-			window = windowNamed(client, target);
+			try {
+				// (a frame's element: a window or a name is no node)
+				if (Reflect.apply(nativeNodeType, target, []) === 1)
+					frame = target as Element;
+			} catch (error) {
+				// no node
+			}
+			window = frame
+				? (Reflect.apply(nativeContentWindow!, frame, []) as
+						typeof globalThis | null)
+				: windowNamed(client, target);
 			targetClient = (window as Record<string, any> | null)?.[
 				client.names.client
 			];
 		} catch (error) {
 			// a window of another origin
 		}
-		if (!window || !targetClient) return;
 		const sample = jsSample(url);
 		const own = window === client.global;
 		// its own location set through another's (Sandbox gateLocation): that
 		// one noted it
-		const noted = targetClient.jsNote;
+		const noted = targetClient?.jsNotes?.at(-1);
 		if (own && noted && !noted.own && noted.sample === sample) return;
-		const site = callerSite(client);
-		let frame: Element | null = null;
-		if (!own)
+		// (a frame of the markup's: the parser started it, at no code: the
+		// document's first line, measured)
+		const site = client.markupCopy ? violationSite(client) : callerSite(client);
+		if (!own && !frame)
 			try {
-				frame = window.frameElement;
+				frame = window ? Reflect.apply(nativeFrameElement!, window, []) : null;
 				if (frame?.ownerDocument !== client.global.document) frame = null;
 			} catch (error) {
 				// none
 			}
-		targetClient.jsNote = {
-			sample,
-			own,
-			check: () =>
-				event?.defaultPrevented
-					? undefined
-					: client.codeEnforced &&
-						codeRefused(
-							client,
-							'script-src-elem',
-							'inline',
-							frame,
-							{ parser: true, sample, lead: 'Running the JavaScript URL' },
-							false,
-							site,
-						),
+		const twice = client.markupCopy || (!!opens && !window);
+		let verdict: boolean | undefined;
+		let checked = false;
+		const check = () => {
+			if (checked) return verdict;
+			checked = true;
+			if (event?.defaultPrevented) {
+				// no navigation: nothing runs to take the note
+				const index = notes.indexOf(note);
+				if (index !== -1) notes.splice(index, 1);
+				return (verdict = undefined);
+			}
+			const judged = () =>
+				codeRefused(
+					client,
+					'script-src-elem',
+					'inline',
+					frame,
+					{ parser: true, sample, lead: 'Running the JavaScript URL' },
+					false,
+					site,
+				);
+			verdict = client.codeEnforced && judged();
+			if (twice && client.codeEnforced && !verdict) judged();
+			return verdict;
 		};
+		const notes = targetClient
+			? (targetClient.jsNotes ??= [])
+			: (client.jsPending ??= []);
+		const note: JsNote = { sample, own, check };
+		keepNote(notes, note);
+		nativeSetTimeout(check);
 	},
 	/**
 	 * Whether the page's policy refuses, as it runs, a handler of `that` (its
 	 * element, or the window of a body's handler) whose text is kept by
-	 * `code`, or (`that` 0) a javascript: URL whose sample is `code`, firing
+	 * `code`, or (`that` 0) the javascript: URL `code` (decoded), firing
 	 * the violations (DocumentClient.codeRuns). Chrome judges a handler as
 	 * it compiles it, at its first run, by the policies in force then, which
 	 * holds for every later run; a javascript: URL as the navigation starts
-	 * and again as it runs (a report-only policy reports both), measured
+	 * (by the document whose code started it) and again as it runs, and its
+	 * code by the page's Trusted Types before it runs (the default policy's
+	 * `Location href`), measured
 	 */
-	runRefused(
-		client: DocumentClient,
-		that: unknown,
-		code: string,
-		/** the URL a javascript: URL of statements runs through, where allowed */
-		inner?: string,
-	): boolean {
+	runRefused(client: DocumentClient, that: unknown, code: string): boolean {
 		hookHandlers(client);
 		const global = client.global as typeof globalThis;
 		if (that === 0) {
+			const sample = code.slice(0, 40);
 			// as the navigation started: by the document whose code started it,
-			// where one noted it (jsStarts), else here, at no place
-			const note = client.jsNote;
-			client.jsNote = undefined;
-			const first = note?.sample === code ? note.check() : undefined;
+			// which noted it here (jsStarts), or for a window with no client
+			// then (a new window, a fresh frame) its creator
+			let note = takeNote(client.jsNotes, sample);
+			if (!note)
+				try {
+					const creator = (
+						((global as Record<string, any>).parent === global
+							? (global as Record<string, any>).opener
+							: (global as Record<string, any>).parent) as Record<
+							string,
+							any
+						> | null
+					)?.[client.names.client] as DocumentClient | undefined;
+					note = takeNote(creator?.jsPending, sample);
+				} catch (error) {
+					// a creator of another origin
+				}
+			// (the inject's own run of the code a default policy made)
+			if (note?.made) return false;
+			const first = note?.check();
 			const judged = (site?: Site) =>
 				codeRefused(
 					client,
@@ -643,24 +756,71 @@ export const policyChecks = {
 					null,
 					{
 						parser: true,
-						sample: code,
+						sample,
 						lead: 'Running the JavaScript URL',
 					},
 					false,
 					site,
 				);
+			if (first || (client.codeEnforced && first === undefined && judged()))
+				return true;
+			// the page's Trusted Types, by the code it wrote: its default
+			// policy's, for `Location href`, runs instead; none made, the
+			// navigation is refused (report-only: reported), measured
+			const page = code.slice('javascript:'.length);
+			const required = client.trustedTypesRequired();
+			let trusted = page;
+			if (required) {
+				const sink = 'Location href';
+				const callback = client.defaultScript?.();
+				let made: unknown = null;
+				if (typeof callback === 'function')
+					try {
+						made = Reflect.apply(callback, undefined, [
+							page,
+							'TrustedScript',
+							sink,
+						]);
+					} catch (error) {
+						// failed
+					}
+				if (made !== null && made !== undefined) trusted = `${made}`;
+				else {
+					const enforced = required === 'enforce';
+					if (enforced) client.reportTrustedSink(sink, page);
+					else client.reportTrustedTypes(sink, page);
+					try {
+						Reflect.apply(consoleOf(client, enforced), undefined, [
+							`This document requires 'TrustedScript' assignment. Navigating to a javascript:-URL is equivalent to a 'TrustedScript' assignment${typeof callback === 'function' ? " and the 'default' policy failed toexecute" : ''}.${enforced ? ' The action has been blocked.' : ' The policy is report-only, so the violation has been logged but no further action has been taken.'}`,
+						]);
+					} catch (error) {
+						// no console
+					}
+					if (enforced) return true;
+				}
+			}
 			// as it runs: the document's first line
-			const refused =
-				!!first ||
-				(client.codeEnforced &&
-					((first === undefined && judged()) ||
-						judged([client.url.url.href.replace(/[?#].*$/s, ''), 1, 0])));
-			if (refused || !inner) return refused;
-			// statements run as a script of their own, through a javascript:
-			// URL of their rewrite (a 'use strict' of theirs a directive, their
-			// let and const the window's), judged now
+			if (client.codeEnforced && judged(violationSite(client))) return true;
+			if (trusted === page) return false;
+			// the default policy made other code: it runs instead, through a
+			// javascript: URL of its rewrite, judged now
+			const made = `javascript:${trusted}`;
+			keepNote((client.jsNotes ??= []), {
+				sample: made.slice(0, 40),
+				own: true,
+				check: () => false,
+				made: true,
+			});
 			const location = global.location;
-			Reflect.apply(location.assign, location, [inner]);
+			Reflect.apply(location.assign, location, [
+				routeHTML(
+					new StompURL(made, client.url),
+					client.url,
+					client.config,
+					false,
+					client.nestedRoute,
+				),
+			]);
 			return true;
 		}
 		// (a body's handler of the window's runs with the window as this, and

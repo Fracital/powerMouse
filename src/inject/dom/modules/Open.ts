@@ -115,9 +115,17 @@ export default class OpenModule extends Module<DocumentClient> {
 					popupOpened(client);
 			});
 		};
+		// a refused javascript: URL of statements throws: nothing ran natively,
+		// so no listener of the page's hears of it (DocumentClient codeRuns)
+		const refusal = (event: ErrorEvent) => {
+			if (event.error !== client.codeRefusal) return;
+			event.stopImmediatePropagation();
+			event.preventDefault();
+		};
 		const install = () => {
 			global.addEventListener('click', listener, true);
 			global.addEventListener('auxclick', listener, true);
+			global.addEventListener('error', refusal, true);
 		};
 		install();
 		addDocumentOpenListener(global, install);

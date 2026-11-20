@@ -2776,12 +2776,14 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				// its way): written back it would be an empty URL, which a
 				// script reports as an error and never loads again
 				// A base's href took effect with its attribute, and written
-				// again it is judged again (base-uri, a violation each time)
+				// again it is judged again (base-uri, a violation each time); a
+				// frame's javascript: URL would run again
 				if (
 					typeof value === 'string' &&
 					written !== '' &&
 					value !== '' &&
-					ctor !== realm.HTMLBaseElement
+					ctor !== realm.HTMLBaseElement &&
+					!value.startsWith('javascript:')
 				)
 					Reflect.apply(target, that, [
 						sink ? trustedOf(sink[0], value) : value,

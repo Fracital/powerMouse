@@ -22,6 +22,7 @@ import { done, launch } from '../lib.mjs';
 const sha = (text) =>
 	`'sha256-${createHash('sha256').update(text).digest('base64')}'`;
 const NONCE = "script-src 'nonce-probes'";
+const TRUSTED = "require-trusted-types-for 'script'";
 // every kind of script the layout has (test/csp-server.mjs layout)
 const ALL = [
 	'i:plain',
@@ -41,7 +42,7 @@ const laid = (spec) => ({
 	probes: [
 		...spec.l
 			.filter((token) =>
-				/^(i|in|ix|e|en|eo|di|de|wi|we|fi|fw|img|fx|sty|oc|ob|oe|ol|ju|jt|bo|og|if|wh|jf|jc|jl):/.test(
+				/^(i|in|ix|e|en|eo|di|de|wi|we|fi|fw|img|fx|sty|oc|ob|oe|ol|ju|jt|bo|og|if|wh|jf|jc|jl|jq|js|jr|jw):/.test(
 					token,
 				),
 			)
@@ -50,7 +51,10 @@ const laid = (spec) => ({
 				// (a let's statements: run, strict, the window's let or none)
 				return token.startsWith('jl:')
 					? [name, `${name}S`, `${name}G`, `${name}N`]
-					: [name];
+					: // (and whether it ran before the next timer)
+						token.startsWith('jq:')
+						? [name, `${name}T`, `${name}L`]
+						: [name];
 			}),
 		'reports',
 	],
@@ -385,11 +389,78 @@ const HANDLER_PLACED = {
 		source: true,
 		l: ['meta', 'body', 'jl:lexical'],
 	}),
+	'a javascript: link of statements with a let runs before the next timer':
+		laid({ l: ['body', 'jq:timed'] }),
+	// A form's javascript: action, a frame's src a script sets and a new
+	// window's first URL are judged as the navigation starts too (a new
+	// window's twice by its opener, then by itself); a frame's src runs once
+	"a form's javascript: action under a report-only header": laid({
+		ro: NONCE,
+		source: true,
+		l: ['body', 'js:form'],
+	}),
+	"a form's javascript: action after a meta": laid({
+		m: NONCE,
+		source: true,
+		l: ['meta', 'body', 'js:form'],
+	}),
+	"a frame's javascript: src under a report-only header": laid({
+		ro: NONCE,
+		source: true,
+		l: ['body', 'jr:src'],
+	}),
+	"a frame's javascript: src after a meta": laid({
+		m: NONCE,
+		source: true,
+		l: ['meta', 'body', 'jr:src'],
+	}),
+	"a new window's javascript: URL under a report-only header": laid({
+		ro: NONCE,
+		source: true,
+		l: ['body', 'jw:opened'],
+	}),
+	"a new window's javascript: URL after a meta": laid({
+		m: NONCE,
+		source: true,
+		l: ['meta', 'body', 'jw:opened'],
+	}),
+	// Trusted Types: Chrome asks the default policy of a javascript: URL's
+	// code as it runs (`Location href`); with none, or one that returns
+	// null, the navigation is refused (report-only: reported)
+	'a javascript: link under Trusted Types, its default policy passing it': laid(
+		{
+			p: TRUSTED,
+			l: ['td:pass', 'body', 'ju:passed'],
+		},
+	),
+	'a javascript: link under Trusted Types, its default policy refusing it':
+		laid({
+			p: TRUSTED,
+			l: ['td:null', 'body', 'ju:refused'],
+		}),
+	'a javascript: link under Trusted Types with no default policy': laid({
+		p: TRUSTED,
+		l: ['body', 'ju:nopolicy'],
+	}),
+	'a javascript: link under report-only Trusted Types': laid({
+		ro: TRUSTED,
+		l: ['td:null', 'body', 'ju:reported'],
+	}),
+};
+
+// A refused javascript: URL of statements has compiled as it is refused
+// (the check is its first call, which throws): its let is the window's,
+// never initialized, where natively there is none (docs/csp.md)
+const HANDLER_PLACED_EXPECTED = {
+	'a javascript: link of statements with a let after a meta': {
+		lexicalN: 'its let is declared and uninitialized: typeof throws',
+	},
 };
 
 await compareCases(browser, HANDLER_PLACED, {
 	fields: [...FIELDS, 'sourceFile', 'lineNumber', 'columnNumber'],
 	consoleMessages: true,
+	expected: HANDLER_PLACED_EXPECTED,
 });
 await compareCases(browser, PLACED, {
 	fields: [...FIELDS, 'sourceFile', 'lineNumber', 'columnNumber'],

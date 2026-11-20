@@ -389,6 +389,18 @@ const nativeOpenerGet = Reflect.getOwnPropertyDescriptor(
 const hasISO2022Escape = (text: string) =>
 	text.includes('\u000e') || text.includes('\u000f') || text.includes('\u001b');
 
+/** a javascript: URL's first check, as the document whose code started its navigation noted it (./policyChecks.ts jsStarts) */
+export interface JsNote {
+	/** the URL's sample (the code's) */
+	sample: string;
+	/** noted by this document of its own location */
+	own: boolean;
+	/** the first check, by the noting document, made once: true where refused, undefined where its navigation never started */
+	check: () => boolean | undefined;
+	/** the code a default policy made, which runs unjudged */
+	made?: boolean;
+}
+
 export default class DocumentClient extends Client {
 	private write: typeof document.write;
 	// native document.open: the hooked one runs the open listeners, which
@@ -2054,18 +2066,16 @@ export default class DocumentClient extends Client {
 		Record<string, boolean>
 	>();
 	/**
-	 * @internal the first check of a javascript: URL, as the document whose
-	 * code navigated this window to it noted it (jsStarts): runRefused takes
-	 * it
+	 * @internal the first checks of javascript: URLs, as the documents whose
+	 * code navigated this window to them noted them (jsStarts), in order:
+	 * runRefused takes the first of the URL's (a second navigation may be
+	 * noted before the first runs)
 	 */
-	jsNote?: {
-		/** the URL's sample (the code's) */
-		sample: string;
-		/** noted by this document of its own location */
-		own: boolean;
-		/** the first check, by the noting document: true where refused, undefined where its navigation never started */
-		check: () => boolean | undefined;
-	};
+	jsNotes?: JsNote[];
+	/** @internal the notes of javascript: URLs this document's code started in a window with no client yet (a new window, a fresh frame), which its runRefused finds here */
+	jsPending?: JsNote[];
+	/** what a refused javascript: URL of statements throws (codeRuns), which the inject's listener takes before any of the page's (Open) */
+	readonly codeRefusal = {};
 	/**
 	 * Whether the page's policy refuses, as it runs, a handler of `that` (its
 	 * element, or the window of a body's; `code` the key of its text), once,
@@ -2073,7 +2083,7 @@ export default class DocumentClient extends Client {
 	 * URL its statements run through), by the policies in force then
 	 * (./policyChecks.ts runRefused); fires the violations
 	 */
-	override codeRuns(that: unknown, code: string, inner?: string): boolean {
+	override codeRuns(that: unknown, code: string, statements?: 1): boolean {
 		if (that !== 0) {
 			let verdicts = this.#handlerVerdicts.get(that as object);
 			if (!verdicts) this.#handlerVerdicts.set(that as object, (verdicts = {}));
@@ -2081,10 +2091,16 @@ export default class DocumentClient extends Client {
 				this.codeEnforced &&
 				(this.#checks()?.runRefused(this, that, code) ?? true));
 		}
-		return (
-			(this.codeEnforced || !!this.jsNote || !!inner) &&
-			(this.#checks()?.runRefused(this, 0, code, inner) ?? true)
-		);
+		if (
+			(this.codeEnforced ||
+				!!this.jsNotes?.length ||
+				!!this.trustedTypesRequired()) &&
+			(this.#checks()?.runRefused(this, 0, code) ?? true)
+		) {
+			if (statements) throw this.codeRefusal;
+			return true;
+		}
+		return false;
 	}
 	/**
 	 * The page's code (a link it clicked, a location it set, open()) starts

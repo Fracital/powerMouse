@@ -733,17 +733,8 @@ export default class Client {
 			? this.trustedCheck(value, type, sink, refuse, convert, attribute)
 			: convert(value);
 	}
-	/**
-	 * Set by the TrustedTypes module: whether a javascript: URL whose code
-	 * is `page` may navigate as its rewrite `routed` (the code the browser
-	 * hands a default policy), under the page's Trusted Types; false after
-	 * `refuse` (the native navigation to the page's URL) where it may not
-	 */
-	trustedJavascript?: (
-		page: string,
-		routed: string,
-		refuse: () => unknown,
-	) => boolean;
+	/** set by the TrustedTypes module: the page's default policy's createScript, if any */
+	defaultScript?: () => unknown;
 	/** set by the TrustedTypes module: a script text of the inject's own the page's default policy is not asked of */
 	trustedApprove?: (value: string) => void;
 	/** how a policy of this context requires Trusted Types of its sinks (src/csp.ts trustedTypesRequired) */
@@ -791,10 +782,11 @@ export default class Client {
 	/**
 	 * Whether the page's policy refuses a handler or a javascript: URL's
 	 * code as it runs (the access API's `csp`, which the rewrite of each
-	 * calls first; `inner`, the URL a javascript: URL of statements runs
-	 * through). Overridden by the document client; the base never enforces.
+	 * calls first; `statements`: a javascript: URL of statements, which a
+	 * refusal throws out of). Overridden by the document client; the base
+	 * never enforces.
 	 */
-	codeRuns(_that: unknown, _code: string, _inner?: string): boolean {
+	codeRuns(_that: unknown, _code: string, _statements?: 1): boolean {
 		return false;
 	}
 	/**

@@ -72,16 +72,6 @@ export default class LocationModule extends Module<DocumentClient> {
 			owns.set(native, own);
 			return proxyModule.wrapFunction(native, call);
 		};
-		/** a javascript: URL's code, as the browser hands it a default policy */
-		const decoded = (url: string) => {
-			// (a URL keeps no tab or line break)
-			const code = url.slice('javascript:'.length).replace(/[\t\n\r]/g, '');
-			try {
-				return decodeURIComponent(code);
-			} catch (error) {
-				return code;
-			}
-		};
 		// a fragment's navigation goes to it as written (the Fragment module)
 		const fragments = moduleClient.getModule(FragmentModule);
 		const navigateTo = (destination: URL) => {
@@ -110,10 +100,8 @@ export default class LocationModule extends Module<DocumentClient> {
 			if (moduleClient.freshTo?.(destination)) return;
 			const loading = global.document.readyState !== 'complete';
 			const how = loading ? 'replace' : method;
-			// a javascript: URL's code is the page's Trusted Types' to judge
-			// (as Chrome does: the default policy's sink `Location href`, the
-			// code decoded); refused, the browser is handed the page's URL,
-			// which it refuses and reports itself
+			// (a javascript: URL's code is the page's Trusted Types' to judge as
+			// it runs: DocumentClient codeRuns)
 			const route =
 				how === 'assign'
 					? (fragments?.live(moduleClient.navigationRoute(destination)) ??
@@ -121,19 +109,6 @@ export default class LocationModule extends Module<DocumentClient> {
 					: navigateTo(destination);
 			// (a javascript: URL is judged as it starts: jsStarts)
 			moduleClient.jsStarts(global, destination.href);
-			if (
-				destination.protocol === 'javascript:' &&
-				moduleClient.trustedJavascript?.(
-					decoded(destination.href),
-					decoded(route),
-					// navigate to the rewrite (the inject's, which no Trusted Types
-					// judge); the page's Trusted Types judge its code (trustedJavascript)
-					() => Reflect.apply(real[how], real, [route]),
-				) === false
-			)
-				// refused, or deferred to the page's default policy (async, as the
-				// navigation is): the inject navigates itself where it may
-				return;
 			return Reflect.apply(real[how], real, [route]);
 		};
 

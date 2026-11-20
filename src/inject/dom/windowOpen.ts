@@ -101,8 +101,19 @@ export function windowOpen(
 		// a javascript: URL runs in the opened window: rewritten, like a
 		// javascript: link (routeHTML rewrites its body)
 		if (destination !== null && destination.protocol === 'javascript:') {
-			// judged as it starts, by this document's policies
-			client.jsStarts(name, destination.href);
+			// judged as it starts, by this document's policies (a new window's
+			// twice, measured)
+			try {
+				deferred('policyChecks').jsStarts(
+					client,
+					name,
+					destination.href,
+					undefined,
+					true,
+				);
+			} catch (error) {
+				// the window judges it as it runs
+			}
 			args[0] = routeHTML(
 				new StompURL(destination, client.url),
 				client.url,
@@ -197,6 +208,14 @@ export function windowOpen(
 
 		const opened = Reflect.apply(target, that, args);
 		rememberOpened(opened);
+		// (the violations of its initial document, which this bundle runs, are
+		// its console's)
+		if (opened)
+			try {
+				deferred('policyChecks').openedConsole(opened);
+			} catch (error) {
+				// none
+			}
 		return opened;
 	};
 }

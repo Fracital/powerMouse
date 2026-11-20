@@ -441,6 +441,19 @@ const insertText = (name, how) => {
  *                    page loads, that says `<n>` ran (`<n>S` in strict mode)
  *                    and declares a let; a script inserted a moment after
  *                    load says `<n>G` where the window has it, else `<n>N`
+ *   jq:<n>           a link to javascript: of statements that declares a
+ *                    let and says `<n>` ran, clicked as the page loads; the
+ *                    first timer after the click says `<n>T` where it ran
+ *                    by then, else `<n>L`
+ *   js:<n>           a form whose action is javascript: that does,
+ *                    submitted (submit()) as the page loads
+ *   jr:<n>           an iframe whose src a script sets to javascript: that
+ *                    does (`parent.__ran`)
+ *   jw:<n>           open() of a new window at javascript: that does
+ *                    (`opener.__ran`), as the page loads
+ *   td:<how>         an inline script (nonce="probes") that makes the
+ *                    default Trusted Types policy, whose createScript
+ *                    returns the code (`pass`) or null (`null`)
  *   fi:<n> / fw:<n>  a script file (nonce="probes", /csp/insert.js) that
  *                    inserts an inline script of <n> after itself, through
  *                    the DOM / by document.write
@@ -528,6 +541,50 @@ function layout(req, res, query) {
 				);
 				break;
 			}
+			case 'jq': {
+				const name = arg.replace(/\W/g, '');
+				add(
+					`<a data-n="${n}" data-click href="javascript:${attribute(`let ${name}Q=1;self.${name}R=1;${ranText(arg)}`)}"></a>`,
+				);
+				add(
+					helper(
+						`addEventListener('load', () => setTimeout(() => __ran(self.${name}R ? '${name}T' : '${name}L')));`,
+					),
+				);
+				break;
+			}
+			case 'js':
+				add(
+					`<form data-n="${n}" action="javascript:${attribute(ranText(arg))}"></form>`,
+				);
+				add(
+					helper(
+						"const f = document.currentScript.previousElementSibling; addEventListener('load', () => f.submit());",
+					),
+				);
+				break;
+			case 'jr':
+				add(`<iframe data-n="${n}"></iframe>`);
+				add(
+					helper(
+						`document.currentScript.previousElementSibling.src = ${JSON.stringify(`javascript:parent.${ranText(arg)}`)};`,
+					),
+				);
+				break;
+			case 'jw':
+				add(
+					helper(
+						`addEventListener('load', () => open(${JSON.stringify(`javascript:opener.${ranText(arg)}`)}));`,
+					),
+				);
+				break;
+			case 'td':
+				add(
+					helper(
+						`trustedTypes.createPolicy('default', { createScript: (s) => ${arg === 'null' ? 'null' : 's'} });`,
+					),
+				);
+				break;
 			case 'ju':
 			case 'jt':
 				add(
