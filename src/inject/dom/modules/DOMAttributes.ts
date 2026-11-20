@@ -32,8 +32,10 @@ import ProxyModule, { usePrototype } from '../../modules/Proxy';
 import { computedURL, scopePrefix, unrouteCSS } from '../../modules/Unroute';
 import { LazyMap, LazyWeakMap, LazyWeakSet } from '../../ownCollections';
 import { modifyCSS, modifyJS } from '../../rewriter';
+import { isParsed } from '../../trusted';
 import DocumentClient, {
 	addDocumentOpenListener,
+	getGlobalParsingState,
 	type StyleElement,
 } from '../Client';
 import {
@@ -1011,8 +1013,17 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					// DOM, not the parser (DOMAttributes runs for inserted elements).
 					// One not connected yet that a nonce could still let through is
 					// held refused, and judged again as it connects, as Chrome
-					// judges it (with the nonce it has then: DOMContentHooks)
+					// judges it (with the nonce it has then: DOMContentHooks). One of
+					// markup the parser runs (a copy made of it) is the parser's:
+					// a document.write's is judged now; the page's markup is
+					// judged here by the policies in force (more policies refuse
+					// no less), and what they let through again as the parser
+					// prepares it, by the policies in force then (judgeParsed)
+					const parser =
+						isParsed(element) &&
+						getGlobalParsingState(realm) === 'parsingBeforeWrite';
 					if (
+						!parser &&
 						!element.isConnected &&
 						moduleClient.scriptAwaitsNonce(element, url)
 					) {
@@ -1022,7 +1033,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						moduleClient.holdScript(element, url, src);
 						return;
 					}
-					if (moduleClient.refuseExternalScript(element, url, false)) {
+					if (moduleClient.refuseExternalScript(element, url, parser)) {
+						// the parser's keeps the page's src and gets an empty one,
+						// for which the browser fires its error as it prepares it
+						if (parser) {
+							element.setAttribute('src', '');
+							return;
+						}
 						// clear the live src (the page's own, which the browser would
 						// otherwise load) so nothing loads; the browser fires 'error'
 						element.removeAttribute('src');
@@ -1032,7 +1049,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					}
 					// let through by its host or its integrity where the page's
 					// policy says so and the browser's copy would not (src/csp.ts)
-					moduleClient.giveCodeNonce(element, url, null, false);
+					moduleClient.giveCodeNonce(element, url, null, parser);
 					placeLoad(
 						element,
 						'src',

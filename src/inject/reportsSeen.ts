@@ -6,8 +6,13 @@
 // the worker bundle's own (./reportParts.ts).
 import type Client from './Client';
 import type ProxyModule from './modules/Proxy';
-import { unrouteURL, type ErrorLocation } from './modules/Unroute';
-import type { LazyWeakSet } from './ownCollections';
+import {
+	unrouteURL,
+	type ErrorLocation,
+	type MadeObserver,
+	type MadeReports,
+} from './modules/Unroute';
+import { OwnWeakMap, OwnWeakSet, type LazyWeakSet } from './ownCollections';
 
 /** the deprecation report's id for a synchronous request on a document's main thread */
 const SYNCHRONOUS_REQUEST_REPORT =
@@ -195,3 +200,190 @@ export function reportsSeen(view: ReportView, reports: unknown): unknown {
 	};
 	return seen(reports);
 }
+
+/** what a csp-violation report's body holds, in the order its toJSON has it */
+export interface ViolationReportBody {
+	sourceFile: string | null;
+	lineNumber: number;
+	columnNumber: number;
+	documentURL: string;
+	referrer: string;
+	blockedURL: string;
+	effectiveDirective: string;
+	originalPolicy: string;
+	sample: string;
+	disposition: string;
+	statusCode: number;
+}
+
+/** what each report and body the inject made holds */
+const madeValues = new OwnWeakMap<object, Record<string, unknown>>();
+/** each realm's stand-in for the Report interface's prototype, which no global names */
+const reportPrototypes = new OwnWeakMap<object, object>();
+/** the prototypes whose getters answer for the reports the inject made */
+const answering = new OwnWeakSet<object>();
+/** the document's own setTimeout (./dom/Client.ts), given with the first report */
+let later: typeof setTimeout | undefined;
+
+/**
+ * Hook the members `keys` (getters, and toJSON) of `prototype`, the
+ * browser's, so that they answer for a report or body the inject made, and
+ * as the browser's for any other
+ */
+function answer(
+	proxyModule: ProxyModule,
+	prototype: object,
+	keys: readonly string[],
+) {
+	if (answering.has(prototype)) return;
+	answering.add(prototype);
+	for (const key of keys) {
+		const descriptor = Reflect.getOwnPropertyDescriptor(prototype, key);
+		const native = descriptor?.get ?? descriptor?.value;
+		if (typeof native !== 'function') continue;
+		const wrapped = proxyModule.wrapFunction(native, (target, that, args) => {
+			const values = madeValues.get(that as object);
+			if (!values) return Reflect.apply(target, that, args);
+			if (key !== 'toJSON') return values[key];
+			// (a report's body as its body's toJSON has it)
+			const json = { ...values };
+			const body = madeValues.get(values.body as object);
+			if (body) json.body = { ...body };
+			return json;
+		});
+		Reflect.defineProperty(
+			prototype,
+			key,
+			descriptor!.get
+				? { ...descriptor, get: wrapped }
+				: { ...descriptor, value: wrapped },
+		);
+	}
+}
+
+/**
+ * A stand-in for the Report prototype of `global`, which no global names:
+ * its members read as the browser's (type, url, body and toJSON, tagged
+ * "Report", inheriting Object.prototype)
+ */
+function reportPrototype(global: typeof globalThis, proxyModule: ProxyModule) {
+	let prototype = reportPrototypes.get(global);
+	if (prototype) return prototype;
+	prototype = {};
+	// (natives of the names the browser's members have, for their shape)
+	const natives: [string, () => unknown][] = [
+		[
+			'type',
+			Reflect.getOwnPropertyDescriptor(global.Event.prototype, 'type')!.get!,
+		],
+		[
+			'url',
+			Reflect.getOwnPropertyDescriptor(global.Response.prototype, 'url')!.get!,
+		],
+		[
+			'body',
+			Reflect.getOwnPropertyDescriptor(global.Response.prototype, 'body')!.get!,
+		],
+	];
+	for (const [key, native] of natives)
+		Reflect.defineProperty(prototype, key, {
+			get: native,
+			set: undefined,
+			enumerable: true,
+			configurable: true,
+		});
+	Reflect.defineProperty(prototype, 'toJSON', {
+		value: global.CSPViolationReportBody.prototype.toJSON,
+		writable: true,
+		enumerable: true,
+		configurable: true,
+	});
+	Reflect.defineProperty(prototype, Symbol.toStringTag, {
+		value: 'Report',
+		writable: false,
+		enumerable: false,
+		configurable: true,
+	});
+	answer(proxyModule, prototype, ['type', 'url', 'body', 'toJSON']);
+	reportPrototypes.set(global, prototype);
+	return prototype;
+}
+
+/**
+ * Queue `report` for `observer` (`state`), as the browser's observer queues
+ * one: the first of an empty queue posts a task that hands the observer the
+ * queue as it then is (emptied by takeRecords meanwhile, an empty list)
+ */
+function hand(observer: object, state: MadeObserver, report: object) {
+	const { pending } = state;
+	pending[pending.length] = report;
+	if (pending.length !== 1) return;
+	Reflect.apply(later!, undefined, [
+		() => {
+			const list: unknown[] = [];
+			for (let i = 0; i < pending.length; i++) list[i] = pending[i];
+			pending.length = 0;
+			Reflect.apply(state.callback, observer, [list, observer]);
+		},
+	]);
+}
+
+/** whether `state` takes reports of `type` */
+const takes = (state: MadeObserver, type: string) => {
+	const { types } = state;
+	if (types === null) return true;
+	for (let i = 0; i < types.length; i++) if (types[i] === type) return true;
+	return false;
+};
+
+/**
+ * The csp-violation reports of the violations the inject makes itself (the
+ * browser never gets the page's script-src, style-src or Trusted Types,
+ * src/csp.ts): a report the page's ReportingObservers are handed as the
+ * browser's are (takeRecords has it at once, the callback in a task before
+ * the violation's event, a buffered observer the newest 100 as it first
+ * observes), whose members read as the browser's (measured, Chrome 157)
+ */
+export const madeReport = {
+	/** report a violation of `body` to the page's observers */
+	report(
+		global: typeof globalThis,
+		proxyModule: ProxyModule,
+		made: MadeReports,
+		body: ViolationReportBody,
+		timer: typeof setTimeout,
+	) {
+		later = timer;
+		const Body = global.CSPViolationReportBody;
+		if (typeof Body !== 'function') return;
+		answer(proxyModule, Body.prototype, [...Object.keys(body), 'toJSON']);
+		const bodyObject = Object.create(Body.prototype) as object;
+		madeValues.set(bodyObject, { ...body });
+		const report = Object.create(
+			reportPrototype(global, proxyModule),
+		) as object;
+		madeValues.set(report, {
+			type: 'csp-violation',
+			url: body.documentURL,
+			body: bodyObject,
+		});
+		const { buffer, observing } = made;
+		if (buffer.length >= 100) {
+			for (let i = 1; i < buffer.length; i++) buffer[i - 1] = buffer[i]!;
+			buffer.length--;
+		}
+		buffer[buffer.length] = { type: 'csp-violation', report };
+		for (let i = 0; i < observing.length; i++) {
+			const observer = observing[i]!;
+			const state = made.observers.get(observer);
+			if (state && takes(state, 'csp-violation')) hand(observer, state, report);
+		}
+	},
+	/** hand a buffered observer that starts the reports made before */
+	buffered(made: MadeReports, observer: object, state: MadeObserver) {
+		const { buffer } = made;
+		for (let i = 0; i < buffer.length; i++)
+			if (takes(state, buffer[i]!.type))
+				hand(observer, state, buffer[i]!.report);
+	},
+};

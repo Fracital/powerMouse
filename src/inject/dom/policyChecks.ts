@@ -28,9 +28,13 @@ import {
 	type CodeItem,
 } from '../../cspJudge';
 import { proxyBlobURL } from '../../routeURL';
+import { digest } from '../../sha';
+import ProxyModule from '../modules/Proxy';
+import UnrouteModule from '../modules/Unroute';
 import type DocumentClient from './Client';
 import { nativeSetTimeout, nonceOf } from './Client';
 import { deferred } from './deferred';
+import { nativeConsoleError, nativeConsoleInfo } from './modules/Context';
 
 /** what Chrome names a refused load of `url` by (a script's, a style's) */
 function blockedOf(url: URL): string {
@@ -64,6 +68,37 @@ function dispatchViolation(
 	const Event = global.SecurityPolicyViolationEvent;
 	if (typeof Event !== 'function') return;
 	const document = global.document;
+	// its report, which the page's ReportingObservers have before the event
+	// (takeRecords at once)
+	const made = client.getModule(UnrouteModule)?.madeReports;
+	const proxyModule = client.getModule(ProxyModule);
+	if (made && proxyModule)
+		try {
+			deferred('madeReport').report(
+				global,
+				proxyModule,
+				made,
+				{
+					sourceFile: null,
+					lineNumber: 0,
+					columnNumber: 0,
+					documentURL: documentURI ?? client.url.url.href.replace(/#.*$/s, ''),
+					referrer:
+						documentURI === undefined
+							? (client.referrerOf(document) ?? '')
+							: '',
+					blockedURL: blocked,
+					effectiveDirective: directive,
+					originalPolicy: policy.text,
+					sample,
+					disposition: policy.disposition,
+					statusCode: statusCode ?? 200,
+				},
+				nativeSetTimeout,
+			);
+		} catch (error) {
+			// the part cannot be had
+		}
 	nativeSetTimeout(() => {
 		try {
 			deferred('dispatchViolation')(
@@ -156,6 +191,47 @@ function elementIntegrity(element: Element): string | null {
 }
 
 /**
+ * Chrome's console message for a script element `policy` refuses at
+ * script-src-elem (`governed`: the directive that governs it), printed by
+ * the console's native method, which no page hook sees, as the browser's
+ * own (measured, Chrome 157): an inline one's names the hash of the page's
+ * text, an external one's its URL
+ */
+function logScriptRefusal(
+	policy: Policy,
+	governed: { name: string; sources: string[] },
+	item: CodeItem,
+) {
+	const { name, sources } = governed;
+	const directive = sources.length ? `${name} ${sources.join(' ')}` : name;
+	const enforced = policy.disposition === 'enforce';
+	const action = enforced
+		? ' The action has been blocked.'
+		: ' The policy is report-only, so the violation has been logged but no further action has been taken.';
+	let message: string;
+	if (item.url) {
+		message = `Loading the script '${item.url.href}' violates the following Content Security Policy directive: "${directive}".${name === 'script-src-elem' ? '' : ` Note that 'script-src-elem' was not explicitly set, so '${name}' is used as a fallback.`}`;
+	} else {
+		const lower = sources.map((source) => source.toLowerCase());
+		message = `Executing inline script violates the following Content Security Policy directive '${directive}'.${
+			lower.includes("'unsafe-inline'") &&
+			sources.some((source) => /^'(nonce-|sha(256|384|512)-)/i.test(source))
+				? " Note that 'unsafe-inline' is ignored if either a hash or nonce value is present in the source list."
+				: ` Either the 'unsafe-inline' keyword, a hash ('sha256-${digest('sha256', item.text ?? '')}'), or a nonce ('nonce-...') is required to enable inline execution.${name === 'default-src' ? " Note also that 'script-src' was not explicitly set, so 'default-src' is used as a fallback." : ''}`
+		}`;
+	}
+	try {
+		Reflect.apply(
+			enforced ? nativeConsoleError : nativeConsoleInfo,
+			undefined,
+			[message + action],
+		);
+	} catch (error) {
+		// no console
+	}
+}
+
+/**
  * Whether the page's own policy refuses a piece of its code at `directive`
  * (a script or style element, a handler or style attribute), firing the
  * violation(s) the browser would: true where an enforced policy refuses it,
@@ -192,6 +268,8 @@ function codeRefused(
 				? item.sample.slice(0, 40)
 				: '';
 		dispatchViolation(client, policy, directive, blocked, sample, node);
+		if (directive === 'script-src-elem')
+			logScriptRefusal(policy, governed, item);
 		if (policy.disposition === 'enforce') refused = true;
 	}
 	return refused;
