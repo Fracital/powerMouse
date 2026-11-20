@@ -31,6 +31,7 @@ import { proxyBlobURL } from '../../routeURL';
 import { digest } from '../../sha';
 import ProxyModule from '../modules/Proxy';
 import UnrouteModule from '../modules/Unroute';
+import { LazySet, LazyWeakMap } from '../ownCollections';
 import type DocumentClient from './Client';
 import { nativeSetTimeout, nonceOf } from './Client';
 import { deferred } from './deferred';
@@ -105,8 +106,13 @@ function dispatchViolation(
  * The csp-violation report of a violation the inject makes, which the
  * page's ReportingObservers have before its event (takeRecords at once):
  * where its code was is `site`'s, or none (null, as Chrome's report names
- * no place: measured)
+ * no place: measured). A document reports each report once: one that reads
+ * as one it made before (the same code refused again at the same place, a
+ * script file run twice) is not made again, though its event fires
+ * (measured). One with no place is always made: natively it has a place of
+ * its own.
  */
+const madeBodies = new LazyWeakMap<DocumentClient, LazySet<string>>();
 function makeReport(
 	client: DocumentClient,
 	policy: Policy,
@@ -120,33 +126,42 @@ function makeReport(
 	const global = client.global as typeof globalThis;
 	const made = client.getModule(UnrouteModule)?.madeReports;
 	const proxyModule = client.getModule(ProxyModule);
-	if (made && proxyModule)
-		try {
-			deferred('madeReport').report(
-				global,
-				proxyModule,
-				made,
-				{
-					sourceFile: site?.[0] ?? null,
-					lineNumber: site?.[1] ?? null,
-					columnNumber: site?.[2] ?? null,
-					documentURL: documentURI ?? client.url.url.href.replace(/#.*$/s, ''),
-					referrer:
-						documentURI === undefined
-							? (client.referrerOf(global.document) ?? '')
-							: '',
-					blockedURL: blocked,
-					effectiveDirective: directive,
-					originalPolicy: policy.text,
-					sample,
-					disposition: policy.disposition,
-					statusCode: statusCode ?? 200,
-				},
-				nativeSetTimeout,
-			);
-		} catch (error) {
-			// the part cannot be had
-		}
+	if (!made || !proxyModule) return;
+	const body = {
+		sourceFile: site?.[0] ?? null,
+		lineNumber: site?.[1] ?? null,
+		columnNumber: site?.[2] ?? null,
+		documentURL: documentURI ?? client.url.url.href.replace(/#.*$/s, ''),
+		referrer:
+			documentURI === undefined
+				? (client.referrerOf(global.document) ?? '')
+				: '',
+		blockedURL: blocked,
+		effectiveDirective: directive,
+		originalPolicy: policy.text,
+		sample,
+		disposition: policy.disposition,
+		statusCode: statusCode ?? 200,
+	};
+	if (site) {
+		let bodies = madeBodies.get(client);
+		if (!bodies) madeBodies.set(client, (bodies = new LazySet()));
+		// (no global of the page's makes the key)
+		const key = `${site[0]}\n${site[1]}\n${site[2]}\n${body.documentURL}\n${body.referrer}\n${blocked}\n${directive}\n${policy.text}\n${sample}\n${policy.disposition}\n${body.statusCode}`;
+		if (bodies.has(key)) return;
+		bodies.add(key);
+	}
+	try {
+		deferred('madeReport').report(
+			global,
+			proxyModule,
+			made,
+			body,
+			nativeSetTimeout,
+		);
+	} catch (error) {
+		// the part cannot be had
+	}
 }
 
 /**
@@ -259,6 +274,18 @@ function logScriptRefusal(
 	} catch (error) {
 		// no console
 	}
+}
+
+/**
+ * Where the page's code that called the hook is, as a violation names it
+ * (the URL with no query or fragment, measured: ./violations.ts), or none
+ * where no script of the page's called it
+ */
+function callerSite(client: DocumentClient): Site | undefined {
+	const at = client.getModule(UnrouteModule)!.callerSite();
+	return at.filename === ''
+		? undefined
+		: [at.filename.replace(/[?#].*$/s, ''), at.lineno, at.colno];
 }
 
 /**
@@ -493,10 +520,14 @@ export const policyChecks = {
 				script ? element : null,
 				{ text: code, nonce, parser, sample: code },
 				false,
-				// a script of the markup's names where its text starts
+				// a script of the markup's names where its text starts, one the
+				// page's code inserts the inserting call (in a script file, its
+				// place in the file's text: ../positionParts.ts)
 				client.parsedSource === code
 					? deferred('markupScriptSite')(client, code)
-					: undefined,
+					: elem && script
+						? callerSite(client)
+						: undefined,
 			);
 		return codeRefused(
 			client,
