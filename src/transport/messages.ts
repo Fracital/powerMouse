@@ -609,6 +609,16 @@ export interface NavigateInfo {
 	icon: string | null;
 	/** the page's service worker client id, once it learned it (`whoami`) */
 	client?: string;
+	/**
+	 * `wanted`: the page is cross-origin isolated natively (it sent COOP
+	 * `same-origin` and an embedder policy, or a Document-Isolation-Policy)
+	 * and is not here: the host's page is not isolated and the browser
+	 * cannot isolate a frame of it by itself (it has no
+	 * Document-Isolation-Policy). A host may offer the page a window of its
+	 * own whose page is isolated (README, Cross-origin isolation). Set by the
+	 * controller, absent otherwise
+	 */
+	isolation?: 'wanted';
 }
 /**
  * global set by the bootstrap of a worker started from a blob: URL: the
@@ -1256,6 +1266,12 @@ export type HostReload = 'no-cache' | 'reload';
 export type SWbound = {
 	/** replace the request rules */
 	rules: [RequestRule[]];
+	/**
+	 * the controller starts the agent of the documents a
+	 * Document-Isolation-Policy isolates (src/controller/apart.ts): its route
+	 * answers this token once, with a document that runs `script`
+	 */
+	apartAgent: [{ token: string; script: string }];
 	/** the host page was reloaded: the pages it restores are (HostReload) */
 	hostReload: [HostReload];
 	/**
@@ -1479,6 +1495,11 @@ export type Controllerbound = {
 	 * could not tell
 	 */
 	isolationEngine: [undefined, IsolationEngine | null];
+	/**
+	 * a top-level page that is cross-origin isolated natively is shown to
+	 * this client without isolation (NavigateInfo.isolation)
+	 */
+	isolationWanted: [string];
 	/**
 	 * a blob: URL the controller's document minted, which the worker reads
 	 * to learn whether it reads its clients' (src/server/rewrites.ts

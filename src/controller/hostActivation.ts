@@ -8,9 +8,11 @@ const WALK_GAP = 100;
  * host is the browser's own window): each proxied document in the host's
  * frames is told it has one only through the proxy
  * (src/inject/dom/activation.ts). A frame of another origin (isolation
- * mode) is never reached, by Chrome or here.
+ * mode) is never reached, by Chrome or here. `also` hears of each input
+ * walked for: the documents a Document-Isolation-Policy puts out of this
+ * realm's reach are told by an agent that reaches them (./apart.ts).
  */
-export function watchHostInput(name: string) {
+export function watchHostInput(name: string, also?: (now: number) => void) {
 	let walked = -Infinity;
 	const tell = (event: Event) => {
 		if (!event.isTrusted) return;
@@ -32,36 +34,8 @@ export function watchHostInput(name: string) {
 		const now = Date.now();
 		if (now - walked < WALK_GAP) return;
 		walked = now;
-		let budget = 2000;
-		const visit = (win: Window) => {
-			if (budget-- <= 0) return;
-			try {
-				const client = (win as unknown as Record<string, any>)[name];
-				if (
-					client?.global === win &&
-					typeof client.markActivation === 'function'
-				)
-					client.markActivation(client, true, now);
-			} catch (error) {
-				// a window of another origin, or one going away
-			}
-			let length = 0;
-			try {
-				length = win.length;
-			} catch (error) {
-				// closing
-			}
-			for (let index = 0; index < length && budget > 0; index++) {
-				let child: Window | undefined;
-				try {
-					child = (win as unknown as Record<number, Window>)[index];
-				} catch (error) {
-					// gone meanwhile
-				}
-				if (child) visit(child);
-			}
-		};
-		for (let index = 0; index < window.length; index++) visit(window[index]);
+		markHostInput(window, name, now);
+		also?.(now);
 	};
 	for (const type of [
 		'keydown',
@@ -71,4 +45,43 @@ export function watchHostInput(name: string) {
 		'touchend',
 	])
 		window.addEventListener(type, tell, true);
+}
+
+/**
+ * Tell every proxied document in the frames of `root` that this realm
+ * reaches that the host's input at `now` was not its own
+ */
+export function markHostInput(root: Window, name: string, now: number) {
+	let budget = 2000;
+	const visit = (win: Window) => {
+		if (budget-- <= 0) return;
+		try {
+			const client = (win as unknown as Record<string, any>)[name];
+			if (client?.global === win && typeof client.markActivation === 'function')
+				client.markActivation(client, true, now);
+		} catch (error) {
+			// a window of another origin, or one going away
+		}
+		let length = 0;
+		try {
+			length = win.length;
+		} catch (error) {
+			// closing
+		}
+		for (let index = 0; index < length && budget > 0; index++) {
+			let child: Window | undefined;
+			try {
+				child = (win as unknown as Record<number, Window>)[index];
+			} catch (error) {
+				// gone meanwhile
+			}
+			if (child) visit(child);
+		}
+	};
+	for (let index = 0; index < root.length; index++) {
+		const child = (root as unknown as Record<number, Window | undefined>)[
+			index
+		];
+		if (child && child !== window) visit(child);
+	}
 }
