@@ -1,0 +1,44 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>WEBSOCKET TEARDOWN</title>
+	</head>
+	<body>
+		<script>
+			// Opens ?count sockets to the suite's server (?port, /hold: open
+			// until the page closes them), then, once all are open, ends the
+			// document with every socket still open: ?go navigates the frame
+			// to ?next, ?frame (in the top) loads this page in a child frame
+			// and removes the frame once its sockets are open.
+			const params = new URLSearchParams(location.search);
+			const base = 'ws://127.0.0.1:' + params.get('port');
+			const tag = params.get('tag') || 'x';
+			if (params.has('frame')) {
+				const child = new URL(location.href);
+				child.searchParams.delete('frame');
+				const frame = document.createElement('iframe');
+				addEventListener('message', ({ data }) => {
+					if (data !== 'open ' + tag) return;
+					frame.remove();
+					document.title = 'removed ' + tag;
+				});
+				frame.src = child.href;
+				document.body.append(frame);
+			} else {
+				const count = Number(params.get('count') || 3);
+				let open = 0;
+				for (let i = 0; i < count; i++) {
+					const ws = new WebSocket(base + '/hold?tag=' + tag + '&i=' + i);
+					ws.onopen = () => {
+						if (++open < count) return;
+						document.title = 'open ' + tag;
+						if (parent !== window) parent.postMessage('open ' + tag, '*');
+						else if (params.has('go'))
+							setTimeout(() => location.replace(params.get('next')), 50);
+					};
+				}
+			}
+		</script>
+	</body>
+</html>

@@ -13,8 +13,27 @@ import {
 	TransportToHost,
 	WebSocketMessage,
 } from './messages';
-import { closePort, onPort, privateChannel } from './ports';
+import { closePort, listenOn, onPort, privateChannel } from './ports';
 import { RpcHelper } from './rpc';
+
+/**
+ * Chrome closes a document's WebSockets (1001) as it goes: it navigated
+ * away, its frame was removed. A worker never hears a document go (Chrome
+ * 157 fires no MessagePort close event unless MessagePortCloseEvent is on),
+ * so the document's sockets are closed on its pagehide; else each stayed
+ * open in the transport, its upstream connection and Wisp stream with it,
+ * for as long as the server kept it.
+ */
+const openSockets = new Set<() => void>();
+let hearsHide = false;
+function closedOnHide(close: () => void) {
+	openSockets.add(close);
+	if (hearsHide || typeof document === 'undefined') return;
+	hearsHide = true;
+	listenOn(globalThis, 'pagehide', (event) => {
+		if (event.isTrusted) for (const close of openSockets) close();
+	});
+}
 
 /**
  * A ProxyTransport whose implementation lives on the other end of a MessagePort.
@@ -115,6 +134,16 @@ export default class RemoteTransport implements ProxyTransport {
 		(code: number, reason: string) => void,
 	] {
 		const [port, theirs] = privateChannel();
+		const closeSocket = (code: number, reason: string) => {
+			openSockets.delete(goes);
+			postToPort(port, {
+				type: 'close',
+				code,
+				reason,
+			} satisfies WebSocketMessage);
+		};
+		const goes = () => closeSocket(1001, '');
+		closedOnHide(goes);
 
 		// frames travel on their own port and can overtake the connect
 		// response on the rpc port; hold them until onopen has run
@@ -122,7 +151,10 @@ export default class RemoteTransport implements ProxyTransport {
 		const pending: WebSocketMessage[] = [];
 		const deliver = (data: WebSocketMessage) => {
 			if (data.type === 'data') onmessage(data.data);
-			else if (data.type === 'close') onclose(data.code, data.reason);
+			else if (data.type === 'close') {
+				openSockets.delete(goes);
+				onclose(data.code, data.reason);
+			}
 		};
 
 		this.rpc
@@ -136,9 +168,15 @@ export default class RemoteTransport implements ProxyTransport {
 					onopen(response.protocol, response.extensions);
 					opened = true;
 					for (const data of pending.splice(0)) deliver(data);
-				} else onerror(response.error);
+				} else {
+					openSockets.delete(goes);
+					onerror(response.error);
+				}
 			})
-			.catch((error) => onerror(String(error)));
+			.catch((error) => {
+				openSockets.delete(goes);
+				onerror(String(error));
+			});
 
 		onPort(port, 'message', (data) => {
 			if (opened) deliver(data as WebSocketMessage);
@@ -155,12 +193,7 @@ export default class RemoteTransport implements ProxyTransport {
 					{ type: 'data', data } satisfies WebSocketMessage,
 					transferablesOf(data),
 				),
-			(code, reason) =>
-				postToPort(port, {
-					type: 'close',
-					code,
-					reason,
-				} satisfies WebSocketMessage),
+			closeSocket,
 		];
 	}
 }

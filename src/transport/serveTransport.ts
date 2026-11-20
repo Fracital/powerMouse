@@ -529,6 +529,11 @@ export default function serveTransport(
 							code,
 							reason,
 						} satisfies WebSocketMessage);
+						// the last word (the page reads what was posted before
+						// the port closed): the channel goes, or this worker
+						// keeps it for the page's life
+						socket.onmessage = null;
+						socket.close();
 					},
 					(error) => {
 						pass.connected();

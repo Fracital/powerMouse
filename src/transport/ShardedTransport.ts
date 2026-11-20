@@ -1070,8 +1070,13 @@ class ShardedTransport implements ProxyTransport {
 		const pending: ShardSocketMessage[] = [];
 		const deliver = (message: ShardSocketMessage) => {
 			if (message.type === 'data') onmessage(message.data);
-			else if (message.type === 'close') onclose(message.code, message.reason);
-			else onerror(message.error);
+			else if (message.type === 'close') {
+				// the last word: the channel goes, or both workers keep it
+				// (and the shard epoxy's socket) for the transport's life
+				port.onmessage = null;
+				port.close();
+				onclose(message.code, message.reason);
+			} else onerror(message.error);
 		};
 		port.onmessage = ({ data }: MessageEvent<ShardSocketMessage>) => {
 			if (opened) deliver(data);
@@ -1095,9 +1100,15 @@ class ShardedTransport implements ProxyTransport {
 						onopen(result.protocol, result.extensions);
 						opened = true;
 						for (const message of pending.splice(0)) deliver(message);
-					} else onerror(result.error);
+					} else {
+						port.close();
+						onerror(result.error);
+					}
 				},
-				(error) => onerror(errorText(error)),
+				(error) => {
+					port.close();
+					onerror(errorText(error));
+				},
 			);
 		return [
 			(data) =>
