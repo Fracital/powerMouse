@@ -1011,25 +1011,12 @@ body.recents .frames .frame.gone,
 	background: rgba(255, 255, 255, 0.12);
 }
 
-/* New tab, then the bar's menu, which the tab manager hides with the bar */
+/* the tab manager's own action: a new tab (the menu is the tab's, on its bar) */
 .recentsActions {
 	display: flex;
 	align-items: center;
 	gap: 4px;
 }
-#recentsMenu {
-	display: grid;
-	place-items: center;
-	padding: 0;
-}
-#recentsMenu svg {
-	display: block;
-}
-#recentsMenu[aria-expanded='true'],
-#recentsMenu:focus-visible {
-	background: rgba(255, 255, 255, 0.12);
-}
-
 /* one label per card. It is the whole browser view's size (chrome bar plus
    frame) and carries the card's transform (set from JS): its top --ch pixels
    are a copy of the chrome bar, scaled with the page like a real preview,

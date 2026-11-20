@@ -5433,13 +5433,15 @@ const menuItems = () =>
 		(item) => !item.hidden,
 	);
 
-for (const button of [$('toolMenu'), $('recentsMenu')])
-	button.addEventListener('click', () => {
-		if (menuPopover.isOpen()) return menuPopover.close();
-		syncFullscreenItem();
-		menuPopover.open(button);
-		menuItems()[0]?.focus();
-	});
+// the menu is the tab's: its button is on the tab's bar, and the tab
+// manager has none (only its new-tab button)
+const menuButton = $('toolMenu');
+menuButton.addEventListener('click', () => {
+	if (menuPopover.isOpen()) return menuPopover.close();
+	syncFullscreenItem();
+	menuPopover.open(menuButton);
+	menuItems()[0]?.focus();
+});
 
 // a menu's keys: the arrows, Home and End move between the items, Tab
 // leaves the menu, and while it is open no key reaches the tab manager
