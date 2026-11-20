@@ -358,3 +358,9 @@ npm run dev     # rebuild on change
 npm run demo    # http://localhost:8080 with holyWisp, epoxy and libcurl
 npm run lint
 ```
+
+## Credits
+
+|                                                                               | GitHub                         | Name       |
+| ----------------------------------------------------------------------------- | ------------------------------ | ---------- |
+| <img src="docs/assets/am%20i%20cool%20yet.png" width="64" alt="e9x's avatar"> | [@e9x](https://github.com/e9x) | David Reed |
