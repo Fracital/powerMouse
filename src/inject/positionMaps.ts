@@ -194,7 +194,7 @@ export function placeCode(site: object, at: unknown): Place | null {
 		for (const [key, code] of [...heldCodes.entries()]) {
 			heldCodes.delete(key);
 			const { head = '', tail = '' } = code[1];
-			const hex = sha256Hex(head + code[2] + tail);
+			const hex = code[4] ?? sha256Hex(head + code[2] + tail);
 			code[2] = undefined;
 			if (codes.has(hex)) continue;
 			codes.set(hex, code);
@@ -259,4 +259,9 @@ export function placeKept(code: CodeMap, at: number): Place | null {
 }
 
 /** the readers, as ./positionParts.ts asks for them */
-export const readers = { file: placeIn, code: placeCode, origin: placeOrigin };
+export const readers = {
+	file: placeIn,
+	code: placeCode,
+	origin: placeOrigin,
+	hash: sha256Hex,
+};

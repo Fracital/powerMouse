@@ -34,6 +34,8 @@ export type CodeMap = [
 	source: ScriptSource,
 	output: string | undefined,
 	read?: unknown,
+	/** a written script's hash once the browser has digested it */
+	hash?: string,
 ];
 
 /** code whose rewrite's map its caller keeps, with the script it makes of the output */
@@ -50,8 +52,10 @@ export function keepCode(
 	output: string,
 ) {
 	if (!map) return;
-	heldCodes.set(++kept, [map, source, output]);
+	const code: CodeMap = [map, source, output, undefined, undefined];
+	heldCodes.set(++kept, code);
 	heldCodes.delete(kept - 4096);
+	return code;
 }
 
 // the bundle's own, taken when it loads: a ref made by another realm's

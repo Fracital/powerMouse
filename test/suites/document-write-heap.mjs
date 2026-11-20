@@ -34,6 +34,7 @@ const pageOf = (size) =>
 	'<!doctype html><html><head><title>WRITE-HEAP</title></head><body>' +
 	'<p>a page with an inline script</p>' +
 	`<script>function neverCalled() { return "${'x'.repeat(size)}"; }\n` +
+	"function writtenPosition() { return new window.Error('position'); }\n" +
 	'window.__script = typeof neverCalled;</script>' +
 	// made while the parser runs, its stack never read
 	"<script>window.kept = new Error('kept');</script>" +
@@ -100,7 +101,15 @@ async function measure(page, frame, navigate) {
 		heaps[name] = await heapAfterGC(cdp);
 	}
 	await cdp.detach();
-	return { ready, kept: heaps.big - heaps.small };
+	// Read a frame from the large script after measuring, so the stack reader
+	// cannot free the copy before the retention check measures it.
+	const position = ready
+		? await frame().evaluate(() => {
+				const line = window.writtenPosition().stack.split('\n')[1];
+				return /:(\d+:\d+)\)$/.exec(line)?.[1] ?? null;
+			})
+		: null;
+	return { ready, kept: heaps.big - heaps.small, position };
 }
 
 const browser = await launch();
@@ -139,6 +148,11 @@ ok(
 	'the page keeps none of its written markup through a kept Error',
 	proxied.ready && native.ready && proxied.kept - native.kept < SIZE / 2,
 	`big over small: proxied ${mb(proxied.kept)} MB native ${mb(native.kept)} MB (script ${mb(SIZE)} MB)`,
+);
+ok(
+	'a stack from the large script still reports its original position',
+	native.position !== null && proxied.position === native.position,
+	`proxied ${proxied.position}, native ${native.position}`,
 );
 
 server.close();

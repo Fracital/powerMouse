@@ -69,7 +69,7 @@ import { contextText, linkRoute, opaqueContext } from '../../visited';
 import { ownCodec, shareCodec, type CodecBackend } from '../../wasm/codec';
 import Client from '../Client';
 import { LazyMap, LazySet, LazyWeakMap, LazyWeakSet } from '../ownCollections';
-import { keepCode, MAPPED } from '../positionParts';
+import { keepCode, MAPPED, type CodeMap } from '../positionParts';
 import {
 	apartMap,
 	controllerModule,
@@ -92,7 +92,7 @@ import cloneRawNode, {
 	releaseMarkup,
 	startedScripts,
 } from './cloneNode';
-import { activationPart, deferred } from './deferred';
+import { activationPart, deferred, heldPart } from './deferred';
 import type { LegacyEncoder } from './legacyEncoding';
 import { initLoads, loadSource, type LoadSource } from './loadGrants';
 import { nativeConsoleError, type StandInEntry } from './modules/Context';
@@ -216,6 +216,50 @@ export function runDocumentOpenListeners(global: typeof globalThis) {
 const STYLE_MEMO_MIN = 1024;
 /** characters of style text (in and out) a document keeps routed */
 const STYLE_MEMO_CHARS = 16 * 1024 * 1024;
+
+/** Leave small scripts to the stack reader: most never need to be hashed. */
+const LARGE_WRITTEN_SCRIPT = 64 * 1024;
+const subtle = globalThis.crypto?.subtle;
+const digest = subtle?.digest;
+const Encoder = globalThis.TextEncoder;
+const encode = Encoder?.prototype.encode;
+const Bytes = Uint8Array;
+let scriptEncoder: TextEncoder | undefined;
+
+/**
+ * heldCodes needs a written script's map after the parse, not another copy
+ * of its text. Compute the hash used by the stack reader without waiting
+ * for the first stack read. An early read can still hash synchronously.
+ */
+async function hashWritten(code: CodeMap, text: string) {
+	try {
+		let hash: string;
+		if (digest && encode) {
+			const bytes = Reflect.apply(encode, (scriptEncoder ??= new Encoder()), [
+				text,
+			]);
+			const result = new Bytes(
+				await Reflect.apply(digest, subtle, ['SHA-256', bytes]),
+			);
+			const digits = '0123456789abcdef';
+			hash = '';
+			for (let i = 0; i < 32; i++)
+				hash += digits[result[i]! >>> 4]! + digits[result[i]! & 15]!;
+		} else {
+			// No Web Crypto: use the reader only if already here. Writing a
+			// script must not fetch a deferred part just to file its map.
+			const reader = heldPart('positionReaders');
+			if (!reader) return;
+			hash = reader.hash(text);
+		}
+		if (code[2] !== undefined) {
+			code[4] = hash;
+			code[2] = undefined;
+		}
+	} catch (error) {
+		// The output is still available to the synchronous reader.
+	}
+}
 
 type ParsingState = 'parsingBeforeWrite' | void;
 
@@ -3826,11 +3870,13 @@ export default class DocumentClient extends Client {
 			}
 			if (isModule) rewritten = this.moduleText(rewritten, null);
 			const named = NAMED.test(rewritten) ? rewritten : rewritten + sourceURL;
-			keepCode(
+			const code = keepCode(
 				map,
 				{ tail: named === rewritten ? '' : sourceURL, place },
 				rewritten,
 			);
+			if (parsed && code && named.length >= LARGE_WRITTEN_SCRIPT)
+				void hashWritten(code, named);
 			const text = named.replace(/<\/script/gi, '<\\/script');
 			write(text);
 			sources?.set(text, source);
