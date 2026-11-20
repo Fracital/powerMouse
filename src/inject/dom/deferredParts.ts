@@ -170,6 +170,7 @@ import {
 import { ownStoreRefusal } from './credentialStore';
 import { saveDownload } from './downloadSave';
 import { fetchLater } from './fetchLater';
+import { hookHandlerName } from './handlerGetters';
 import { instructionData, loadXML, xmlProlog } from './instructions';
 import { lazyFonts } from './lazyFonts';
 import { formEncoding, legacyFormQuery, legacyQuery } from './legacyEncoding';
@@ -376,6 +377,10 @@ export const parts = {
 	// Client.ts), and a data: URL's integrity, which shares their digests
 	// (../../sriDigest.ts; modules/DOMAttributes.ts)
 	policyChecks,
+	// the getters of a handler property the page's attributes use, at the
+	// first attribute of its name (./handlerGetters.ts;
+	// modules/DOMAttributes.ts)
+	hookHandlerName,
 	integrityHoldsSync,
 	navigationRefusal,
 	precommitRedirect,

@@ -602,9 +602,20 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 				return /^on[a-z]+$/.test(name);
 			}
 		}
+		// the getters of the handler properties the page's attributes use,
+		// each hooked as its first attribute comes (../handlerGetters.ts)
+		const hookedNames: Record<string, 1> = { __proto__: null } as never;
 		domHooksModule.useAttributes(
 			(element, name) => {
 				if (!isHandler(element, name)) return;
+				if (!hookedNames[name]) {
+					hookedNames[name] = 1;
+					try {
+						deferred('hookHandlerName')(moduleClient, name);
+					} catch (error) {
+						// the part cannot be had: the handler is judged as it runs
+					}
+				}
 				element.restoreAttributesOG(name);
 				if (element.hasAttribute(name)) {
 					const source = element.getAttribute(name)!;
@@ -1302,13 +1313,14 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					// a javascript: URL runs in the frame, which a sandbox without
 					// allow-scripts forbids: natively nothing happens, so the frame
 					// is not navigated at all
+					let judged: string | undefined;
 					if (resource.url.protocol === 'javascript:') {
 						if (!frameRunsScripts(element)) {
 							element.removeAttribute('src');
 							return;
 						}
 						// judged as its navigation starts (DocumentClient jsStarts)
-						moduleClient.jsStarts(element, resource.url.href);
+						judged = moduleClient.jsStarts(element, resource.url.href);
 					}
 					// a data: document's frame is a deferred part (an opaque
 					// document, ../rareAttributes.ts), made first: without it the
@@ -1366,6 +1378,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 								},
 							);
 					const routed =
+						judged ??
 						opaque ??
 						routeHTML(
 							resource,

@@ -396,7 +396,7 @@ export interface JsNote {
 	/** noted by this document of its own location */
 	own: boolean;
 	/** the first check, by the noting document, made once: true where refused, undefined where its navigation never started */
-	check: () => boolean | undefined;
+	check: (runs?: boolean) => boolean | undefined;
 	/** the code a default policy made, which runs unjudged */
 	made?: boolean;
 }
@@ -2074,6 +2074,8 @@ export default class DocumentClient extends Client {
 	jsNotes?: JsNote[];
 	/** @internal the notes of javascript: URLs this document's code started in a window with no client yet (a new window, a fresh frame), which its runRefused finds here */
 	jsPending?: JsNote[];
+	/** @internal a handler's property is read now (../handlerGetters.ts): the reading code compiles it, and its violation names that code */
+	handlerRead?: boolean;
 	/** what a refused javascript: URL of statements throws (codeRuns), which the inject's listener takes before any of the page's (Open) */
 	readonly codeRefusal = {};
 	/**
@@ -2106,12 +2108,24 @@ export default class DocumentClient extends Client {
 	 * The page's code (a link it clicked, a location it set, open()) starts
 	 * a navigation of `target` (a window, or a link's target name) to `url`:
 	 * a javascript: URL is judged as it starts, by this document's policies,
-	 * at the place of that code (./policyChecks.ts jsStarts)
+	 * at the place of that code (./policyChecks.ts jsStarts). Returns the
+	 * route to navigate to instead where this document refuses it now
 	 */
-	jsStarts(target: unknown, url: string, event?: Event) {
+	jsStarts(
+		target: unknown,
+		url: string,
+		event?: Event,
+		owner?: Element,
+	): string | undefined {
 		if (/^javascript:/i.test(url.replace(/^[\0- ]+|[\t\n\r]/g, '')))
 			try {
-				deferred('policyChecks').jsStarts(this, target, url, event);
+				return deferred('policyChecks').jsStarts(
+					this,
+					target,
+					url,
+					event,
+					owner,
+				);
 			} catch (error) {
 				// the part cannot be had: the window judges it as it runs
 			}

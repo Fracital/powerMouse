@@ -596,6 +596,7 @@ const DEFERRED_FILES = new Set(
 		'src/inject/dom/deferredParts.ts',
 		'src/inject/dom/downloadSave.ts',
 		'src/inject/dom/fetchLater.ts',
+		'src/inject/dom/handlerGetters.ts',
 		'src/inject/dom/legacyEncoding.ts',
 		'src/inject/dom/lazyFonts.ts',
 		'src/inject/dom/instructions.ts',
