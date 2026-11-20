@@ -68,7 +68,6 @@ const PATHS = [
 ].flatMap((path) => [`script-path-${path}-late`, `script-path-${path}-none`]);
 // those that differ from native (EXPECTED)
 const COPIED = [
-	'script-path-write-late',
 	'script-path-adoptNode-late',
 	'script-path-importNode-late',
 	'script-path-importNode-none',
@@ -268,8 +267,6 @@ const EXPECTED = {
 	'a script refused before it connects, copied': {
 		violations:
 			'the copies fire no violation (natively each is judged as it connects), and the scripts of another document fire theirs as their src is set',
-		'script-path-write-late':
-			'a refused script keeps no src (it loads nothing), and the inject judged this one before it had its nonce: the markup the page reads back and writes carries no src, so the written script loads nothing (natively it runs)',
 		'script-path-adoptNode-late':
 			'a script of another document is judged as its src is set there, without the nonce it is given later, and stays refused when it is adopted and connected (natively it loads)',
 		'script-path-importNode-late':
@@ -316,6 +313,40 @@ const PLACED = {
 		p: "script-src 'nonce-probes'",
 		h: 'nonce',
 		probes: ['eval', 'function', 'timeout-string', 'handler-attribute'],
+	},
+	// a script the page's code inserts: its violation names the inserting
+	// call, in the markup (the inline script's map places it) or in the
+	// script file, as Chrome judges it as it connects (one that never
+	// connects fires nothing)
+	'where an inserted script is refused, from the markup': {
+		p: `script-src ${probesHash}`,
+		h: 'inline-hash',
+		probes: [
+			'script-inline',
+			'script-other',
+			'script-self',
+			'script-unconnected',
+		],
+	},
+	'where an inserted script is refused, from a script file': {
+		p: "script-src 'nonce-probes'",
+		h: 'nonce',
+		probes: [
+			'script-inline',
+			'script-other',
+			'script-self',
+			'script-unconnected',
+		],
+	},
+	'where an inserted script is reported, from a script file': {
+		ro: "script-src 'nonce-probes'",
+		h: 'nonce',
+		probes: [
+			'script-inline',
+			'script-other',
+			'script-self',
+			'script-unconnected',
+		],
 	},
 	'where code from a string is refused, in the markup': {
 		p: `script-src ${probesHash} ${insertedHash}`,

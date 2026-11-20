@@ -150,7 +150,7 @@ export const MEMBERS = [
 	'applyMeasuredMemory',
 	'connectInheritance',
 	'rewriterLightText',
-	'scriptAwaitsNonce',
+	'scriptAwaits',
 	'applyScriptSource',
 	'applyErrorReports',
 	'ownTransportPort',

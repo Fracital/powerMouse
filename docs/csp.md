@@ -100,10 +100,11 @@ where it sees the request (`hostsApply`, Hosts below); the inject refuses a
 `data:` or `blob:` one itself and fires the enforced violation the worker
 cannot. A script the page inserts through the DOM is judged as it connects,
 with the nonce it has then, as Chrome judges it as it prepares it: one whose
-src the page set before it connected, and that a nonce could still let
-through, is held refused (no src) and judged again by the insertion that
-connects it (`DocumentClient.holdScript`); any other way it reaches the
-document, it stays refused.
+src the page set before it connected, and that a policy refuses, is held
+(no src for the browser; the page reads its own) and judged by the
+insertion that connects it (`DocumentClient.holdScript`), whose call its
+violation names; one never inserted fires nothing. Any other way it
+reaches the document (inserted into another document), it stays held.
 
 A script of the page's markup (the response's, or one document.write
 writes) is judged as the parser prepares it, as Chrome judges it, by the
@@ -482,11 +483,7 @@ refuses fires a violation, natively either.
 - An external script after a meta a script inserts is not fetched; Chrome's
   preload scanner, which does not know the meta, fetches it (and does not
   run it).
-- A violation the inject makes of a script an inline script of the
-  page's markup inserted (through the DOM or document.write) names the
-  inserting call's place in the document the inject writes, not the
-  markup's (an inserting script file's is as natively). A
-  report-only refusal of a load that went out (an image, a fetch: the
+- A report-only refusal of a load that went out (an image, a fetch: the
   worker's word, after the load) is reported, event and report, with no
   place, and without Chrome's console message; Chrome names where the
   parser was or the calling code.
@@ -511,13 +508,13 @@ refuses fires a violation, natively either.
   scripts does not start (its bootstrap imports the page's module).
 - A report-only policy does not report an inline script an enforced one
   allows by its hash.
-- A refused external script keeps no src: its markup read back (and
-  written, as by document.write), a copy of it (cloneNode, importNode, a
-  template's content), and the script itself once it connects load nothing
-  and fire no event, where natively each is judged again as it connects. A
-  script of another document is judged as its src is set there, so a nonce
-  it is given later does not count when it is adopted (csp-scripts lists
-  these as expected differences).
+- A script the page's code gave a refused src before it connected (held,
+  above) has no src for the browser: a copy of it (cloneNode, importNode, a
+  template's content) loads nothing and fires no event, where natively each
+  is judged again as it connects. A script of another document is judged
+  as its src is set there (its violation names that call), so a nonce it
+  is given later does not count when it is adopted, and it loads nothing
+  (csp-scripts lists these as expected differences).
 - A frame under a script policy the inject enforces (nonces,
   'strict-dynamic') costs about 15 KB of heap more than under none: its
   checks' deferred part, evaluated in each such frame (frame-cost gates a

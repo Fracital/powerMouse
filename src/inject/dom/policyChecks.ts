@@ -1046,32 +1046,32 @@ export const policyChecks = {
 			},
 			// an http(s) load the service worker sees and reports itself
 			/^https?:$/.test(code.protocol),
+			// one the page's code inserts names the inserting call, as an
+			// inline one does; the markup's names none (measured, Chrome 157)
+			script && !parser ? callerSite(client) : undefined,
 		);
 	},
 	/**
 	 * Whether a script by `url` the page gives a src to before it connects
-	 * is refused for now only by enforced policies that take nonces
-	 * (DocumentClient.scriptAwaitsNonce); nothing is fired
+	 * is refused for now by a policy of the page's, enforced or report-only
+	 * (DocumentClient.scriptAwaits); nothing is fired
 	 */
-	awaitsNonce(client: DocumentClient, element: Element, url: URL): boolean {
+	awaits(client: DocumentClient, element: Element, url: URL): boolean {
 		const item = {
 			url,
 			nonce: elementNonce(client, element),
 			integrity: elementIntegrity(element),
 			parser: false,
 		};
-		let refused = false;
 		for (const { policy, self } of client.pagePolicies()) {
-			if (policy.disposition !== 'enforce') continue;
 			const governed = governing(policy, 'script-src-elem');
-			if (!governed) continue;
-			if (codeAllows(governed.sources, 'script-src-elem', { ...item, self }))
-				continue;
-			if (!governed.sources.some((source) => /^'nonce-/i.test(source)))
-				return false;
-			refused = true;
+			if (
+				governed &&
+				!codeAllows(governed.sources, 'script-src-elem', { ...item, self })
+			)
+				return true;
 		}
-		return refused;
+		return false;
 	},
 	/**
 	 * How the page's own script-src refuses code made from a string, as

@@ -2008,34 +2008,36 @@ export default class DocumentClient extends Client {
 		}
 	}
 	/**
-	 * The page's external scripts its script-src refused when their src was
-	 * set, before they connected, where a nonce could still let them through:
-	 * Chrome judges a script as it prepares it, when it connects, with the
-	 * nonce it has then (a page may give the nonce after the src). Such a
-	 * script is held refused, its src the page's (`src`) and its real URL
-	 * (`url`), and judged again by the insertion that connects it
+	 * The page's external scripts its script-src refuses when their src is
+	 * set, before they connect: Chrome judges a script as it prepares it,
+	 * when it connects, with the nonce it has then (a page may give the nonce
+	 * after the src), fires nothing for one that never connects, and names
+	 * the inserting call. Such a script is held, its src the page's (`src`)
+	 * and its real URL (`url`), and judged by the insertion that connects it
 	 * (DOMContentHooks). One that reaches a document any other way stays
-	 * refused, as it was judged.
+	 * held, with no src.
 	 */
 	readonly #heldScripts = new LazyWeakMap<Element, { url: URL; src: string }>();
 	#heldCount = 0;
 	/**
 	 * Whether a script by `url` the page gives a src to before it connects is
-	 * refused for now only by enforced policies that take nonces, so the nonce
-	 * it has when it connects decides (holdScript); nothing is fired. A script
-	 * of another document (the inject's own copies of markup) never waits
+	 * refused for now by a policy of the page's, so it is judged as it
+	 * connects (holdScript); nothing is fired. A script of another document
+	 * (the inject's own copies of markup) never waits
 	 */
-	scriptAwaitsNonce(element: Element, url: URL): boolean {
-		if (!this.codeEnforced) return false;
+	scriptAwaits(element: Element, url: URL): boolean {
+		// (one judged already: Chrome prepares a script once, and a held one
+		// is given its src again as it connects)
+		if (!this.codeEnforced || this.#codeVerdict.has(element)) return false;
 		if (
 			Reflect.apply(nativeOwnerDocument, element, []) !== this.global.document
 		)
 			return false;
 		// (the part cannot be had: not held, and refused as it is judged,
 		// refuseExternalScript)
-		return this.#checks()?.awaitsNonce(this, element, url) ?? false;
+		return this.#checks()?.awaits(this, element, url) ?? false;
 	}
-	/** hold `element` (scriptAwaitsNonce) until it connects */
+	/** hold `element` (scriptAwaits) until it connects */
 	holdScript(element: Element, url: URL, src: string) {
 		if (!this.#heldScripts.has(element)) this.#heldCount++;
 		this.#heldScripts.set(element, { url, src });
@@ -2356,13 +2358,15 @@ export default class DocumentClient extends Client {
 	 * routed URL's, which has its own)
 	 */
 	#policyCreator(): DocumentClient | null {
-		try {
-			if (/^https?:$/.test(this.global.location.protocol)) return null;
-		} catch (error) {
-			return null;
-		}
-		return this.#creatorClient();
+		return this.#local ? this.#creatorClient() : null;
 	}
+	/**
+	 * The document is a local one as it starts (about:blank, about:srcdoc,
+	 * blob:), whose policies are its creator's too: also once the page opens
+	 * it (document.open), which gives it the opener's URL and keeps its
+	 * policies (measured, Chrome 157)
+	 */
+	readonly #local = !/^https?:$/.test(this.global.location.protocol);
 	/**
 	 * The nonce the inject's own scripts carry: the document's (its shell's,
 	 * which the browser's copy of the page's script policy names, src/csp.ts),

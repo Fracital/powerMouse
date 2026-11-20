@@ -35,6 +35,8 @@
 			documentURI: event.documentURI,
 			referrer: event.referrer,
 			sourceFile: event.sourceFile,
+			lineNumber: event.lineNumber,
+			columnNumber: event.columnNumber,
 			statusCode: event.statusCode,
 			sample: event.sample,
 			target:
@@ -547,6 +549,21 @@
 		'script-blob': () =>
 			script({ src: blob('window.__ran=1', 'text/javascript') }),
 		'script-inline': () => script({}, 'window.__ran = 1'),
+		// a script given a src it is refused and never inserted: Chrome
+		// judges a script as it connects, and fires nothing for this one
+		'script-unconnected': () =>
+			settle(
+				new Promise((resolve) => {
+					const node = document.createElement('script');
+					node.onload = () => resolve('load');
+					node.onerror = () => resolve('error');
+					node.setAttribute('src', `${other}/csp/run.js`);
+					setTimeout(
+						() => resolve(`waited, src ${node.getAttribute('src')}`),
+						100,
+					);
+				}),
+			),
 		'script-inline-nonce': () =>
 			script({ nonce: 'probes' }, 'window.__ran = 1'),
 		// a script by URL the policy lets through only by its nonce, given as

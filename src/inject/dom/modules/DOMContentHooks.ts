@@ -1068,10 +1068,11 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				if (willConnect || foreign) routeUnseen(insert, queryable, foreign);
 			}
 
-			// scripts the page's script-src refused before they connected, which
-			// a nonce could still let through (DocumentClient.holdScript): judged
-			// again now, with the nonce they have; refused, the violation and the
-			// error, let through, their src is the page's again. Before the
+			// scripts the page's script-src refused before they connected
+			// (DocumentClient.holdScript): judged now, with the nonce they have,
+			// as Chrome judges them (the violation names this insertion);
+			// refused, the violation and the error, let through, their src is
+			// the page's again. Before the
 			// scripts are rewritten, which would take one without its src for
 			// an empty inline script
 			if (willConnect && queryable !== null && client.scriptsHeld) {
