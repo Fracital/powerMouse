@@ -176,6 +176,7 @@ import { formEncoding, legacyFormQuery, legacyQuery } from './legacyEncoding';
 import { markupMembers } from './markupMembers';
 import { markupSinks } from './markupSinks';
 import { measuredMemory } from './measuredMemory';
+import { moduleGraph } from './moduleGraph';
 import FingerprintModule from './modules/Fingerprint';
 import { longFrames } from './modules/LongFrames';
 import { longTasks } from './modules/LongTasks';
@@ -339,6 +340,9 @@ export const parts = {
 	// the copies a document no service worker controls makes of its loads,
 	// at its first (./uncontrolledCopies.ts; ./modules/DOMAttributes.ts)
 	uncontrolledCopies,
+	// and the module graphs of such a document, at its first module
+	// (./moduleGraph.ts; Client.ts importIn, moduleText)
+	moduleGraph,
 	// the violations and errors of the page's own policy the inject makes
 	// itself, the first time it refuses something (./violations.ts; Client.ts)
 	dispatchViolation,

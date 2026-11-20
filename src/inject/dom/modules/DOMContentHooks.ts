@@ -553,11 +553,13 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			// runs none of it: nothing to rewrite. Asked of the library, it made
 			// a top's first task fetch and compile the wasm module synchronously
 			// when nothing else of that task needed it (15 to 30 ms)
-			const rewritten =
+			let rewritten =
 				passed === ''
 					? ''
 					: (client.prewrittenScript(type === 'genericModule', passed, true) ??
 						modifyJS(passed, client.baseURL, client.config, type));
+			if (type === 'genericModule')
+				rewritten = client.moduleText(rewritten, script);
 			// a rewrite that changed nothing leaves no mark. The mark is the
 			// rewritten text, and a script of the document's markup whose text
 			// is its own rewrite (nothing in it to rewrite, and written as the
@@ -883,9 +885,11 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				);
 				if (passed === null) return '';
 				const type = scriptType(element);
-				const output =
+				let output =
 					client.prewrittenScript(type === 'genericModule', passed, true) ??
 					modifyJS(passed, client.baseURL, client.config, type);
+				if (type === 'genericModule')
+					output = client.moduleText(output, script);
 				client.trustedApprove?.(output);
 				return output;
 			});

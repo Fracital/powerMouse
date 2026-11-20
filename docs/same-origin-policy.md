@@ -943,6 +943,44 @@ Filled in commit by commit; see the CHANGELOG for each.
     same path through the bundle above, and the srcdoc document's readbacks
     (`about:srcdoc`, its base URL, its parent's policy container) would
     need a stand-in of their own.
+  - _Module scripts_ (uncontrolled-modules suite, Chrome 157, WebKitGTK
+    and Firefox, both modes). Natively a module's static imports in such a
+    document load from the network and work in all three engines: inline
+    and external modules, relative, path-absolute, absolute and `../`
+    imports, an import map's bare specifier, a JSON module, a cycle,
+    `import()` from a module and from a classic script, and markup the page
+    writes with document.write; a missing import fires `error` on the
+    script and runs nothing. Through the proxy each import went to the
+    proxy origin's own server, which has no route: every case failed, and
+    a module whose import was missing ran. The copies cannot be routes
+    either: a module copied to a `blob:` URL resolves a path-absolute
+    import against `blob:` and fails in every engine. So the inject loads
+    the graph itself, in a deferred part (`src/inject/dom/moduleGraph.ts`)
+    loaded at the document's first module: every module is fetched through
+    the proxy as the load it is (`script cors`, with the load grant and
+    partition of `loadFetch`), its MIME type checked as the browser checks
+    a script's, a JSON module's and a CSS module's, and copied to a `blob:`
+    URL whose static imports name their own copies, from the leaves up. A
+    rewritten module's imports are found by the routes' shape, a bare
+    specifier by the `from` or `import` before it, resolved with
+    `import.meta.resolve` in the document, under its own import maps. Each
+    module is copied once a document, so it is one instance however it is
+    imported. An inline module runs a stub that awaits its graph; an
+    external one gets its graph's copy as its URL, one written in markup
+    after the write (a module does not hold up the parser, and one the
+    parser made with neither src nor text has not started); `import()`
+    imports the copy. A cycle has no leaf: the import that closes it keeps
+    its absolute route, and an import map the inject adds names that
+    route's copy. Chrome and WebKit take an import map at any time (measured:
+    several, mapping an absolute URL to a `blob:` URL, applied to a `blob:`
+    module's imports); Firefox takes none once a module of the document has
+    loaded, and a `blob:` URL cannot name a module before it is made, so a
+    cycle in such a document fails in Firefox (a known difference). WebKit
+    hands an about:blank frame its parent's service worker
+    (`navigator.serviceWorker.controller` is set once the frame is made), and
+    a module route loaded from it fails: an about:blank document, opened or
+    not, that another realm's bundle injects counts as having no worker,
+    whatever its controller says.
   - Cost: frame-cost 1070 KB of heap a frame (1064 before, ceiling 1120),
     the bundle 816 KB (809, ceiling 850); an about:blank frame with fifty
     images of another site loads in 48 ms (median of 9; 47 to 62 before,

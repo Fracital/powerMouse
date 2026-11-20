@@ -257,13 +257,19 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// the attribute, the property and the markup read back as the page
 		// wrote them, currentSrc as the URL the copy came from.
 		// (an about:srcdoc document has its parent's worker, so one under such
-		// a document has none either)
+		// a document has none either. WebKit hands an about:blank document,
+		// opened or not, its creator's worker, which serves none of its
+		// routes, as it served no document of it: one another realm's bundle
+		// made is judged as one with none, measured in the
+		// uncontrolled-modules suite)
+		const blank = () =>
+			moduleClient.opened || realm.location.href === 'about:blank';
 		const uncontrolled = () =>
-			!moduleClient.controlled &&
-			(moduleClient.opened ||
-				realm.location.href === 'about:blank' ||
-				realm.location.href === 'about:srcdoc' ||
-				realm.location.protocol === 'blob:');
+			(realm !== globalThis && blank()) ||
+			(!moduleClient.controlled &&
+				(blank() ||
+					realm.location.href === 'about:srcdoc' ||
+					realm.location.protocol === 'blob:'));
 		this.uncontrolled = uncontrolled;
 		// the proxy origin from the base URL: an about:blank document's own
 		// origin reads "null"
@@ -2109,9 +2115,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// document no service worker controls: each load the rewrite left with
 		// only its marker (see placeLoad) gets the page's value back and its
 		// hooks run on the element itself, which makes its copy. Underneath the
-		// hooks, so the page's observers see nothing. A script is not one: it
-		// got its copy during the write, or (the transport in the page) does
-		// not run. Under a document, an element or a shadow root: the
+		// hooks, so the page's observers see nothing. A classic script is not
+		// one: it got its copy during the write, or (the transport in the
+		// page) does not run. Under a document, an element or a shadow root: the
 		// browser parses markup the inject rewrote into any of them
 		// (setHTMLUnsafe, a shadow root's innerHTML)
 		const LOADS = [
@@ -2120,7 +2126,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		];
 		const marker = markerPrefix().replace(':', '\\:');
 		const written = LOADS.map((name) => name.replace(':', '\\:'))
-			.map((name) => `[${marker}${name}]:not([${name}]):not(script)`)
+			.map(
+				(name) =>
+					`[${marker}${name}]:not([${name}]):not(script:not([type=module]))`,
+			)
 			.join(',');
 		// a document a worker controls loads its elements itself, but for an
 		// <object>'s data and an <embed>'s src: Chrome sends no such load

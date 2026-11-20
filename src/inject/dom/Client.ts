@@ -3166,6 +3166,28 @@ export default class DocumentClient extends Client {
 		if (token) request.headers.set(LOAD_HEADER, token);
 		return super.routedFetch(request);
 	}
+	/**
+	 * In a document no service worker controls, a module route's import is
+	 * the copy of its graph the inject made (./moduleGraph.ts), as is a bare
+	 * specifier the document's import maps route; a blob: URL (a copy) is
+	 * imported as it is
+	 */
+	override importIn(url: string): Promise<unknown> | null {
+		return url.startsWith('blob:') ||
+			!this.getModule(DOMAttributesModule)?.uncontrolled?.()
+			? super.importIn(url)
+			: deferred('moduleGraph')(this).import(url, () => super.importIn(url));
+	}
+	/** @internal what an inline module's rewritten `text` runs: in a document no service worker controls, a stub that runs it once its imports are copied (./moduleGraph.ts); `script` is null in markup */
+	moduleText(text: string, script: Element | null): string {
+		return text && this.getModule(DOMAttributesModule)?.uncontrolled?.()
+			? deferred('moduleGraph')(this).inline(text, script)
+			: text;
+	}
+	/** @internal the stub moduleText made runs the module it stands for */
+	runModule(token: number): Promise<void> {
+		return deferred('moduleGraph')(this).run(token);
+	}
 	/** the nearest routed client: for such an about:blank, its navigator's (controlledClient) */
 	override routedClient(): Client | null {
 		const routed = super.routedClient();
@@ -3610,7 +3632,7 @@ export default class DocumentClient extends Client {
 			// the restore runs after the script's directive prologue, so a strict
 			// script stays strict
 			// what the worker made of it already (prewrite.ts), else made here
-			const rewritten =
+			let rewritten =
 				this.#table()?.script(isModule, source) ??
 				modifyJS(
 					source,
@@ -3619,6 +3641,7 @@ export default class DocumentClient extends Client {
 					isModule ? 'genericModule' : 'generic',
 					isModule ? '' : scriptPreamble(source),
 				);
+			if (isModule) rewritten = this.moduleText(rewritten, null);
 			const named = /^\/\/[#@]\s*sourceURL=/m.test(rewritten)
 				? rewritten
 				: rewritten + sourceURL;
