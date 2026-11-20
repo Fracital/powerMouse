@@ -4,7 +4,9 @@
 // refuses a string with Chrome's TypeError and reports the page's sink and
 // value, the page's default policy is called with Chrome's arguments and
 // what it returns is what lands, the page's own trusted values pass, and
-// policies are made, refused and reported by their names. The proxy writes
+// policies are made, refused and reported by their names, and the
+// csp-violation reports a ReportingObserver is handed are Chrome's (the
+// `reports` probe). The proxy writes
 // strings into these sinks all the time (the page's rewritten markup, its
 // rewritten scripts, eval of rewritten code): none of that may be refused,
 // reported or shown to the page's default policy. Compared with the page
@@ -66,7 +68,11 @@ const TRUSTED = [
 
 const ENFORCED = {
 	// every sink refuses a string, and the page's own trusted values pass
-	enforced: { p: RTT, js: 'tt', probes: [...SINKS, ...TRUSTED, 'readback'] },
+	enforced: {
+		p: RTT,
+		js: 'tt',
+		probes: [...SINKS, ...TRUSTED, 'readback', 'reports'],
+	},
 	'default policy': {
 		p: RTT,
 		js: 'tt',
@@ -81,7 +87,7 @@ const ENFORCED = {
 	'default policy that returns null': {
 		p: RTT,
 		js: 'tt',
-		probes: ['default-null', ...SINKS],
+		probes: ['default-null', ...SINKS, 'reports'],
 	},
 	'default policy that throws': {
 		p: RTT,
@@ -122,6 +128,7 @@ const ENFORCED = {
 			'policy-foo~2',
 			'policy-default',
 			'readback',
+			'reports',
 		],
 	},
 	'names without require-trusted-types-for': {
@@ -137,7 +144,7 @@ const ENFORCED = {
 	"'none'": {
 		p: "trusted-types 'none'",
 		js: 'tt',
-		probes: ['policy-foo', 'policy-default'],
+		probes: ['policy-foo', 'policy-default', 'reports'],
 	},
 	star: {
 		p: 'trusted-types *',
@@ -192,17 +199,25 @@ const REPORTED = {
 	'report-only': {
 		ro: RTT,
 		js: 'tt',
-		probes: [...HTML, 'script-text', 'handler', 'eval', 'function', 'timeout'],
+		probes: [
+			...HTML,
+			'script-text',
+			'handler',
+			'eval',
+			'function',
+			'timeout',
+			'reports',
+		],
 	},
 	'report-only, default policy that returns null': {
 		ro: RTT,
 		js: 'tt',
-		probes: ['default-null', 'innerHTML', 'script-text', 'eval'],
+		probes: ['default-null', 'innerHTML', 'script-text', 'eval', 'reports'],
 	},
 	'report-only names': {
 		ro: 'trusted-types foo',
 		js: 'tt',
-		probes: ['policy-foo', 'policy-bar', 'policy-foo~2'],
+		probes: ['policy-foo', 'policy-bar', 'policy-foo~2', 'reports'],
 	},
 };
 

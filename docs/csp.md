@@ -42,7 +42,8 @@ report-uri and report-to are left out (the browser would post the proxy's
 URLs). A report-only policy goes to the browser as one. A meta's content is
 replaced by the browser policy for it (the inject's attribute hook; the page
 reads its own content back), and it applies when the meta is inserted, as
-natively.
+natively. A meta outside the head is ignored, as natively: the browser gets
+no content for it, and the console says so with the page's policy.
 
 A document of the site pool (docs/site-pool.md) is on a slot's origin, and a
 frame or a form of a site another slot shows reaches it by a 307 to that
@@ -102,7 +103,55 @@ with the nonce it has then, as Chrome judges it as it prepares it: one whose
 src the page set before it connected, and that a nonce could still let
 through, is held refused (no src) and judged again by the insertion that
 connects it (`DocumentClient.holdScript`); any other way it reaches the
-document, it stays refused. A script-src-attr handler and a style-src-attr style attribute run
+document, it stays refused.
+
+A script of the page's markup (the response's, or one document.write
+writes) is judged as the parser prepares it, as Chrome judges it, by the
+policies the document has then: a meta in the head applies to the scripts
+after it, whether it came in the first chunk of the markup, a later one, or
+from a script that inserted it, and not to the scripts before it. The copy
+of the markup marks each script (`<prefix>parsed`), and a MutationObserver
+the inject keeps on the written document judges each marked script the
+parser inserts (the parser runs a microtask checkpoint before it runs a
+script it inserted, also where the markup waited behind a script that was
+loading; `DocumentClient` `#watchParsed`). A script the inject writes in
+the markup's place (the stand-in that writes each inline style,
+`DOMContentHooks` `rewriteStyle`, kept in `ownScripts`) is not marked: the
+browser never sees it, so the page's policy never judges it, and a style
+under a policy of nonces stays and applies with no violation. An external
+script the policies
+in force already refuse as it is copied gets no src there (more policies
+refuse no less), and is judged and reported with the others, in the order
+the parser prepares them; one after a meta of the head that is not in the
+page yet is written with no src for the browser until it is judged, so
+that the browser's preload scanner fetches nothing the page's policy
+refuses, as natively (`#holdParsed`). A refused inline script keeps no
+text; a refused external one keeps `src=""` for the browser, which fires
+its error event, as for the refused script natively, and the page reads
+its own src back. A violation of an inline script of the markup names
+where its text starts, as Chrome's does: the document's URL (no query, no
+fragment), the line (its line feeds counted; a carriage return alone ends
+none) and the column in UTF-16 units (`./violations.ts`
+`markupScriptSite`, read from the markup the inject received); an external
+one's names none, as natively. One the page's code inserts (through the
+DOM, by document.write) names the inserting call, as Chrome's does: in a
+script file, its place in the file's own text, from the map the service
+worker's rewrite of the file carries, and in code the inject rewrote (a
+script of the markup, eval, a handler) from the map its rewrite handed
+over (`docs/rust-plan.md`, position maps).
+The console says what Chrome's says of
+each refusal (the page's directive, its notes on 'unsafe-inline' and on
+the fallback directive), and
+the page's ReportingObservers are handed a csp-violation report of it as the
+browser hands its own: takeRecords has it at once, the callback in a task
+before the event, a buffered observer the reports before as it first
+observes, and the report and its body read as the browser's
+(`src/inject/reportsSeen.ts` `madeReport`; csp-meta-scripts compares them).
+A document reports a placed violation once, as Chrome does: the same code
+refused again at the same place (a script file run twice) fires its event
+and makes no second report.
+
+A script-src-attr handler and a style-src-attr style attribute run
 only by 'unsafe-inline' (or 'unsafe-hashes' with the value's hash); the
 inject clears the live attribute where they do not. A CSSOM write (an
 element's `style` property, `setProperty`) is the browser's to allow, so the
@@ -113,7 +162,12 @@ script-src (or default-src) decides eval, `Function`, a string timer and
 WebAssembly compilation: without 'unsafe-eval' (or 'wasm-unsafe-eval', which
 allows only WebAssembly) the inject throws Chrome's EvalError or CompileError
 naming the page's directive, runs nothing, and reports it; a string timer
-runs nothing and throws nothing. STomp's own code is never refused: it evals
+runs nothing and throws nothing. The violation names the page's call, as
+Chrome's does (sourceFile, lineNumber, columnNumber): in a script file, in
+a script of the markup (the document's lines, its first line's column
+from where its text starts) or in a handler (from where its start tag
+ends), read through the map of the rewrite of the code that made the call
+(`docs/rust-plan.md`, position maps). STomp's own code is never refused: it evals
 through the realm's own `eval` captured before the page's, and its wasm
 compiles with native `WebAssembly` methods captured before the inject's wrap
 (`src/wasm/module.ts`), so the page's policy never reaches it.
@@ -364,9 +418,8 @@ refuses fires a violation, natively either.
 
 ## Not yet as natively
 
-- Trusted Types: a report-only policy's violation of a sink the inject
-  writes reaches no `ReportingObserver`, and the
-  browser reports a report-only refusal of a script whose text landed as
+- Trusted Types: the browser reports a report-only refusal of a script
+  whose text landed as
   a Text node, or of a javascript: URL, with the rewrite as the sample.
   A javascript: URL of a link (its href is rewritten when it is set) is
   judged by the browser with the rewrite's code: the default policy is
@@ -375,6 +428,17 @@ refuses fires a violation, natively either.
   module worker of a `blob:` URL does not start. An SVG script's
   rewritten text is let through only by a default policy, as the page's
   own would be. A violation's sourceFile is not the page's script.
+- An external script after a meta a script inserts is not fetched; Chrome's
+  preload scanner, which does not know the meta, fetches it (and does not
+  run it).
+- A violation the inject makes of a script an inline script of the
+  page's markup inserted (through the DOM or document.write) names the
+  inserting call's place in the document the inject writes, not the
+  markup's (an inserting script file's is as natively). A
+  report-only refusal of a load that went out (an image, a fetch: the
+  worker's word, after the load) is reported, event and report, with no
+  place, and without Chrome's console message; Chrome names where the
+  parser was or the calling code.
 - 'unsafe-hashes' with the hash of an event handler, a style attribute or a
   `javascript:` URL: the rewrite changes the text, and the browser refuses
   it.
@@ -418,9 +482,11 @@ refuses fires a violation, natively either.
   not exist yet or that a `<base target>` sends to a new one (named as a
   form into its own window), or for a base set and inserted again within
   one task with the same URL (the last place is named). Every other
-  directive's violation is not placed as natively: the inject's own (the
-  page's code it refuses under script-src, style-src or Trusted Types, a
-  report-only refusal of a load) names no place, and the browser's names
+  directive's violation is not placed as natively, but for an inline
+  script of the markup's or one a script file inserts: the inject's own
+  (the page's code it refuses under script-src-attr, style-src or Trusted
+  Types, a report-only refusal of a load) names no place, and the
+  browser's names
   the line and column of the inject's hook, with no sourceFile, where a
   hook made the load (a frame, an image, a worker, a connection).
 - A navigation's hop refused by one of two policies is reported by both

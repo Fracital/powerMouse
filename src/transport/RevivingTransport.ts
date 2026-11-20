@@ -175,6 +175,23 @@ export default class RevivingTransport implements ProxyTransport {
 		return (this.base as { fieldSupport?: unknown }).fieldSupport;
 	}
 
+	/**
+	 * The base's answer for `host`'s HTTPS record (EpoxyTransport's
+	 * httpsAnswer, its ECH lookup's), or null when it has none
+	 */
+	async httpsAnswer(
+		host: string,
+		headers?: RawHeaders,
+	): Promise<ArrayBuffer | null> {
+		const base = this.base as {
+			httpsAnswer?: (
+				host: string,
+				headers?: RawHeaders,
+			) => Promise<ArrayBuffer | null>;
+		};
+		return (await base.httpsAnswer?.(host, headers)) ?? null;
+	}
+
 	init(): Promise<void> {
 		return this.base.init();
 	}

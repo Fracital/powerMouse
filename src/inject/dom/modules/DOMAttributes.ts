@@ -32,8 +32,10 @@ import ProxyModule, { usePrototype } from '../../modules/Proxy';
 import { computedURL, scopePrefix, unrouteCSS } from '../../modules/Unroute';
 import { LazyMap, LazyWeakMap, LazyWeakSet } from '../../ownCollections';
 import { modifyCSS, modifyJS } from '../../rewriter';
+import { isParsed } from '../../trusted';
 import DocumentClient, {
 	addDocumentOpenListener,
+	getGlobalParsingState,
 	type StyleElement,
 } from '../Client';
 import {
@@ -255,13 +257,19 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// the attribute, the property and the markup read back as the page
 		// wrote them, currentSrc as the URL the copy came from.
 		// (an about:srcdoc document has its parent's worker, so one under such
-		// a document has none either)
+		// a document has none either. WebKit hands an about:blank document,
+		// opened or not, its creator's worker, which serves none of its
+		// routes, as it served no document of it: one another realm's bundle
+		// made is judged as one with none, measured in the
+		// uncontrolled-modules suite)
+		const blank = () =>
+			moduleClient.opened || realm.location.href === 'about:blank';
 		const uncontrolled = () =>
-			!moduleClient.controlled &&
-			(moduleClient.opened ||
-				realm.location.href === 'about:blank' ||
-				realm.location.href === 'about:srcdoc' ||
-				realm.location.protocol === 'blob:');
+			(realm !== globalThis && blank()) ||
+			(!moduleClient.controlled &&
+				(blank() ||
+					realm.location.href === 'about:srcdoc' ||
+					realm.location.protocol === 'blob:'));
 		this.uncontrolled = uncontrolled;
 		// the proxy origin from the base URL: an about:blank document's own
 		// origin reads "null"
@@ -612,16 +620,26 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					}
 					// the browser compiles the code as a function's body: marked,
 					// so the function reads back with the page's code in it
+					// (its positions read as its own, as natively: of its tag in the
+					// page's markup, ./violations.ts handlerPlace)
 					const key = sourceKey(source);
 					keepSource(key, source);
+					const head = handlerMark(key);
 					element.setAttribute(
 						name,
-						handlerMark(key) +
+						head +
 							modifyJS(
 								source,
 								moduleClient.baseURL,
 								moduleClient.config,
 								'generic',
+								'',
+								{
+									head,
+									place: moduleClient.markupCopy
+										? deferred('handlerPlace')(moduleClient, name, source)
+										: undefined,
+								},
 							),
 					);
 				}
@@ -1011,8 +1029,18 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					// DOM, not the parser (DOMAttributes runs for inserted elements).
 					// One not connected yet that a nonce could still let through is
 					// held refused, and judged again as it connects, as Chrome
-					// judges it (with the nonce it has then: DOMContentHooks)
+					// judges it (with the nonce it has then: DOMContentHooks). One of
+					// markup the parser runs (a copy made of it) is the parser's:
+					// a document.write's is judged now; the page's markup gets no
+					// src here where the policies in force refuse it (more
+					// policies refuse no less), and is judged and reported as the
+					// parser prepares it, by the policies in force then
+					// (judgeParsed), in its order
+					const parser =
+						isParsed(element) &&
+						getGlobalParsingState(realm) === 'parsingBeforeWrite';
 					if (
+						!parser &&
 						!element.isConnected &&
 						moduleClient.scriptAwaitsNonce(element, url)
 					) {
@@ -1022,7 +1050,21 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						moduleClient.holdScript(element, url, src);
 						return;
 					}
-					if (moduleClient.refuseExternalScript(element, url, false)) {
+					if (parser && moduleClient.markupCopy)
+						moduleClient.quietRefusal = true;
+					let refused: boolean;
+					try {
+						refused = moduleClient.refuseExternalScript(element, url, parser);
+					} finally {
+						moduleClient.quietRefusal = false;
+					}
+					if (refused) {
+						// the parser's keeps the page's src and gets an empty one,
+						// for which the browser fires its error as it prepares it
+						if (parser) {
+							element.setAttribute('src', '');
+							return;
+						}
 						// clear the live src (the page's own, which the browser would
 						// otherwise load) so nothing loads; the browser fires 'error'
 						element.removeAttribute('src');
@@ -1032,7 +1074,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					}
 					// let through by its host or its integrity where the page's
 					// policy says so and the browser's copy would not (src/csp.ts)
-					moduleClient.giveCodeNonce(element, url, null, false);
+					moduleClient.giveCodeNonce(element, url, null, parser);
 					placeLoad(
 						element,
 						'src',
@@ -2083,9 +2125,9 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// document no service worker controls: each load the rewrite left with
 		// only its marker (see placeLoad) gets the page's value back and its
 		// hooks run on the element itself, which makes its copy. Underneath the
-		// hooks, so the page's observers see nothing. A script is not one: it
-		// got its copy during the write, or (the transport in the page) does
-		// not run. Under a document, an element or a shadow root: the
+		// hooks, so the page's observers see nothing. A classic script is not
+		// one: it got its copy during the write, or (the transport in the
+		// page) does not run. Under a document, an element or a shadow root: the
 		// browser parses markup the inject rewrote into any of them
 		// (setHTMLUnsafe, a shadow root's innerHTML)
 		const LOADS = [
@@ -2094,7 +2136,10 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		];
 		const marker = markerPrefix().replace(':', '\\:');
 		const written = LOADS.map((name) => name.replace(':', '\\:'))
-			.map((name) => `[${marker}${name}]:not([${name}]):not(script)`)
+			.map(
+				(name) =>
+					`[${marker}${name}]:not([${name}]):not(script:not([type=module]))`,
+			)
 			.join(',');
 		// a document a worker controls loads its elements itself, but for an
 		// <object>'s data and an <embed>'s src: Chrome sends no such load

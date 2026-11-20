@@ -57,14 +57,21 @@ import {
 } from '../../scriptRoutes';
 import { IMPORT_MAP_ROUTE } from '../../sri';
 import StompURL from '../../StompURL';
-import { HOOK_ERROR, OPEN_TAB, SHELL_END } from '../../transport/messages';
+import {
+	HOOK_ERROR,
+	LOAD_HEADER,
+	OPEN_TAB,
+	SHELL_END,
+} from '../../transport/messages';
 import { queryOf } from '../../urlShape';
 import { BUILD, coreModuleKey } from '../../version';
 import { contextText, linkRoute, opaqueContext } from '../../visited';
 import { ownCodec, shareCodec, type CodecBackend } from '../../wasm/codec';
 import Client from '../Client';
 import { LazyMap, LazySet, LazyWeakMap, LazyWeakSet } from '../ownCollections';
+import { keepCode, MAPPED } from '../positionParts';
 import {
+	apartMap,
 	controllerModule,
 	deferredText,
 	getPublicSuffix,
@@ -75,7 +82,7 @@ import {
 	shareRewriter,
 } from '../rewriter';
 import { learnSites, siteAnswers } from '../sites';
-import { trustedHTML, trustedScript } from '../trusted';
+import { ownScripts, trustedHTML, trustedScript } from '../trusted';
 import type { ActivationNote, markActivation } from './activation';
 import type { ActivationPart } from './activationPart';
 import cloneRawNode, {
@@ -88,6 +95,7 @@ import cloneRawNode, {
 import { activationPart, deferred } from './deferred';
 import type { LegacyEncoder } from './legacyEncoding';
 import { initLoads, loadSource, type LoadSource } from './loadGrants';
+import { nativeConsoleError } from './modules/Context';
 import DOMAttributesModule, {
 	scriptKind,
 	shouldRewriteScript,
@@ -156,6 +164,17 @@ export function nonceOf(element: Element): string {
 	return '';
 }
 const nativeQuerySelectorAll = Element.prototype.querySelectorAll;
+const nativeRemoveAttribute = Element.prototype.removeAttribute;
+export const nativeScriptText = Reflect.getOwnPropertyDescriptor(
+	HTMLScriptElement.prototype,
+	'text',
+)!;
+const nativeAddEventListener = EventTarget.prototype.addEventListener;
+const nativeCompareDocumentPosition = Node.prototype.compareDocumentPosition;
+/** the mark of a script or policy meta of the page's markup the write judges or counts (judgeParsed) */
+const PARSED_MARK = () => `${markerPrefix()}parsed`;
+/** a held script's routed src (holdParsed) */
+const HELD_SRC = () => `${markerPrefix()}held`;
 const nativeDocumentQuerySelector = Document.prototype.querySelector;
 const nativeObserve = MutationObserver.prototype.observe;
 const nativeDisconnect = MutationObserver.prototype.disconnect;
@@ -280,6 +299,8 @@ const documentViewGetter = Reflect.getOwnPropertyDescriptor(
  * text, with the decode tables of every named entity in each frame.
  */
 const ESCAPED = /&(amp|lt|gt|nbsp);/g;
+/** a script that names itself (`//# sourceURL=`) */
+const NAMED = /^\/\/[#@]\s*sourceURL=/m;
 const UNESCAPED: Record<string, string> = {
 	amp: '&',
 	lt: '<',
@@ -1711,6 +1732,242 @@ export default class DocumentClient extends Client {
 		return this.#refuseOnce(element, 'script-src-elem', url, parser);
 	}
 	/**
+	 * @internal the page's markup is being copied to be written (startPage):
+	 * its scripts are judged in the written page (judgeParsed)
+	 */
+	markupCopy = false;
+	/**
+	 * @internal judge without reporting: a copy of the page's markup, whose
+	 * scripts are reported as the parser prepares them (judgeParsed)
+	 */
+	quietRefusal = false;
+	/** @internal the page's text of the script of its markup judged now (judgeParsed), which a violation places */
+	parsedSource: string | null = null;
+	/** @internal the page's markup so far, until it is parsed (./violations.ts markupScriptSite) */
+	markupSoFar = '';
+	/**
+	 * Judge a script of the page's markup the parser inserted in the written
+	 * page (the copy marked it, rewriteInlineScripts) before the parser
+	 * prepares it, as Chrome judges a parser's script then: by the policies
+	 * in force (a meta before it in the head, one a script before it
+	 * inserted), with the nonce it has. A refused inline one keeps no text;
+	 * a refused external one gets an empty src, for which the browser fires
+	 * its error, as for a refused load. `sources`: the page's text of each
+	 * rewritten inline script.
+	 */
+	#judgeParsed(script: Element, sources: Map<string, string>) {
+		hiddenMutation(() => {
+			Reflect.apply(nativeRemoveAttribute, script, [PARSED_MARK()]);
+			const held = Reflect.apply(nativeGetAttribute, script, [HELD_SRC()]) as
+				string | null;
+			if (held !== null)
+				Reflect.apply(nativeRemoveAttribute, script, [HELD_SRC()]);
+			const release = () => {
+				if (held !== null)
+					Reflect.apply(nativeSetAttribute, script, ['src', held]);
+			};
+			if (!this.codeEnforced) return release();
+			const src =
+				(Reflect.apply(nativeGetAttribute, script, [`${markerPrefix()}src`]) as
+					string | null) ??
+				(Reflect.apply(nativeGetAttribute, script, ['src']) as string | null);
+			if (src === null) {
+				const text = Reflect.apply(nativeScriptText.get!, script, []) as string;
+				const source = sources.get(text) ?? text;
+				this.parsedSource = source;
+				try {
+					if (this.refuseInlineScript(script, source, true))
+						Reflect.apply(nativeScriptText.set!, script, [trustedScript('')]);
+					else this.giveCodeNonce(script, null, source, true);
+				} finally {
+					this.parsedSource = null;
+				}
+				return;
+			}
+			let url: URL;
+			try {
+				url = this.encodingParse(src, this.baseHref);
+			} catch (error) {
+				return release();
+			}
+			if (this.refuseExternalScript(script, url, true)) {
+				Reflect.apply(nativeSetAttribute, script, ['src', '']);
+				return;
+			}
+			if (held !== null)
+				try {
+					this.giveCodeNonce(script, url, null, true);
+				} catch (error) {
+					// judged before
+				}
+			release();
+		});
+	}
+	/** the policy metas of the page's markup copied (copiedMetas), and those the parser inserted since (watchParsed) */
+	#metasCopied = 0;
+	#metasParsed = 0;
+	/**
+	 * Where the copy being made holds its scripts' src (holdParsed): from
+	 * its first policy meta in the head on, from its start where a meta
+	 * copied before is not in the page yet, nowhere where every policy is
+	 * live (or the page's loads are copies, not routes)
+	 */
+	#holdFrom: Element | true | null = null;
+	/**
+	 * Count the policy metas of the head in a copy of the page's markup
+	 * (`root`, the head's children where `inHead`), marked so the write
+	 * counts them in (watchParsed), and say where the copy's external
+	 * scripts are to be held (#holdFrom): one after a meta that is not in
+	 * the page yet is held with no src for the browser until the parser
+	 * prepares it (judgeParsed), as the browser's preload scanner would
+	 * fetch what the page's policy refuses
+	 */
+	#copiedMetas(root: Element, inHead: boolean, hold: boolean) {
+		const pending = this.#metasCopied > this.#metasParsed;
+		let first: Element | null = null;
+		for (const meta of Reflect.apply(nativeQuerySelectorAll, root, [
+			'meta[http-equiv]',
+		]) as Iterable<Element>) {
+			if (
+				Reflect.apply(nativeGetAttribute, meta, [
+					`${markerPrefix()}content`,
+				]) === null ||
+				(
+					Reflect.apply(nativeGetAttribute, meta, ['http-equiv']) as string
+				).toLowerCase() !== 'content-security-policy'
+			)
+				continue;
+			const parent = Reflect.apply(nativeParent, meta, []) as Element;
+			if (
+				!(parent === root
+					? inHead
+					: (parent.localName || '').toLowerCase() === 'head')
+			)
+				continue;
+			Reflect.apply(nativeSetAttribute, meta, [PARSED_MARK(), '']);
+			this.#metasCopied++;
+			first ??= meta;
+		}
+		this.#holdFrom = !hold ? null : pending ? true : first;
+	}
+	/** hold a marked external `script` of the copy (#holdFrom) */
+	#holdParsed(script: Element) {
+		const from = this.#holdFrom;
+		if (
+			from === null ||
+			(from !== true &&
+				!(
+					(Reflect.apply(nativeCompareDocumentPosition, from, [
+						script,
+					]) as number) & 4
+				))
+		)
+			return;
+		const src = Reflect.apply(nativeGetAttribute, script, ['src']) as
+			string | null;
+		if (src === null || src === '') return;
+		Reflect.apply(nativeSetAttribute, script, [HELD_SRC(), src]);
+		Reflect.apply(nativeRemoveAttribute, script, ['src']);
+	}
+	/**
+	 * The browser ignores a policy's meta outside the head, and says so in
+	 * the console with the meta's content: a copy of the page's markup
+	 * (`root`, the head's children where `inHead`) keeps no content for the
+	 * browser in such a meta (the page reads its own back), and the console
+	 * names the page's policy, as natively
+	 */
+	#metasOutsideHead(root: Element, inHead: boolean) {
+		for (const meta of Reflect.apply(nativeQuerySelectorAll, root, [
+			'meta[http-equiv]',
+		]) as Iterable<Element>) {
+			const content = Reflect.apply(nativeGetAttribute, meta, [
+				`${markerPrefix()}content`,
+			]) as string | null;
+			const parent = Reflect.apply(nativeParent, meta, []) as Element;
+			if (
+				content === null ||
+				(
+					Reflect.apply(nativeGetAttribute, meta, ['http-equiv']) as string
+				).toLowerCase() !== 'content-security-policy' ||
+				(parent === root
+					? inHead
+					: (parent.localName || '').toLowerCase() === 'head')
+			)
+				continue;
+			Reflect.apply(nativeRemoveAttribute, meta, ['content']);
+			try {
+				Reflect.apply(nativeConsoleError, undefined, [
+					`The Content Security Policy '${content}' was delivered via a <meta> element outside the document's <head>, which is disallowed. The policy has been ignored.`,
+				]);
+			} catch (error) {
+				// no console
+			}
+		}
+	}
+	/**
+	 * Watch `document`, the written page, for the scripts of the page's
+	 * markup the parser inserts (judgeParsed), until it is parsed. The
+	 * parser performs a microtask checkpoint before it runs a script it
+	 * inserted, with no script running (the end tag of a piece written
+	 * after one that loaded, or the next piece's write, which comes from a
+	 * microtask queued after this observer's), so each is judged before it
+	 * runs, wherever the parser was when the page's markup was written.
+	 *
+	 * The observer reads no node of its records: a node the parser made has
+	 * no wrapper until code first reads it, and one read through the
+	 * records got the wrapper of the records' realm, which may be another
+	 * window's (a parent's bundle made the client of a frame's initial
+	 * about:blank, an opener's that of a new window's, and the next
+	 * document has a realm of its own). Such a node has that realm's
+	 * prototypes, so none of its own window's hooks see it: a STomp loaded
+	 * through this one found none of its scripts in its frames, and a new
+	 * window's head inserted the page's scripts through its opener's hooks.
+	 * The marked elements are found through the written document's own
+	 * querySelectorAll, so only they get wrappers, its realm's.
+	 */
+	#watchParsed(document: Document, sources: Map<string, string>) {
+		let query: Function | undefined;
+		for (
+			let proto: object | null = document;
+			proto && !query;
+			proto = Reflect.getPrototypeOf(proto)
+		)
+			query = Reflect.getOwnPropertyDescriptor(proto, 'querySelectorAll')
+				?.value as Function | undefined;
+		if (!query) return;
+		const selector = `[${PARSED_MARK().replace(':', '\\:')}]`;
+		try {
+			const observer = new this.#MutationObserver(() => {
+				const marked = Reflect.apply(query, document, [
+					selector,
+				]) as ArrayLike<Element>;
+				for (let i = 0; i < marked.length; i++) {
+					const node = marked[i]!;
+					if ((node.localName || '').toLowerCase() === 'meta') {
+						this.#metasParsed++;
+						hiddenMutation(() =>
+							Reflect.apply(nativeRemoveAttribute, node, [PARSED_MARK()]),
+						);
+					} else this.#judgeParsed(node, sources);
+				}
+			});
+			Reflect.apply(nativeObserve, observer, [
+				document,
+				{ childList: true, subtree: true },
+			]);
+			Reflect.apply(nativeAddEventListener, document, [
+				'DOMContentLoaded',
+				() => {
+					Reflect.apply(nativeDisconnect, observer, []);
+					this.markupSoFar = '';
+				},
+				{ once: true },
+			]);
+		} catch (error) {
+			// no observer: the page's scripts are not judged
+		}
+	}
+	/**
 	 * The page's external scripts its script-src refused when their src was
 	 * set, before they connected, where a nonce could still let them through:
 	 * Chrome judges a script as it prepares it, when it connects, with the
@@ -2201,14 +2458,16 @@ export default class DocumentClient extends Client {
 	 * blob: document and a `javascript:` URL's (whose URL is about:blank),
 	 * which the worker serves at an `inline:` route, and an about:blank or
 	 * srcdoc document such a document makes (measured in Chrome 152; a plain
-	 * about:blank frame of an http page reads its parent's cookies). Their
-	 * requests carry cookies as any other's. A data: document is an opaque
-	 * origin, and stays as it is.
+	 * about:blank frame of an http page reads its parent's cookies), and an
+	 * about:blank a page of another origin navigated a frame to under a frame
+	 * of another site (navigatorOf). Their requests carry cookies as any
+	 * other's. A data: document is an opaque origin, and stays as it is.
 	 */
 	get cookieAverse(): boolean {
 		try {
 			const location = this.global.location;
 			if (location.protocol === 'about:') {
+				if (this.navigatorOf(this.global)) return this.#crossAncestor();
 				if (!this.nested) return false;
 				const parent = (this.parent as Record<string, any>)[
 					this.names.client
@@ -2340,6 +2599,7 @@ export default class DocumentClient extends Client {
 				? allowDelegates(allow, src)
 				: { delegates: 'none' as const }),
 			credentialless,
+			apart: facts.includes('d'),
 		};
 	}
 	/**
@@ -2809,6 +3069,156 @@ export default class DocumentClient extends Client {
 	 * code needs the access helper before it runs
 	 */
 	injectChild?: (context: typeof globalThis) => void;
+	/**
+	 * @internal inject this page's bundle into a window it navigated to an
+	 * about:blank of its own origin (navigatorOf; IFrame sets it), whatever
+	 * that window's parent is
+	 */
+	injectNavigated?: (context: typeof globalThis) => void;
+	/**
+	 * The child windows of this document another origin's page navigated to
+	 * about:blank, where the browser makes that document the navigating
+	 * page's (src/isolation.ts IsolationEngine `blank`): the page's client,
+	 * the document the window showed when it was navigated, and the
+	 * about:blank document it holds for (the first other one the window
+	 * shows: natively the navigation commits a moment later)
+	 */
+	#navigatedBlanks = new LazyWeakMap<
+		object,
+		{ creator: DocumentClient; before: unknown; document?: unknown }
+	>();
+	/** @internal `creator` navigated this document's child `window` to about:blank (null: as the window's parent's, the default) */
+	navigatedBlank(window: object, creator: DocumentClient | null) {
+		if (!creator) {
+			this.#navigatedBlanks.delete(window);
+			return;
+		}
+		let before: unknown;
+		try {
+			before = Reflect.get(window, 'document');
+		} catch (error) {
+			// a window of another real origin
+		}
+		this.#navigatedBlanks.set(window, { creator, before });
+	}
+	/** @internal the client of the page whose about:blank this document's child `window` shows (navigatedBlank), if one does */
+	blankCreator(window: object): DocumentClient | null {
+		const entry = this.#navigatedBlanks.get(window);
+		if (!entry) return null;
+		try {
+			const document = Reflect.get(window, 'document');
+			if (document === entry.before) return null;
+			const { href } = Reflect.get(window, 'location') as Location;
+			// (its next document, once it shows another than that one)
+			if (
+				entry.document !== undefined
+					? entry.document !== document
+					: !/^about:blank([?#]|$)/.test(href)
+			) {
+				this.#navigatedBlanks.delete(window);
+				return null;
+			}
+			entry.document = document;
+			// (while the creator's window still shows the creator's document)
+			const { creator } = entry;
+			return (creator.global as unknown as Record<string, unknown>)[
+				this.names.client
+			] === creator
+				? creator
+				: null;
+		} catch (error) {
+			return null;
+		}
+	}
+	/**
+	 * The nearest controlled client: for an about:blank another origin's
+	 * page navigated this window to (navigatorOf; a document no worker
+	 * controls in Chrome), that page's, so its requests are made and judged
+	 * as its own origin's, not by the parent's realm, which is of another
+	 */
+	override controlledClient(): Client | null {
+		if (!this.controlled) {
+			const navigator = this.navigatorOf(this.global);
+			if (navigator && navigator !== this) return navigator.controlledClient();
+		}
+		return super.controlledClient();
+	}
+	/**
+	 * Whether this document's requests, which another realm makes
+	 * (controlledClient), are in a partition that realm's are not: such an
+	 * about:blank under a frame of another site, navigated by a page in none,
+	 * and a document under it (LoadGrantMessage `^`)
+	 */
+	get crossCarried(): boolean {
+		const carrier = this.controlledClient();
+		return (
+			!!carrier &&
+			carrier !== this &&
+			carrier.partition === '' &&
+			this.partition !== ''
+		);
+	}
+	override routedFetch(
+		input: RequestInfo | URL,
+		init?: RequestInit,
+	): Promise<Response> {
+		if (!this.crossCarried) return super.routedFetch(input, init);
+		// a grant names the partition (a no-cors request drops the header,
+		// and stays its navigator's)
+		const request = new Request(input as RequestInfo, init);
+		const token = loadSource()?.announce(request.url, '^');
+		if (token) request.headers.set(LOAD_HEADER, token);
+		return super.routedFetch(request);
+	}
+	/**
+	 * In a document no service worker controls, a module route's import is
+	 * the copy of its graph the inject made (./moduleGraph.ts), as is a bare
+	 * specifier the document's import maps route; a blob: URL (a copy) is
+	 * imported as it is
+	 */
+	override importIn(url: string): Promise<unknown> | null {
+		return url.startsWith('blob:') ||
+			!this.getModule(DOMAttributesModule)?.uncontrolled?.()
+			? super.importIn(url)
+			: deferred('moduleGraph')(this).import(url, () => super.importIn(url));
+	}
+	/** @internal what an inline module's rewritten `text` runs: in a document no service worker controls, a stub that runs it once its imports are copied (./moduleGraph.ts); `script` is null in markup */
+	moduleText(text: string, script: Element | null): string {
+		return text && this.getModule(DOMAttributesModule)?.uncontrolled?.()
+			? deferred('moduleGraph')(this).inline(text, script)
+			: text;
+	}
+	/** @internal the stub moduleText made runs the module it stands for */
+	runModule(token: number): Promise<void> {
+		return deferred('moduleGraph')(this).run(token);
+	}
+	/** the nearest routed client: for such an about:blank, its navigator's (controlledClient) */
+	override routedClient(): Client | null {
+		const routed = super.routedClient();
+		if (routed === this) return routed;
+		const navigator = this.navigatorOf(this.global);
+		return navigator && navigator !== this ? navigator.routedClient() : routed;
+	}
+	/** @internal the client of `context`'s parent, as the browser has the parent, if it is a document of ours */
+	parentClientOf(context: object): DocumentClient | null {
+		try {
+			const parent = Reflect.apply(
+				nativeParentGet,
+				context,
+				[],
+			) as unknown as Record<string, DocumentClient | undefined> | null;
+			if (!parent || parent === context) return null;
+			const client = parent[this.names.client];
+			return client?.isDOM ? client : null;
+		} catch (error) {
+			// a parent of another real origin
+			return null;
+		}
+	}
+	/** @internal the client of the page whose about:blank `context` shows, as its parent recorded it (navigatedBlank) */
+	navigatorOf(context: object): DocumentClient | null {
+		return this.parentClientOf(context)?.blankCreator(context) ?? null;
+	}
 	/** @internal a child window has this name (Context module): reads of it by name are restricted like `frames[i]` */
 	exposeChild?: (name: string) => void;
 	/**
@@ -2929,6 +3339,8 @@ export default class DocumentClient extends Client {
 	 * could not reach it, and it read no cookie)
 	 */
 	#creatorClient(): DocumentClient | null {
+		const navigator = this.navigatorOf(this.global);
+		if (navigator && navigator !== this) return navigator;
 		for (const get of [nativeParentGet, nativeOpenerGet])
 			try {
 				const window = Reflect.apply(get, this.global, []) as Record<
@@ -3157,10 +3569,11 @@ export default class DocumentClient extends Client {
 		// document.write, and a script that runs inside a write has no URL:
 		// its stack frames and errors read `<anonymous>`, where the network's
 		// parser names the document. Each is named for the document (the
-		// route, which reads back as the page's URL), unless it names itself.
-		// Markup the page writes is left as natively: unnamed.
+		// route, which reads back as the page's URL, without its fragment, as
+		// natively), unless it names itself. Markup the page writes is left as
+		// natively: unnamed.
 		const sourceURL = parsed
-			? `\n//# sourceURL=${this.global.location.href}`
+			? `\n//# sourceURL=${this.global.location.href.replace(/#.*$/s, '')}`
 			: '';
 		for (const script of root.querySelectorAll('script')) {
 			// an SVG script element has no `text`: its textContent is the source
@@ -3172,6 +3585,23 @@ export default class DocumentClient extends Client {
 				if (isHTMLScript) this.scriptText(script, text);
 				else element.textContent = text;
 			};
+			// a script of the page's markup is judged as the parser prepares
+			// it in the written page, by the policies in force then
+			// (judgeParsed): marked so the write finds it. Never one the inject
+			// made (a style's stand-in, DOMContentHooks: ownScripts holds the
+			// copy's element, the written page's is another), which the page's
+			// policy does not judge, as the browser's never sees it
+			// (one the policies in force refused as it was copied has no src:
+			// DOMAttributes)
+			const judgedThere =
+				this.markupCopy &&
+				isHTMLScript &&
+				!ownScripts.has(script) &&
+				shouldRewriteScript(script);
+			if (judgedThere) {
+				Reflect.apply(nativeSetAttribute, script, [PARSED_MARK(), '']);
+				this.#holdParsed(script);
+			}
 			if (!read()) continue;
 			if (
 				(script.getAttribute('type') || '').trim().toLowerCase() === 'importmap'
@@ -3194,7 +3624,7 @@ export default class DocumentClient extends Client {
 				continue;
 			// the page's own script-src refuses this inline script of the
 			// markup: it keeps no text, so it runs nothing (src/csp.ts)
-			if (!script.hasAttribute('src')) {
+			if (!judgedThere && !script.hasAttribute('src')) {
 				if (this.refuseInlineScript(script, source, true)) {
 					write('');
 					continue;
@@ -3205,20 +3635,34 @@ export default class DocumentClient extends Client {
 			}
 			const isModule = scriptKind(script) === 'module';
 			// the restore runs after the script's directive prologue, so a strict
-			// script stays strict
-			// what the worker made of it already (prewrite.ts), else made here
-			const rewritten =
-				this.#table()?.script(isModule, source) ??
-				modifyJS(
+			// script stays strict. What the worker made of it already
+			// (prewrite.ts), else made here. Its positions read as its text's
+			// (in the page's markup, where the worker or codePlace found it):
+			// the map its rewrite hands over is kept by the script V8 runs
+			// (../positionParts.ts keepCode)
+			const table = this.#table();
+			let rewritten = table?.script(isModule, source);
+			let map = table?.found?.[3];
+			let place = table?.found?.[4];
+			if (rewritten === undefined) {
+				place = parsed ? deferred('codePlace')(this, source) : undefined;
+				rewritten = modifyJS(
 					source,
 					this.baseURL,
 					this.config,
 					isModule ? 'genericModule' : 'generic',
 					isModule ? '' : scriptPreamble(source),
+					MAPPED,
 				);
-			const named = /^\/\/[#@]\s*sourceURL=/m.test(rewritten)
-				? rewritten
-				: rewritten + sourceURL;
+				map = apartMap;
+			}
+			if (isModule) rewritten = this.moduleText(rewritten, null);
+			const named = NAMED.test(rewritten) ? rewritten : rewritten + sourceURL;
+			keepCode(
+				map,
+				{ tail: named === rewritten ? '' : sourceURL, place },
+				rewritten,
+			);
 			const text = named.replace(/<\/script/gi, '<\\/script');
 			write(text);
 			sources?.set(text, source);
@@ -3657,6 +4101,7 @@ export default class DocumentClient extends Client {
 			const writing = this.writing;
 			if (uncontrolled) this.writing = true;
 			this.#parseBase = base;
+			this.markupCopy = true;
 			setGlobalParsingState(this.global, 'parsingBeforeWrite');
 			try {
 				// workaround: no descendant of the parse may go into any element
@@ -3676,10 +4121,18 @@ export default class DocumentClient extends Client {
 				// preamble that restores the source the page wrote for
 				// `document.currentScript.textContent`; a module has no currentScript.
 				// Nothing may produce `</script` in the markup.
+				this.#metasOutsideHead(node, !!job.stream?.copyingHead);
+				this.#copiedMetas(
+					node,
+					!!job.stream?.copyingHead,
+					!uncontrolled && job.sources !== null,
+				);
 				this.rewriteInlineScripts(node, true, job.sources ?? undefined);
 			} finally {
 				setGlobalParsingState(this.global);
 				this.#parseBase = null;
+				this.markupCopy = false;
+				this.#holdFrom = null;
 				this.writing = writing;
 			}
 			const markup = serializeScripted(node, this.innerHTML);
@@ -3898,6 +4351,7 @@ export default class DocumentClient extends Client {
 			// a script the parser has not run yet reads back as the page wrote
 			// it (Readback), until the page's markup is parsed
 			this.pendingScripts = job.sources;
+			if (job.sources) this.#watchParsed(this.global.document, job.sources);
 			this.pieces = state;
 			written = true;
 			pass();
@@ -3981,6 +4435,7 @@ export default class DocumentClient extends Client {
 					// not a table: everything is rewritten here
 				}
 			job.received += markup;
+			this.markupSoFar = job.received;
 			const stream = job.stream;
 			if (stream) stream.add(markup, end);
 			else if (end) {

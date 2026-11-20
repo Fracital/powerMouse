@@ -114,14 +114,15 @@ would not give it).
 
 ### 4. Document-level policy
 
-| Behaviour                                                            | Chrome                                                                                         | Before                                                             | Fix                                       |
-| -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ----------------------------------------- |
-| `window.origin`, `self.origin`, `location.origin`, `isSecureContext` | the page's                                                                                     | as natively                                                        |                                           |
-| `document.domain` setter                                             | host-parsed value (`0.0.1` is `0.0.0.1`, an IP host only to itself, `''` "is an empty domain") | accepted `0.0.1`; other messages                                   | setter parses the value as a host         |
-| `postMessage` targetOrigin, `event.origin`                           | per origin                                                                                     | as natively                                                        |                                           |
-| `document.referrer`, Referrer-Policy                                 | per policy                                                                                     | as natively (referrer and wpt-referrer-policy suites)              |                                           |
-| `navigation.entries()` across origins                                | only the contiguous same-origin entries                                                        | **leak**: B sees A's entry, its full URL included, and `canGoBack` | entries filtered to the document's origin |
-| `:visited`                                                           | partitioned by top-level site and frame origin; never readable by script                       | every proxied link is a proxy URL in one partition                 | link routes (Visited links)               |
+| Behaviour                                                            | Chrome                                                                                               | Before                                                                       | Fix                                                                         |
+| -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `window.origin`, `self.origin`, `location.origin`, `isSecureContext` | the page's                                                                                           | as natively                                                                  |                                                                             |
+| `document.domain` setter                                             | host-parsed value (`0.0.1` is `0.0.0.1`, an IP host only to itself, `''` "is an empty domain")       | accepted `0.0.1`; other messages                                             | setter parses the value as a host                                           |
+| `postMessage` targetOrigin, `event.origin`                           | per origin                                                                                           | as natively                                                                  |                                                                             |
+| `document.referrer`, Referrer-Policy                                 | per policy                                                                                           | as natively (referrer and wpt-referrer-policy suites)                        |                                                                             |
+| `navigation.entries()` across origins                                | only the contiguous same-origin entries                                                              | **leak**: B sees A's entry, its full URL included, and `canGoBack`           | entries filtered to the document's origin                                   |
+| `:visited`                                                           | partitioned by top-level site and frame origin; never readable by script                             | every proxied link is a proxy URL in one partition                           | link routes (Visited links)                                                 |
+| An about:blank a page navigates another origin's frame's child to    | the page's origin (Firefox too; WebKit keeps the parent's): the page reaches it, the parent does not | **leak**: the parent's; the parent reached it and the page got SecurityError | the page's bundle, as its creator, where the browser's `blank` rule says so |
 
 ### 5. Workers
 
@@ -286,6 +287,40 @@ Filled in commit by commit; see the CHANGELOG for each.
   page's own `history.back()` does not. A popup held the same way
   stays open: a fresh context for it would cut its opener
   (docs/scramjet-parity.md section 2c).
+- **An about:blank a page navigates is of the origin the browser gives
+  it** (coi-engines, sop-escapes and sop-partitions suites). When a page P
+  navigates the child of a frame X of another origin to about:blank,
+  Chrome and Firefox make the new document P's: P reaches it, X reads
+  `contentDocument` null and SecurityError for its document, and the
+  document's `parent` is closed to it, its base URL P's. WebKit keeps the
+  parent's origin: X reaches it, P does not (measured in Chrome 157,
+  Firefox 160 and WebKitGTK 2.52.4). Through the proxy the frame's parent
+  X injected it as its own: X reached a document of P's origin, P got
+  SecurityError, and the document reached X. Now the inject navigates the
+  window with P's own Location (P's base URL, P's referrer), and X records
+  P as the window's navigator until the window shows another document
+  (DocumentClient navigatedBlank, blankCreator). The document then gets
+  P's bundle with P as its creator (IFrame injectNavigated), and X's realm
+  reads it as one of another origin (Context restrictChild). Which engine
+  does which is the service worker's `blank` rule (src/isolation.ts),
+  which the controller asks the browser, never its name. Firefox replaces
+  the first about:blank document about 200 ms later; that race is
+  Firefox's own and is not played out, the state after it is. Under a
+  frame of another site the document is in the partition its site has
+  with a cross-site ancestor, as Chrome keys it: its `document.cookie`
+  reads "" and drops writes, service worker `register` and
+  `getRegistrations` reject with InvalidStateError, and its requests, its
+  blob: workers' and its blob: documents' carry that partition's
+  Partitioned cookies, not P's. P's realm makes those requests (the
+  document has no service worker), so they say so: a load grant of `^`
+  (src/server/loadGrants.ts), and `cross` on its BLOB_MINTED and inline
+  document messages. The worker moves only a first-party client's
+  request, and only into its own site's partition under itself, which
+  any page reaches natively by navigating a cross-site frame's child. One
+  difference stays: the proxy's HTTP cache confirms an entry made for a
+  request with other cookies (docs/http-cache.md), so that document's
+  fetch of a resource P's top-level page cached reaches the site once
+  more.
 - **A frame navigates its top and its parent as natively** (top-navigation
   suite: 66 cases, Chrome 152, 156 and 157 alike natively, against both
   modes). A frame's `top.location = url`, `top.location.href = url`,
@@ -908,6 +943,58 @@ Filled in commit by commit; see the CHANGELOG for each.
     same path through the bundle above, and the srcdoc document's readbacks
     (`about:srcdoc`, its base URL, its parent's policy container) would
     need a stand-in of their own.
+  - _Module scripts_ (uncontrolled-modules suite, Chrome 157, WebKitGTK
+    and Firefox, both modes). Natively a module's static imports in such a
+    document load from the network and work in all three engines: inline
+    and external modules, relative, path-absolute, absolute and `../`
+    imports, an import map's bare specifier, a JSON module, a cycle,
+    `import()` from a module and from a classic script, and markup the page
+    writes with document.write; a missing import fires `error` on the
+    script and runs nothing. Through the proxy each import went to the
+    proxy origin's own server, which has no route: every case failed, and
+    a module whose import was missing ran. The copies cannot be routes
+    either: a module copied to a `blob:` URL resolves a path-absolute
+    import against `blob:` and fails in every engine. So the inject loads
+    the graph itself, in a deferred part (`src/inject/dom/moduleGraph.ts`)
+    loaded at the document's first module: every module is fetched through
+    the proxy as the load it is (`script cors`, with the load grant and
+    partition of `loadFetch`), its MIME type checked as the browser checks
+    a script's, a JSON module's and a CSS module's, and copied to a `blob:`
+    URL whose static imports name their own copies, from the leaves up. A
+    rewritten module's imports are found by the routes' shape, a bare
+    specifier by the `from` or `import` before it, resolved with
+    `import.meta.resolve` in the document, under its own import maps. Each
+    module is copied once a document, so it is one instance however it is
+    imported. An inline module runs a stub that awaits its graph; an
+    external one gets its graph's copy as its URL, one written in markup
+    after the write (a module does not hold up the parser, and one the
+    parser made with neither src nor text has not started); `import()`
+    imports the copy. A cycle has no leaf, and a `blob:` URL cannot name a
+    module before it is made, so the rewriter's linker
+    (`rust/rwjs/src/link.rs`, flag 2048 of the core module) merges a
+    cycle's modules into one module, copied once, and each of them is
+    copied as a module that exports what it did from that one, as live
+    bindings. Each module keeps its own top-level names (one another module
+    of the cycle declares, or reads as a global, is renamed, by a scope
+    walk of each module, with its function's `name` kept), its own
+    `import.meta`, and the order the browser runs a cycle in; a function
+    one declares is hoisted across the cycle, and an import of another
+    reads that one's binding itself, in its temporal dead zone until it
+    runs (measured on a cycle of three modules: `test/pages/um-link-a.js`).
+    Left: a `*` import of a module of the cycle reads an object of getters
+    (its properties are accessors, and it is not the namespace an
+    `import()` of the module answers), and the modules outside the cycle
+    run before all of its own. A cycle the linker declines (an import of a
+    name the module does not export, a namespace whose names a module
+    outside the cycle decides) is closed as before: the import that closes
+    it keeps its absolute route, and an import map the inject adds names
+    that route's copy, which Chrome and WebKit take at any time and Firefox
+    not once a module of the document has loaded. WebKit
+    hands an about:blank frame its parent's service worker
+    (`navigator.serviceWorker.controller` is set once the frame is made), and
+    a module route loaded from it fails: an about:blank document, opened or
+    not, that another realm's bundle injects counts as having no worker,
+    whatever its controller says.
   - Cost: frame-cost 1070 KB of heap a frame (1064 before, ceiling 1120),
     the bundle 816 KB (809, ceiling 850); an about:blank frame with fifty
     images of another site loads in 48 ms (median of 9; 47 to 62 before,
@@ -1329,7 +1416,9 @@ natively (`src/isolation.ts`, `src/server/rewrites.ts`):
   origin, a redirect included, without a CORP that lets it be had is a
   network error; under
   `credentialless` such a request goes out without cookies. Only under an
-  isolated host: under any other a page's COEP does nothing, as before.
+  isolated host, or for a page the proxy isolates with its own
+  Document-Isolation-Policy (below): under any other a page's COEP does
+  nothing, as before.
 - `document.featurePolicy` answers for `cross-origin-isolated` with the
   page's permission and origin (`allowsFeature`, `getAllowlistForFeature`,
   `allowedFeatures` in the native order); the real policy would show the
@@ -1428,22 +1517,22 @@ run a demo server whose pages send the headers.
 
 What a page sees, by its own headers:
 
-| The page                                                                                                   | Chrome     | STomp, isolated host | STomp, host not isolated |
-| ---------------------------------------------------------------------------------------------------------- | ---------- | -------------------- | ------------------------ |
-| COOP `same-origin` and COEP (either value, parameters or not)                                              | isolated   | isolated             | not                      |
-| The same and `Permissions-Policy: cross-origin-isolated=()`                                                | not        | not                  | not                      |
-| No headers, one of the two, another COOP value, a Report-Only form, a malformed value                      | not        | not                  | not                      |
-| A Document-Isolation-Policy                                                                                | isolated   | isolated             | not                      |
-| Its dedicated workers (script with COEP, `blob:`, nested)                                                  | as it is   | as it is             | not                      |
-| Its dedicated worker whose script has no COEP, when it has one                                             | `error`    | `error`              | runs, not isolated       |
-| Its shared workers                                                                                         | not        | not                  | not                      |
-| Its frame without COEP (or, from another origin, CORP), when it has COEP                                   | no load    | no load              | loads, not isolated      |
-| Its same-origin frame with COEP; another origin's with COEP, CORP and `allow`; about:blank, `srcdoc`       | as it is   | as it is             | not                      |
-| Its frame the permission does not reach (another origin without `allow`, `allow` `'none'`, its own header) | not        | not                  | not                      |
-| Its credentialless frame                                                                                   | as above   | as above             | not                      |
-| A frame with a Document-Isolation-Policy in a page that is not isolated                                    | isolated   | not                  | not                      |
-| `require-corp`: its no-cors load of another origin without CORP                                            | fails      | fails                | loads                    |
-| `credentialless`: the same load                                                                            | no cookies | no cookies           | with cookies             |
+| The page                                                                                                   | Chrome     | STomp, isolated host | STomp, host not isolated   |
+| ---------------------------------------------------------------------------------------------------------- | ---------- | -------------------- | -------------------------- |
+| COOP `same-origin` and COEP (either value, parameters or not)                                              | isolated   | isolated             | isolated (Chrome 137+)     |
+| The same and `Permissions-Policy: cross-origin-isolated=()`                                                | not        | not                  | not                        |
+| No headers, one of the two, another COOP value, a Report-Only form, a malformed value                      | not        | not                  | not                        |
+| A Document-Isolation-Policy                                                                                | isolated   | isolated             | isolated (Chrome 137+)     |
+| Its dedicated workers (script with COEP, `blob:`, nested)                                                  | as it is   | as it is             | as it is (Chrome 137+)     |
+| Its dedicated worker whose script has no COEP, when it has one                                             | `error`    | `error`              | `error` (Chrome 137+)      |
+| Its shared workers                                                                                         | not        | not                  | not                        |
+| Its frame without COEP (or, from another origin, CORP), when it has COEP                                   | no load    | no load              | no load (Chrome 137+)      |
+| Its same-origin frame with COEP; another origin's with COEP, CORP and `allow`; about:blank, `srcdoc`       | as it is   | as it is             | as it is (Chrome 137+)     |
+| Its frame the permission does not reach (another origin without `allow`, `allow` `'none'`, its own header) | not        | not                  | not, but the clock (below) |
+| Its credentialless frame                                                                                   | as above   | as above             | as above (Chrome 137+)     |
+| A frame with a Document-Isolation-Policy in a page that is not isolated                                    | isolated   | not                  | not                        |
+| `require-corp`: its no-cors load of another origin without CORP                                            | fails      | fails                | fails (Chrome 137+)        |
+| `credentialless`: the same load                                                                            | no cookies | no cookies           | no cookies (Chrome 137+)   |
 
 ### What a host does
 
@@ -1487,6 +1576,84 @@ What isolation costs a host, measured:
   need a CORP (require-corp), and a window it opens on another origin, or on
   a page without the headers, has no opener.
 
+### A host that is not isolated (Chrome 137 and later)
+
+A host whose page cannot be isolated (its ads, its sign-in popups) still
+gets the proxied pages that are isolated natively isolated. Measured
+natively in Chrome 157: a frame of a page without the headers that sends
+`Document-Isolation-Policy` is isolated by it alone (`crossOriginIsolated`,
+SharedArrayBuffer for it and its dedicated workers, the 5 microsecond
+clock), in an agent cluster of its own on a thread of its own (the host's
+timers ran on while such a frame was busy for 1.5 s). Documents of one
+origin that the policy isolates reach each other whatever their values
+(siblings in the host's page included); a document of that origin that it
+does not isolate (the host's own page) reaches them only as one of another
+origin: `postMessage`, `location`, `frames` and indexed access, `length`,
+nothing else. Neither a Permissions-Policy header that denies
+`cross-origin-isolated` nor an element's
+`allow="cross-origin-isolated 'none'"` takes the isolation from such a
+document.
+
+So, where the controller's probe says the browser has the policy
+(`IsolationEngine.dip`), the service worker serves a top-level page that
+is isolated natively (the table's first rows) with a
+`Document-Isolation-Policy` (`src/isolation.ts servedIsolationPolicy`: the
+page's own when it sent one, else the value its COEP names), and judges
+it as under an isolated host: its embedder policy refuses the frames,
+workers and loads it refuses natively. Every document in its frames is
+served with the policy too (their route's nested mark says so, `d`), and
+so are the inline documents its documents make (about:blank and
+`javascript:` copies, `data:` and `blob:` documents: their creator's
+client is remembered), since a frame of the proxy's origin outside the
+cluster would be out of its parent's reach. A page that is not isolated
+natively is served as before. Where the probe says the browser has no
+such policy (Firefox, WebKit, older Chromes), and under the site pool,
+nothing changes, and the navigate event says `isolation: 'wanted'` for a
+page that is isolated natively, which a host may offer a window of its
+own.
+
+What the policy took from the controller, which reached its frames'
+documents synchronously, and how each is had now:
+
+- **The frame's address, title, history and buttons** (`Frame.url`,
+  `canGoBack`, `canGoForward`; RemoteController's `frameInfo`), **Back,
+  Forward and Reload**, **the user activations** the history marks and
+  **the host's input** (`src/controller/hostActivation.ts`): a hidden
+  document of the proxy's origin in the cluster, the agent
+  (`src/controller/apart.ts`), answers them over a MessagePort. The
+  controller starts it the first time a frame shows a document out of its
+  reach, at a route of the service worker's that answers only a token the
+  controller gave it over its own channel, once; it runs the controller
+  frame's script (`dist/controllerFrame.js`), served with the policy, and
+  finds the frames through the windows of the host's page. A frame shows
+  such a document when its window throws on `document`.
+- **The host's geometry** (`HOST_GEOMETRY`) and **the compiled core
+  module**, which a proxied top reads synchronously from the controller's
+  window: the agent keeps both on its own window (the module compiled
+  there from the bytes the controller hands it: a Module does not cross
+  agent clusters), which the documents of the cluster reach.
+- **The service worker's kick** (`SW_KICK`), which a document on the
+  host's thread needs when the host's page is busy: not needed, the
+  cluster runs on its own thread.
+- Unchanged, since they are messages or storage: the navigate, client and
+  frame-moved reports, BroadcastChannel, the service worker's channels and
+  the synchronous requests to it, storage (one storage key), cookies (the
+  worker's jar).
+
+Left:
+
+- A frame of such a page that is not isolated natively (the permission
+  does not reach it, or it gives it up) is in the cluster all the same,
+  or its parent could not reach it: its inject hides `crossOriginIsolated`
+  and SharedArrayBuffer (the `n` of its facts), but the clock stays 5
+  microseconds and its dedicated workers are isolated (twelve rows of
+  cross-origin-isolation are on its known list for it).
+- A frame with a Document-Isolation-Policy in a page that is not isolated
+  is not isolated, as under an isolated host.
+- The first top of the cluster may compile the core module itself (the
+  agent is handed the module when it starts, which may be after the top
+  asked).
+
 ### WebKit and Firefox
 
 Measured natively in WebKitGTK 2.52.4 (MiniBrowser over WebKitWebDriver;
@@ -1505,6 +1672,7 @@ frames and workers):
 | A frame with a Document-Isolation-Policy                           | apart        | as any frame | as any frame |
 | A `credentialless` frame without an embedder policy                | loads        | no load      | no load      |
 | A dedicated worker (or a blob: one) of a page that is not isolated | not isolated | not isolated | not isolated |
+| An about:blank a page navigates another origin's frame's child to  | the page's   | the page's   | the parent's |
 
 Firefox and WebKit have no `cross-origin-isolated` permission: every frame
 and worker of an isolated page is isolated. WebKit has no `credentialless`,
@@ -1528,7 +1696,10 @@ Chrome's (`byEngine`, which tries every combination), it asks the
 controller's page once, and that page asks the browser
 (src/controller/isolationProbe.ts). A dedicated worker and two hidden
 frames of its own load what the service worker answers itself
-(`coi~probe/c`, `p`, `d`). The worker's script sends COEP
+(`coi~probe/c`, `p`, `d`), and a third tells whose an about:blank is
+(`blank`): a data: frame whose child its parent navigates to about:blank
+(the controller's document reaches it in Chrome and Firefox, not in
+WebKit; the service worker reads the answer at `coi~probe/b`). The worker's script sends COEP
 `credentialless`, and the worker is isolated only where the browser has
 that policy. A frame cannot ask that: WebKit checks no embedder policy of
 a frame's document that a service worker answered (measured, WebKitGTK

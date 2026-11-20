@@ -9,7 +9,7 @@
 // blocker's engine from its lists when the service worker asks.
 import { buildEngine } from './blocker/build';
 import { parseConfig } from './config';
-import { modifyJS, type RewrittenBy } from './rewriteJS';
+import { modifyJS, SCRIPT_FILE, type RewrittenBy } from './rewriteJS';
 import {
 	REWRITE_READY,
 	REWRITE_RPC,
@@ -23,6 +23,7 @@ import StompURL from './StompURL';
 import { REWRITE_MODULES, REWRITE_PORT } from './transport/messages';
 import { RpcHelper } from './transport/rpc';
 import { rewriteBytesInWasm } from './wasm/rewriteBytes';
+import { takeApart } from './wasm/rewriter';
 import {
 	adoptModules,
 	heldModules,
@@ -53,7 +54,10 @@ function rewrite(request: RewriteRequest): string | RewriteAnswer {
 		request.source,
 		told,
 	);
-	return told.by ? { output, by: told.by } : output;
+	// (the map of code asked for apart: an inline script of a document,
+	// src/prewrite.ts)
+	const map = request.source?.apart ? takeApart() : '';
+	return told.by ? { output, by: told.by, ...(map ? { map } : {}) } : output;
 }
 
 /**
@@ -81,6 +85,7 @@ function rewriteBytes(
 			request.config,
 			request.type,
 			request.preamble ?? '',
+			SCRIPT_FILE,
 		),
 		[],
 	];

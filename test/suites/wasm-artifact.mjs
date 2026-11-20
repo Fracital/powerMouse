@@ -122,11 +122,13 @@ if (artifacts.includes('core.wasm')) {
 	// what it costs (the rewriter, the scanner and the suffix lookup in one;
 	// the budget is the measurement and a margin, raised only by the change
 	// that needs it: 724,224 bytes, 248,544 brotli when oxc's parser was
-	// built for speed, rust/Cargo.toml)
+	// built for speed, rust/Cargo.toml; 756,811 bytes, 260,123 brotli with
+	// the linker of an import cycle, rust/rwjs/src/link.rs; 928,476 bytes,
+	// 287,536 brotli with the rewriter's walk and edits built for speed too)
 	const brotli = brotliCompressSync(bytes).length;
 	ok(
-		'the core is within its budget of 765,000 bytes, 255,000 brotli',
-		bytes.length <= 765_000 && brotli <= 255_000,
+		'the core is within its budget of 936,000 bytes, 293,000 brotli',
+		bytes.length <= 936_000 && brotli <= 293_000,
 		`${bytes.length} bytes, ${brotli} brotli`,
 	);
 	const module = await compileModule(bytes);

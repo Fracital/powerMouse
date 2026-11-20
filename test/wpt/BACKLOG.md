@@ -562,11 +562,6 @@ makes a history entry there since 211f4cc3).
   cross-origin classic script (or importScripts) has a muted, sanitized base
   URL natively, and the rewriter is given the script's real URL for every
   classic script. Idea: the worker passes a base it knows is muted.
-- `html/semantics/scripting-1/the-script-element/module/evaluation-error-5.html`
-  (1: the inline module error's line, 1 for 16): markup scripts are written
-  as their own text, so an error's lineno is relative to the script, not to
-  the document; classic inline scripts too. Idea: pad each markup script to
-  its position in the original markup.
 - `html/semantics/scripting-1/the-script-element/module/module-in-xhtml.xhtml`
   (1: the harness TIMEOUT; its one subtest fails natively): XHTML scripts
   (README), `async_test is not defined`.

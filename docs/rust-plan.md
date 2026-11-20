@@ -318,7 +318,9 @@ tests assert:
 4. **Line and column positions improve.** An unedited line keeps its line
    number; a column shifts only by the edits earlier on that line. Today
    escodegen reprinted everything, so a stack position was only near the
-   page's own. Tests that assert "near" are tightened, not loosened.
+   page's own. Tests that assert "near" are tightened, not loosened. A
+   script file's rewrite also carries the map of itself to the input
+   (below), so a position the page reads there is the input's own.
 5. **`//# sourceURL` and `//# sourceMappingURL` keep their place**, and the
    mapping URL is still routed (a replace edit over the URL in the comment).
 6. **`compact` stops meaning anything.** Splicing never reformats, so
@@ -344,6 +346,89 @@ tests assert:
     validated UTF-8. The host side never calls `from_utf8_unchecked` on
     network bytes: the ABI takes bytes and validates once, and a script that
     is not UTF-8 falls back to the JavaScript rewriter.
+
+### Position maps
+
+V8 and Blink name positions in the text they ran: an error's stack, a long
+animation frame script's `sourceCharPosition`, the inserting call a CSP
+violation names. Natively that is the page's text. With flag 512 (the
+service worker's rewrites of script files: `SCRIPT_FILE` in
+`src/rewriteJS.ts`, `rewriteBytes`) the module writes, last in the lead,
+a statement that hands the inject the map from the output's positions to
+the input's:
+
+```js
+(0).$s$j?.pos('url', 'key', function () {
+	/*MAP*/
+});
+```
+
+The edits crate knows every splice: `apply_mapped` (`rust/edits`) runs a
+mapper over the same pieces the writer writes, before it, so the lead's
+length (which holds the map) is known when the writer starts. MAP is base64
+VLQ (the source map alphabet, which has no `*`): where the map's own
+function ends (`past`), where the lead starts in the output and the input
+position it stands at, the input's line lengths when there is no holder
+(otherwise the inject counts the holder's text), then runs. Each run is a
+length and the input position it starts at, as a zigzag delta from the
+previous run's end, with a bit for text an edit wrote (which stands at its
+anchor: an edit's start, a wrap's end) against a stretch copied from the
+input. Offsets are UTF-16 units, as V8's `CallSite.getPosition()` counts.
+A rewrite with no edits writes no map: its positions are the input's.
+
+The inject keeps the function in a WeakRef by URL (`src/inject/positionParts.ts`,
+in both bundles) and decodes it only when a position in that file is asked
+for, through its native `toString` (`src/inject/positionMaps.ts`, a
+deferred part of the document bundle, in the worker bundle itself), once
+per function. The stack formatter (`Unroute` `applyErrorStacks`: a frame,
+an eval's origin, `getLineNumber` and `getColumnNumber` of a structured
+stack, an error event's place), `LongFrames` and the CSP violations
+(`policyChecks.ts` `callerSite`) read it.
+
+Measured on the corpus (`all.json`, 4,018 scripts): 3,429 get a map; the
+output without the map statement equals the plain rewrite in every one;
+all 8,686,543 runs copy their input stretch exactly, and no line or column
+read through a map is wrong. The maps are 19.69 MB, 2.72% of the output.
+Rewrite time with the map, against the same module without it (minimum of
+runs): 1,265 to 1,316 ms warm over the twelve biggest scripts (+4.0%),
+2,192 to 2,318 ms over `big.json` (+5.7%), 1,703 to 1,774 ms cold (+4.2%),
+peak memory unchanged (13.8x the input). Without the flag the module writes
+and times as before. `core.wasm` is 4,070 bytes bigger (726,782).
+
+Code the inject rewrites has no file to name it by: a script of the page's
+markup, an event handler attribute, eval, `new Function`, a string timer, a
+script the page inserts, a javascript: URL. Its rewrite asks for the map
+apart (flag 1024): the module makes the same map but writes nothing into
+the output, which is byte for byte the plain rewrite, and the meta call
+(16) answers `marks<TAB>key<TAB>map`. The inject holds the map with the
+output and what the script V8 runs has around it (a handler's mark before,
+a markup script's sourceURL after) and where the code stands in the
+document (`ScriptSource.place`), the newest 4,096
+(`src/inject/positionParts.ts` `keepCode`, about 130 bytes of the
+document bundle). The first time a frame of no file kept is placed, the
+reader (`positionMaps.ts` `placeCode`, a deferred part) hashes each code
+held since the last time as V8 names a script (`CallSite.getScriptHash()`,
+SHA-256 of its UTF-8, `src/sha.ts` `sha256Hex`, about 80 MB/s), lets the
+text go, and decodes the map of the one that matches. The module hashed
+the output itself at first (a midstate the inject finished with the tail),
+but SHA-256 in wasm runs at about 120 MB/s against the rewrite's 65, which
+made every rewrite apart 63% slower on the bench corpus, where most code
+is never placed. Making the map apart costs 6% (16.3 ms/MB against 15.4
+plain, `big12`, warm, least of 7), as the statement's does (16.1);
+counting the source's lines eight bytes at a time where none ends a line
+or leaves ASCII took the map's own cost from 13% to that. On the corpus
+(`all.json`) every output apart is the plain one and every map the
+statement's (4,012 scripts), and `core.wasm` is 1,605 bytes bigger
+(728,387). A markup script's lines are the document's and its first
+line's column is where its text starts (measured, Chrome 157); the service
+worker finds that place for a prewritten script (`prewrite`, each piece's place in the document counted as it streams),
+the inject for one it rewrites (`violations.ts` `codePlace`). A handler of
+the markup counts from where its start tag ends (`handlerPlace`). A long
+animation frame's script has no hash: a markup script's is the kept map
+of this document's markup whose output is long enough and puts the
+position where an inline script's text has the function's name before it,
+else the only one long enough (`LongFrames.ts`). A CSP violation of eval,
+`Function` or a string timer names the page's call, placed the same way.
 
 ## 6. The boundary and loading
 
@@ -378,17 +463,20 @@ truth for the thing most likely to leak an origin.
 
 The flags of `r`, and what each call takes and answers:
 
-| Flag | Input                          | Answer                                    |
-| ---- | ------------------------------ | ----------------------------------------- |
-| 0    | a classic script               | the rewritten script                      |
-| 1    | text                           | the host's routing of it (the round trip) |
-| 2    | a module                       | the rewritten module                      |
-| 4    | (with 0 or 2)                  | the holder statement is written too       |
-| 8    | `url`, `key`, `shifts`, `lead` | nothing: they hold for the next rewrite   |
-| 16   | nothing                        | `marks<TAB>key` of the last rewrite       |
-| 32   | nothing                        | the revision of what the module writes    |
-| 64   | a classic script               | `1` when it parses, `0` when not          |
-| 128  | a classic script               | `1` when it is one expression statement   |
+| Flag | Input                           | Answer                                                            |
+| ---- | ------------------------------- | ----------------------------------------------------------------- |
+| 0    | a classic script                | the rewritten script                                              |
+| 1    | text                            | the host's routing of it (the round trip)                         |
+| 2    | a module                        | the rewritten module                                              |
+| 4    | (with 0 or 2)                   | the holder statement is written too                               |
+| 8    | `url`, `key`, `shifts`, `lead`  | nothing: they hold for the next rewrite                           |
+| 16   | nothing                         | `marks<TAB>key` of the last rewrite (under 1024, then `<TAB>map`) |
+| 32   | nothing                         | the revision of what the module writes                            |
+| 64   | a classic script                | `1` when it parses, `0` when not                                  |
+| 128  | a classic script                | `1` when it is one expression statement                           |
+| 512  | (with 0 or 2)                   | the position map statement is written too                         |
+| 1024 | (with 0 or 2)                   | the map is made apart, for 16 to answer                           |
+| 2048 | a cycle's modules, apart by NUL | the merged module and each one's facade, apart by NUL (`link.rs`) |
 
 `lead` is what runs before the script's own code (the worker bootstrap, a
 module's `import.meta` lines, the caller's preamble), built by `scriptLead`
@@ -403,7 +491,10 @@ what it cannot parse (`unrewritten` in `src/wasm/rewriter.ts`: the script as
 it was, or a `throw` under `allowInvalidJs: false`) without running that
 rewriter. Flags 64 and 128 ask the parser alone, for `parsesAsScript` and
 `singleExpression`, whose answer is the module's wherever the thread holds
-it. The revision (`REVISION` in `rewrite.rs`) is raised
+it. Flag 2048 merges the modules of an import cycle in a document no
+service worker controls (`link.rs`, `src/inject/dom/moduleGraph.ts`);
+status 4 when they do not link, and the host closes the cycle with an
+import map. The revision (`REVISION` in `rewrite.rs`) is raised
 whenever the output for any script changes, so a cache of rewrites keyed on
 the backend and the revision never serves an older module's text;
 `rust/host/parity.mjs --cases` holds it to the outputs
@@ -1734,6 +1825,26 @@ Measured the same day and not taken: `+simd128` (no snip, both builds) is
 `SERVING_MEMORY_LIMIT`, over the whole corpus in the order the sites serve
 their scripts, gains nothing measurable (section 6's table prices it at 4
 to 12% for one site's load at a time).
+
+The walk built for speed (2026-11-19). With the parser at `opt-level = 3`
+and the rest at `z`, a warm rewrite of the twelve largest scripts spent
+6% of its time in the early checks and 6% in the shape questions the walk
+asks, mostly in calls that a build for speed inlines. The walk (`rwjs`)
+and the edits (`edits`) are now built at 3 as well, but for the linker and
+the printer, which run rarely and keep `#[optimize(size)]` on each
+function. Over the site corpus (4,018 scripts, 323 MB) through the rewrite
+worker's glue, alternated, median of 5: 50.0 to 54.5 MB a second (8.3%
+less time), the outputs the same; the twelve largest 9.9% less (least of
+7). The module is 928,476 bytes, 287,536 brotli (171,665 and 27,413 more).
+The first rewrite after a compile pays for the larger functions about
+1 ms more in node 24 (6.6 to 7.8 ms over the second for a 5 KB script,
+13.9 to 14.3 for a 204 KB one), not the 3 to 8 ms this section once
+priced the walk at `s` with. Measured and not taken: `wasm-opt -O3` in
+place of `-Oz` (no difference in time, 9 KB more); the walk at `s` (7%
+less time for 105 KB); marking only the hottest functions of the walk,
+the early checks and the shape questions for speed (3.4% for 32 KB: the
+time is spread across the crate); `dlmalloc` at 3 (the build-std crate
+takes no profile of the workspace).
 
 What a cold rewrite holds (2026-11-19). A script that grows an instance
 past `SERVING_MEMORY_LIMIT` is rewritten on a fresh one every time, so

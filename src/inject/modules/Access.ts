@@ -13,6 +13,7 @@ import ErrorMessages from '../errorMessages';
 import Module from '../Module';
 import { failsToParse } from '../nativeErrors';
 import { LazyWeakMap, OwnWeakSet } from '../ownCollections';
+import { keepPositions } from '../positionParts';
 import { requestRefused } from '../requestVerdict';
 import { modifyJS } from '../rewriter';
 import { trustedScript } from '../trusted';
@@ -1740,6 +1741,12 @@ export default class AccessModule extends Module<Client> {
 			src: (key: unknown, subs: unknown, holder: unknown): void => {
 				if (keepEmbedded(key, subs, holder))
 					holders[holders.length] = holder as Function;
+			},
+			// the map of a script file's rewrite to the page's text, for the
+			// positions the page reads (../positionParts.ts), held as a holder is
+			pos: (url: unknown, key: unknown, map: unknown): void => {
+				if (keepPositions(url, key, map))
+					holders[holders.length] = map as Function;
 			},
 		};
 

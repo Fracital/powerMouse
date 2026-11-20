@@ -3,7 +3,8 @@
 // for hosts. A proxied top's copy is handed the controller's module (adopt);
 // a call made before it has arrived stops for it (rewriterLight's `needs`).
 import { LAZY_CONTEXTS, MAY_ROUTE } from './cssURL';
-import { library } from './rewriterLight';
+import { library, run, stopped } from './rewriterLight';
+import { linkInWasm } from './wasm/rewriter';
 import { rewriteStyles } from './wasm/scanner';
 import { domainOf, publicSuffixOf, suffixListPin } from './wasm/suffix';
 
@@ -31,6 +32,19 @@ export const api = {
 			return pin ? `${pin.commit} ${pin.date}` : '';
 		},
 	}),
+	/**
+	 * The modules of an import cycle, apart by NUL, merged into one
+	 * (rust/rwjs/src/link.rs): the merged module and each one's facade,
+	 * apart by NUL, or null when they do not link (a document no service
+	 * worker controls, src/inject/dom/moduleGraph.ts; a worker has none)
+	 */
+	link(modules: string): string | null {
+		return run(() => {
+			const answered = linkInWasm(`${modules}`);
+			if (!answered) stopped();
+			return answered?.linked ?? null;
+		}, null);
+	},
 	/** how many of this copy's CSS rewrites the scanner made (css suites) */
 	styleRewrites(): string {
 		return `${styles.wasm} 0`;

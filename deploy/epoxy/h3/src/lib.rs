@@ -231,6 +231,16 @@ pub struct H3Connection {
 	stats: Arc<Stats>,
 	closed: std::rc::Rc<std::cell::Cell<bool>>,
 	handshake_ms: f64,
+	/// when `connect` was called and the handshake ended, in this realm's
+	/// `performance.now()`
+	connect_start: f64,
+	connect_end: f64,
+}
+
+#[wasm_bindgen]
+extern "C" {
+	#[wasm_bindgen(js_namespace = performance, js_name = now)]
+	fn performance_now() -> f64;
 }
 
 /// Connect to `host` (the TLS server name) over the datagram channel.
@@ -254,6 +264,7 @@ pub async fn connect(
 		.unwrap_or(10_000);
 	let config = client_config(&pem)?;
 	let start = web_time::Instant::now();
+	let connect_start = performance_now();
 
 	let (closed_tx, closed_rx) = futures_channel::oneshot::channel::<()>();
 	let socket = Arc::new(ChannelSocket::new(readable, writable, move || {
@@ -288,6 +299,7 @@ pub async fn connect(
 		}
 	};
 	let handshake_ms = start.elapsed().as_secs_f64() * 1000.0;
+	let connect_end = performance_now();
 
 	// h3 draws its GREASE ids and values from fastrand, whose global
 	// generator has a fixed seed on wasm32-unknown-unknown: every realm
@@ -329,6 +341,8 @@ pub async fn connect(
 		stats,
 		closed,
 		handshake_ms,
+		connect_start,
+		connect_end,
 	})
 }
 
@@ -400,6 +414,21 @@ impl H3Connection {
 		self.handshake_ms
 	}
 
+	/// When `connect` was called, the Initial about to go out, in this
+	/// realm's `performance.now()` (a browser's connectStart and, QUIC's
+	/// handshake being its TLS one, secureConnectionStart)
+	#[wasm_bindgen(getter, js_name = connectStart)]
+	pub fn connect_start(&self) -> f64 {
+		self.connect_start
+	}
+
+	/// When the handshake ended, in this realm's `performance.now()` (a
+	/// browser's connectEnd)
+	#[wasm_bindgen(getter, js_name = connectEnd)]
+	pub fn connect_end(&self) -> f64 {
+		self.connect_end
+	}
+
 	/// The PING frames sent so far: the keep-alive's while a request is
 	/// open, and the probes of a loss timeout with nothing to send again.
 	/// Each one is acknowledged at once by a live peer, so the host times
@@ -437,9 +466,12 @@ impl H3Connection {
 
 	/// Run one request. `headers` is `[name, value][]` in the order to send;
 	/// `body` is null, a Uint8Array, or a ReadableStream of Uint8Array.
-	/// Resolves to `{ status, headers: [name, value][], body: ReadableStream | null }`
-	/// once the response head arrives; the body streams after that, decoded
-	/// from gzip, deflate, br or zstd the way epoxy decodes it.
+	/// Resolves to `{ status, headers: [name, value][], body: ReadableStream | null,
+	/// encoded: { bytes } }` once the response head arrives; the body streams
+	/// after that, decoded from gzip, deflate, br or zstd the way epoxy
+	/// decodes it. `encoded.bytes` counts the DATA bytes as they came, before
+	/// the decoding (a browser's encodedBodySize), and is the whole body's
+	/// once the stream has ended.
 	pub async fn request(
 		&self,
 		method: String,
@@ -569,6 +601,8 @@ impl H3Connection {
 			out_headers.push(&Array::of2(&name.as_str().into(), &byte_string(value.as_bytes()).into()));
 		}
 
+		let encoded = Object::new();
+		Reflect::set(&encoded, &"bytes".into(), &0.into())?;
 		let null_body = method == Method::HEAD || matches!(status, 101 | 103 | 204 | 205 | 304);
 		let body: JsValue = if null_body {
 			JsValue::NULL
@@ -616,7 +650,15 @@ impl H3Connection {
 				Some((Ok::<_, std::io::Error>(out), g))
 			})
 			.boxed_local();
-			let reader = raw.into_async_read();
+			let counted = {
+				let encoded = encoded.clone();
+				let mut total = 0f64;
+				move |chunk: &Bytes| {
+					total += chunk.len() as f64;
+					let _ = Reflect::set(&encoded, &"bytes".into(), &total.into());
+				}
+			};
+			let reader = raw.inspect_ok(counted).into_async_read();
 			let decoded: std::pin::Pin<Box<dyn AsyncRead>> = match coding {
 				Some(Coding::Gzip) => Box::pin(GzipDecoder::new(reader)),
 				Some(Coding::Brotli) => Box::pin(BrotliDecoder::new(reader)),
@@ -646,6 +688,7 @@ impl H3Connection {
 		Reflect::set(&result, &"status".into(), &status.into())?;
 		Reflect::set(&result, &"headers".into(), &out_headers)?;
 		Reflect::set(&result, &"body".into(), &body)?;
+		Reflect::set(&result, &"encoded".into(), &encoded)?;
 		Ok(result.into())
 	}
 }

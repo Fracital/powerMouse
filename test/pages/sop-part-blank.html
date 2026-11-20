@@ -1,0 +1,38 @@
+<!doctype html>
+<title>SOP PARTITION BLANK</title>
+<body>
+	<script>
+		// Site A's page (sop-partitions suite) framing site B's
+		// (sop-blank-b.html, `?b=`), whose child it navigates to about:blank:
+		// natively that document is A's, under a frame of another site, and
+		// takes on the partition of a frame of A that has another site above
+		// it. The partition battery of sop-part.html runs in it, as
+		// `role=blank` with this page's `t` and `c`.
+		const query = new URLSearchParams(location.search);
+		const frame = document.createElement('iframe');
+		addEventListener('message', async (event) => {
+			if (event.data?.sopPart) window.__part = event.data.sopPart;
+			const loads = event.data?.sopBlankLoads;
+			if (event.source !== frame.contentWindow || !loads) return;
+			const blank = () => frame.contentWindow.frames[0];
+			if (loads === 1) {
+				blank().location.href = 'about:blank';
+				return;
+			}
+			// (a moment on: Firefox replaces the first document it shows)
+			await new Promise((resolve) => setTimeout(resolve, 400));
+			const markup = await (await fetch('sop-part.html')).text();
+			const source = markup.slice(
+				markup.indexOf('<script>') + 8,
+				markup.lastIndexOf('</' + 'script>'),
+			);
+			const target = blank();
+			target.__partQuery = `?role=blank&t=${query.get('t')}&c=${encodeURIComponent(query.get('c'))}`;
+			const script = target.document.createElement('script');
+			script.textContent = source;
+			target.document.body.append(script);
+		});
+		frame.src = `${query.get('b')}/pages/sop-blank-b.html`;
+		document.body.append(frame);
+	</script>
+</body>
