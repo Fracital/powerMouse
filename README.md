@@ -292,7 +292,14 @@ from the browser (the host page's `Referrer-Policy` makes no difference).
 Its `<meta name="stomp-allowed-origins">` in `controllerFrame.html` can list
 the host origins it accepts, space separated. A page of another origin, or
 of an opaque one (a sandboxed document, a `data:` URL), gets an error named
-`EmbedderRefusedError` from `wait()` that says which.
+`EmbedderRefusedError` from `wait()` that says which. A controller frame
+that does not load or never answers rejects `wait()` with a
+`ControllerFrameError`: at once when the browser reports why (a
+`frame-ancestors` of the proxy origin that does not list your page, or a
+page that sends `Cross-Origin-Embedder-Policy` while the frame's response
+has no `Cross-Origin-Resource-Policy` or embedder policy of its own), 5 s
+after its load event when it loaded and said nothing (a 404, a wrong
+`directory`), and after 60 s when it never loaded.
 
 ## Cross-origin isolation
 

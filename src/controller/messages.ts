@@ -184,6 +184,16 @@ export const STORAGE_BLOCKED = 'StorageBlockedError';
 export const EMBEDDER_REFUSED = 'EmbedderRefusedError';
 
 /**
+ * The `name` of the error RemoteController.wait() rejects with when the
+ * controller frame did not load or never answered: the browser blocked it
+ * (the proxy origin's frame-ancestors, a missing Cross-Origin-Resource-Policy
+ * or Cross-Origin-Embedder-Policy under a host page that sends COEP), or
+ * the URL serves something else. The message says which, when the browser
+ * told the page (./frameWatch.ts).
+ */
+export const CONTROLLER_FRAME_ERROR = 'ControllerFrameError';
+
+/**
  * Posted by a controller frame that cannot read its embedder's origin at
  * load (the host page's Referrer-Policy is `no-referrer` or `same-origin`,
  * in a browser without `location.ancestorOrigins`), to any origin: the host

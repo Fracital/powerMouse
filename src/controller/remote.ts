@@ -40,6 +40,7 @@ import { BUILD, CONTROLLER_FRAME_SCRIPT } from '../version';
 import { drawAccountChooser } from './accountChooser';
 import { ClientFrames } from './clientFrames';
 import { Extensions, framesAsTabs, type HubTabs } from './extensions';
+import { watchFrame } from './frameWatch';
 import { GeometryWatch } from './geometry';
 import {
 	framePath,
@@ -420,9 +421,19 @@ export class RemoteController extends EventTarget {
 		let frameReady!: () => void;
 		let frameFailed!: (error: Error) => void;
 		const frameReadyPromise = new Promise<void>((resolve, reject) => {
-			frameReady = resolve;
-			frameFailed = reject;
+			// either one ends the watch on the frame's load
+			frameReady = () => {
+				stopWatch();
+				resolve();
+			};
+			frameFailed = (error) => {
+				stopWatch();
+				reject(error);
+			};
 		});
+		// wait() is bounded: a frame the browser blocked, or one that never
+		// answers, rejects it with what the browser said (./frameWatch.ts)
+		const stopWatch = watchFrame(this.element, (error) => frameFailed(error));
 		// a page of an opaque origin is one no controller frame serves (and a
 		// sandboxed one makes its frames opaque too, which then cannot say so)
 		if (self.origin === 'null')
