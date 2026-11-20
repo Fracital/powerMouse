@@ -164,7 +164,7 @@ export function nonceOf(element: Element): string {
 	return '';
 }
 const nativeQuerySelectorAll = Element.prototype.querySelectorAll;
-const nativeRemoveAttribute = Element.prototype.removeAttribute;
+export const nativeRemoveAttribute = Element.prototype.removeAttribute;
 export const nativeScriptText = Reflect.getOwnPropertyDescriptor(
 	HTMLScriptElement.prototype,
 	'text',
@@ -178,7 +178,7 @@ const HELD_SRC = () => `${markerPrefix()}held`;
 const nativeDocumentQuerySelector = Document.prototype.querySelector;
 const nativeObserve = MutationObserver.prototype.observe;
 const nativeDisconnect = MutationObserver.prototype.disconnect;
-const nativeGetAttribute = Element.prototype.getAttribute;
+export const nativeGetAttribute = Element.prototype.getAttribute;
 const nativeParent = Reflect.getOwnPropertyDescriptor(
 	Node.prototype,
 	'parentNode',
@@ -1757,7 +1757,12 @@ export default class DocumentClient extends Client {
 	 */
 	#judgeParsed(script: Element, sources: Map<string, string>) {
 		hiddenMutation(() => {
+			// (marked for its handlers alone: refuseHandler)
+			const handlers =
+				Reflect.apply(nativeGetAttribute, script, [PARSED_MARK()]) === 'h';
 			Reflect.apply(nativeRemoveAttribute, script, [PARSED_MARK()]);
+			if (this.codeEnforced) this.#checks()?.parsedHandlers(this, script);
+			if (handlers) return;
 			const held = Reflect.apply(nativeGetAttribute, script, [HELD_SRC()]) as
 				string | null;
 			if (held !== null)
@@ -1937,7 +1942,7 @@ export default class DocumentClient extends Client {
 		if (!query) return;
 		const selector = `[${PARSED_MARK().replace(':', '\\:')}]`;
 		try {
-			const observer = new this.#MutationObserver(() => {
+			const judge = () => {
 				const marked = Reflect.apply(query, document, [
 					selector,
 				]) as ArrayLike<Element>;
@@ -1950,7 +1955,8 @@ export default class DocumentClient extends Client {
 						);
 					} else this.#judgeParsed(node, sources);
 				}
-			});
+			};
+			const observer = new this.#MutationObserver(judge);
 			Reflect.apply(nativeObserve, observer, [
 				document,
 				{ childList: true, subtree: true },
@@ -1958,6 +1964,9 @@ export default class DocumentClient extends Client {
 			Reflect.apply(nativeAddEventListener, document, [
 				'DOMContentLoaded',
 				() => {
+					// what the parser inserted after its last checkpoint (no script
+					// after it): handlers' elements, before the page's listeners
+					judge();
 					Reflect.apply(nativeDisconnect, observer, []);
 					this.markupSoFar = '';
 				},
@@ -2016,9 +2025,32 @@ export default class DocumentClient extends Client {
 		this.#heldCount--;
 		return held;
 	}
-	/** whether the page's script-src-attr refuses this inline handler (`value`); fires the violation */
+	/**
+	 * Whether the page's script-src-attr refuses this inline handler
+	 * (`value`) as it is set; fires the violation. Chrome judges it as it
+	 * is set and again as it compiles it, at its first run (codeRuns), by
+	 * the policies in force then: one of the page's markup as the parser
+	 * inserts its element in the written page (judgeParsed), marked here
+	 */
 	refuseHandler(element: Element, value: string): boolean {
-		return this.#refuseOnce(element, 'script-src-attr', value);
+		if (!this.markupCopy)
+			return this.#refuseOnce(element, 'script-src-attr', value);
+		// (a script of the markup's is marked again as one, after: judgeParsed
+		// judges its handlers too)
+		Reflect.apply(nativeSetAttribute, element, [PARSED_MARK(), 'h']);
+		return false;
+	}
+	/**
+	 * Whether the page's policy refuses, as it runs, a handler of `that` (its
+	 * element, or the window of a body's; `code` the key of its text) or,
+	 * `that` 0, a javascript: URL's code (`code` its sample), by the policies
+	 * in force then (./policyChecks.ts runRefused); fires the violations
+	 */
+	override codeRuns(that: unknown, code: string): boolean {
+		return (
+			this.codeEnforced &&
+			(this.#checks()?.runRefused(this, that, code) ?? true)
+		);
 	}
 	/** whether the page's style-src refuses this inline style (its own `text`); fires the violation (targets the document, as Chrome does for styles) and the caller blanks it */
 	refuseInlineStyle(element: Element, text: string, parser: boolean): boolean {

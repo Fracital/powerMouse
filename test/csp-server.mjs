@@ -359,6 +359,10 @@ function policies(res, query) {
 	);
 }
 
+/** an image that loads under any img-src that takes data: (and none sets one) */
+const GIF =
+	'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
+
 /** the text of a layout's script that says `name` ran (its hash is the one a policy names) */
 export const ranText = (name) =>
 	`__ran(${JSON.stringify(String(name).replace(/[^\w-]/g, ''))})`;
@@ -414,6 +418,14 @@ const insertText = (name, how) => {
  *                    inline / external script of <n> after itself, no nonce
  *   wi:<n> / we:<n>  the same by document.write
  *   sty:<n>          an inline <style id="<n>"> that sets --<n> on the root
+ *   oc:<n> / ju:<n>  a button whose onclick runs `__ran("<n>")` / a link to
+ *                    javascript: that does, clicked as the page loads
+ *   oe:<n> / ol:<n>  an image whose onerror / onload does, as it fails /
+ *                    loads
+ *   ob:<n>           a button whose onclick does, never clicked
+ *   jt:<n>           a link to javascript: of statements that does, ending
+ *                    in a line comment, clicked as the page loads
+ *   bo:<n>           `body`, the body's onload doing it (the window's load)
  *   fi:<n> / fw:<n>  a script file (nonce="probes", /csp/insert.js) that
  *                    inserts an inline script of <n> after itself, through
  *                    the DOM / by document.write
@@ -457,6 +469,24 @@ function layout(req, res, query) {
 			case 'sty':
 				add(`<style id="${n}">:root{--${n}:1}</style>`);
 				break;
+			case 'ob':
+			case 'oc':
+				add(
+					`<button data-n="${n}"${kind === 'oc' ? ' data-click' : ''} onclick="${attribute(ranText(arg))}"></button>`,
+				);
+				break;
+			case 'ju':
+			case 'jt':
+				add(
+					`<a data-n="${n}" data-click href="javascript:${attribute(ranText(arg))}${kind === 'jt' ? ';void 0//end' : ''}"></a>`,
+				);
+				break;
+			case 'oe':
+			case 'ol':
+				add(
+					`<img data-n="${n}" ${kind === 'oe' ? 'src="/csp/none.png" onerror' : `src="${GIF}" onload`}="${attribute(ranText(arg))}">`,
+				);
+				break;
 			case 'gap':
 				add(`<!--${'.'.repeat(2048)}-->`);
 				parts.push('');
@@ -478,7 +508,10 @@ function layout(req, res, query) {
 				parts[parts.length - 1] += '<!-- \u00e9\u{1f600} -->';
 				break;
 			case 'body':
-				add('</head><body>');
+			case 'bo':
+				add(
+					`</head><body${kind === 'bo' ? ` data-n="${n}" onload="${attribute(ranText(arg))}"` : ''}>`,
+				);
 				body = true;
 				break;
 			case 'i':

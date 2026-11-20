@@ -9,7 +9,11 @@
 // that ran, its load and error events, the violations, the csp-violation
 // reports a ReportingObserver is handed (the `reports` probe) and the
 // console's messages are compared with the page loaded natively, in both
-// modes. The same page under a header policy is the baseline.
+// modes. The same page under a header policy is the baseline. The
+// markup's handlers (onclick, onerror, onload, a body's) and javascript:
+// links are judged by the policies in force as the parser inserts them and
+// again as they first run, as natively: after a meta in the same piece of
+// the markup, in a later one, and before a meta a script inserts.
 import { createHash } from 'node:crypto';
 import { compareCases, FIELDS } from '../csp-lib.mjs';
 import { ranText } from '../csp-server.mjs';
@@ -37,7 +41,9 @@ const laid = (spec) => ({
 	probes: [
 		...spec.l
 			.filter((token) =>
-				/^(i|in|ix|e|en|eo|di|de|wi|we|fi|fw|img|fx|sty):/.test(token),
+				/^(i|in|ix|e|en|eo|di|de|wi|we|fi|fw|img|fx|sty|oc|ob|oe|ol|ju|jt|bo):/.test(
+					token,
+				),
 			)
 			.map((token) => token.slice(token.indexOf(':') + 1)),
 		'reports',
@@ -238,9 +244,74 @@ const REPORTED = {
 	}),
 };
 
+// The markup's handlers and a javascript: link (test/csp-server.mjs
+// layout: a button clicked and one never clicked, an image that fails and
+// one that loads, a body's onload, a link clicked) under a policy of
+// nonces: each refused and reported where natively, the console's message
+// Chrome's (an event handler's, a JavaScript URL's). Chrome judges a
+// handler as its attribute is set and again as it first runs, a
+// javascript: URL as its navigation starts and as it runs, by the policies
+// in force then: a handler parsed before a meta a script inserts is
+// refused as it runs, and a report-only policy reports each twice.
+const HANDLED = ['oc:click', 'oe:fails', 'ol:loads', 'ju:link'];
+const HANDLER_CASES = {
+	'handlers under a header of nonces': laid({
+		p: NONCE,
+		l: ['body', ...HANDLED, 'ob:unclicked'],
+	}),
+	'handlers after a meta in the same piece': laid({
+		m: NONCE,
+		l: ['meta', 'body', ...HANDLED, 'ob:unclicked'],
+	}),
+	'handlers a piece after the meta': laid({
+		m: NONCE,
+		l: ['meta', 'gap', 'body', ...HANDLED],
+	}),
+	'handlers after a meta in a later piece': laid({
+		m: NONCE,
+		l: ['gap', 'meta', 'body', ...HANDLED],
+	}),
+	'handlers after a meta, brotli': laid({
+		m: NONCE,
+		l: ['meta', 'body', ...HANDLED],
+		br: true,
+	}),
+	'handlers before a meta a script inserts': laid({
+		m: NONCE,
+		l: ['body', ...HANDLED, 'mi:0'],
+	}),
+	"a body's onload after a meta": laid({ m: NONCE, l: ['meta', 'bo:onload'] }),
+	'a javascript: link of statements after a meta': laid({
+		m: NONCE,
+		l: ['meta', 'body', 'jt:statements'],
+	}),
+	"handlers after a meta of 'unsafe-inline'": laid({
+		m: "script-src 'unsafe-inline'",
+		l: ['meta', 'bo:onload', ...HANDLED],
+	}),
+	'handlers under a report-only header': laid({
+		ro: "script-src 'nonce-probes' 'report-sample'",
+		l: ['body', ...HANDLED],
+	}),
+	'a javascript: link of statements under a report-only header': laid({
+		ro: NONCE,
+		l: ['body', 'jt:statements'],
+	}),
+	"handlers under default-src, 'unsafe-inline' with a nonce, script-src-attr":
+		laid({
+			p: [
+				"default-src 'nonce-probes' data:",
+				"script-src 'unsafe-inline' 'nonce-probes'",
+				"script-src-attr 'none'",
+			],
+			l: ['body', 'oc:click', 'ju:link'],
+		}),
+};
+
 const browser = await launch();
 await compareCases(browser, CASES, { consoleMessages: true });
 await compareCases(browser, STYLE_CASES, { consoleMessages: true });
+await compareCases(browser, HANDLER_CASES, { consoleMessages: true });
 await compareCases(browser, PLACED, {
 	fields: [...FIELDS, 'sourceFile', 'lineNumber', 'columnNumber'],
 	consoleMessages: true,

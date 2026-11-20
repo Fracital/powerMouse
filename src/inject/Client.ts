@@ -789,6 +789,15 @@ export default class Client {
 		return null;
 	}
 	/**
+	 * Whether the page's policy refuses a handler or a javascript: URL's
+	 * code as it runs (the access API's `csp`, which the rewrite of each
+	 * calls first). Overridden by the document client; the base never
+	 * enforces.
+	 */
+	codeRuns(_that: unknown, _code: string): boolean {
+		return false;
+	}
+	/**
 	 * The URL the shell of a document the page made (a blob:, data: or
 	 * inline document, an <object>'s) or the bootstrap of a blob: worker
 	 * named for this context: what the context's own URL reads as. The

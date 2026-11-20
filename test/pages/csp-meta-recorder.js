@@ -81,7 +81,9 @@
 	} catch (error) {
 		reports.push(`threw ${error.name}`);
 	}
-	addEventListener('load', () =>
+	addEventListener('load', () => {
+		// a layout's button or javascript: link (`oc`, `ju`)
+		for (const node of document.querySelectorAll('[data-click]')) node.click();
 		setTimeout(() => {
 			const results = {};
 			for (const name of names)
@@ -98,6 +100,6 @@
 				results,
 				events,
 			};
-		}, 600),
-	);
+		}, 600);
+	});
 })();
