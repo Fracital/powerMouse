@@ -1448,7 +1448,16 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 						resource.url.href !== 'about:blank' &&
 						moduleClient.freshFrame
 					) {
-						if (moduleClient.freshFrame(element, routed)) return;
+						let fresh: boolean;
+						try {
+							fresh = moduleClient.freshFrame(element, routed);
+						} catch (error) {
+							// the fresh context is a deferred part (../freshSwap.ts):
+							// without it the frame is not navigated
+							element.removeAttribute('src');
+							return;
+						}
+						if (fresh) return;
 					}
 					// the document the frame shows now sees the navigation (its
 					// navigate event): this one judged it
