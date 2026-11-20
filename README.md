@@ -157,8 +157,17 @@ changelog's known limitations before picking it.
 | `navigate` event, `title`, `lastNavigate` | the page's own reports (load, pushState, hashchange, title changes); no polling needed                                                                                                                                                                                                                                                                            |
 | `element`                                 | the underlying `<iframe>`                                                                                                                                                                                                                                                                                                                                         |
 
-`SearchBuilder(template)` turns free text into a URL: hosts and URLs pass
-through, everything else is substituted into `template` at `%s`.
+`SearchBuilder(template)` turns what a user typed into a URL as Chrome's
+omnibox does. A URL with a scheme the omnibox navigates to (`https:`,
+`ftp:`, `view-source:`, `data:`, `about:`, `mailto:` and a few more) is
+kept, its scheme and host in lower case and spaces encoded; `javascript:`
+and a scheme nothing handles are searched. A host without a scheme gets
+`https://`, the omnibox's default since Chrome 90, and `http://` where
+Chrome does not upgrade: an IP address, `localhost`, a single label, a
+private top-level name such as `.local` or `.test`, an address with a
+port. Chrome falls back to `http://` when the https load fails; a proxied
+frame shows the error page instead. Everything else is substituted into
+`template` at `%s`.
 `SEARCH_ENGINES` lists the engines `suggest()` knows (`id`, `name`, the
 results template `search` and the suggest endpoint `suggest`), and
 `searchEngine(name)` finds one by its id or by a results template.
@@ -175,7 +184,9 @@ keystroke for two characters or more, one request at a time, a late answer
 dropped (`controller.suggest(text, { engine, signal })`). The input is an
 ARIA combobox: the arrows move and go round the ends, Tab fills, Enter opens
 the highlighted row or lets the form submit, Escape closes, Shift+Delete
-forgets a history row. The empty box shows `picks()` once clicked. No
+forgets a history row. The first row opens what was typed, through
+`SearchBuilder` with the `search` template (or the host's own `toUrl`), so
+it follows the rules above. The empty box shows `picks()` once clicked. No
 proxied page and no controller bundle loads it; the demo's address bars are
 built on it.
 

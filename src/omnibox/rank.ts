@@ -200,7 +200,7 @@ export function frecentSites(
 }
 
 export interface RankOptions {
-	/** The typed text reads as an address, not a search (searchEngines.ts isSearchQuery). */
+	/** The typed text reads as an address, not a search: its URL (SearchBuilder's rules, box.ts) is no results page of the engine. */
 	urlLike: boolean;
 	/** Where the default row goes: the address as typed, or the search engine's results. */
 	defaultUrl: string;
