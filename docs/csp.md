@@ -155,20 +155,37 @@ A script-src-attr handler and a style-src-attr style attribute run
 only by 'unsafe-inline' (or 'unsafe-hashes' with the value's hash); the
 inject clears the live attribute where they do not. Chrome judges a
 handler as its attribute is set and again as it compiles it, at its first
-run, by the policies in force each time (a report-only policy reports
-both), and so does the inject: one the page's code sets as it sets it, one
-of the page's markup as the parser inserts its element in the written page
-(the copy marks it, and `#watchParsed` judges it, also after the markup's
-last script, at DOMContentLoaded), so a meta in the same piece of the
-markup or a later one applies to the handlers after it. The rewritten
-handler asks the access API's `csp` first (`DocumentClient.codeRuns`,
-`./policyChecks.ts` runRefused), which judges it once by the policies then
-and keeps that verdict, as the compiled handler is kept: a handler parsed
-before a meta a script inserts is refused as it runs. A javascript: URL is
-judged at script-src-elem as Chrome judges it as its navigation starts and
-again as it runs: the rewritten URL asks `csp` before its code
-(`src/rewriteHTML.ts`), and a refusal runs none of it; a report-only policy
-reports it twice. Their console messages are Chrome's ("Executing inline
+run or the first read of its property (`el.onclick`), by the policies in
+force each time (a report-only policy reports both), and so does the
+inject: one the page's code sets as it sets it, one of the page's markup
+as the parser inserts its element in the written page (the copy marks it,
+and `#watchParsed` judges it, also after the markup's last script, at
+DOMContentLoaded), one a document.write wrote at the write, once the
+parser inserted it (`writtenHandlers`), so a meta before it applies. One
+that runs before it was judged as parsed (an iframe's load as the parser
+inserts it) is judged as parsed first. The rewritten handler asks the
+access API's `csp` first (`DocumentClient.codeRuns`, `./policyChecks.ts`
+runRefused), which judges it once by the policies then and keeps that
+verdict, as the compiled handler is kept: a handler parsed before a meta a
+script inserts is refused as it runs. Its property's getter judges it the
+same way and reads null where it is refused (hooked when the
+`policyChecks` part is made, so only in a document whose policy governs
+code). Its violation as it is compiled names the code that dispatched its
+event or read its property, else its place in the markup (where its start
+tag ends, where V8 counts the handler's own frame from); as it is parsed,
+none, or the write. A javascript: URL is judged at script-src-elem as
+Chrome judges it: as its navigation starts, by the policies of the
+document whose code started it (a link's click, a location it set, its
+open()), at that code (`DocumentClient.jsStarts`, which hands the check
+to the window it runs in; another frame's violation targets the frame's
+element), and again as it runs, by its window's, at the document's first
+line. The rewritten URL asks `csp` before its code (`src/rewriteHTML.ts`),
+and a refusal runs none of it; a report-only policy reports it twice. One
+of statements runs in a block after its directive prologue, or, where it
+may declare a `let`, a `const` or a `class` (which a block would keep from
+the window), as a script of its own: `csp` navigates the window to a
+javascript: URL of its rewrite once it is judged. Their console messages
+are Chrome's ("Executing inline
 event handler", "Running the JavaScript URL", with no hash). A CSSOM write (an
 element's `style` property, `setProperty`) is the browser's to allow, so the
 inject does not refuse it, only the `style` attribute the page sets as a
@@ -458,21 +475,16 @@ refuses fires a violation, natively either.
 - 'unsafe-hashes' with the hash of an event handler, a style attribute or a
   `javascript:` URL: the rewrite changes the text, and the browser refuses
   it.
-- A handler's property (`onclick`) read before it runs reads the compiled
-  function, with no violation; Chrome compiles it then, and judges it. A
-  handler of the markup's that runs before the parser's next checkpoint (an
-  iframe's load as it is inserted) is judged as it runs and again as it is
-  parsed. A document.write's handlers are judged as they are written. A
-  handler's violation as it runs names no place; Chrome's names the code
-  that dispatched its event, else the handler's place in the markup (each
-  makes its report, as natively; those as the parser inserts the handlers
-  name none natively either, and make one report).
-- A javascript: URL is judged by the policies of the window it runs in
-  (Chrome: those of the document that navigates), and one of statements runs
-  in a block after its directive prologue: its `let`, `const` and `class`
-  declarations are not the window's. Its first violation (as
-  the navigation starts) names no place; Chrome's names the code that
-  navigated.
+- A handler's property read before any policy of the page's governs code
+  (one a script inserts later) compiles nothing in the inject's eyes: the
+  getters are hooked only once one does (hooking them in every frame cost
+  some 19 KB a frame), so the handler is judged as it first runs after.
+  Chrome compiled it at the read, and runs it.
+- A javascript: URL a form submits, a frame's `src` or a new window's
+  first URL is judged by the window it runs in only (Chrome: first by the
+  document that navigates), its first violation at no place.
+- A javascript: URL of statements that may declare a `let`, a `const` or a
+  `class` runs a task later than natively (a second navigation runs it).
 - A stylesheet `<link>` the page's policy allows by its host where the
   list also takes nonces is refused.
 - A module worker of a `blob:` URL under a policy that refuses `blob:`

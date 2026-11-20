@@ -129,7 +129,8 @@ export function routeHTML(
 		// page wrote it, decoded (the violation's sample; percent-encoded
 		// here, the browser decodes the URL before it runs it). Refused,
 		// nothing of the code runs
-		const refused = `${accessExpression(names.access)}.csp(0,${encodeURIComponent(JSON.stringify(`javascript:${body}`.slice(0, 40)))})`;
+		const csp = `${accessExpression(names.access)}.csp(0,${encodeURIComponent(JSON.stringify(`javascript:${body}`.slice(0, 40)))}`;
+		const refused = `${csp})`;
 		const head = `((r,c)=>typeof r==='string'&&c?c.javascriptDocument(r,document.URL):r)((${inject},${refused}?void 0:(`;
 		const tail = `)),self[${client}]||(()=>{try{return ${creator}}catch(e){}})())`;
 		const expression = rewriter('singleExpression')(body)
@@ -143,6 +144,13 @@ export function routeHTML(
 			// with the access API's name, which no page's code uses), closed
 			// after a line break, as the code may end in a line comment
 			const label = names.access;
+			// Statements that may declare a let, a const or a class, which a
+			// block would keep from the window, run as a script of their own:
+			// once judged, `csp` navigates the window to a javascript: URL of
+			// their rewrite (encoded twice: the browser decodes this URL, then
+			// that one)
+			if (/\b(?:let|const|class)\b/.test(body))
+				return `javascript:void (${inject},${csp},${encodeURIComponent(JSON.stringify(`javascript:${encodeURIComponent(modifyJS(body, url, config, 'generic', `void (${inject});`, kept))}`))}))`;
 			return `javascript:${modifyJS(body, url, config, 'generic', `void (${inject});${label}:{if(${refused})break ${label};`, kept)}\u2028}`;
 		}
 		return `javascript:${head}${expression}${tail}`;

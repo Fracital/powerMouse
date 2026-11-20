@@ -250,7 +250,11 @@ export default class SandboxModule extends Module<DocumentClient> {
 			const navigate = (
 				member: 'href' | 'assign' | 'replace',
 				url: string,
-			): boolean => !!client.navigateWindow?.(target, url, member);
+			): boolean => {
+				// (a javascript: URL is judged as it starts, by this document)
+				client.jsStarts(target, url);
+				return !!client.navigateWindow?.(target, url, member);
+			};
 			// A Location of its own, every member the stand-in's with its
 			// descriptor (unforgeable, so a Proxy could not answer for them),
 			// each function reading as the native one and acting on the stand-in;

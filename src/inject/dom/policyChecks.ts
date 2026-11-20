@@ -27,15 +27,16 @@ import {
 	integrityMatches,
 	type CodeItem,
 } from '../../cspJudge';
-import { keptText } from '../../functionSource';
+import { keptText, sourceKey } from '../../functionSource';
 import { proxyBlobURL } from '../../routeURL';
 import { digest } from '../../sha';
 import ProxyModule from '../modules/Proxy';
 import UnrouteModule from '../modules/Unroute';
-import { LazySet, LazyWeakMap } from '../ownCollections';
+import { LazySet, LazyWeakMap, LazyWeakSet } from '../ownCollections';
 import type DocumentClient from './Client';
 import {
 	nativeGetAttribute,
+	nativeQuerySelectorAll,
 	nativeRemoveAttribute,
 	nativeSetTimeout,
 	nonceOf,
@@ -301,10 +302,11 @@ function logScriptRefusal(
 /**
  * Where the page's code that called the hook is, as a violation names it
  * (the URL with no query or fragment, measured: ./violations.ts), or none
- * where no script of the page's called it
+ * where no script of the page's called it; with `skip`, the code `skip`
+ * frames of the page's under it, where there is one
  */
-function callerSite(client: DocumentClient): Site | undefined {
-	const at = client.getModule(UnrouteModule)!.callerSite();
+function callerSite(client: DocumentClient, skip?: number): Site | undefined {
+	const at = client.getModule(UnrouteModule)!.callerSite(skip);
 	return at.filename === ''
 		? undefined
 		: [at.filename.replace(/[?#].*$/s, ''), at.lineno, at.colno];
@@ -374,8 +376,129 @@ function codeRefused(
 	return refused;
 }
 
-/** each handler's verdict as it first ran, by the key of its text (runRefused) */
-const handlerVerdicts = new LazyWeakMap<object, Record<string, boolean>>();
+/** the attribute that marks an element of the page's whose handlers wait to be judged as parsed (DocumentClient refuseHandler) */
+const parsedMark = () => `${markerPrefix()}parsed`;
+
+/** a javascript: URL's sample, as its rewrite hands it to the access API's `csp` (src/rewriteHTML.ts) */
+function jsSample(url: string): string {
+	// (as the URL parser keeps it: no tab or line break, nothing of C0 or a
+	// space around it)
+	let code = url
+		.replace(/^[\0- ]+|[\0- ]+$|[\t\n\r]/g, '')
+		.slice('javascript:'.length);
+	try {
+		code = decodeURIComponent(code);
+	} catch (error) {
+		// not percent-encoded
+	}
+	return `javascript:${code}`.slice(0, 40);
+}
+
+/** the window a navigation of `client`'s document aims at by `target` (a window, or a name), where one of this tab's proxied ones */
+function windowNamed(
+	client: DocumentClient,
+	target: unknown,
+): typeof globalThis | null {
+	if (typeof target !== 'string') return target as typeof globalThis | null;
+	const keyword = target.toLowerCase();
+	if (!target || keyword === '_self') return client.global;
+	if (keyword === '_parent' || keyword === '_top')
+		return client.targetWindow(keyword)?.window ?? client.global;
+	const frame = client.frameNamed(target);
+	return frame
+		? ((frame as HTMLIFrameElement).contentWindow as typeof globalThis | null)
+		: (client.namedWindow?.(target) ?? null);
+}
+
+/** whether a handler's property is read now (the getters of hookHandlers): the reading code compiles it */
+let reading = false;
+/** the clients whose handlers' getters are hooked (hookHandlers) */
+const hookedClients = new LazyWeakSet<object>();
+/** the handlers a body's attributes give its window, besides those of the body's own interface */
+const BODY_WINDOW = [
+	'onblur',
+	'onerror',
+	'onfocus',
+	'onload',
+	'onresize',
+	'onscroll',
+];
+
+/**
+ * Chrome compiles a handler of an attribute as its property is first read
+ * (`el.onclick`) if it did not run before, and judges it then, as at a
+ * run: the property reads null where refused. Each handler property's
+ * getter is hooked so, the first time the part is made for a document
+ * (none where no policy of the page's governs code: such a document never
+ * needs it; hooking every frame's cost a frame some 19 KB,
+ * ../modules/Proxy.ts applyDescriptors)
+ */
+function hookHandlers(client: DocumentClient) {
+	if (hookedClients.has(client)) return;
+	hookedClients.add(client);
+	const g = client.global as typeof globalThis;
+	const proxyModule = client.getModule(ProxyModule);
+	if (!proxyModule) return;
+	const body = g.HTMLBodyElement.prototype;
+	for (const owner of [
+		g,
+		g.Element.prototype,
+		g.HTMLElement.prototype,
+		g.SVGElement.prototype,
+		g.HTMLMediaElement.prototype,
+		body,
+		g.HTMLFrameSetElement.prototype,
+	])
+		for (const name of Reflect.ownKeys(owner)) {
+			if (typeof name !== 'string' || !/^on[a-z]+$/.test(name)) continue;
+			const descriptor = Reflect.getOwnPropertyDescriptor(owner, name);
+			if (!descriptor?.get || !descriptor.configurable) continue;
+			// (a body's handler of the window's, its attribute the body's: the
+			// window's others have none)
+			const windows =
+				owner === g ||
+				owner === body ||
+				owner === g.HTMLFrameSetElement.prototype;
+			if (
+				owner === g &&
+				!BODY_WINDOW.includes(name) &&
+				!Reflect.getOwnPropertyDescriptor(body, name)
+			)
+				continue;
+			descriptor.get = proxyModule.wrapFunction(
+				descriptor.get,
+				(target, that, args) => {
+					const value = Reflect.apply(target, that, args);
+					if (value === null || !client.codeEnforced) return value;
+					let element: Element | null = null;
+					try {
+						element =
+							that === g
+								? g.document.body
+								: Reflect.apply(nativeNodeType, that, []) === 1
+									? (that as Element)
+									: null;
+					} catch (error) {
+						// neither
+					}
+					const key =
+						element &&
+						(
+							Reflect.apply(nativeGetAttribute, element, [name]) as
+								string | null
+						)?.match(/^\/\*(.+?)\*\//)?.[1];
+					if (!key) return value;
+					reading = true;
+					try {
+						return client.codeRuns(windows ? g : that, key) ? null : value;
+					} finally {
+						reading = false;
+					}
+				},
+			);
+			Reflect.defineProperty(owner, name, descriptor);
+		}
+}
 
 export const policyChecks = {
 	/**
@@ -385,8 +508,16 @@ export const policyChecks = {
 	 * A refused one keeps no attribute for the browser, which compiles
 	 * nothing; the page reads its own back
 	 */
-	parsedHandlers(client: DocumentClient, element: Element) {
+	parsedHandlers(
+		client: DocumentClient,
+		element: Element,
+		/** written by a document.write, judged at the write (it names its place) */
+		written?: boolean,
+	): string[] {
+		hookHandlers(client);
 		const prefix = markerPrefix();
+		const site = written ? callerSite(client) : undefined;
+		const refused: string[] = [];
 		for (const name of Reflect.apply(nativeGetAttributeNames, element, [])) {
 			if (!name.startsWith(`${prefix}on`)) continue;
 			const text = Reflect.apply(nativeGetAttribute, element, [name]);
@@ -396,14 +527,89 @@ export const policyChecks = {
 					'script-src-attr',
 					'inline',
 					element,
-					{ text, sample: text, once: '' },
+					{ text, sample: text, once: site ? undefined : '' },
 					false,
+					site,
 				)
-			)
+			) {
+				refused.push(sourceKey(text ?? ''));
 				Reflect.apply(nativeRemoveAttribute, element, [
 					name.slice(prefix.length),
 				]);
+			}
 		}
+		return refused;
+	},
+	/** the handlers a document.write of the page's just wrote in `document` (DocumentClient.writtenHandlers), as the parser inserted them */
+	writtenHandlers(client: DocumentClient, document: Document) {
+		const mark = parsedMark();
+		const root = document.documentElement;
+		if (!root) return;
+		for (const element of Reflect.apply(nativeQuerySelectorAll, root, [
+			`[${mark.replace(/:/g, '\\:')}=w]`,
+		]) as Iterable<Element>) {
+			Reflect.apply(nativeRemoveAttribute, element, [mark]);
+			policyChecks.parsedHandlers(client, element, true);
+		}
+	},
+	/**
+	 * The page's code (`client`'s) starts a navigation of `target` (a window
+	 * or a name) to the javascript: URL `url` (DocumentClient.jsStarts): the
+	 * window it runs in is handed the check Chrome makes as the navigation
+	 * starts, by this document's policies, at the place of that code (a
+	 * frame's targets the frame's element), which it makes as it runs, if
+	 * the navigation started (`event`: the click of a link, which a
+	 * listener may cancel)
+	 */
+	jsStarts(
+		client: DocumentClient,
+		target: unknown,
+		url: string,
+		event?: Event,
+	) {
+		let window: typeof globalThis | null = null;
+		let targetClient: DocumentClient | undefined;
+		try {
+			window = windowNamed(client, target);
+			targetClient = (window as Record<string, any> | null)?.[
+				client.names.client
+			];
+		} catch (error) {
+			// a window of another origin
+		}
+		if (!window || !targetClient) return;
+		const sample = jsSample(url);
+		const own = window === client.global;
+		// its own location set through another's (Sandbox gateLocation): that
+		// one noted it
+		const noted = targetClient.jsNote;
+		if (own && noted && !noted.own && noted.sample === sample) return;
+		const site = callerSite(client);
+		let frame: Element | null = null;
+		if (!own)
+			try {
+				frame = window.frameElement;
+				if (frame?.ownerDocument !== client.global.document) frame = null;
+			} catch (error) {
+				// none
+			}
+		targetClient.jsNote = {
+			sample,
+			own,
+			check: () =>
+				event?.defaultPrevented
+					? undefined
+					: client.codeEnforced &&
+						codeRefused(
+							client,
+							'script-src-elem',
+							'inline',
+							frame,
+							{ parser: true, sample, lead: 'Running the JavaScript URL' },
+							false,
+							site,
+						),
+		};
 	},
 	/**
 	 * Whether the page's policy refuses, as it runs, a handler of `that` (its
@@ -414,10 +620,21 @@ export const policyChecks = {
 	 * holds for every later run; a javascript: URL as the navigation starts
 	 * and again as it runs (a report-only policy reports both), measured
 	 */
-	runRefused(client: DocumentClient, that: unknown, code: string): boolean {
+	runRefused(
+		client: DocumentClient,
+		that: unknown,
+		code: string,
+		/** the URL a javascript: URL of statements runs through, where allowed */
+		inner?: string,
+	): boolean {
+		hookHandlers(client);
+		const global = client.global as typeof globalThis;
 		if (that === 0) {
-			// (where the page's code that navigated was is not known here; as
-			// it runs, the place is the document's first line)
+			// as the navigation started: by the document whose code started it,
+			// where one noted it (jsStarts), else here, at no place
+			const note = client.jsNote;
+			client.jsNote = undefined;
+			const first = note?.sample === code ? note.check() : undefined;
 			const judged = (site?: Site) =>
 				codeRefused(
 					client,
@@ -432,30 +649,57 @@ export const policyChecks = {
 					false,
 					site,
 				);
-			return (
-				judged() || judged([client.url.url.href.replace(/[?#].*$/s, ''), 1, 0])
-			);
+			// as it runs: the document's first line
+			const refused =
+				!!first ||
+				(client.codeEnforced &&
+					((first === undefined && judged()) ||
+						judged([client.url.url.href.replace(/[?#].*$/s, ''), 1, 0])));
+			if (refused || !inner) return refused;
+			// statements run as a script of their own, through a javascript:
+			// URL of their rewrite (a 'use strict' of theirs a directive, their
+			// let and const the window's), judged now
+			const location = global.location;
+			Reflect.apply(location.assign, location, [inner]);
+			return true;
 		}
-		const verdicts = handlerVerdicts.get(that as object) ?? {};
-		handlerVerdicts.set(that as object, verdicts);
-		if (code in verdicts) return verdicts[code]!;
-		const text = keptText(code)?.[0] ?? '';
-		// (a body's handler of the window's runs with the window as this)
-		let element = (client.global as typeof globalThis).document.body;
+		// (a body's handler of the window's runs with the window as this, and
+		// its violation targets the document)
+		let element: Element | null = null;
 		try {
 			if (Reflect.apply(nativeNodeType, that, []) === 1)
-				element = that as HTMLElement;
+				element = that as Element;
 		} catch (error) {
 			// the window
 		}
-		return (verdicts[code] = codeRefused(
+		const owner = element ?? global.document.body;
+		// one the parser inserted that runs before the parse was judged (an
+		// iframe's load as it is inserted): judged as parsed first
+		const mark = parsedMark();
+		const pending = owner && Reflect.apply(nativeGetAttribute, owner, [mark]);
+		if (pending === 'h' || pending === 'w') {
+			Reflect.apply(nativeRemoveAttribute, owner, [mark]);
+			if (
+				policyChecks
+					.parsedHandlers(client, owner, pending === 'w')
+					.includes(code)
+			)
+				return true;
+		}
+		const text = keptText(code)?.[0] ?? '';
+		// where the code that compiles it is: the code that dispatched its
+		// event (under the handler's own frame), else the handler's place in
+		// the markup (where V8 counts its own frame from: ./violations.ts
+		// handlerPlace); the code that read its property
+		return codeRefused(
 			client,
 			'script-src-attr',
 			'inline',
 			element,
 			{ text, sample: text },
 			false,
-		));
+			callerSite(client, reading ? 0 : 1),
+		);
 	},
 	/**
 	 * Where a load of the document that no worker sees goes instead of `url`
@@ -612,6 +856,7 @@ export const policyChecks = {
 		code: string | URL,
 		parser?: boolean,
 	): boolean {
+		hookHandlers(client);
 		const elem = directive.endsWith('-elem');
 		const script = directive.startsWith('script');
 		const nonce = elem ? elementNonce(client, element) : undefined;

@@ -426,6 +426,21 @@ const insertText = (name, how) => {
  *   jt:<n>           a link to javascript: of statements that does, ending
  *                    in a line comment, clicked as the page loads
  *   bo:<n>           `body`, the body's onload doing it (the window's load)
+ *   og:<n>           a button whose onclick does, never clicked, then an
+ *                    inline script (nonce="probes") that reads its onclick
+ *                    and calls what it reads
+ *   if:<n>           an iframe whose onload does (its about:blank loads as
+ *                    the parser inserts it)
+ *   wh:<n>           an inline script (nonce="probes") that writes a button
+ *                    whose onclick does, clicked as the page loads
+ *   jf:<n> / jc:<n>  a frame named f<n> of a layout of nothing, under no
+ *                    policy / the first `m` one as its header, and a link
+ *                    to javascript: in it that does (`parent.__ran`),
+ *                    clicked as the page loads
+ *   jl:<n>           a link to javascript: of statements, clicked as the
+ *                    page loads, that says `<n>` ran (`<n>S` in strict mode)
+ *                    and declares a let; a script inserted a moment after
+ *                    load says `<n>G` where the window has it, else `<n>N`
  *   fi:<n> / fw:<n>  a script file (nonce="probes", /csp/insert.js) that
  *                    inserts an inline script of <n> after itself, through
  *                    the DOM / by document.write
@@ -475,6 +490,44 @@ function layout(req, res, query) {
 					`<button data-n="${n}"${kind === 'oc' ? ' data-click' : ''} onclick="${attribute(ranText(arg))}"></button>`,
 				);
 				break;
+			case 'og':
+				add(
+					`<button data-n="${n}" onclick="${attribute(ranText(arg))}"></button>`,
+				);
+				add(
+					helper(
+						'const b = document.currentScript.previousElementSibling; const f = b.onclick; if (f) f.call(b);',
+					),
+				);
+				break;
+			case 'if':
+				add(
+					`<iframe data-n="${n}" onload="${attribute(ranText(arg))}"></iframe>`,
+				);
+				break;
+			case 'wh':
+				add(
+					helper(
+						`document.write(${JSON.stringify(`<button data-n="${n}" data-click onclick="${attribute(ranText(arg))}"></button>`).replace(/<\//g, '<\\/')});`,
+					),
+				);
+				break;
+			case 'jf':
+			case 'jc':
+				add(
+					`<iframe name="f${n}" src="${attribute(`/csp/doc?${new URLSearchParams(kind === 'jc' ? { l: '', p: metas[0] ?? '' } : { l: '' })}`)}"></iframe>`,
+				);
+				add(
+					`<a data-n="${n}" data-click target="f${n}" href="javascript:${attribute(`parent.${ranText(arg)}`)}"></a>`,
+				);
+				break;
+			case 'jl': {
+				const name = arg.replace(/\W/g, '');
+				add(
+					`<a data-n="${n}" data-click data-late="${attribute(`__ran(typeof ${name}L === 'number' ? '${name}G' : '${name}N')`)}" href="javascript:${attribute(`'use strict';let ${name}L=1;__ran((function(){return this})()?'${name}':'${name}S')`)}"></a>`,
+				);
+				break;
+			}
 			case 'ju':
 			case 'jt':
 				add(

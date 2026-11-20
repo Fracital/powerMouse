@@ -119,6 +119,8 @@ export default class LocationModule extends Module<DocumentClient> {
 					? (fragments?.live(moduleClient.navigationRoute(destination)) ??
 						moduleClient.navigationRoute(destination))
 					: navigateTo(destination);
+			// (a javascript: URL is judged as it starts: jsStarts)
+			moduleClient.jsStarts(global, destination.href);
 			if (
 				destination.protocol === 'javascript:' &&
 				moduleClient.trustedJavascript?.(

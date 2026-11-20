@@ -34,6 +34,14 @@ export default class OpenModule extends Module<DocumentClient> {
 		const clicks = heldClicks(client);
 
 		const listener = (event: MouseEvent) => {
+			// a javascript: link's code, judged as its navigation starts
+			const clicked = event.type === 'click' && clickedLink(global, event);
+			if (clicked)
+				client.jsStarts(
+					clicked.getAttribute('target') || baseTarget(global.document),
+					clicked.getAttribute('href') ?? '',
+					event,
+				);
 			if (event.defaultPrevented) return;
 			if (event.type === 'auxclick' && event.button !== 1) return;
 			if (event.type === 'click' && event.button !== 0) return;

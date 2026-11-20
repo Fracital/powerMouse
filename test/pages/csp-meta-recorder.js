@@ -85,6 +85,13 @@
 		// a layout's button or javascript: link (`oc`, `ju`)
 		for (const node of document.querySelectorAll('[data-click]')) node.click();
 		setTimeout(() => {
+			// a layout's script for after load (`jl`)
+			for (const node of document.querySelectorAll('[data-late]')) {
+				const script = document.createElement('script');
+				script.nonce = 'probes';
+				script.text = node.dataset.late;
+				document.body.append(script);
+			}
 			const results = {};
 			for (const name of names)
 				results[name] =

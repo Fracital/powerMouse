@@ -116,15 +116,18 @@ another stream's while these were measured.
   URL (`sourcesMatch` against `document.url` in `src/csp.ts`) instead of an
   opaque origin.
 - `content-security-policy/navigation/to-javascript-parent-initiated-parent-csp.html`
-  (8: the harness TIMEOUT, 1 FAIL "Javascript url executed", 1 TIMEOUT, 5
-  NOTRUN), `content-security-policy/navigation/to-javascript-url-script-src.html`
+  (5: the harness TIMEOUT, 2 FAIL "Javascript url executed" for iframe.src
+  and otherTab.location.href, 1 TIMEOUT, 1 NOTRUN; a frame's location and
+  an area into a frame or another tab pass since the initiator's first
+  check, `DocumentClient.jsStarts`),
+  `content-security-policy/navigation/to-javascript-url-script-src.html`
   (5: the harness TIMEOUT and four subtests),
   `content-security-policy/navigation/to-javascript-parent-initiated-check-csp-order.html`
   (8: the harness TIMEOUT and 7 MISSING): a `javascript:` navigation of a
   child frame or another window runs although the initiator's `script-src`
-  forbids it. The proxy runs a `javascript:` URL in the target and checks no
-  policy of the document that started it, where Chrome checks the
-  initiator's.
+  forbids it. A link's click, a location write and open() hand the target
+  the initiator's first check (`DocumentClient.jsStarts`); a frame's `src`
+  and these tests' other paths do not yet.
 
 Cleared on the combined tree: `frame-src-same-document-meta.sub.html` (no
 fix names it).

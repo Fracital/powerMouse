@@ -100,7 +100,9 @@ export function windowOpen(
 		}
 		// a javascript: URL runs in the opened window: rewritten, like a
 		// javascript: link (routeHTML rewrites its body)
-		if (destination !== null && destination.protocol === 'javascript:')
+		if (destination !== null && destination.protocol === 'javascript:') {
+			// judged as it starts, by this document's policies
+			client.jsStarts(name, destination.href);
 			args[0] = routeHTML(
 				new StompURL(destination, client.url),
 				client.url,
@@ -108,6 +110,7 @@ export function windowOpen(
 				false,
 				aimed ? aimed.client.nestedRoute : client.nestedRoute,
 			);
+		}
 		// a new tab: the host's to open, when it said so (then the page
 		// sees null, as with a popup blocker). Not for a sandboxed
 		// document's popup that keeps its sandbox: the browser refuses it

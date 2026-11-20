@@ -41,11 +41,17 @@ const laid = (spec) => ({
 	probes: [
 		...spec.l
 			.filter((token) =>
-				/^(i|in|ix|e|en|eo|di|de|wi|we|fi|fw|img|fx|sty|oc|ob|oe|ol|ju|jt|bo):/.test(
+				/^(i|in|ix|e|en|eo|di|de|wi|we|fi|fw|img|fx|sty|oc|ob|oe|ol|ju|jt|bo|og|if|wh|jf|jc|jl):/.test(
 					token,
 				),
 			)
-			.map((token) => token.slice(token.indexOf(':') + 1)),
+			.flatMap((token) => {
+				const name = token.slice(token.indexOf(':') + 1);
+				// (a let's statements: run, strict, the window's let or none)
+				return token.startsWith('jl:')
+					? [name, `${name}S`, `${name}G`, `${name}N`]
+					: [name];
+			}),
 		'reports',
 	],
 });
@@ -312,6 +318,79 @@ const browser = await launch();
 await compareCases(browser, CASES, { consoleMessages: true });
 await compareCases(browser, STYLE_CASES, { consoleMessages: true });
 await compareCases(browser, HANDLER_CASES, { consoleMessages: true });
+// Where a handler's violations and a javascript: URL's say its code was,
+// and when Chrome judges them (measured, Chrome 157): a handler as the
+// parser inserts it (no place; one a document.write wrote, the write) and
+// as it is compiled, at its first run or the first read of its property
+// (the code that dispatched its event or read it, else the handler's place
+// in the markup, where its start tag ends); one that runs before the
+// parser's next checkpoint (an iframe's load) is judged as parsed first. A
+// javascript: URL is judged as its navigation starts by the policies of
+// the document whose code started it, at that code (a frame's violation
+// targets the frame's element), and as it runs by its window's, at its
+// first line. One of statements runs as a script: a 'use strict' of it is
+// a directive and its let is the window's.
+const HANDLER_PLACED = {
+	'where handlers are judged under a report-only header': laid({
+		ro: NONCE,
+		source: true,
+		l: [
+			'body',
+			'oc:click',
+			'oe:fails',
+			'ol:loads',
+			'if:frame',
+			'og:read',
+			'wh:written',
+			'ju:link',
+		],
+	}),
+	'where handlers are judged after a meta': laid({
+		m: NONCE,
+		source: true,
+		l: ['meta', 'body', 'oc:click', 'if:frame', 'og:read', 'wh:written'],
+	}),
+	"where a body's onload is judged under a report-only header": laid({
+		ro: NONCE,
+		source: true,
+		l: ['bo:onload'],
+	}),
+	'a handler read after a meta a script inserts': laid({
+		m: NONCE,
+		source: true,
+		l: ['body', 'ob:unclicked', 'mi:0', 'og:read'],
+	}),
+	'a javascript: link into a frame, refused by the linking document': laid({
+		m: NONCE,
+		source: true,
+		l: ['meta', 'body', 'jf:framed'],
+	}),
+	"a javascript: link into a frame, refused by the frame's": laid({
+		m: NONCE,
+		source: true,
+		l: ['body', 'jc:framed'],
+	}),
+	'a javascript: link into a frame under a report-only header': laid({
+		ro: NONCE,
+		source: true,
+		l: ['body', 'jf:framed'],
+	}),
+	'a javascript: link of statements with a let': laid({
+		l: ['body', 'jl:lexical'],
+	}),
+	'a javascript: link of statements with a let under a report-only header':
+		laid({ ro: NONCE, source: true, l: ['body', 'jl:lexical'] }),
+	'a javascript: link of statements with a let after a meta': laid({
+		m: NONCE,
+		source: true,
+		l: ['meta', 'body', 'jl:lexical'],
+	}),
+};
+
+await compareCases(browser, HANDLER_PLACED, {
+	fields: [...FIELDS, 'sourceFile', 'lineNumber', 'columnNumber'],
+	consoleMessages: true,
+});
 await compareCases(browser, PLACED, {
 	fields: [...FIELDS, 'sourceFile', 'lineNumber', 'columnNumber'],
 	consoleMessages: true,

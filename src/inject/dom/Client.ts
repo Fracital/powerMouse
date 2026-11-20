@@ -163,7 +163,7 @@ export function nonceOf(element: Element): string {
 		}
 	return '';
 }
-const nativeQuerySelectorAll = Element.prototype.querySelectorAll;
+export const nativeQuerySelectorAll = Element.prototype.querySelectorAll;
 export const nativeRemoveAttribute = Element.prototype.removeAttribute;
 export const nativeScriptText = Reflect.getOwnPropertyDescriptor(
 	HTMLScriptElement.prototype,
@@ -1759,7 +1759,7 @@ export default class DocumentClient extends Client {
 		hiddenMutation(() => {
 			// (marked for its handlers alone: refuseHandler)
 			const handlers =
-				Reflect.apply(nativeGetAttribute, script, [PARSED_MARK()]) === 'h';
+				Reflect.apply(nativeGetAttribute, script, [PARSED_MARK()]) !== '';
 			Reflect.apply(nativeRemoveAttribute, script, [PARSED_MARK()]);
 			if (this.codeEnforced) this.#checks()?.parsedHandlers(this, script);
 			if (handlers) return;
@@ -2033,24 +2033,72 @@ export default class DocumentClient extends Client {
 	 * inserts its element in the written page (judgeParsed), marked here
 	 */
 	refuseHandler(element: Element, value: string): boolean {
-		if (!this.markupCopy)
+		if (!this.markupCopy && !this.writing)
 			return this.#refuseOnce(element, 'script-src-attr', value);
 		// (a script of the markup's is marked again as one, after: judgeParsed
-		// judges its handlers too)
-		Reflect.apply(nativeSetAttribute, element, [PARSED_MARK(), 'h']);
+		// judges its handlers too). One a document.write wrote is judged at
+		// the write, once the parser inserted it (writtenHandlers)
+		Reflect.apply(nativeSetAttribute, element, [
+			PARSED_MARK(),
+			this.markupCopy ? 'h' : 'w',
+		]);
 		return false;
 	}
+	/** the handlers of `document` a document.write of the page's just wrote, judged as the parser inserted them (refuseHandler) */
+	writtenHandlers(document: Document) {
+		if (this.codeEnforced) this.#checks()?.writtenHandlers(this, document);
+	}
+	/** each handler's verdict as it first ran, by the key of its text, kept as the compiled handler is (codeRuns) */
+	readonly #handlerVerdicts = new LazyWeakMap<
+		object,
+		Record<string, boolean>
+	>();
+	/**
+	 * @internal the first check of a javascript: URL, as the document whose
+	 * code navigated this window to it noted it (jsStarts): runRefused takes
+	 * it
+	 */
+	jsNote?: {
+		/** the URL's sample (the code's) */
+		sample: string;
+		/** noted by this document of its own location */
+		own: boolean;
+		/** the first check, by the noting document: true where refused, undefined where its navigation never started */
+		check: () => boolean | undefined;
+	};
 	/**
 	 * Whether the page's policy refuses, as it runs, a handler of `that` (its
-	 * element, or the window of a body's; `code` the key of its text) or,
-	 * `that` 0, a javascript: URL's code (`code` its sample), by the policies
-	 * in force then (./policyChecks.ts runRefused); fires the violations
+	 * element, or the window of a body's; `code` the key of its text), once,
+	 * or, `that` 0, a javascript: URL's code (`code` its sample; `inner` the
+	 * URL its statements run through), by the policies in force then
+	 * (./policyChecks.ts runRefused); fires the violations
 	 */
-	override codeRuns(that: unknown, code: string): boolean {
+	override codeRuns(that: unknown, code: string, inner?: string): boolean {
+		if (that !== 0) {
+			let verdicts = this.#handlerVerdicts.get(that as object);
+			if (!verdicts) this.#handlerVerdicts.set(that as object, (verdicts = {}));
+			return (verdicts[code] ??=
+				this.codeEnforced &&
+				(this.#checks()?.runRefused(this, that, code) ?? true));
+		}
 		return (
-			this.codeEnforced &&
-			(this.#checks()?.runRefused(this, that, code) ?? true)
+			(this.codeEnforced || !!this.jsNote || !!inner) &&
+			(this.#checks()?.runRefused(this, 0, code, inner) ?? true)
 		);
+	}
+	/**
+	 * The page's code (a link it clicked, a location it set, open()) starts
+	 * a navigation of `target` (a window, or a link's target name) to `url`:
+	 * a javascript: URL is judged as it starts, by this document's policies,
+	 * at the place of that code (./policyChecks.ts jsStarts)
+	 */
+	jsStarts(target: unknown, url: string, event?: Event) {
+		if (/^javascript:/i.test(url.replace(/^[\0- ]+|[\t\n\r]/g, '')))
+			try {
+				deferred('policyChecks').jsStarts(this, target, url, event);
+			} catch (error) {
+				// the part cannot be had: the window judges it as it runs
+			}
 	}
 	/** whether the page's style-src refuses this inline style (its own `text`); fires the violation (targets the document, as Chrome does for styles) and the caller blanks it */
 	refuseInlineStyle(element: Element, text: string, parser: boolean): boolean {
