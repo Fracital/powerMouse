@@ -194,6 +194,31 @@ const CASES = {
 			'style-data',
 		],
 	},
+	// a list that takes nonces judges a stylesheet by its element (the
+	// worker cannot: ../../src/cspJudge.ts hostsApply), and its hosts still
+	// let one through, by the DOM and in the markup
+	'styles by host where the list also takes nonces': {
+		p: "style-src 'self' 'nonce-probes'",
+		sl: true,
+		probes: ['style-self', 'style-other', 'style-inline', 'markup-sheet'],
+	},
+	'styles by host where the list also takes nonces, style-src-elem': {
+		p: "script-src 'nonce-probes'; style-src-elem 'self' 'nonce-probes'",
+		h: 'nonce',
+		s: true,
+		sl: true,
+		probes: ['style-self', 'style-other', 'markup-styles', 'markup-sheet'],
+	},
+	'a markup stylesheet by host where the list also takes nonces, report-only': {
+		ro: "style-src 'self' 'nonce-probes'",
+		sl: true,
+		probes: ['style-self', 'style-other', 'markup-sheet'],
+	},
+	'a markup stylesheet refused where the list takes nonces': {
+		p: "style-src 'nonce-probes' https://elsewhere.invalid",
+		sl: true,
+		probes: ['style-self', 'markup-sheet'],
+	},
 	'nonce styles in the markup': {
 		p: "style-src 'nonce-probes'",
 		s: true,
@@ -236,6 +261,10 @@ const CASES = {
 // policy refused before it connected keeps no src, so its markup, a copy of
 // it, and one judged in another document load nothing
 const EXPECTED = {
+	'a markup stylesheet refused where the list takes nonces': {
+		'markup-sheet':
+			'a refused stylesheet link keeps no href, so it has no sheet (natively an empty one)',
+	},
 	'a script refused before it connects, copied': {
 		violations:
 			'the copies fire no violation (natively each is judged as it connects), and the scripts of another document fire theirs as their src is set',

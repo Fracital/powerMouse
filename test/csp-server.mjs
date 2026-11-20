@@ -11,6 +11,7 @@
 //         head (repeatable; the browser ignores it)
 //     probes: the names of test/pages/csp-probes.js's probes to run
 //     s:  styles in the head, one carrying nonce="probes" (markup-styles)
+//     sl: a stylesheet <link> of /csp/style.css in the head (markup-sheet)
 //     js: `tt` for test/pages/csp-tt-probes.js's (Trusted Types) instead,
 //         `worker` for test/pages/csp-worker-probes.js's (the workers'
 //         connections), after a script that leaves the worker's text on
@@ -174,9 +175,13 @@ export function csp(req, res) {
 			const styles = query.has('s')
 				? '<style nonce="probes">:root { --csp-markup-nonce: yes; }</style><style>:root { --csp-markup-plain: yes; }</style>'
 				: '';
+			// `sl=1`: a stylesheet <link> in the markup
+			const sheet = query.has('sl')
+				? '<link rel="stylesheet" href="/csp/style.css?markup" id="markup-sheet">'
+				: '';
 			send(
 				'text/html; charset=utf-8',
-				`<!doctype html><html><head>${metas}<title>CSP PROBES</title>${styles}</head><body>${script}</body></html>`,
+				`<!doctype html><html><head>${metas}<title>CSP PROBES</title>${styles}${sheet}</head><body>${script}</body></html>`,
 			);
 			return true;
 		}
