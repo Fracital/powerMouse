@@ -1495,9 +1495,28 @@ const swPartsHolder = {
  * IIFE (poolNames): minified, it wrote `.prototype` some 1,040 times, 10
  * bytes each, nearly all where hooks are installed as a frame starts, and
  * `a[pn]` is 4. A computed read of the same string is the same read (the
- * same getter, `this`, assignment, delete and optional chain).
+ * same getter, `this`, assignment, delete and optional chain). The others
+ * are the interfaces and methods it names most often as it installs its
+ * hooks, or as one of its listeners takes an event: each saves 180 bytes or
+ * more. No name read on every access the rewriter routes is here (`length`,
+ * `client`, `getAttribute`).
  */
-const POOLED_NAMES = ['prototype'];
+const POOLED_NAMES = [
+	'prototype',
+	'addEventListener',
+	'addModule',
+	'removeAttribute',
+	'stopImmediatePropagation',
+	'Document',
+	'querySelectorAll',
+	'Element',
+	'HTMLFormElement',
+	'postMessage',
+	'DOMException',
+	'HTMLScriptElement',
+	'dispatchEvent',
+	'EventTarget',
+];
 const NAME_CHARACTERS =
 	'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_$';
 const RESERVED_SHORT = new Set(['do', 'if', 'in']);
