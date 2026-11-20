@@ -170,6 +170,14 @@ export async function serveExtension(
 	if (method !== 'GET' && method !== 'HEAD')
 		return answer(405, 'An extension serves its files to GET only.');
 	const path = cleanPath(decodeURIComponent(url.pathname));
+	// a theme runs nothing (themes.ts): its pictures (no SVG, which can
+	// script) and its manifest only. Chrome shows a navigation to any of
+	// its files and a page's fetch none, as below
+	if (
+		loaded.theme &&
+		!/^(?:image\/(?!svg)|application\/json)/.test(mimeOf(path))
+	)
+		return answer(404, 'A theme has no pages or scripts.');
 	const site = header(headers, 'sec-fetch-site');
 	const initiator = initiatorOf(headers);
 	const own =

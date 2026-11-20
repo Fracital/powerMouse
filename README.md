@@ -256,7 +256,9 @@ declarativeNetRequest. The Chrome Web Store's "Add to Chrome" installs
 them in a proxied tab, after a dialog the host draws
 (`extensions.onPrompt`). The service worker keeps and serves them; a page
 no extension reaches loads no extension code, and the inject bundle carries
-none. An install from a listing affects powerMouse only.
+none. An install from a listing affects powerMouse only. A theme from the
+store installs on the click, runs nothing, and reaches the host through
+`extensions.onTheme` as Chrome's colors, tints, properties and images.
 
 ```js
 const info = await controller.extensions.install(file); // .crx, .zip, Web Store id, files

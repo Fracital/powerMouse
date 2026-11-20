@@ -96,6 +96,7 @@ const SUITE_ENV = {
 	'demo-token': { STOMP_TEST_TRANSPORT: '1' },
 	// the Chrome Web Store's host with the suite's port, and its update service
 	webstore: { STOMP_TEST_TRANSPORT: '1' },
+	'webstore-themes': { STOMP_TEST_TRANSPORT: '1' },
 	// and the relying party's sites (test/passkeys-rp.mjs)
 	passkeys: { STOMP_TEST_TRANSPORT: '1' },
 	'adversarial-passkeys': { STOMP_TEST_TRANSPORT: '1' },

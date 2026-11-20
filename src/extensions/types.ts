@@ -113,6 +113,8 @@ export type ExtensionOrigin = 'package' | 'webstore' | 'unpacked';
 /** an installed extension, as `list()` and `get()` answer */
 export interface ExtensionInfo {
 	id: string;
+	/** a theme (manifest.theme) runs nothing and has no permissions: `extensions.theme()` reads it */
+	type: 'extension' | 'theme';
 	name: string;
 	shortName: string;
 	version: string;
@@ -177,8 +179,9 @@ export interface ExtensionsChange {
 		| 'notification'
 		| 'menus'
 		| 'tab'
-		| 'ready';
-	/** the extension it is about (none for `ready`) */
+		| 'ready'
+		| 'theme';
+	/** the extension it is about (none for `ready`; for `theme`, the theme now shown, none for the default) */
 	id?: string;
 	/** the tab it is about (an action change for one tab) */
 	tabId?: number;
@@ -215,7 +218,8 @@ export type ClickResult = 'popup' | 'clicked' | 'disabled';
  * and checked the page is the store's; the page draws none of it.
  */
 export interface ExtensionPromptRequest {
-	kind: 'install' | 'uninstall';
+	/** `theme`: a theme's install, which Chrome makes on the click with no dialog (the host is not asked) */
+	kind: 'install' | 'uninstall' | 'theme';
 	id: string;
 	/** its name as the store gave it (localized), or as installed */
 	name: string;
@@ -235,8 +239,10 @@ export type ExtensionPromptAnswer = 'accept' | 'cancel' | 'gesture';
 /** what `extensions.onPrompt`'s handler is asked: the request, with the frame of the page that asked (null when it is not one of the host's) */
 export interface ExtensionPrompt<F = unknown> extends Omit<
 	ExtensionPromptRequest,
-	'client'
+	'client' | 'kind'
 > {
+	/** (a theme's install asks no one) */
+	kind: 'install' | 'uninstall';
 	frame: F | null;
 }
 
@@ -490,4 +496,52 @@ export type ExtensionCommand =
 	/** a nested document's frame id, which the worker keeps (its requests carry it too) */
 	| { op: 'frame'; client: string }
 	/** a frame's next document (its window reported it) keeps the frame id of its last */
-	| { op: 'sameFrame'; client: string; previous: string };
+	| { op: 'sameFrame'; client: string; previous: string }
+	/** the theme shown now (ThemePayload, null for the default), and every installed theme */
+	| { op: 'theme' }
+	| { op: 'themes' }
+	/** Chrome's Reset to default: every theme is uninstalled */
+	| { op: 'resetTheme' };
+
+/**
+ * manifest.theme as Chrome reads it, with Chrome's key names and values as
+ * the manifest wrote them: `colors` ([r, g, b] or [r, g, b, a]), `tints`
+ * ([h, s, l], -1 for unchanged), `properties` (ntp_background_alignment,
+ * ntp_background_repeat, ntp_logo_alternate, ...), and `images`, each a file
+ * of the package (or a file per scale, `{"100_percent": ...}`) as `I`
+ */
+export interface ChromeTheme<I = string> {
+	colors: Record<string, unknown>;
+	tints: Record<string, unknown>;
+	properties: Record<string, unknown>;
+	images: Record<string, I | Record<string, I>>;
+}
+
+/** an image of a theme as the worker hands it over: its bytes (the host page makes its blob: URL) */
+export interface ThemeImageFile {
+	path: string;
+	type: string;
+	bytes: ArrayBuffer;
+}
+
+/** an installed theme, as `extensions.theme()`, `themes()` and `onTheme` give it */
+export interface ThemeInfo {
+	/** `chrome-theme:<extensionId>` */
+	id: string;
+	extensionId: string;
+	/** localized (`__MSG_*__` filled in) */
+	name: string;
+	description: string;
+	version: string;
+	source: ExtensionOrigin;
+	/** the theme shown now; a theme another one replaced stays installed, off, until Chrome would drop it */
+	enabled: boolean;
+	/** its images as blob: URLs of the host page's, valid while the theme is installed */
+	theme: ChromeTheme<string>;
+}
+
+/** a theme as the worker answers it, its images' bytes in it */
+export interface ThemePayload extends Omit<ThemeInfo, 'theme'> {
+	updatedAt: number;
+	theme: ChromeTheme<ThemeImageFile>;
+}

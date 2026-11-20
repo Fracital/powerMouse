@@ -49,6 +49,8 @@ await frame.go(controller.extensions.resolveUrl(options.displayUrl));
 | `menus(id)`, `clickMenu(id, info, tabId?)`         | an extension's context menu items, and telling it one was clicked                                                                                                                                                                                              |
 | `notificationEvent(id, notificationId, kind, ...)` | tell it the user clicked or closed one of its notifications                                                                                                                                                                                                    |
 | `onPrompt(handler)`                                | draw the Chrome Web Store's install and uninstall dialogs: the handler gets `{ kind, id, name, iconUrl, permissions, url, frame }` and resolves true for Add extension or Remove (see below)                                                                   |
+| `theme()`, `themes()`, `onTheme(listener)`         | the Chrome theme shown (null for the default), every installed theme, and hearing it change: see [Themes](#themes)                                                                                                                                             |
+| `resetTheme()`                                     | Chrome's Reset to default: uninstall every theme                                                                                                                                                                                                               |
 
 `controller.tabIdOf(frame)` is the tab id the extensions know a frame by, and
 `controller.activeTab` (a frame or null) is the tab `chrome.tabs.query({ active: true })`
@@ -414,10 +416,13 @@ of the listing cannot obtain a grant for the fetching document.
   a Web Store download. Installing a local file is a separate host action.
 - `getExtensionStatus(id, manifest?)` answers `force_installed` (policy),
   `enabled`, `disabled`, `deprecated_manifest_version` (an MV2 manifest, as
-  Chrome 157 installs none) or `installable`.
-- `management.getAll()` and `get(id)` answer Chrome's `ExtensionInfo`:
-  `installType` `normal`, `development` or `admin`, `updateUrl` and the
-  store's `homepageUrl` for a store install, icons as
+  Chrome 157 installs none, unless it is a theme's) or `installable`.
+- `management.getAll()` and `get(id)` answer Chrome's `ExtensionInfo`, its
+  keys sorted as the bindings give them: `installType` `normal`,
+  `development` or `admin`, the manifest's `update_url` as `updateUrl` (the
+  update service's for a store install without one), the store's
+  `homepageUrl` for a store install, `versionName` (`""` without
+  `version_name`), `type` `theme` or `extension`, icons as
   `chrome://extension-icon/<id>/<size>/0`, permissions and hosts sorted.
 - `management.uninstall(id, { showConfirmDialog: true })` asks the host and
   answers "Extension <id> uninstall canceled by user." on Cancel.
@@ -441,6 +446,77 @@ the extension's button from the same change.
 No extension's content script or injection runs in the store's pages, and
 no webRequest listener or rule sees a request for one: Chrome hides the
 store from every extension, so none can press its buttons.
+
+### Themes
+
+A package whose manifest has a `theme` key is a theme, as Chrome reads it.
+On a theme's listing, Add to Chrome installs it on the click: Chrome 157
+shows no dialog for a theme (measured on the store's Themes category), so
+the controller checks the click and the focus and asks the host nothing.
+Most of the store's themes are Manifest V2, which Chrome still installs
+for a theme: `getExtensionStatus` answers `installable` and
+`beginInstallWithManifest3` takes them. The rest of the flow is an
+extension's: `completeInstall` downloads and verifies the CRX3,
+`onInstalled` fires with `type: "theme"`, the page shows Remove from Chrome,
+and Remove from Chrome asks the host (`Remove "<name>"?`) as Chrome does.
+
+Chrome runs nothing of a theme. The worker loads one from its manifest
+without the keys an extension's code or grants come from (`background`,
+`content_scripts`, `permissions`, `host_permissions`,
+`declarative_net_request`, `web_accessible_resources`, pages, actions, and
+the rest: `src/server/extensions/themes.ts` keeps the keys every package
+has), and lists each one it left out in `ExtensionInfo.warnings`. A theme
+has no permissions, no content scripts, no rules, no background and no
+toolbar button; the hub skips it, the request path treats a scope with only
+themes as one with no extension, and its origin serves its pictures and
+`manifest.json` only (a navigation to one of its pages answers 404).
+`chrome://extensions` lists no theme, and neither does the demo's
+Extensions page.
+
+One theme is shown at a time. A new theme turns off the one it replaced:
+`getAll` lists the old one with `enabled: false`, `mayEnable: true` and
+`disabledReason: "unknown"`, and its status is `disabled`. Chrome keeps it
+for the undo of its install bubble until the tab that installed the new
+theme navigates, then uninstalls it; the worker drops it once the store's
+document that installed the new theme is gone (the next store call, list or
+theme read finds out). A theme the host installs, or turns on with
+`enable(id)`, replaces the shown one at once. `resetTheme()` is Chrome's
+Reset to default: every theme is uninstalled and the store's pages hear
+`onUninstalled`, as chrome://settings does it.
+
+The host draws the theme. `extensions.onTheme(listener)` calls the listener
+soon with the theme shown now (after a reload, the installed one) and then
+with every change, null for the default. `theme()` reads it once and
+`themes()` lists every installed theme, the shown one first. Each is a
+`ThemeInfo`:
+
+```js
+controller.extensions.onTheme((theme) => {
+	if (!theme) return useDefaultLook();
+	// { id: 'chrome-theme:<extensionId>', extensionId, name, description,
+	//   version, source: 'webstore' | 'package' | 'unpacked', enabled,
+	//   theme: { colors, tints, properties, images } }
+	applyChromeTheme(theme.theme);
+});
+```
+
+`theme` is `manifest.theme` with Chrome's key names and values as the
+manifest wrote them: `colors` (`frame: [r, g, b]`, `button_background:
+[r, g, b, a]`, ...), `tints` (`buttons: [h, s, l]`, -1 for unchanged),
+`properties` (`ntp_background_alignment`, `ntp_background_repeat`,
+`ntp_logo_alternate`) and `images` (`theme_frame`, `theme_toolbar`,
+`theme_ntp_background`, ...). STomp does not map them to colors of its own
+or fill in Chromium's defaults; the host does. Each image is a blob: URL of
+the host's page, made from the package's file; an image given per scale
+(`{ "100_percent": ..., "200_percent": ... }`) is the same dictionary of
+blob: URLs, and an image whose file the package does not have is left out,
+as Chrome leaves it out. The URLs stay valid while the theme is installed.
+The name and description are localized (`__MSG_*__`). A theme persists with
+the extensions, in the worker's store, across reloads.
+
+The demo hands the theme to its theme system: `showChromeTheme` in
+`demo/public/pm/main.js` calls `PMTheme.fromChrome(theme.theme, theme)` and
+`PMTheme.install` when the page has them.
 
 ## Limits
 

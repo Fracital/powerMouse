@@ -5715,7 +5715,8 @@ async function syncExtensions() {
 		return;
 	}
 	if (sync !== extSyncs) return; // a newer read is on its way
-	extInstalled = installed;
+	// (themes are not listed, as chrome://extensions lists none)
+	extInstalled = installed.filter((info) => info.type !== 'theme');
 	extShown = actions;
 	renderExtActions();
 	if (extPanelPopover.isOpen()) renderExtPanel();
@@ -6306,7 +6307,30 @@ function watchExtensions() {
 			return;
 		scheduleExtSync();
 	});
+	api.onTheme(showChromeTheme);
 	syncExtensions();
+}
+
+/** the Chrome theme shown (extensions.onTheme), as PMTheme last installed it */
+let chromeThemeId = null;
+
+/** hand a Chrome theme to the demo's theme system, when it has one (PMTheme owns the look) */
+function showChromeTheme(theme) {
+	const themes = globalThis.PMTheme;
+	if (!themes?.fromChrome || !themes.install) return;
+	// (one Chrome theme at a time: a new one replaces the last)
+	if (chromeThemeId && chromeThemeId !== theme?.id)
+		themes.uninstall?.(chromeThemeId);
+	chromeThemeId = null;
+	if (!theme) return;
+	themes.install({
+		...themes.fromChrome(theme.theme, theme),
+		id: theme.id,
+		name: theme.name,
+		source: 'webstore',
+		extensionId: theme.extensionId,
+	});
+	chromeThemeId = theme.id;
 }
 
 /** About: the proxy's build and what the console badges said */

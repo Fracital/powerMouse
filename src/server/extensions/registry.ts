@@ -35,6 +35,7 @@ import {
 	type Manifest,
 	type RunAt,
 	type ShippedExtension,
+	type ThemePayload,
 	type World,
 } from '../../extensions/types';
 import { EXTENSION_BUS_PREFIX } from '../../transport/messages';
@@ -56,6 +57,9 @@ import {
 	type StoredExtension,
 } from './store';
 import { verifyStorePackage } from './storeProof';
+import { isTheme, themeManifest, themeSections } from './themes';
+
+declare const self: ServiceWorkerGlobalScope;
 
 /** a content_scripts entry, or a scripting registration, as the worker matches it */
 export interface ScriptEntry {
@@ -76,6 +80,8 @@ export interface ScriptEntry {
 
 /** an extension as the worker holds it while it runs */
 export interface Loaded {
+	/** a theme: loaded from what themes.ts leaves of its manifest, so nothing of it runs */
+	theme: boolean;
 	record: StoredExtension;
 	/** the manifest, localized */
 	manifest: Manifest;
@@ -286,19 +292,23 @@ export class ExtensionRegistry {
 			for (const host of this.#dnrHosts)
 				for (const loaded of this.enabled())
 					await this.#dnrInstall(loaded, host);
+			// (a theme a store install replaced before the worker stopped)
+			for (const loaded of this.#loaded.values())
+				if (loaded.theme && !loaded.record.enabled) this.#watchReplaced();
 		})();
 		return this.#ready;
 	}
 
-	/** whether any extension is installed at all (the request path's first, synchronous question) */
+	/** whether any extension is installed at all (the request path's first, synchronous question); a theme is none */
 	get any(): boolean {
-		return this.#loaded.size > 0;
+		for (const loaded of this.#loaded.values()) if (!loaded.theme) return true;
+		return false;
 	}
 
-	/** the enabled extensions */
+	/** the enabled extensions (never a theme) */
 	*enabled(): Iterable<Loaded> {
 		for (const loaded of this.#loaded.values())
-			if (loaded.record.enabled) yield loaded;
+			if (loaded.record.enabled && !loaded.theme) yield loaded;
 	}
 
 	get(id: string): Loaded | undefined {
@@ -520,7 +530,11 @@ export class ExtensionRegistry {
 		return `data:${mimeOf(path)};base64,${bytesToBase64(bytes)}`;
 	}
 
-	async #load(record: StoredExtension): Promise<Loaded> {
+	async #load(stored: StoredExtension): Promise<Loaded> {
+		// a theme is what themes.ts leaves of it, whatever an older record kept
+		const theme = isTheme(stored.manifest);
+		const themed = theme ? themeManifest(stored.manifest) : null;
+		const record = themed ? { ...stored, manifest: themed.manifest } : stored;
 		files.attach(record.id, record.index ?? {});
 		const uiLocale = (
 			(typeof navigator !== 'undefined' && navigator.language) ||
@@ -571,18 +585,22 @@ export class ExtensionRegistry {
 					}
 				: {}),
 		};
-		const granted = new Set([
-			...(raw.permissions ?? []),
-			...(raw.host_permissions ?? []),
-			...(((await extensionState.get(record.id, 'granted')) as
-				string[] | undefined) ?? []),
-		]);
+		const granted = new Set(
+			theme
+				? []
+				: [
+						...(raw.permissions ?? []),
+						...(raw.host_permissions ?? []),
+						...(((await extensionState.get(record.id, 'granted')) as
+							string[] | undefined) ?? []),
+					],
+		);
 		// MV2's host permissions sit in `permissions`
 		const mv3 = Number(raw.manifest_version) >= 3;
 		const blocking =
 			granted.has('webRequest') &&
 			(mv3 ? record.policy : granted.has('webRequestBlocking'));
-		const warnings: string[] = [];
+		const warnings: string[] = themed ? [...themed.warnings] : [];
 		const accessible: Loaded['accessible'] = [];
 		for (const item of raw.web_accessible_resources ?? [])
 			if (typeof item === 'string')
@@ -592,9 +610,10 @@ export class ExtensionRegistry {
 					paths: item.resources.map(resourceGlob),
 					matches: item.matches ?? null,
 				});
+		const kept = async (key: string) =>
+			theme ? undefined : extensionState.get(record.id, key);
 		const registered = (
-			((await extensionState.get(record.id, 'scripts')) as
-				Record<string, unknown>[] | undefined) ?? []
+			((await kept('scripts')) as Record<string, unknown>[] | undefined) ?? []
 		).flatMap((script) => {
 			try {
 				return [registrationEntry(script)];
@@ -603,6 +622,7 @@ export class ExtensionRegistry {
 			}
 		});
 		const loaded: Loaded = {
+			theme,
 			record,
 			manifest,
 			catalogs,
@@ -612,7 +632,7 @@ export class ExtensionRegistry {
 			entries: manifestEntries(raw),
 			registered,
 			userScripts: (
-				((await extensionState.get(record.id, 'userScripts')) as
+				((await kept('userScripts')) as
 					Record<string, unknown>[] | undefined) ?? []
 			).flatMap((script) => {
 				try {
@@ -622,7 +642,7 @@ export class ExtensionRegistry {
 				}
 			}),
 			worlds:
-				((await extensionState.get(record.id, 'userScriptWorlds')) as
+				((await kept('userScriptWorlds')) as
 					Record<string, unknown>[] | undefined) ?? [],
 			accessible,
 			areas: this.#loaded.get(record.id)?.areas ?? new Map(),
@@ -650,6 +670,7 @@ export class ExtensionRegistry {
 		const background = manifest.background;
 		return {
 			id: record.id,
+			type: loaded.theme ? 'theme' : 'extension',
 			name: manifest.name,
 			shortName: manifest.short_name ?? manifest.name,
 			version: manifest.version ?? '',
@@ -727,6 +748,8 @@ export class ExtensionRegistry {
 		command: Extract<ExtensionCommand, { op: 'install' }>,
 		download: (url: string) => Promise<Uint8Array>,
 		expect?: (read: ReadPackage) => void,
+		/** the store's document that installs it: a theme it replaces stays, off, while that document does */
+		installer?: string,
 	): Promise<ExtensionInfo> {
 		await this.ready();
 		let read: ReadPackage;
@@ -778,6 +801,7 @@ export class ExtensionRegistry {
 			filename,
 			enabled: command.enabled,
 			policy: command.policy,
+			installer,
 		});
 	}
 
@@ -789,6 +813,7 @@ export class ExtensionRegistry {
 			filename: string;
 			enabled?: boolean;
 			policy?: boolean;
+			installer?: string;
 		},
 	): Promise<ExtensionInfo> {
 		const previous =
@@ -813,11 +838,137 @@ export class ExtensionRegistry {
 				: {}),
 			generation: (previous?.generation ?? 0) + 1,
 		};
+		const shown = this.currentTheme()?.record.id;
 		await records.put(record);
 		const loaded = await this.#load(record);
 		await this.#dnrSync(record.id);
+		if (loaded.theme && record.enabled)
+			await this.#replaceThemes(record.id, options.installer ?? null);
 		this.#emit({ type: previous ? 'updated' : 'installed', id: read.id });
+		if (loaded.theme && record.enabled) this.#emitTheme();
+		else if (shown === read.id) this.#emitTheme();
 		return this.info(loaded);
+	}
+
+	// ---- themes (themes.ts) ----------------------------------------------------
+
+	/** the theme shown now: the enabled one (the newest, should there be two) */
+	currentTheme(): Loaded | undefined {
+		let found: Loaded | undefined;
+		for (const loaded of this.#loaded.values())
+			if (
+				loaded.theme &&
+				loaded.record.enabled &&
+				(!found || loaded.record.updatedAt > found.record.updatedAt)
+			)
+				found = loaded;
+		return found;
+	}
+
+	#emitTheme() {
+		const id = this.currentTheme()?.record.id;
+		this.#emit(id ? { type: 'theme', id } : { type: 'theme' });
+	}
+
+	/**
+	 * `id` is the theme now (ThemeService::SetTheme): every other theme is
+	 * turned off. Chrome keeps the one it replaced, for the undo of its
+	 * install bubble, until the tab that installed the new one navigates;
+	 * so a theme the store's page `installer` replaced stays, off, while that
+	 * document lives (sweepThemes), and one any other install replaced goes
+	 */
+	async #replaceThemes(id: string, installer: string | null) {
+		await extensionState.put(id, 'replacedBy', null);
+		for (const loaded of [...this.#loaded.values()]) {
+			const other = loaded.record.id;
+			if (!loaded.theme || other === id) continue;
+			if (installer) {
+				if (loaded.record.enabled) {
+					loaded.record = { ...loaded.record, enabled: false };
+					await records.put(loaded.record);
+					this.#emit({ type: 'disabled', id: other });
+				}
+				await extensionState.put(other, 'replacedBy', installer);
+				this.#watchReplaced();
+			} else await this.#drop(other);
+		}
+	}
+
+	#sweeping: Promise<number> = Promise.resolve(0);
+	#sweepTimer: ReturnType<typeof setTimeout> | null = null;
+
+	/** look for the installing document's going while the worker runs, as Chrome drops the theme at that navigation */
+	#watchReplaced() {
+		if (this.#sweepTimer) return;
+		this.#sweepTimer = setTimeout(async () => {
+			const waiting = await this.sweepThemes().catch(() => 0);
+			this.#sweepTimer = null;
+			if (waiting) this.#watchReplaced();
+		}, 400);
+	}
+
+	/**
+	 * drop the themes a store install replaced once the document that
+	 * installed it is gone; answers how many still wait (one sweep at a time)
+	 */
+	sweepThemes(): Promise<number> {
+		const run = async () => {
+			await this.ready();
+			let waiting = 0;
+			for (const loaded of [...this.#loaded.values()]) {
+				if (!loaded.theme || loaded.record.enabled) continue;
+				const installer = await extensionState.get(
+					loaded.record.id,
+					'replacedBy',
+				);
+				if (typeof installer !== 'string') continue;
+				if (await self.clients.get(installer)) waiting++;
+				else if (this.#loaded.get(loaded.record.id) === loaded)
+					await this.#drop(loaded.record.id);
+			}
+			return waiting;
+		};
+		this.#sweeping = this.#sweeping.then(run, run);
+		return this.#sweeping;
+	}
+
+	/** a theme as the host is given it: its sections, and its images' bytes */
+	async themePayload(loaded: Loaded): Promise<ThemePayload> {
+		const { record, manifest } = loaded;
+		return {
+			id: `chrome-theme:${record.id}`,
+			extensionId: record.id,
+			name: manifest.name,
+			description: manifest.description ?? '',
+			version: manifest.version ?? '',
+			source: record.source,
+			enabled: record.enabled,
+			updatedAt: record.updatedAt,
+			theme: await themeSections(manifest, (path) =>
+				files.bytes(record.id, path),
+			),
+		};
+	}
+
+	/** every installed theme, the one shown first */
+	async themes(): Promise<ThemePayload[]> {
+		await this.sweepThemes();
+		const current = this.currentTheme();
+		const all = [...this.#loaded.values()]
+			.filter((loaded) => loaded.theme)
+			.sort(
+				(a, b) =>
+					Number(b === current) - Number(a === current) ||
+					a.record.installedAt - b.record.installedAt,
+			);
+		return Promise.all(all.map((loaded) => this.themePayload(loaded)));
+	}
+
+	/** Chrome's Reset to default (ThemeService::UseDefaultTheme): every theme is uninstalled */
+	async resetTheme(): Promise<void> {
+		await this.ready();
+		const themes = [...this.#loaded.values()].filter((loaded) => loaded.theme);
+		for (const loaded of themes) await this.#drop(loaded.record.id);
 	}
 
 	async list(): Promise<ExtensionInfo[]> {
@@ -837,11 +988,15 @@ export class ExtensionRegistry {
 		await this.ready();
 		const loaded = this.#found(id);
 		if (loaded.record.enabled !== enabled) {
+			const shown = this.currentTheme();
 			loaded.record = { ...loaded.record, enabled };
 			await records.put(loaded.record);
 			if (!enabled) this.#activeTabs.delete(id);
 			await this.#dnrSync(id);
+			// (turning a theme on shows it, as Chrome's undo does)
+			if (loaded.theme && enabled) await this.#replaceThemes(id, null);
 			this.#emit({ type: enabled ? 'enabled' : 'disabled', id });
+			if (this.currentTheme() !== shown) this.#emitTheme();
 		}
 		return this.info(loaded);
 	}
@@ -849,6 +1004,12 @@ export class ExtensionRegistry {
 	async remove(id: string): Promise<void> {
 		await this.ready();
 		this.#found(id);
+		await this.#drop(id);
+	}
+
+	/** uninstall one that is loaded (the registry is ready) */
+	async #drop(id: string): Promise<void> {
+		const shown = this.currentTheme()?.record.id === id;
 		this.#loaded.delete(id);
 		await records.delete(id);
 		await files.remove(id);
@@ -857,6 +1018,7 @@ export class ExtensionRegistry {
 		this.#activeTabs.delete(id);
 		await this.#dnrSync(id);
 		this.#emit({ type: 'removed', id });
+		if (shown) this.#emitTheme();
 	}
 
 	/** download again from where it came: the Web Store, for one installed from there */
@@ -1515,7 +1677,7 @@ export class ExtensionRegistry {
 				description: info.description,
 				version: info.version,
 				enabled: info.enabled,
-				type: 'extension',
+				type: info.type,
 				installType: loaded.record.policy
 					? 'admin'
 					: loaded.record.source === 'unpacked'

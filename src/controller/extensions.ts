@@ -33,6 +33,9 @@ import {
 	type ExtensionSource,
 	type InstallOptions,
 	type PopupHandle,
+	type ThemeImageFile,
+	type ThemeInfo,
+	type ThemePayload,
 } from '../extensions/types';
 import { EXTENSION_BUS_PREFIX, EXTENSION_CHANGES } from '../transport/messages';
 
@@ -507,6 +510,8 @@ export class ExtensionHub {
 			const list = await this.command<ExtensionInfo[]>({ op: 'list' });
 			const seen = new Set<string>();
 			for (const info of list) {
+				// (a theme has nothing the hub runs: themes.ts)
+				if (info.type === 'theme') continue;
 				seen.add(info.id);
 				const known = this.#extensions.get(info.id);
 				if (!info.enabled) {
@@ -1570,6 +1575,11 @@ export class Extensions {
 	#popups = new Set<PopupController>();
 	#prompt: ((prompt: ExtensionPrompt) => boolean | Promise<boolean>) | null =
 		null;
+	#themeListeners = new Set<(theme: ThemeInfo | null) => void>();
+	/** each installed theme's images as this page's blob: URLs, by its id and update */
+	#themeURLs = new Map<string, { key: number; urls: string[] }>();
+	/** the last theme told to onTheme's listeners (its id and update), so a change that is none tells nothing */
+	#toldTheme: string | undefined;
 
 	/** @internal */
 	constructor(backend: ExtensionsBackend) {
@@ -1610,12 +1620,137 @@ export class Extensions {
 				}
 			return;
 		}
+		if (change.type === 'theme') void this.#tellTheme();
+		if (change.type === 'removed' && change.id)
+			this.#keepThemeURLs(
+				[...this.#themeURLs.keys()].filter((id) => id !== change.id),
+			);
 		for (const listener of [...this.#listeners])
 			try {
 				listener(change);
 			} catch (error) {
 				console.error(error);
 			}
+	}
+
+	/** a theme from the worker, its images as blob: URLs of this page (kept while it is installed) */
+	#themeInfo(payload: ThemePayload): ThemeInfo {
+		const kept = this.#themeURLs.get(payload.extensionId);
+		const reuse = kept?.key === payload.updatedAt ? [...kept.urls] : null;
+		if (kept && !reuse) for (const url of kept.urls) URL.revokeObjectURL(url);
+		const urls: string[] = [];
+		const url = (file: ThemeImageFile) => {
+			const made =
+				reuse?.shift() ??
+				URL.createObjectURL(new Blob([file.bytes], { type: file.type }));
+			urls.push(made);
+			return made;
+		};
+		const images: ThemeInfo['theme']['images'] = {};
+		for (const [key, value] of Object.entries(payload.theme.images))
+			images[key] =
+				'bytes' in value
+					? url(value as ThemeImageFile)
+					: Object.fromEntries(
+							Object.entries(value as Record<string, ThemeImageFile>).map(
+								([scale, file]) => [scale, url(file)],
+							),
+						);
+		this.#themeURLs.set(payload.extensionId, { key: payload.updatedAt, urls });
+		return {
+			id: payload.id,
+			extensionId: payload.extensionId,
+			name: payload.name,
+			description: payload.description,
+			version: payload.version,
+			source: payload.source,
+			enabled: payload.enabled,
+			theme: { ...payload.theme, images },
+		};
+	}
+
+	/** forget the blob: URLs of themes no longer installed */
+	#keepThemeURLs(installed: Iterable<string>) {
+		const keep = new Set(installed);
+		for (const [id, kept] of this.#themeURLs)
+			if (!keep.has(id)) {
+				for (const url of kept.urls) URL.revokeObjectURL(url);
+				this.#themeURLs.delete(id);
+			}
+	}
+
+	#themeKey(theme: ThemeInfo | null): string {
+		return theme
+			? `${theme.extensionId}|${this.#themeURLs.get(theme.extensionId)?.key}`
+			: '';
+	}
+
+	/** tell onTheme's listeners the theme shown now, when it changed */
+	async #tellTheme() {
+		if (!this.#themeListeners.size) return;
+		let theme: ThemeInfo | null;
+		try {
+			theme = await this.theme();
+		} catch (error) {
+			return;
+		}
+		const told = this.#themeKey(theme);
+		if (told === this.#toldTheme) return;
+		this.#toldTheme = told;
+		for (const listener of [...this.#themeListeners])
+			try {
+				listener(theme);
+			} catch (error) {
+				console.error(error);
+			}
+	}
+
+	/**
+	 * The theme shown now, or null for the default: a Chrome theme the
+	 * Chrome Web Store's page installed ("Add to Chrome" on a theme's
+	 * listing) or `install()` did. Its `theme` is manifest.theme's colors,
+	 * tints, properties and images under Chrome's own key names, each image
+	 * a blob: URL of this page (valid while the theme is installed).
+	 */
+	async theme(): Promise<ThemeInfo | null> {
+		const payload = await this.#backend.command<ThemePayload | null>({
+			op: 'theme',
+		});
+		return payload ? this.#themeInfo(payload) : null;
+	}
+
+	/** every installed theme, the one shown first (a theme a new one replaced stays, off, for a while, as in Chrome) */
+	async themes(): Promise<ThemeInfo[]> {
+		const list = await this.#backend.command<ThemePayload[]>({
+			op: 'themes',
+		});
+		this.#keepThemeURLs(list.map((payload) => payload.extensionId));
+		return list.map((payload) => this.#themeInfo(payload));
+	}
+
+	/** Chrome's Reset to default: uninstall every theme (the store's pages hear management.onUninstalled) */
+	async resetTheme(): Promise<void> {
+		await this.#backend.command({ op: 'resetTheme' });
+	}
+
+	/**
+	 * Hear the theme shown change: an install from the store's page or
+	 * `install()`, a theme turned on, its removal, resetTheme(). The
+	 * listener is called once soon with the theme shown now (after a
+	 * reload, the installed one), then with each change; null is the
+	 * default theme. Returns the unsubscribe.
+	 */
+	onTheme(listener: (theme: ThemeInfo | null) => void): () => void {
+		this.#themeListeners.add(listener);
+		this.theme().then(
+			(theme) => {
+				if (!this.#themeListeners.has(listener)) return;
+				this.#toldTheme = this.#themeKey(theme);
+				listener(theme);
+			},
+			() => {},
+		);
+		return () => this.#themeListeners.delete(listener);
 	}
 
 	/**
@@ -1694,8 +1829,9 @@ export class Extensions {
 		frame: unknown,
 	): Promise<ExtensionPromptAnswer> {
 		const handler = this.#prompt;
-		if (!handler) return 'cancel';
 		const { kind, id, name, iconUrl, permissions, url } = request;
+		if (kind === 'theme') return 'accept';
+		if (!handler) return 'cancel';
 		try {
 			return (await handler({
 				kind,

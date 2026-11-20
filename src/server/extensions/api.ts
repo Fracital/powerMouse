@@ -47,7 +47,18 @@ export async function extensionCommand(
 			case 'install':
 				return await registry.install(command, download);
 			case 'list':
+				await registry.sweepThemes();
 				return await registry.list();
+			case 'theme': {
+				await registry.sweepThemes();
+				const current = registry.currentTheme();
+				return current ? await registry.themePayload(current) : null;
+			}
+			case 'themes':
+				return await registry.themes();
+			case 'resetTheme':
+				await registry.resetTheme();
+				return undefined;
 			case 'get':
 				return await registry.infoOf(command.id);
 			case 'enable': {

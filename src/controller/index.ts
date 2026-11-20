@@ -223,6 +223,8 @@ export type {
 	InstallOptions,
 	Manifest as ExtensionManifest,
 	PopupHandle,
+	ChromeTheme,
+	ThemeInfo,
 } from '../extensions/types';
 export type {
 	RemoteControllerInit,
@@ -3118,6 +3120,8 @@ export class StompController extends EventTarget {
 			!(await this.#passkeyFocused(request.client))
 		)
 			return 'gesture';
+		// a theme: Chrome installs it on the click and shows no dialog
+		if (request.kind === 'theme') return 'accept';
 		const relay = this.#init.extensionPromptRelay;
 		if (relay) return relay(request);
 		return this.extensions.prompt(request, this.#clients.frame(request.client));

@@ -22,6 +22,7 @@ import type {
 import { getPublicSuffix } from '../../suffix';
 import type { ExtensionRegistry, Loaded } from './registry';
 import { extensionState } from './store';
+import { isTheme } from './themes';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -112,25 +113,25 @@ function extensionInfo(loaded: Loaded): Record<string, unknown> {
 		shortName: manifest.short_name ?? manifest.name,
 		description: manifest.description ?? '',
 		version: manifest.version ?? '',
-		...(typeof raw.version_name === 'string'
-			? { versionName: raw.version_name }
-			: {}),
+		// (always there, '' without version_name: measured on Chrome 157)
+		versionName: typeof raw.version_name === 'string' ? raw.version_name : '',
 		mayDisable: !record.policy,
 		...(enabled ? {} : { mayEnable: !record.policy }),
 		enabled,
 		...(enabled ? {} : { disabledReason: 'unknown' }),
 		isApp: false,
-		type: raw.theme ? 'theme' : 'extension',
+		type: loaded.theme ? 'theme' : 'extension',
 		homepageUrl:
 			typeof raw.homepage_url === 'string'
 				? raw.homepage_url
 				: store
 					? `https://${STORE_HOST}/detail/${record.id}`
 					: '',
-		...(store
-			? { updateUrl: UPDATE_URL }
-			: typeof raw.update_url === 'string'
-				? { updateUrl: raw.update_url }
+		// the manifest's (ManifestURL::GetUpdateURL: a store package's may be http:)
+		...(typeof raw.update_url === 'string'
+			? { updateUrl: raw.update_url }
+			: store
+				? { updateUrl: UPDATE_URL }
 				: {}),
 		offlineEnabled: raw.offline_enabled === true,
 		optionsUrl: options
@@ -155,7 +156,12 @@ function extensionInfo(loaded: Loaded): Record<string, unknown> {
 				? 'development'
 				: 'normal',
 	};
-	return info;
+	// in Chrome's order: the dictionary the bindings convert is sorted
+	return Object.fromEntries(
+		Object.keys(info)
+			.sort()
+			.map((key) => [key, info[key]]),
+	);
 }
 
 /** every extension, enabled ones first (getAll's order) */
@@ -227,11 +233,13 @@ function storeManifest(text: unknown): Record<string, unknown> | null {
 function installStatus(
 	loaded: Loaded | undefined,
 	manifestVersion: number,
+	theme: boolean,
 ): string {
 	if (loaded?.record.policy) return 'force_installed';
 	if (loaded?.record.enabled) return 'enabled';
-	// Chrome 157 installs no Manifest V2 extension (ManifestV2Handler, hard_disable)
-	if (manifestVersion < 3) return 'deprecated_manifest_version';
+	// Chrome 157 installs no Manifest V2 extension (ManifestV2Handler,
+	// hard_disable), but a theme of any version (most of the store's are MV2)
+	if (manifestVersion < 3 && !theme) return 'deprecated_manifest_version';
 	if (loaded) return 'disabled';
 	return 'installable';
 }
@@ -300,7 +308,8 @@ async function beginInstall(
 		const icon = iconUrl ? await iconOf(directory, iconUrl) : null;
 		const manifest = storeManifest(details.manifest);
 		if (!manifest) throw new StoreError(INVALID_MANIFEST, 'manifest_error');
-		if (manifest.manifest_version !== 3 || manifest.theme || manifest.app)
+		const theme = isTheme(manifest as Manifest);
+		if (manifest.app || (!theme && manifest.manifest_version !== 3))
 			throw new StoreError(
 				'Unsupported extension type',
 				'unsupported_extension_type',
@@ -314,12 +323,14 @@ async function beginInstall(
 			typeof details.localizedName === 'string' && details.localizedName
 				? details.localizedName
 				: String(manifest.name);
+		// a theme installs on the click with no dialog (Chrome 157 measured):
+		// the controller checks the click and asks the host nothing
 		const answer = await webStore.prompt(directory, {
-			kind: 'install',
+			kind: theme ? 'theme' : 'install',
 			id,
 			name: shown(name),
 			iconUrl: icon,
-			permissions: warningsOf(manifest),
+			permissions: theme ? [] : warningsOf(manifest),
 			url: page.url,
 			client: page.client,
 		});
@@ -415,6 +426,7 @@ async function completeInstall(
 				)
 					throw new StoreError(MANIFEST_INVALID);
 			},
+			client,
 		);
 	} catch (error) {
 		// the registry's own words for what it could not read or download
@@ -480,12 +492,14 @@ async function webstorePrivate(
 			if (!EXTENSION_ID.test(id.toLowerCase()))
 				throw new StoreError(INVALID_ID);
 			let version = 3;
+			let theme = false;
 			if (args[1] !== undefined && args[1] !== null) {
 				const manifest = storeManifest(args[1]);
 				if (!manifest) throw new StoreError(INVALID_MANIFEST);
 				version = Number(manifest.manifest_version) || 1;
+				theme = isTheme(manifest as Manifest);
 			}
-			return installStatus(registry.get(id), version);
+			return installStatus(registry.get(id), version, theme);
 		}
 		case 'getBrowserLogin':
 			// (no account is signed in to the browser STomp runs in)
@@ -601,7 +615,7 @@ export async function storeCall(
 			status: 403,
 			body: { error: `This page may not call ${area}.${call}.` },
 		};
-	await registry.ready();
+	await registry.sweepThemes();
 	const page = { url, client: found.id };
 	try {
 		const value =
