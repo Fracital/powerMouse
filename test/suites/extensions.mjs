@@ -22,7 +22,9 @@
 //   webNavigation's events, a web accessible script under the page's CSP,
 //   executeScript into a sandboxed frame, a popup sized to its content;
 // - a fourth for the extension's origin, chrome-extension://<id>, in a
-//   content script, the service worker and an extension page.
+//   content script, the service worker and an extension page;
+// - a fifth for the service worker's fetch events (which requests reach
+//   them, respondWith, the package past them) and its pages' messages.
 import { crc32, deflateRawSync } from 'node:zlib';
 import {
 	done,
@@ -585,6 +587,14 @@ const originProbe = {
 		const blob = URL.createObjectURL(new Blob(['blob body']));
 		out.blob = blob.replace(/[0-9a-f-]{36}$/, 'U');
 		out.blobText = await (await fetch(blob)).text();
+		const link = document.createElement('a');
+		link.href = 'x.svg?q#h';
+		out.link = [link.href, link.origin, link.protocol, link.host, link.hostname, link.pathname, link.search, link.hash];
+		const blobLink = document.createElement('a');
+		blobLink.href = blob;
+		out.blobLink = [blobLink.origin, blobLink.protocol, blobLink.host, new URL(blob).origin];
+		const sourceOf = (object, name) => { const own = Object.getOwnPropertyDescriptor(object, name); return Function.prototype.toString.call(own.get || own.value); };
+		out.sources = [sourceOf(Document.prototype, 'URL'), sourceOf(HTMLImageElement.prototype, 'src'), sourceOf(HTMLAnchorElement.prototype, 'origin'), sourceOf(location, 'href'), sourceOf(location, 'toString'), sourceOf(Document.prototype, 'domain'), sourceOf(URL, 'createObjectURL'), sourceOf(Navigator.prototype, 'serviceWorker')];
 		const img = new Image();
 		img.src = chrome.runtime.getURL('x.svg');
 		out.img = img.src;
@@ -631,6 +641,97 @@ const originProbe = {
 		out.sender = await chrome.runtime.sendMessage('sender');
 		document.documentElement.dataset.origin = JSON.stringify(out);
 	})().catch((error) => { document.documentElement.dataset.origin = JSON.stringify({ error: String(error && error.stack || error) }); });`,
+};
+
+// the worker probe: which of an extension's requests reach its service
+// worker's fetch handler, as Chrome 157 gives them, and its pages'
+// messages to it and back (the same files make the native reference)
+const workerPages = ['*://*/pages/ext-worker.html*'];
+
+const workerProbe = {
+	'manifest.json': JSON.stringify({
+		manifest_version: 3,
+		name: 'Worker Probe',
+		version: '1.0',
+		permissions: ['tabs'],
+		host_permissions: ['http://127.0.0.1/*'],
+		background: { service_worker: 'sw.js' },
+		content_scripts: [{ matches: workerPages, js: ['cs.js'] }],
+		web_accessible_resources: [
+			{
+				resources: ['w.txt', 'w-frame.html', 'w-frame.js', 'gen.js'],
+				matches: ['<all_urls>'],
+			},
+		],
+	}),
+	'w.txt': 'package w',
+	'plain.txt': 'package plain',
+	'gone.txt': 'package gone',
+	'later.txt': 'package later',
+	'gen.js': 'window.GEN = "package";',
+	'sw.js': `const seen = [];
+	let installed = false;
+	let activated = false;
+	self.oninstall = () => { installed = true; };
+	self.onactivate = (event) => { activated = true; event.waitUntil(clients.claim()); };
+	self.onfetch = (event) => {
+		const url = new URL(event.request.url);
+		seen.push(url.pathname + url.search + ' ' + event.request.mode + ' ' + event.request.destination);
+		if (url.pathname === '/gen.js') event.respondWith(new Response('window.GEN = ' + JSON.stringify(url.search) + ';', { headers: { 'content-type': 'text/javascript' } }));
+		else if (url.pathname === '/w.txt') event.respondWith(new Response('worker w ' + event.request.url));
+		else if (url.pathname === '/gone.txt') event.respondWith(Response.error());
+		else if (url.pathname === '/later.txt') event.respondWith(new Promise((resolve) => setTimeout(() => resolve(new Response('worker later', { status: 201, headers: { 'x-from': 'worker' } })), 300)));
+	};
+	self.onmessage = (event) => {
+		event.source.postMessage({ echo: event.data, type: event.source.type, url: event.source.url, origin: event.origin, client: event.source instanceof Client, event: event.constructor.name });
+	};
+	chrome.runtime.onMessage.addListener((message, sender, respond) => {
+		clients.matchAll({ includeUncontrolled: true }).then((all) => respond({ seen, installed, activated, clients: all.map((client) => client.url).sort() }));
+		return true;
+	});`,
+	'w.html':
+		'<!doctype html><html><head><title>worker page</title><script src="gen.js?page"></script></head><body><script src="w.js"></script></body></html>',
+	'w.js': `(async () => {
+		const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+		const within = (promise, ms) => Promise.race([promise, sleep(ms).then(() => 'none')]);
+		const out = {};
+		out.gen = window.GEN;
+		const text = (path) => fetch(path).then((response) => response.text(), (error) => error.name);
+		out.w = await text('w.txt');
+		out.plain = await text('plain.txt');
+		out.gone = await text('gone.txt');
+		const later = await fetch('later.txt');
+		out.later = [later.status, later.headers.get('x-from'), await later.text()];
+		const container = navigator.serviceWorker;
+		out.controller = container.controller ? container.controller.scriptURL : null;
+		const ready = await within(container.ready, 5000);
+		out.ready = ready === 'none' ? 'none' : [ready.scope, ready.active && ready.active.scriptURL, ready.active && ready.active.state, ready.active === container.controller];
+		const target = container.controller || (ready !== 'none' && ready.active);
+		const echo = new Promise((resolve) => { container.onmessage = (event) => resolve({ data: event.data, origin: event.origin, source: event.source === target, event: event.constructor.name }); });
+		if (target) target.postMessage({ hi: 1 });
+		out.echo = await within(echo, 3000);
+		out.seen = await chrome.runtime.sendMessage('seen');
+		document.documentElement.dataset.worker = JSON.stringify(out);
+	})().catch((error) => { document.documentElement.dataset.worker = JSON.stringify({ error: String(error && error.stack || error) }); });`,
+	'w-frame.html':
+		'<!doctype html><html><head><title>worker frame</title><script src="gen.js?frame"></script></head><body><script src="w-frame.js"></script></body></html>',
+	'w-frame.js': `(async () => {
+		const w = await fetch('w.txt?frame').then((response) => response.text(), (error) => error.name);
+		parent.postMessage({ frame: location.pathname, gen: window.GEN, w, controller: !!navigator.serviceWorker.controller }, '*');
+	})();`,
+	'cs.js': `if (window === top) (async () => {
+		const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+		const within = (promise, ms) => Promise.race([promise, sleep(ms).then(() => 'none')]);
+		const out = {};
+		out.fetched = await fetch(chrome.runtime.getURL('w.txt?cs')).then((response) => response.text(), (error) => error.name);
+		const hello = new Promise((resolve) => addEventListener('message', (event) => event.data && event.data.frame && resolve(event.data)));
+		const frame = document.createElement('iframe');
+		frame.src = chrome.runtime.getURL('w-frame.html');
+		document.documentElement.append(frame);
+		out.frame = await within(hello, 8000);
+		out.seen = await chrome.runtime.sendMessage('seen');
+		document.documentElement.dataset.worker = JSON.stringify(out);
+	})().catch((error) => { document.documentElement.dataset.worker = JSON.stringify({ error: String(error && error.stack || error) }); });`,
 };
 
 // the MV2 blocker, as a .zip
@@ -747,6 +848,8 @@ const TRUSTED = 'trusted types target';
 const COMPAT = 'compat target';
 const ORIGIN = 'origin target';
 const ORIGIN_PAGE = 'origin page';
+const WORKER = 'worker target';
+const WORKER_PAGE = 'worker page';
 
 const datasetOf = (key) =>
 	new Function(
@@ -1630,6 +1733,41 @@ for (const [mode, base] of [
 		JSON.stringify(inPage),
 	);
 	ok(
+		`${mode}: an extension page's blob: URLs, a link's parts and the runtime's getters read as Chrome's`,
+		inPage?.blob === `blob:${own}/U` &&
+			inPage.blobText === 'blob body' &&
+			JSON.stringify(inPage.link) ===
+				JSON.stringify([
+					`${own}/x.svg?q#h`,
+					own,
+					'chrome-extension:',
+					originId,
+					originId,
+					'/x.svg',
+					'?q',
+					'#h',
+				]) &&
+			JSON.stringify(inPage.blobLink) ===
+				JSON.stringify([own, 'blob:', '', own]) &&
+			JSON.stringify(inPage.sources) ===
+				JSON.stringify([
+					'function get URL() { [native code] }',
+					'function get src() { [native code] }',
+					'function get origin() { [native code] }',
+					'function get href() { [native code] }',
+					'function toString() { [native code] }',
+					'function get domain() { [native code] }',
+					'function createObjectURL() { [native code] }',
+					'function get serviceWorker() { [native code] }',
+				]),
+		JSON.stringify({
+			blob: inPage?.blob,
+			link: inPage?.link,
+			blobLink: inPage?.blobLink,
+			sources: inPage?.sources,
+		}),
+	);
+	ok(
 		`${mode}: an extension page's messages are from chrome-extension://, and reach a frame of it`,
 		inPage?.pong === own &&
 			inPage.sender?.url === pageURL &&
@@ -1645,6 +1783,115 @@ for (const [mode, base] of [
 	await page.evaluate(
 		(id) => window.__controller.extensions.remove(id),
 		originId,
+	);
+
+	// the worker probe (see `workerProbe`): Chrome gives the worker's fetch
+	// handler what the extension's pages load and its pages' navigations, a
+	// web page's frame of one too, but not a web page's own loads
+	const workerInfo = await page.evaluate(
+		(files) =>
+			window.__controller.extensions.install(files, { filename: 'worker' }),
+		workerProbe,
+	);
+	const workerId = workerInfo.id;
+	const ownWorker = `chrome-extension://${workerId}`;
+	await sleep(1500);
+	await page.evaluate(
+		(url) => window.__frame.go(url),
+		`${FIXTURE}pages/ext-worker.html`,
+	);
+	const workerContent = JSON.parse(
+		(await poll(page, WORKER, datasetOf('worker'), 20000)) ?? 'null',
+	);
+	const framed = [
+		'/w-frame.html navigate iframe',
+		'/gen.js?frame no-cors script',
+		'/w-frame.js no-cors script',
+		'/w.txt?frame cors ',
+	];
+	ok(
+		`${mode}: a web page's own load of a web accessible file does not reach the extension's worker`,
+		workerContent?.fetched === 'package w' &&
+			!workerContent.seen?.seen?.some((seen) => seen.startsWith('/w.txt?cs')),
+		JSON.stringify(workerContent),
+	);
+	ok(
+		`${mode}: an extension frame in a web page is its worker's, its navigation and loads too`,
+		workerContent?.frame?.gen === '?frame' &&
+			workerContent.frame.w === `worker w ${ownWorker}/w.txt?frame` &&
+			workerContent.frame.controller === true &&
+			JSON.stringify(workerContent.seen?.seen) === JSON.stringify(framed),
+		JSON.stringify(workerContent),
+	);
+	await page.evaluate(
+		(url) => window.__frame.go(window.__controller.extensions.resolveUrl(url)),
+		`${ownWorker}/w.html`,
+	);
+	const workerPage = JSON.parse(
+		(await poll(page, WORKER_PAGE, datasetOf('worker'), 20000)) ?? 'null',
+	);
+	ok(
+		`${mode}: an extension page's loads reach its worker, which answers, lets one go to the package, fails one and answers one late`,
+		workerPage?.gen === '?page' &&
+			workerPage.w === `worker w ${ownWorker}/w.txt` &&
+			workerPage.plain === 'package plain' &&
+			workerPage.gone === 'TypeError' &&
+			JSON.stringify(workerPage.later) ===
+				JSON.stringify([201, 'worker', 'worker later']),
+		JSON.stringify(workerPage),
+	);
+	ok(
+		`${mode}: the worker's fetch events are Chrome's: which requests, their URLs, modes and destinations`,
+		JSON.stringify(workerPage?.seen?.seen) ===
+			JSON.stringify([
+				...framed,
+				'/w.html navigate document',
+				'/gen.js?page no-cors script',
+				'/w.js no-cors script',
+				'/w.txt cors ',
+				'/plain.txt cors ',
+				'/gone.txt cors ',
+				'/later.txt cors ',
+			]),
+		JSON.stringify(workerPage?.seen),
+	);
+	ok(
+		`${mode}: an extension page's navigator.serviceWorker is the worker's, and its messages go both ways`,
+		workerPage?.controller === `${ownWorker}/sw.js` &&
+			JSON.stringify(workerPage.ready) ===
+				JSON.stringify([
+					`${ownWorker}/`,
+					`${ownWorker}/sw.js`,
+					'activated',
+					true,
+				]) &&
+			JSON.stringify(workerPage.echo) ===
+				JSON.stringify({
+					data: {
+						echo: { hi: 1 },
+						type: 'window',
+						url: `${ownWorker}/w.html`,
+						origin: ownWorker,
+						client: true,
+						event: 'ExtendableMessageEvent',
+					},
+					origin: ownWorker,
+					source: true,
+					event: 'MessageEvent',
+				}),
+		JSON.stringify(workerPage?.echo),
+	);
+	ok(
+		`${mode}: the worker ran its install and activate handlers, and its clients are the extension's pages`,
+		workerPage?.seen?.installed === true &&
+			workerPage.seen.activated === true &&
+			JSON.stringify(workerPage.seen.clients) ===
+				JSON.stringify([`${ownWorker}/w.html`]),
+		JSON.stringify(workerPage?.seen),
+	);
+	await page.evaluate(
+		(id) => window.__controller.extensions.remove(id),
+		workerId,
 	);
 
 	// disable, enable, remove

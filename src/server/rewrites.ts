@@ -29,7 +29,11 @@ import {
 	type ScriptFacts,
 } from '../csp';
 import type { DnrOutcome } from '../extensions/dnr';
-import { EXTENSION_INITIATOR, extensionOfHost } from '../extensions/origin';
+import {
+	displayExtensionURL,
+	EXTENSION_INITIATOR,
+	extensionOfHost,
+} from '../extensions/origin';
 import { CONTENT_SCRIPT_ROUTE, EXTENSION_API_ROUTE } from '../extensions/types';
 import { freshFrameDocument } from '../freshFrame';
 import { sourceKey } from '../functionSource';
@@ -320,6 +324,7 @@ import {
 	documentShell,
 	type ExtensionShell,
 } from './extensions/contentScripts';
+import { fetchEvents, workerOf } from './extensions/fetchEvents';
 import {
 	ExtensionPipeline,
 	type ExtensionRequest,
@@ -3385,7 +3390,7 @@ function genericForward(
 		// the page's emulated service worker answers before the HTTP cache and
 		// the network, as a real one sits before them (docs/service-workers.md)
 		const {
-			response: fromWorker,
+			response: fromPageWorker,
 			control,
 			controller,
 			network: preloaded,
@@ -3399,6 +3404,20 @@ function genericForward(
 			navigation && topLevel ? 'document' : serverRequest.destination,
 			startPreload,
 		);
+		// an extension's own pages: its service worker's (./extensions/fetchEvents.ts)
+		const fromWorker =
+			fromPageWorker ??
+			(await answerFromExtensionWorker(
+				rewriter,
+				serverRequest,
+				url,
+				context,
+				upload,
+				referer ?? '',
+				navigation,
+				navigation && topLevel ? 'document' : serverRequest.destination,
+				client,
+			));
 		// the worker gave the page a network error
 		if (fromWorker?.type === 'error') return Response.error();
 
@@ -9003,6 +9022,62 @@ async function answerFromServiceWorker<N extends Response>(
 			network: answer.network,
 		};
 	return { response: answer, control: routed.control, controller };
+}
+
+/**
+ * A request's answer from the service worker of the extension whose page
+ * made it (or whose page it navigates to), or null for the package: Chrome's
+ * worker controls the extension's pages, never a web page
+ * (./extensions/fetchEvents.ts). The worker sees the request at its
+ * `chrome-extension://` URL; what it answers is rewritten as the package's
+ * file would have been.
+ */
+async function answerFromExtensionWorker(
+	rewriter: Rewriter,
+	serverRequest: Request,
+	url: StompURL,
+	context: RouteContext | undefined,
+	upload: Promise<Blob | undefined>,
+	referrer: string,
+	navigation: boolean,
+	destination: string,
+	client: URL | null,
+): Promise<Response | null> {
+	const registry = rewriter.extensions;
+	const id =
+		registry && !context?.internal
+			? workerOf(registry, url.url, navigation, client)
+			: null;
+	if (!id) return null;
+	let body: ArrayBuffer | null;
+	try {
+		body = (await (await upload)?.arrayBuffer()) ?? null;
+	} catch (error) {
+		return null;
+	}
+	return fetchEvents.dispatch(
+		rewriter.directory,
+		id,
+		{
+			url: displayExtensionURL(url.url.href),
+			method: serverRequest.method,
+			headers: [...serverRequest.headers].filter(
+				([name]) => !OWN_HEADERS.includes(name),
+			),
+			body,
+			mode: serverRequest.mode,
+			credentials: serverRequest.credentials,
+			cache: serverRequest.cache,
+			redirect: serverRequest.redirect,
+			referrer: displayExtensionURL(referrer),
+			referrerPolicy: serverRequest.referrerPolicy,
+			integrity: serverRequest.integrity,
+			keepalive: serverRequest.keepalive,
+			destination: destination === 'empty' ? '' : destination,
+		},
+		navigation ? '' : (context?.clientId ?? ''),
+		navigation ? (context?.resultingClientId ?? context?.clientId ?? '') : '',
+	);
 }
 
 const SCRIPT_HEADERS = {

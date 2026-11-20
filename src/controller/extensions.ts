@@ -7,6 +7,7 @@
 // contexts reach the hub on their BroadcastChannel; a RemoteController's
 // hub is its controller frame's, asked over the frame's RPC.
 import {
+	cleanPath,
 	displayExtensionURL,
 	extensionOfURL,
 	extensionURL,
@@ -571,7 +572,7 @@ export class ExtensionHub {
 			ext.info.background === 'service_worker'
 				? serviceWorkerPage(background.service_worker ?? '')
 				: background.page
-					? background.page.replace(/^\/+/, '')
+					? cleanPath(background.page)
 					: BACKGROUND_PAGE;
 		const frame = this.#frame(`${CONTEXT_NAME_PREFIX}background`);
 		ext.background = frame;

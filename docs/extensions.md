@@ -109,10 +109,15 @@ controller.extensions  --RPC-->  ExtensionHub (with the controller)    Extension
   as its messages carry it and as a message to it names it, is
   `chrome-extension://<id>`, in a page's realm too. In the extension's own
   pages the runtime puts a stand-in over the inject's `location`, and
-  `document.URL`, `documentURI`, `baseURI`, `domain` and the URLs read
-  back of elements, responses and requests show `chrome-extension://`; an
-  emulated service worker's `location` is its script's, as a
-  WorkerLocation reads (`src/extensions/runtime/present.ts`).
+  `document.URL`, `documentURI`, `baseURI`, `domain`, the URLs read back
+  of elements, responses and requests, a link's `origin`, `protocol`,
+  `host` and `hostname`, and the `blob:` URLs the page makes
+  (`blob:chrome-extension://<id>/...`, which load as the inject's own) show
+  `chrome-extension://`; an emulated service worker's `location` is its
+  script's, as a WorkerLocation reads (`src/extensions/runtime/present.ts`).
+  What the runtime defines in a page reads as native, its source included:
+  the inject hands the runtime its own toString table as it loads
+  (`src/inject/modules/Proxy.ts`, `natives.ts` masking).
 - **Content scripts.** When the worker serves a document that an enabled
   extension's `content_scripts` (or `scripting.registerContentScripts`, or
   `userScripts.register`) match, its shell gets a small part before the
@@ -173,7 +178,31 @@ controller.extensions  --RPC-->  ExtensionHub (with the controller)    Extension
   script's folder, so what it resolves against its own URL (a relative
   `fetch`, `importScripts`) resolves as in a worker. Literal
   `importScripts` are loaded ahead as script elements; others are read with
-  a synchronous request and run.
+  a synchronous request and run. The folder is the script's path as Chrome
+  resolves it from the root, so SponsorBlock's `./js/background.js` runs
+  in `js/`.
+- **Service worker.** The page an MV3 worker runs in gets what a
+  ServiceWorkerGlobalScope has: the `install`, `activate`, `fetch` and
+  `message` events with their handler attributes and classes
+  (`ExtendableEvent`, `FetchEvent`, `ExtendableMessageEvent`, `Client`,
+  `WindowClient`), `clients`, `registration` and `serviceWorker`
+  (`src/extensions/runtime/serviceWorker.ts`). Once its script ran, it gets
+  `install`, then `activate`, each awaited through `waitUntil`. The
+  worker controls the extension's pages, as Chrome's does: each one's
+  `navigator.serviceWorker` has the worker as its `controller` and
+  `ready.active`, and messages go both ways over the extension's channel,
+  cloned as postMessage clones them, with a `WindowClient` for the page as
+  the source. A worker that listens for `fetch` when its script ran tells
+  STomp's worker so (`src/server/extensions/fetchEvents.ts`), which then
+  posts it the requests Chrome would give it, before the HTTP cache:
+  navigations to the extension's pages, a web page's frame of one
+  included, and every load of those pages and their workers; never a web
+  page's own request for a web_accessible_resource (a content script's
+  included), the generated background pages' or the worker's own
+  (measured, 157). It says within 5 s whether it took the request; one it
+  did not take goes on to the package, and its response, a network error
+  included, is the page's as the origin's would be. Violentmonkey's popup
+  and options pages get their data this way (`/get-data.js`).
 - **Networking.** An extension context's `fetch`, XHR and WebSocket are
   proxied requests like a site's, through the transport and the cookie jar.
   Cross-origin requests to hosts the extension has permissions for skip CORS
@@ -181,8 +210,9 @@ controller.extensions  --RPC-->  ExtensionHub (with the controller)    Extension
   read them. `chrome.cookies` reads and writes STomp's jar, so a cookie it
   sets is the site's.
 - **Calls into the worker.** `chrome.storage`, `scripting`, `cookies`,
-  `declarativeNetRequest`, `permissions`, `management`, `userScripts` and
-  webRequest's registrations are POSTs to `<directory>extapi`. The worker
+  `declarativeNetRequest`, `permissions`, `management`, `userScripts`,
+  webRequest's registrations and a service worker's fetch handler are POSTs
+  to `<directory>extapi`. The worker
   knows an extension page by its client's URL; a content document carries
   a token the worker made for it (an HMAC of the extension and client ids),
   and may only use `storage` (and `storage.session` when the extension
@@ -286,16 +316,15 @@ document changes, which getMatchedRules reads.
 
 - Backgrounds share the controller document's thread and heap; an MV3
   service worker is emulated in a page, not a worker.
-- The emulated origin still shows in a few reads: a `blob:` URL an
-  extension's page makes reads `blob:https://<id>.invalid/...`; in a web
-  page, an element's URL a content script set to `getURL()`'s reads back
-  in the emulated form; a link's `origin`, `host` and `protocol` parts in
-  an extension's page too. The getters the runtime puts over the inject's
-  in an extension's page read as natives by name and length, not by
-  their source.
-- An emulated service worker gets no `fetch` events: Violentmonkey's
-  popup and options pages ask theirs for `/get-data.js`, which is no file
-  of the package, and render without their data.
+- The emulated origin still shows in one read: in a web page, an
+  element's URL a content script set to `getURL()`'s reads back in the
+  emulated form.
+- An emulated service worker controls every page of its extension from
+  the page's start (Chrome leaves a page that loaded before the worker
+  was active uncontrolled until `clients.claim()`). Its messages carry no
+  ports: a transfer list is cloned, not moved. With the scope open in two
+  tabs, each tab's hub runs the worker's page, and a fetch event goes to
+  whichever answers first.
 - An isolated world shares the page's realm: its top-level declarations
   stay its own (each entry is a function), but globals and prototypes are
   the page's, and separate content_scripts entries do not share

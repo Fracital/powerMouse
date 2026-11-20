@@ -344,10 +344,17 @@ export const IMPORTED_META = 'imported-scripts';
 /**
  * Where an MV3 service worker's page is: in its script's folder, so what the
  * script resolves against its own URL (a fetch of `../config/x`, a relative
- * importScripts) resolves as in the worker
+ * importScripts) resolves as in the worker. The folder is the path's as
+ * Chrome resolves it from the root: SponsorBlock's `./js/background.js` is
+ * in `js/`
  */
-export const serviceWorkerPage = (script: string) =>
-	`${script.replace(/^\/+/, '').replace(/[^/]*$/, '')}${SERVICE_WORKER_PAGE}`;
+export function serviceWorkerPage(script: string): string {
+	const folder: string[] = [];
+	for (const part of script.split(/[?#]/)[0].split('/').slice(0, -1))
+		if (part === '..') folder.pop();
+		else if (part && part !== '.') folder.push(part);
+	return [...folder, SERVICE_WORKER_PAGE].join('/');
+}
 
 /** the worker's route for an extension context's calls (`<directory>extapi`) */
 export const EXTENSION_API_ROUTE = 'extapi';

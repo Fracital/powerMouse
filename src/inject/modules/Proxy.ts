@@ -1,7 +1,8 @@
+import { RUNTIME_GLOBAL } from '../../extensions/types';
 import { keepSourcesHere, originalSource } from '../../functionSource';
 import Client from '../Client';
 import Module from '../Module';
-import { isNative } from '../nativeUtil';
+import { isNative, nativeFunction } from '../nativeUtil';
 import { LazyWeakMap } from '../ownCollections';
 
 // import { getOwnPropertyDescriptors, mirror_attributes } from './rewriteUtil.js';
@@ -717,6 +718,12 @@ export default class ProxyModule extends Module<Client> {
 				return isNative(string) ? string : (originalSource(string) ?? string);
 			},
 		);
+		// the extensions' runtime, which loads first, shows what it defines
+		// in an extension's page as natives (src/extensions/runtime/natives.ts)
+		const runtime = (global as any)[RUNTIME_GLOBAL];
+		if (runtime)
+			runtime.native = (fn: Function, name: string) =>
+				this.functionStrings.set(fn, nativeFunction(name));
 	}
 	bindNatives(target: object, natives: WeakMap<object, object>) {
 		const bindNative = <T extends Function>(target: T) =>

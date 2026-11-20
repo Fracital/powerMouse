@@ -52,6 +52,17 @@ export const natives = {
 	appendChild: global.Node.prototype.appendChild,
 	removeChild: global.Node.prototype.removeChild,
 	addEventListener: global.EventTarget.prototype.addEventListener,
+	removeEventListener: global.EventTarget.prototype.removeEventListener,
+	dispatchEvent: global.EventTarget.prototype.dispatchEvent,
+	EventTarget: global.EventTarget,
+	Event: global.Event,
+	MessageEvent: global.MessageEvent,
+	Request: global.Request,
+	Response: global.Response,
+	structuredClone: global.structuredClone.bind(global),
+	stopImmediatePropagation: global.Event.prototype.stopImmediatePropagation,
+	setPrototypeOf: Object.setPrototypeOf,
+	DOMException: global.DOMException,
 	setAttribute: global.Element.prototype.setAttribute,
 	/** the window's real name: the inject shadows it for a frame the host made */
 	windowName: getter<string>(global, 'name'),
@@ -81,3 +92,14 @@ export const natives = {
 
 export const call = <T>(fn: Function, that: unknown, ...args: unknown[]): T =>
 	natives.Reflect.apply(fn, that, args) as T;
+
+/**
+ * Show a function the runtime defines in a page as the native `name`
+ * (`get href`, `postMessage`): the inject's toString answers for it as for
+ * its own hooks. The inject hands this over as it loads, after the runtime
+ * (src/inject/modules/Proxy.ts); until then, and in a realm it does not
+ * hook, nothing changes.
+ */
+export const masking = {
+	native: (() => {}) as (fn: Function, name: string) => void,
+};

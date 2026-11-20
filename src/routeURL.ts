@@ -75,6 +75,11 @@ function flipUUID(rest: string, key: string): string {
 
 /** a page-origin blob: URL as the proxy's; anything else as it is */
 export function proxyBlobURL(url: string): string {
+	// (an extension's page reads its own as Chrome's, chrome-extension://:
+	// src/extensions/runtime/present.ts)
+	const extension = /^blob:chrome-extension:\/\/([a-p]{32})\//.exec(url);
+	if (extension && blobOrigins?.page === `https://${extension[1]}.invalid`)
+		url = `blob:${blobOrigins.page}${url.slice(56)}`;
 	if (!blobOrigins || !url.startsWith(`blob:${blobOrigins.page}/`)) return url;
 	const rest = url.slice(blobOrigins.page.length + 5);
 	return `blob:${blobOrigins.proxy}${blobOrigins.flip ? flipUUID(rest, blobOrigins.flip) : rest}`;

@@ -102,6 +102,20 @@ async function reach(ctx: Context, target: Target, port: boolean) {
 	return receivers(ctx, target, port);
 }
 
+/** the extension's background (its emulated service worker's page), woken through the hub when none is up */
+export async function backgroundOf(
+	ctx: Context,
+): Promise<Presence | undefined> {
+	const find = () =>
+		[...ctx.peers.values()].find((presence) => presence.kind === 'background');
+	if (find()) return find();
+	ctx.post({ t: 'roll' });
+	await waitFor(ctx, () => !!find(), ROLL_WAIT_MS);
+	if (!find() && (await ctx.hub('wake').catch(() => false)))
+		await waitFor(ctx, () => !!find(), WAKE_WAIT_MS);
+	return find();
+}
+
 let ids = 0;
 const nextId = (ctx: Context) => `${ctx.id}.${++ids}`;
 
