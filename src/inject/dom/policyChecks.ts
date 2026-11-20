@@ -186,7 +186,7 @@ function makeReport(
 		disposition: policy.disposition,
 		statusCode: statusCode ?? 200,
 	};
-	if (policy.directives.has('report-uri'))
+	if (policy.directives.has('report-uri') || policy.directives.has('report-to'))
 		try {
 			deferred('deliverReport')(client, policy, body);
 		} catch (error) {

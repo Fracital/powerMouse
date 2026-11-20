@@ -77,6 +77,9 @@ const SUITE_ENV = {
 	'webrtc-net': { STOMP_TEST_TRANSPORT: '1', WISP_LOG: '1' },
 	// epoxy plus the fixture hosts of test/mixed-servers.mjs
 	'mixed-content': { STOMP_TEST_TRANSPORT: '1' },
+	// an https page of the fixture's mixed.test, whose report-to the Reporting
+	// API sends only for an https document
+	'csp-reports': { STOMP_TEST_TRANSPORT: '1' },
 	// and the default-port sites of the visited suite
 	visited: { STOMP_TEST_TRANSPORT: '1' },
 	// the fixture's https origin through the test transport, and a wisp that

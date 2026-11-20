@@ -7,7 +7,12 @@
 // browser never gets the page's report-uri (src/csp.ts browserPolicy: it
 // would post the proxy's URLs), so the inject sends them, for the
 // violations it makes (./policyChecks.ts makeReport) and for the browser's
-// the page sees (./violations.ts violationShows). A deferred part
+// the page sees (./violations.ts violationShows). A policy with report-to
+// sends to no report-uri: its report goes to the endpoint the document's
+// Reporting-Endpoints names (the shell gives the client them as
+// `reportTo`), handed to the service worker as a `reports` load, which
+// delivers it as Chrome's Reporting API does (src/server/reportUploads.ts).
+// The same report is sent once either way (measured). A deferred part
 // (./deferred.ts): only a page whose policy reports reaches it.
 import type { Policy } from '../../csp';
 import { routeXHR } from '../../routeURL';
@@ -29,8 +34,49 @@ export function deliverReport(
 	policy: Policy,
 	body: ViolationReportBody,
 ) {
-	// (a policy with report-to reports there, and to no report-uri)
-	if (policy.directives.has('report-to')) return;
+	let sent = sentReports.get(client);
+	if (!sent) sentReports.set(client, (sent = new LazySet()));
+	const to = policy.directives.get('report-to');
+	if (to) {
+		// (its first token names the endpoint)
+		const endpoints = (client as { reportTo?: Record<string, string> })
+			.reportTo;
+		const name = to[0];
+		if (!endpoints || name === undefined || !Object.hasOwn(endpoints, name))
+			return;
+		const key = JSON.stringify(body);
+		if (sent.has(key)) return;
+		sent.add(key);
+		// the body's members as the Reporting API writes them: the place only
+		// where there is one
+		const members: Record<string, unknown> = { ...body };
+		if (!body.sourceFile) {
+			delete members.sourceFile;
+			delete members.lineNumber;
+			delete members.columnNumber;
+		}
+		try {
+			loadFetch(
+				client,
+				routeXHR(new StompURL(new URL(endpoints[name]!), client.url)),
+				'reports cors',
+				{
+					method: 'POST',
+					body: JSON.stringify({
+						type: 'csp-violation',
+						url: body.documentURL,
+						body: members,
+					}),
+					credentials: 'omit',
+					keepalive: true,
+					headers: { 'content-type': 'application/json' },
+				},
+			).catch(() => {});
+		} catch (error) {
+			// a document being torn down
+		}
+		return;
+	}
 	const endpoints = policy.directives.get('report-uri');
 	if (!endpoints?.length) return;
 	// Chrome's members, in its order: the place only where there is one
@@ -51,8 +97,6 @@ export function deliverReport(
 	report['status-code'] = body.statusCode;
 	report['script-sample'] = body.sample;
 	const text = JSON.stringify({ 'csp-report': report });
-	let sent = sentReports.get(client);
-	if (!sent) sentReports.set(client, (sent = new LazySet()));
 	if (sent.has(text)) return;
 	sent.add(text);
 	for (const endpoint of endpoints) {

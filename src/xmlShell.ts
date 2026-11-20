@@ -14,6 +14,7 @@ import {
 	marked,
 	policyTexts,
 	referred,
+	reportEndpoints,
 	scriptFacts,
 	sited,
 	syncXHR,
@@ -108,7 +109,7 @@ ${leftKept(names.client, url)}} else {
 	else {
 		delete globalThis.createClient;
 		${names.client}.takeNamedBase();
-	}${keptFacts(names.client, facts)}${marked(names.client, url)}
+	}${keptFacts(names.client, facts)}${reportEndpoints(names.client, facts)}${marked(names.client, url)}
 ${sited(names.client, sites)}${referred(names.client, referrer)}${policyTexts(names.client, policies)}${syncXHR(names.client, syncXHRBlocked)}
 	if (!${names.client}.applied) ${names.client}.apply();
 	${names.client}.loadXML(${JSON.stringify(script)}, ${JSON.stringify(mime)});

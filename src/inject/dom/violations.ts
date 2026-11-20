@@ -404,7 +404,12 @@ function deliverShown(
 ) {
 	const text = Reflect.apply(natives.policy, event, []) as string;
 	const entry = client.pagePolicies().find(({ browser }) => browser === text);
-	if (!entry?.policy.directives.has('report-uri')) return;
+	if (
+		!entry ||
+		(!entry.policy.directives.has('report-uri') &&
+			!entry.policy.directives.has('report-to'))
+	)
+		return;
 	const read = event as SecurityPolicyViolationEvent;
 	deferred('deliverReport')(client, entry.policy, {
 		sourceFile: read.sourceFile,
