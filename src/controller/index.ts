@@ -1101,6 +1101,12 @@ export class StompController extends EventTarget {
 	 */
 	#adblockBase: AdblockInit | null = null;
 	/**
+	 * the served file names `init.assets` falls back to (the dist names), for
+	 * a classic-script host that names a file itself, such as a service worker
+	 * it registers without `register()`
+	 */
+	static readonly DEFAULT_ASSETS: Readonly<Required<Assets>> = DEFAULT_ASSETS;
+	/**
 	 * Register the STomp service worker served from `directory` (the
 	 * constructor's default when omitted: the directory of the current script)
 	 * and resolve once it is activated. The registration goes straight into

@@ -3,6 +3,11 @@
 // StompController / Frame API from dist/Controller.js.
 
 const DIRECTORY = '/stomp/';
+// the served file names, when a host vendors dist/ under names of its own
+// (init.assets; a host sets globalThis.STOMP_ASSETS before this script). The
+// service worker registered below is named from it too, so no file name of
+// the bundle is written here
+const ASSETS = globalThis.STOMP_ASSETS ?? {};
 const SEARCH = new SearchBuilder('https://search.brave.com/search?q=%s');
 const QUICK_LINKS = [
 	['Reddit', 'https://www.reddit.com/', 'orange'],
@@ -1039,6 +1044,7 @@ async function startController(name) {
 		controller = new StompRemoteController({
 			proxyOrigin: PROXY_ORIGIN,
 			directory: DIRECTORY,
+			assets: ASSETS,
 			transport: transports[name](),
 			codec: 'xor',
 			cache: CACHE,
@@ -1059,7 +1065,7 @@ async function startController(name) {
 		// activated): its transport, the transport worker, epoxy's module and
 		// the wisp carrier, comes up while a first visit's worker installs
 		const registration = await navigator.serviceWorker.register(
-			`${DIRECTORY}serviceWorker.js`,
+			`${DIRECTORY}${ASSETS.serviceWorker ?? StompController.DEFAULT_ASSETS.serviceWorker}`,
 			{ scope: DIRECTORY, updateViaCache: 'none' },
 		);
 		setStatus(`Loading ${name} transport…`);
@@ -1067,6 +1073,7 @@ async function startController(name) {
 			serviceworker: registration,
 			transport: transports[name](),
 			directory: DIRECTORY,
+			assets: ASSETS,
 			codec: 'xor',
 			// ?carrierhost=0: this visit's transport opens its own carrier
 			...(new URLSearchParams(location.search).get('carrierhost') === '0' && {
