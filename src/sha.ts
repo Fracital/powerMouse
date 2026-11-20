@@ -57,7 +57,8 @@ function base64(words: Uint32Array, count: number): string {
 	return btoa(binary);
 }
 
-function sha256(bytes: Uint8Array): string {
+/** the SHA-256 of `bytes`: its eight words */
+function sha256Words(bytes: Uint8Array): Uint32Array {
 	const h = Uint32Array.of(
 		0x6a09e667,
 		0xbb67ae85,
@@ -107,7 +108,22 @@ function sha256(bytes: Uint8Array): string {
 		}
 		[a, b, c, d, e, f, g, k].forEach((value, i) => (h[i] = h[i] + value));
 	}
-	return base64(h, 8);
+	return h;
+}
+
+function sha256(bytes: Uint8Array): string {
+	return base64(sha256Words(bytes), 8);
+}
+
+/**
+ * The SHA-256 of `text`'s UTF-8 bytes in hex: the hash V8 names a script
+ * by (CallSite.getScriptHash, src/inject/positionMaps.ts)
+ */
+export function sha256Hex(text: string): string {
+	let hex = '';
+	for (const word of sha256Words((encoder ??= new TextEncoder()).encode(text)))
+		hex += (word >>> 0).toString(16).padStart(8, '0');
+	return hex;
 }
 
 /** SHA-512 (or SHA-384, `short`) over 32-bit halves: [high, low] pairs */

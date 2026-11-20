@@ -16,6 +16,9 @@ export function useHost(given: Host) {
 	host = given;
 }
 
+/** (the inject keeps the map of such code; the harness places none) */
+export const APART = { apart: true };
+
 export function modifyJS(
 	script: string,
 	_url: unknown,

@@ -150,7 +150,7 @@ import {
 	notificationParts,
 	permissionElements,
 } from '../permissionGates';
-import { placeIn } from '../positionMaps';
+import { readers as positionReaders } from '../positionMaps';
 import { madeReport, reportsSeen } from '../reportsSeen';
 import { bucketMethods } from '../storageBucketMethods';
 import { storageUsage } from '../storageUsage';
@@ -224,8 +224,10 @@ import {
 } from './taintRefusals';
 import { uncontrolledCopies } from './uncontrolledCopies';
 import {
+	codePlace,
 	dispatchViolation,
 	evalError,
+	handlerPlace,
 	markupBaseSite,
 	markupScriptSite,
 	noteBaseSite,
@@ -258,9 +260,15 @@ export const parts = {
 	// what a page's add(), addAll() and caches.match() do past their hooks'
 	// checks, at a realm's first (../cacheCalls.ts; ../modules/Partition.ts)
 	cacheCalls,
-	// the reader of the maps of script files' rewrites, at a realm's first
-	// position of one (../positionMaps.ts; ../positionParts.ts)
-	placeIn,
+	// the reader of the maps of rewrites, at a realm's first position of
+	// one: a script file's, and code's the inject rewrote, which it finds by
+	// the script V8 ran (../positionMaps.ts; ../positionParts.ts)
+	positionReaders,
+	// where the markup has a script or a handler V8 counts a frame's line
+	// and column from (./violations.ts; Client.ts rewriteInlineScripts,
+	// modules/DOMAttributes.ts)
+	codePlace,
+	handlerPlace,
 	// what a tainted source's refusals say (a WebGL texture, a VideoFrame, an
 	// OffscreenCanvas's export), at a document's first (./taintRefusals.ts;
 	// modules/CanvasTaint.ts)

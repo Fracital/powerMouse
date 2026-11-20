@@ -35,8 +35,10 @@ export interface RewriteRequest {
 }
 
 /** a script's output with the backend that made it (always the wasm module); the output alone when nothing rewrote it */
-export interface RewriteAnswer extends Required<RewrittenBy> {
+export interface RewriteAnswer extends Required<Pick<RewrittenBy, 'by'>> {
 	output: string;
+	/** the map of an output asked for apart (src/wasm/rewriter.ts takeApart) */
+	map?: string;
 }
 
 /** a script that came as UTF-8: its bytes, handed over, in place of its text (src/wasm/rewriteBytes.ts) */

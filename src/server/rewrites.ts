@@ -5649,7 +5649,11 @@ const TOKEN_ALPHABET =
 function streamMarkup(
 	read: HeadRead,
 	first: string,
-	prewrite: (segment: string) => {
+	/** `at`: where the piece starts in the document (the lines before, the column) */
+	prewrite: (
+		segment: string,
+		at: [number, number],
+	) => {
 		finish: () => Promise<Prewritten>;
 	} | null,
 	meta: ((segment: string) => void) | null,
@@ -5677,6 +5681,9 @@ function streamMarkup(
 			let based = false;
 			let later = false;
 			let head = told !== null && !BODY_START.test(first);
+			// where the next piece starts in the document: the lines before
+			// (line feeds) and its column
+			const at: [number, number] = [0, 0];
 			const send = (segment: string, end: boolean) => {
 				let said: HeadTold | null = null;
 				if (later) {
@@ -5688,7 +5695,18 @@ function streamMarkup(
 				}
 				later = true;
 				if (!based && hasBase(segment)) based = true;
-				const job = based ? null : prewrite(segment);
+				const job = based ? null : prewrite(segment, [at[0], at[1]]);
+				const last = segment.lastIndexOf('\n');
+				if (last < 0) at[1] += segment.length;
+				else {
+					for (
+						let i = segment.indexOf('\n');
+						i >= 0;
+						i = segment.indexOf('\n', i + 1)
+					)
+						at[0]++;
+					at[1] = segment.length - last - 1;
+				}
 				order = order.then(async () => {
 					let table: Prewritten | null = null;
 					if (job)
@@ -6217,6 +6235,8 @@ export function registerRewrites(
 		markup: string,
 		url: StompURL,
 		partition: string | null,
+		/** where `markup` starts in the document: the lines before, the column */
+		at: [number, number] = [0, 0],
 	): {
 		dispatched: Promise<void>;
 		finish: () => Promise<Prewritten>;
@@ -6235,15 +6255,39 @@ export function registerRewrites(
 		const encoder = new TextEncoder();
 		const dispatches: Promise<void>[] = [];
 		const access = helperNames(config).access;
+		// where each script's text starts in the document, as V8 counts a
+		// script of the document from (its frames' lines are the document's):
+		// the lines before (line feeds; a carriage return alone ends none,
+		// measured) and its column (rewriteJS.ts ScriptSource.place)
+		let [lines, lineStart] = [at[0], -at[1]];
+		let counted = 0;
+		const places = scripts.map(([, , start]): [number, number] => {
+			for (
+				let end = markup.indexOf('\n', counted);
+				end >= 0 && end < start;
+				end = markup.indexOf('\n', end + 1)
+			) {
+				lines++;
+				lineStart = end + 1;
+			}
+			counted = Math.max(counted, start);
+			return [lines, start - lineStart];
+		});
 		const outputs = scripts.map(
-			async ([kind, source, start, end]): Promise<
-				Prewritten['scripts'][number] | null
-			> => {
-				const entry = (output: string): Prewritten['scripts'][number] => [
+			async (
+				[kind, source, start, end],
+				index,
+			): Promise<Prewritten['scripts'][number] | null> => {
+				const entry = (
+					output: string,
+					map: string,
+				): Prewritten['scripts'][number] => [
 					kind,
 					start,
 					end,
 					...packRewrite(kind, source, output, access),
+					map,
+					places[index]!,
 				];
 				let sent!: () => void;
 				dispatches.push(new Promise((resolve) => (sent = resolve)));
@@ -6264,20 +6308,30 @@ export function registerRewrites(
 								encoder.encode(source),
 							)
 						: null;
+					// (the map the rewrite handed over apart is kept beside it)
 					const kept = key !== null ? await rewrites!.match(key) : null;
-					if (kept !== null) return entry(await kept.text());
+					if (kept !== null)
+						return entry(
+							await kept.text(),
+							(await (await rewrites!.match(`${key}m`))?.text()) ?? '',
+						);
+					const told: RewrittenBy = {};
 					const rewriting = pool.rewriteInline(
 						source,
 						url,
 						config,
 						type,
 						preamble,
+						told,
 					);
 					sent();
 					const output = await rewriting;
 					if (output === null || output === source) return null;
-					if (key !== null) void rewrites!.put(key, output);
-					return entry(output);
+					if (key !== null) {
+						void rewrites!.put(key, output);
+						if (told.map) void rewrites!.put(`${key}m`, told.map);
+					}
+					return entry(output, told.map ?? '');
 				} finally {
 					sent();
 				}
@@ -7405,7 +7459,7 @@ export function registerRewrites(
 					const token = streamMarkup(
 						read,
 						markup,
-						(segment) => prewrite(segment, url, partition),
+						(segment, at) => prewrite(segment, url, partition, at),
 						request.navigation && hints
 							? (segment) => applyMeta(hints, segment)
 							: null,

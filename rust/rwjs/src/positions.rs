@@ -26,6 +26,10 @@
 //!   to read them from;
 //! - the stretches of the output without the text ahead of its code
 //!   (`edits::Positions`).
+//!
+//! Code the inject rewrites (an inline script, a handler, eval) carries no
+//! map: its rewrite hands the same map over beside the output
+//! ([`write_apart`]), and the inject keeps it by the script V8 runs.
 
 use edits::{Positions, push_vlq};
 
@@ -43,19 +47,49 @@ pub fn line_lengths(source: &str) -> String {
 	let mut lengths = Vec::new();
 	let mut start = 0u32;
 	let mut at = 0u32;
-	let mut chars = source.chars().peekable();
-	while let Some(c) = chars.next() {
-		at += c.len_utf16() as u32;
-		let end = match c {
-			'\r' if chars.peek() == Some(&'\n') => {
-				chars.next();
-				at += 1;
+	let bytes = source.as_bytes();
+	let mut i = 0;
+	// (read by the byte: a character's first byte counts one unit, a
+	// four-byte one's two, the bytes after it none)
+	const ONES: u64 = 0x0101_0101_0101_0101;
+	const HIGH: u64 = 0x8080_8080_8080_8080;
+	let zero = |word: u64| word.wrapping_sub(ONES) & !word & HIGH;
+	while i < bytes.len() {
+		// (eight bytes at once while none ends a line or starts a character
+		// past ASCII: a minified script's lines are long)
+		if let Some(eight) = bytes.get(i..i + 8) {
+			let word = u64::from_le_bytes(eight.try_into().unwrap());
+			if (word & HIGH) | zero(word ^ (ONES * u64::from(b'\n'))) | zero(word ^ (ONES * u64::from(b'\r'))) == 0 {
+				i += 8;
+				at += 8;
+				continue;
+			}
+		}
+		let byte = bytes[i];
+		i += 1;
+		let end = match byte {
+			b'\n' => true,
+			b'\r' => {
+				if bytes.get(i) == Some(&b'\n') {
+					i += 1;
+					at += 1;
+				}
 				true
 			}
-			'\n' | '\r' | '\u{2028}' | '\u{2029}' => true,
+			// LS and PS: E2 80 A8, E2 80 A9
+			0xe2 => bytes[i] == 0x80 && matches!(bytes[i + 1], 0xa8 | 0xa9),
 			_ => false,
 		};
+		at += match byte {
+			0x80..=0xbf => 0,
+			0xf0.. => 2,
+			_ => 1,
+		};
 		if end {
+			// (the line ends after LS's or PS's last byte)
+			if byte == 0xe2 {
+				i += 2;
+			}
 			lengths.push(at - start);
 			start = at;
 		}
@@ -122,6 +156,19 @@ pub fn write_statement(
 	out.push_str(CALL_TAIL);
 }
 
+/// The map of an output that carries none (`Options::apart`), at the end of
+/// `out`: as the statement's, but its first number is the output's
+/// position past the text ahead of the code itself (`written` the UTF-16
+/// length of that text), and the lines are always there
+pub fn write_apart(out: &mut String, written: u32, lines: &str, positions: &Positions) {
+	let (at, stands) = positions.fill.unwrap_or((0, 0));
+	push_vlq(out, u64::from(at + written));
+	push_vlq(out, u64::from(at));
+	push_vlq(out, u64::from(stands));
+	out.push_str(lines);
+	out.push_str(&positions.runs);
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -143,5 +190,11 @@ mod tests {
 		push_vlq(&mut want, 2);
 		push_vlq(&mut want, 4);
 		assert_eq!(line_lengths("\u{1F600}a\nb"), want);
+		// two- and three-byte characters (one with LS's first byte) count one
+		let mut want = String::new();
+		for n in [4, 3, 1, 1] {
+			push_vlq(&mut want, n);
+		}
+		assert_eq!(line_lengths("é\u{20AC}\u{2028}\u{2029}\u{2029}a"), want);
 	}
 }

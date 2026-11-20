@@ -162,7 +162,10 @@ export class RewritePool {
 		);
 		// the worker says the wasm module rewrote it (the only backend)
 		if (answer === null || typeof answer === 'string') return answer;
-		if (told) told.by = answer.by;
+		if (told) {
+			told.by = answer.by;
+			if (answer.map) told.map = answer.map;
+		}
 		return answer.output;
 	}
 	/**
@@ -222,6 +225,8 @@ export class RewritePool {
 	/**
 	 * A document's inline script, rewritten by the worker with the least in
 	 * hand (with its preamble). Null when none is ready or answered in time.
+	 * `told` has the map of the output the rewrite handed over apart
+	 * (src/prewrite.ts).
 	 */
 	async rewriteInline(
 		script: string,
@@ -229,8 +234,17 @@ export class RewritePool {
 		config: Config,
 		type: ScriptType,
 		preamble: string,
+		told?: RewrittenBy,
 	): Promise<string | null> {
-		return this.#rewriteOne(script, url, config, type, undefined, preamble);
+		return this.#rewriteOne(
+			script,
+			url,
+			config,
+			type,
+			{ apart: true },
+			preamble,
+			told,
+		);
 	}
 	/**
 	 * The script rewritten by a worker, or null when the caller must rewrite

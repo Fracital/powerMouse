@@ -136,7 +136,9 @@ none) and the column in UTF-16 units (`./violations.ts`
 one's names none, as natively. One the page's code inserts (through the
 DOM, by document.write) names the inserting call, as Chrome's does: in a
 script file, its place in the file's own text, from the map the service
-worker's rewrite of the file carries (`docs/rust-plan.md`, position maps).
+worker's rewrite of the file carries, and in code the inject rewrote (a
+script of the markup, eval, a handler) from the map its rewrite handed
+over (`docs/rust-plan.md`, position maps).
 The console says what Chrome's says of
 each refusal (the page's directive, its notes on 'unsafe-inline' and on
 the fallback directive), and
@@ -160,7 +162,12 @@ script-src (or default-src) decides eval, `Function`, a string timer and
 WebAssembly compilation: without 'unsafe-eval' (or 'wasm-unsafe-eval', which
 allows only WebAssembly) the inject throws Chrome's EvalError or CompileError
 naming the page's directive, runs nothing, and reports it; a string timer
-runs nothing and throws nothing. STomp's own code is never refused: it evals
+runs nothing and throws nothing. The violation names the page's call, as
+Chrome's does (sourceFile, lineNumber, columnNumber): in a script file, in
+a script of the markup (the document's lines, its first line's column
+from where its text starts) or in a handler (from where its start tag
+ends), read through the map of the rewrite of the code that made the call
+(`docs/rust-plan.md`, position maps). STomp's own code is never refused: it evals
 through the realm's own `eval` captured before the page's, and its wasm
 compiles with native `WebAssembly` methods captured before the inject's wrap
 (`src/wasm/module.ts`), so the page's policy never reaches it.

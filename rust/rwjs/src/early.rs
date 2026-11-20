@@ -1908,6 +1908,7 @@ mod tests {
 			module,
 			holder: false,
 			positions: false,
+			apart: false,
 			config: &config,
 			params: &params,
 		};

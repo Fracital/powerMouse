@@ -522,10 +522,12 @@ export const policyChecks = {
 				false,
 				// a script of the markup's names where its text starts, one the
 				// page's code inserts the inserting call (in a script file, its
-				// place in the file's text: ../positionParts.ts)
+				// place in the file's text: ../positionParts.ts), and so does a
+				// handler the page's code sets (one of the markup's names none:
+				// measured, Chrome 157)
 				client.parsedSource === code
 					? deferred('markupScriptSite')(client, code)
-					: elem && script
+					: script && (elem || !client.markupCopy)
 						? callerSite(client)
 						: undefined,
 			);
@@ -582,10 +584,14 @@ export const policyChecks = {
 		const wasm = kind === 'wasm-compile' || kind === 'wasm-module';
 		const blocked = wasm ? 'wasm-eval' : 'eval';
 		let directive: string | null = null;
+		// the violation names the page's call (of eval, Function, the timer),
+		// placed in the page's text (measured, Chrome 157)
+		let site: Site | undefined | null = null;
 		for (const { policy } of client.pagePolicies()) {
 			const governed = governing(policy, 'script-src');
 			if (!governed) continue;
 			if (codeAllows(governed.sources, 'script-src', { wasm })) continue;
+			if (site === null) site = callerSite(client);
 			const shown =
 				sample &&
 				governed.sources.some(
@@ -593,7 +599,17 @@ export const policyChecks = {
 				)
 					? sample.slice(0, 40)
 					: '';
-			dispatchViolation(client, policy, 'script-src', blocked, shown, null);
+			dispatchViolation(
+				client,
+				policy,
+				'script-src',
+				blocked,
+				shown,
+				null,
+				undefined,
+				undefined,
+				site,
+			);
 			// the first enforced policy that refuses it names the thrown error
 			if (policy.disposition === 'enforce' && directive === null)
 				directive = `${governed.name} ${governed.sources.join(' ')}`;

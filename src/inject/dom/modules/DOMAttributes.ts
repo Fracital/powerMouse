@@ -620,16 +620,26 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					}
 					// the browser compiles the code as a function's body: marked,
 					// so the function reads back with the page's code in it
+					// (its positions read as its own, as natively: of its tag in the
+					// page's markup, ./violations.ts handlerPlace)
 					const key = sourceKey(source);
 					keepSource(key, source);
+					const head = handlerMark(key);
 					element.setAttribute(
 						name,
-						handlerMark(key) +
+						head +
 							modifyJS(
 								source,
 								moduleClient.baseURL,
 								moduleClient.config,
 								'generic',
+								'',
+								{
+									head,
+									place: moduleClient.markupCopy
+										? deferred('handlerPlace')(moduleClient, name, source)
+										: undefined,
+								},
 							),
 					);
 				}
