@@ -39,6 +39,9 @@
 //! does not export, a namespace whose names a module outside the cycle
 //! decides) declines the link, and the host closes the cycle as it did
 //! before.
+//!
+//! Its functions are built for size (`#[optimize(size)]`) in a crate built
+//! for speed (rust/Cargo.toml): a document links a cycle once, if at all.
 use std::collections::HashMap;
 
 use edits::{Edit, Piece};
@@ -154,6 +157,7 @@ struct Walk<'a> {
 }
 
 impl<'a> Walk<'a> {
+	#[optimize(size)]
 	fn enter(&mut self, var: bool) {
 		self.stack.push(self.current);
 		self.m.scopes.push(Scope {
@@ -164,10 +168,12 @@ impl<'a> Walk<'a> {
 		self.current = self.m.scopes.len() - 1;
 	}
 
+	#[optimize(size)]
 	fn leave(&mut self) {
 		self.current = self.stack.pop().unwrap_or(0);
 	}
 
+	#[optimize(size)]
 	fn declare(&mut self, name: &'a str, span: Span, scope: usize) {
 		let shorthand = std::mem::take(&mut self.shorthand);
 		self.m.scopes[scope].names.push(name);
@@ -176,6 +182,7 @@ impl<'a> Walk<'a> {
 		}
 	}
 
+	#[optimize(size)]
 	fn reference(&mut self, it: &IdentifierReference<'a>, shorthand: bool) {
 		self.m.refs.push(Ref {
 			name: it.name.as_str(),
@@ -187,6 +194,7 @@ impl<'a> Walk<'a> {
 }
 
 /// whether a class has a static member `name`, which its `name` is then
+#[optimize(size)]
 fn static_name(class: &Class) -> bool {
 	// (the key's own text: oxc's static name of a numeric key formats the
 	// number, which would bring the float printer into the module)
@@ -204,14 +212,17 @@ fn static_name(class: &Class) -> bool {
 }
 
 impl<'a> Visit<'a> for Walk<'a> {
+	#[optimize(size)]
 	fn enter_scope(&mut self, flags: ScopeFlags, _: &std::cell::Cell<Option<ScopeId>>) {
 		self.enter(flags.contains(ScopeFlags::ClassStaticBlock));
 	}
 
+	#[optimize(size)]
 	fn leave_scope(&mut self) {
 		self.leave();
 	}
 
+	#[optimize(size)]
 	fn visit_function(&mut self, it: &Function<'a>, _: ScopeFlags) {
 		let kind = std::mem::take(&mut self.var_kind);
 		let mut named = false;
@@ -241,6 +252,7 @@ impl<'a> Visit<'a> for Walk<'a> {
 		self.var_kind = kind;
 	}
 
+	#[optimize(size)]
 	fn visit_arrow_function_expression(&mut self, it: &ArrowFunctionExpression<'a>) {
 		let kind = std::mem::take(&mut self.var_kind);
 		self.enter(false);
@@ -255,6 +267,7 @@ impl<'a> Visit<'a> for Walk<'a> {
 		self.var_kind = kind;
 	}
 
+	#[optimize(size)]
 	fn visit_class(&mut self, it: &Class<'a>) {
 		let kind = std::mem::take(&mut self.var_kind);
 		let declaration = it.r#type == ClassType::ClassDeclaration;
@@ -308,6 +321,7 @@ impl<'a> Visit<'a> for Walk<'a> {
 		self.var_kind = kind;
 	}
 
+	#[optimize(size)]
 	fn visit_variable_declaration(&mut self, it: &VariableDeclaration<'a>) {
 		let kind = self.var_kind;
 		for declarator in &it.declarations {
@@ -328,6 +342,7 @@ impl<'a> Visit<'a> for Walk<'a> {
 		self.var_kind = kind;
 	}
 
+	#[optimize(size)]
 	fn visit_binding_identifier(&mut self, it: &BindingIdentifier<'a>) {
 		let mut scope = self.current;
 		if self.var_kind {
@@ -338,6 +353,7 @@ impl<'a> Visit<'a> for Walk<'a> {
 		self.declare(it.name.as_str(), it.span, scope);
 	}
 
+	#[optimize(size)]
 	fn visit_binding_property(&mut self, it: &BindingProperty<'a>) {
 		if it.computed {
 			self.visit_property_key(&it.key);
@@ -347,10 +363,12 @@ impl<'a> Visit<'a> for Walk<'a> {
 		self.shorthand = false;
 	}
 
+	#[optimize(size)]
 	fn visit_identifier_reference(&mut self, it: &IdentifierReference<'a>) {
 		self.reference(it, false);
 	}
 
+	#[optimize(size)]
 	fn visit_object_property(&mut self, it: &ObjectProperty<'a>) {
 		if let (true, Expression::Identifier(id)) = (it.shorthand, &it.value) {
 			self.reference(id, true);
@@ -359,6 +377,7 @@ impl<'a> Visit<'a> for Walk<'a> {
 		walk::walk_object_property(self, it);
 	}
 
+	#[optimize(size)]
 	fn visit_assignment_target_property_identifier(&mut self, it: &AssignmentTargetPropertyIdentifier<'a>) {
 		self.reference(&it.binding, true);
 		if let Some(init) = &it.init {
@@ -366,6 +385,7 @@ impl<'a> Visit<'a> for Walk<'a> {
 		}
 	}
 
+	#[optimize(size)]
 	fn visit_assignment_expression(&mut self, it: &AssignmentExpression<'a>) {
 		let at = self.m.refs.len();
 		walk::walk_assignment_expression(self, it);
@@ -382,12 +402,14 @@ impl<'a> Visit<'a> for Walk<'a> {
 		}
 	}
 
+	#[optimize(size)]
 	fn visit_import_meta(&mut self, it: &ImportMeta) {
 		self.m.metas.push(it.span);
 	}
 }
 
 /// what `literal` (with `with`) names, of `count` members
+#[optimize(size)]
 fn source_of(text: &str, literal: &StringLiteral, with: &Option<oxc::allocator::Box<WithClause>>, count: usize) -> Option<Source> {
 	let value = literal.value.as_str()?;
 	if let Some(index) = value.strip_prefix('\u{1}') {
@@ -400,6 +422,7 @@ fn source_of(text: &str, literal: &StringLiteral, with: &Option<oxc::allocator::
 	Some(Source::Outside(value.to_owned(), attributes.to_owned()))
 }
 
+#[optimize(size)]
 fn walk_member<'a>(allocator: &'a Allocator, text: &'a str, count: usize) -> Option<Member<'a>> {
 	let parsed = Parser::new(allocator, text, SourceType::mjs()).parse();
 	if parsed.fatal_error || parsed.diagnostics.has_errors() {
@@ -555,6 +578,7 @@ fn walk_member<'a>(allocator: &'a Allocator, text: &'a str, count: usize) -> Opt
 }
 
 /// `text` as a string literal
+#[optimize(size)]
 fn quote(text: &str) -> String {
 	let mut out = String::with_capacity(text.len() + 2);
 	out.push('"');
@@ -575,6 +599,7 @@ fn quote(text: &str) -> String {
 }
 
 /// `from "specifier" attributes`
+#[optimize(size)]
 fn from(source: &Source) -> String {
 	match source {
 		Source::Outside(specifier, attributes) if attributes.is_empty() => format!("from {}", quote(specifier)),
@@ -589,6 +614,7 @@ struct Linker<'a> {
 
 impl<'a> Linker<'a> {
 	/// the scope `name` resolves to from `scope` of member `m`, or None (a global)
+	#[optimize(size)]
 	fn resolve(&self, m: usize, name: &str, mut scope: usize) -> Option<usize> {
 		let scopes = &self.members[m].scopes;
 		loop {
@@ -603,6 +629,7 @@ impl<'a> Linker<'a> {
 	}
 
 	/// whether a scope from `scope` up to the top (not counting it) of member `m` declares `name`
+	#[optimize(size)]
 	fn shadowed(&self, m: usize, name: &str, mut scope: usize) -> bool {
 		let scopes = &self.members[m].scopes;
 		while scope != 0 {
@@ -614,11 +641,13 @@ impl<'a> Linker<'a> {
 		false
 	}
 
+	#[optimize(size)]
 	fn import_of(&self, m: usize, local: &str) -> Option<&(&'a str, Source, Imported)> {
 		self.members[m].imports.iter().find(|(name, ..)| *name == local)
 	}
 
 	/// what the top-level binding `local` of member `m` is
+	#[optimize(size)]
 	fn local(&self, m: usize, local: &str, seen: &mut Vec<(usize, String)>) -> Option<Target> {
 		match self.import_of(m, local) {
 			Some((_, Source::Member(j), Imported::Name(name))) => self.export(*j, name, seen),
@@ -632,6 +661,7 @@ impl<'a> Linker<'a> {
 	}
 
 	/// what export `name` of member `m` is: None when it has none, or it is ambiguous
+	#[optimize(size)]
 	fn export(&self, m: usize, name: &str, seen: &mut Vec<(usize, String)>) -> Option<Target> {
 		if seen.iter().any(|(j, n)| *j == m && n == name) {
 			return None;
@@ -642,6 +672,7 @@ impl<'a> Linker<'a> {
 		found
 	}
 
+	#[optimize(size)]
 	fn export_in(&self, m: usize, name: &str, seen: &mut Vec<(usize, String)>) -> Option<Target> {
 		let member = &self.members[m];
 		if let Some((_, export)) = member.exports.iter().find(|(n, _)| n == name) {
@@ -680,6 +711,7 @@ impl<'a> Linker<'a> {
 	}
 
 	/// the export names of member `m`, and the modules outside whose names it exports by `*`
+	#[optimize(size)]
 	fn names(&self, m: usize, names: &mut Vec<String>, outside: &mut Vec<Source>, seen: &mut Vec<usize>, top: bool) {
 		if seen.contains(&m) {
 			return;
@@ -715,6 +747,7 @@ struct Names<'a> {
 }
 
 impl Names<'_> {
+	#[optimize(size)]
 	fn fresh(&mut self, base: &str) -> String {
 		let base = base.trim_matches('*');
 		let name = (1..)
@@ -727,11 +760,13 @@ impl Names<'_> {
 }
 
 /// the name binding `name` of member `m` is given in the merged module, when it is not its own
+#[optimize(size)]
 fn renamed<'s>(index: &Map<'s>, given: &'s [String], m: usize, name: &'s str) -> Option<&'s String> {
 	index.get(&(name, m)).map(|&at| &given[at]).filter(|given| given.as_str() != name)
 }
 
 /// what member `m`'s import `local` of another member reads
+#[optimize(size)]
 fn alias<'t>(aliases: &'t [(&str, Target)], local: &str) -> Option<&'t Target> {
 	aliases.iter().find(|(name, _)| *name == local).map(|(_, target)| target)
 }
@@ -750,6 +785,7 @@ struct Head<'f, 'a> {
 
 impl Head<'_, '_> {
 	/// the text that reads `target` in the merged module
+	#[optimize(size)]
 	fn read(&mut self, target: &Target) -> String {
 		match target {
 			Target::Binding(m, name) => self.given[self.index[&(name.as_str(), *m)]].clone(),
@@ -775,6 +811,7 @@ impl Head<'_, '_> {
 }
 
 /// `import ... as local from ...`
+#[optimize(size)]
 fn import(source: &Source, imported: &Imported, local: &str) -> String {
 	match imported {
 		Imported::Name(imported) => format!("import {{ {} as {local} }} {};\n", quote(imported), from(source)),
@@ -783,11 +820,13 @@ fn import(source: &Source, imported: &Imported, local: &str) -> String {
 }
 
 /// `Object.defineProperty(name, "name", ...)`: the `name` a function had
+#[optimize(size)]
 fn fix(name: &str, was: &str) -> String {
 	format!("Object.defineProperty({name}, \"name\", {{ value: {} }});", quote(was))
 }
 
 /// The cycle `input` merged (see the module's comment), or None
+#[optimize(size)]
 pub fn link(input: &str) -> Option<String> {
 	let texts: Vec<&str> = input.split('\0').collect();
 	let count = texts.len();
@@ -803,6 +842,7 @@ pub fn link(input: &str) -> Option<String> {
 	let mut order = Vec::with_capacity(count);
 	let mut outside: Vec<Source> = Vec::new();
 	let mut visited = vec![false; count];
+	#[optimize(size)]
 	fn visit(m: usize, members: &[Member], visited: &mut [bool], order: &mut Vec<usize>, outside: &mut Vec<Source>) {
 		visited[m] = true;
 		for source in &members[m].requested {
