@@ -610,7 +610,20 @@ export default async function createServer(
 	registerMediaLoads(router);
 	registerKeptLoads(router);
 	registerIntegrityLoads(router);
-	registerXhr(router, init.codec);
+	// whether a page's synchronous request reaches the worker, as an earlier
+	// worker learned it (Sync.ts reached)
+	let syncKnown: boolean | undefined;
+	try {
+		const known: unknown = await db.get('consts', 'syncAnswers');
+		if (typeof known === 'boolean') syncKnown = known;
+	} catch (error) {
+		// not known yet
+	}
+	registerXhr(router, init.codec, syncKnown, (value) =>
+		openConfigDB()
+			.then((store) => store.put('consts', value, 'syncAnswers'))
+			.catch(() => {}),
+	);
 
 	return {
 		router,

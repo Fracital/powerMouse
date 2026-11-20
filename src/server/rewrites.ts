@@ -368,6 +368,7 @@ import {
 } from './sniff';
 import { boundClient } from './srcdocVouches';
 import type { StorageHosts } from './Storage';
+import { syncAnswers } from './Sync';
 import { rememberVisitedHop, takeVisitedHop } from './visitedHops';
 
 // What the rewrite cache keys its entries under for this build's rewriter: the
@@ -6144,6 +6145,9 @@ export function registerRewrites(
 				// the pages' synchronous requests complete (a written script in
 				// a document no worker controls is copied at once)
 				...(init.workerTransport ? { workerTransport: true } : {}),
+				// whether a page's synchronous request reaches the worker
+				// (./Sync.ts reached)
+				...(syncAnswers() !== undefined ? { syncAnswers: syncAnswers() } : {}),
 				...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 				// every document's inject builds the window membrane from this
 				...(init.membrane === false ? { membrane: false } : {}),

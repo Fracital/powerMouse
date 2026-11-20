@@ -670,6 +670,8 @@ const DEFERRED_FILES = new Set(
 		'src/inject/violationDispatch.ts',
 		'src/inject/dom/uncontrolledCopies.ts',
 		'src/inject/dom/moduleGraph.ts',
+		'src/inject/dom/syncAnswer.ts',
+		'src/syncAsk.ts',
 		'src/inject/idbSize.ts',
 		'src/inject/storageUsage.ts',
 		'src/inject/legacyFileSystem.ts',
