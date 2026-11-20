@@ -822,6 +822,50 @@ const UPDATE_FOUND_MS = 3000;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Wait for a frame's navigation to `routed` (`reported`, see
+ * Frame.#arrival); when a newer service worker takes over (`onHandover`)
+ * and, HANDOVER_GRACE_MS later, the frame has neither reported, fired its
+ * load event nor changed document (`before`, null for another origin's),
+ * the navigation is sent again, once, and the next report (`nextReport`)
+ * is waited for. By way of about:blank: Chrome drops a navigation to the
+ * URL a frame still on its first document is already on its way to
+ * (measured), and the stuck one would go on waiting.
+ */
+export async function arrival(
+	element: HTMLIFrameElement,
+	routed: string,
+	reported: Promise<void>,
+	onHandover: (listener: () => void) => () => void,
+	nextReport: () => Promise<void>,
+	before: Document | null,
+	sent: () => void = () => {},
+): Promise<void> {
+	let arrived = false;
+	const shown = () => {
+		arrived = true;
+	};
+	element.addEventListener('load', shown);
+	const settled = reported.then(shown);
+	let handedOver = () => {};
+	const handover = new Promise<void>((resolve) => (handedOver = resolve));
+	const stop = onHandover(handedOver);
+	try {
+		await Promise.race([settled, handover]);
+		if (!arrived) await Promise.race([settled, sleep(HANDOVER_GRACE_MS)]);
+		if (arrived || element.contentDocument !== before) return await reported;
+		stop();
+		const again = nextReport();
+		element.src = 'about:blank';
+		element.src = routed;
+		sent();
+		await again;
+	} finally {
+		stop();
+		element.removeEventListener('load', shown);
+	}
+}
+
 /** how long a document's request report waits for its page to say which frame it is in */
 const ATTRIBUTION_WAIT_MS = 3000;
 /** the same for a subresource fetched before the page reported (head scripts, styles) */
@@ -830,6 +874,12 @@ const SUBRESOURCE_WAIT_MS = 1500;
 export const NAVIGATION_WAIT_MS = 30000;
 /** how long after the frame's load event they wait for a report that may never come (a document nothing injected) */
 export const REPORT_GRACE_MS = 1000;
+/**
+ * How long a frame's navigation that a new service worker's takeover may
+ * have lost is given to show itself before it is sent again (see
+ * Frame.#arrival)
+ */
+const HANDOVER_GRACE_MS = 1000;
 /** how long register() and the constructor wait for a worker to activate before going on with what there is */
 export const REGISTER_WAIT_MS = 30000;
 const DOCUMENT_DESTINATIONS = new Set([
@@ -1699,6 +1749,29 @@ export class StompController extends EventTarget {
 				this.rebind(controller).catch(() => {});
 		});
 	}
+	/** the handover listeners (onHandover) */
+	#handovers = new Set<() => void>();
+	/**
+	 * @internal `listener` runs when a newer service worker of the
+	 * registration takes over, the moment the old one is stopped (Frame.go
+	 * sends again a navigation it may have lost); the returned function
+	 * removes it
+	 */
+	onHandover(listener: () => void): () => void {
+		this.#handovers.add(listener);
+		return () => this.#handovers.delete(listener);
+	}
+	/** run the handover listeners once `worker` starts activating */
+	#takingOver(worker: ServiceWorker) {
+		const changed = () => {
+			if (worker.state === 'redundant')
+				worker.removeEventListener('statechange', changed);
+			if (worker.state !== 'activating' && worker.state !== 'activated') return;
+			worker.removeEventListener('statechange', changed);
+			for (const listener of [...this.#handovers]) listener();
+		};
+		worker.addEventListener('statechange', changed);
+	}
 	/** a worker served from our directory (the host's own service worker is not) */
 	#ours(worker: ServiceWorker): boolean {
 		return worker.scriptURL.startsWith(this.directory.href);
@@ -1715,6 +1788,7 @@ export class StompController extends EventTarget {
 			if (!registration) return;
 			const adopt = (worker: ServiceWorker | null) => {
 				if (!worker) return;
+				this.#takingOver(worker);
 				activated(worker).then(
 					() => {
 						// heal() rebinds on its own once its worker is activated
@@ -4111,9 +4185,34 @@ export class Frame extends EventTarget {
 				await this.#ask(run, { kind: 'typed' });
 			else this.#hostNavigation = true;
 		}
+		const before = this.element.contentDocument;
 		this.element.src = routed;
-		await reported;
+		await this.#arrival(routed, reported, before);
 		if (origin) this.#bounced(origin);
+	}
+	/**
+	 * Wait for the navigation the frame was just sent on (`reported`), and
+	 * send it once more when a newer service worker takes over before the
+	 * frame shows anything of it. Chrome stops the old worker then, and a
+	 * navigation that worker was handed in that moment is never answered,
+	 * nor sent to the network or the new worker: the frame kept its old
+	 * document for good (measured, the first visit after a deploy). Sent
+	 * again, it waits for the new worker, whose revive window holds it until
+	 * this controller has shaken hands with it.
+	 */
+	async #arrival(
+		routed: string,
+		reported: Promise<void>,
+		before: Document | null,
+	): Promise<void> {
+		await arrival(
+			this.element,
+			routed,
+			reported,
+			(listener) => this.controller.onHandover(listener),
+			() => this.#nextReport(),
+			before,
+		);
 	}
 	/**
 	 * The site pool: a navigation sent to the slot `origin` reported from

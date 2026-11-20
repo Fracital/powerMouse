@@ -263,6 +263,8 @@ export type HostBound = {
 	stale: [StaleInfo | null];
 	/** the inner controller's transport chose its carrier (StompController.carrier) */
 	carrier: [CarrierInfo];
+	/** a newer service worker took over from the inner controller's (StompController.onHandover) */
+	handover: [];
 	/** a note of the inner controller's transport, for the host's console (transportLog.ts) */
 	transportNote: [TransportNote];
 	/** a host hook threw in a proxied realm, or a hook URL could not be fetched */
