@@ -37,7 +37,7 @@ const laid = (spec) => ({
 	probes: [
 		...spec.l
 			.filter((token) =>
-				/^(i|in|ix|e|en|eo|di|de|wi|we|img|fx|sty):/.test(token),
+				/^(i|in|ix|e|en|eo|di|de|wi|we|fi|fw|img|fx|sty):/.test(token),
 			)
 			.map((token) => token.slice(token.indexOf(':') + 1)),
 		'reports',
@@ -189,7 +189,10 @@ const STYLE_CASES = {
 // line feeds (CR LF and a lone CR, `crlf`) and its columns UTF-16 units
 // (`wide`), in the first piece of the markup and a later one; an external
 // one's names none. A script's violations come in the order the parser
-// prepares them.
+// prepares them. One a script file inserts (through the DOM, by
+// document.write) names the inserting call in the file: the service
+// worker's rewrite of the file carries the map of itself to the file's
+// text.
 const PLACED = {
 	'where a meta refuses': laid({
 		m: NONCE,
@@ -215,6 +218,11 @@ const PLACED = {
 		p: NONCE,
 		source: true,
 		l: ['crlf', 'i:a', 'wide', 'i:b', 'e:c', 'gap', 'i:late', 'body', 'i:end'],
+	}),
+	'where a script file inserts': laid({
+		m: NONCE,
+		source: true,
+		l: ['meta', 'fi:filedom', 'fw:filewrite', 'gap', 'body', 'fi:bodydom'],
 	}),
 };
 

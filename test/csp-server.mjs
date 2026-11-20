@@ -237,6 +237,12 @@ export function csp(req, res) {
 		case '/csp/ran.js':
 			send('text/javascript', ranText(query.get('n') ?? ''));
 			return true;
+		case '/csp/insert.js':
+			send(
+				'text/javascript',
+				insertText(query.get('n') ?? '', query.get('how')),
+			);
+			return true;
 		case '/csp/wrun.js':
 			send('text/javascript', 'self.__ran = (self.__ran ?? 0) + 1;');
 			return true;
@@ -358,6 +364,32 @@ export const ranText = (name) =>
 	`__ran(${JSON.stringify(String(name).replace(/[^\w-]/g, ''))})`;
 
 /**
+ * A script file that inserts an inline script of `name` after itself,
+ * through the DOM or (`how` "write") by document.write: on a later line
+ * than its first, past code the rewriter writes around (a location, a
+ * member call) and characters past ASCII, so the place a violation names
+ * of the inserted script (the inserting call's) is the file's own
+ * (csp-meta-scripts)
+ */
+const insertText = (name, how) => {
+	const text = JSON.stringify(ranText(name));
+	const insert =
+		how === 'write'
+			? `document.write(${JSON.stringify(`<script data-n="${attribute(name)}">`)} + ${text} + '<\\/script>');`
+			: `document.currentScript.after(s);`;
+	return [
+		'// \u00e9\u{1f600} inserts a script (in a block: the file runs more than once)',
+		'{',
+		`const here = location.href, wide = '\u00fc\u{1f600}';`,
+		'const s = document.createElement("script");',
+		`s.dataset.n = ${JSON.stringify(name)}; s.text = ${text};`,
+		`if (here && wide) ${insert}`,
+		'}',
+		'',
+	].join('\n');
+};
+
+/**
  * A /csp/doc page laid out by its `l` query (csp-meta-scripts): the
  * recorder first in the head (an inline script with nonce="probes", before
  * any meta, so it runs under every meta), then each comma-separated token
@@ -382,6 +414,9 @@ export const ranText = (name) =>
  *                    inline / external script of <n> after itself, no nonce
  *   wi:<n> / we:<n>  the same by document.write
  *   sty:<n>          an inline <style id="<n>"> that sets --<n> on the root
+ *   fi:<n> / fw:<n>  a script file (nonce="probes", /csp/insert.js) that
+ *                    inserts an inline script of <n> after itself, through
+ *                    the DOM / by document.write
  *   img:<n> / fx:<n> an image by /csp/ran.js?n=<n> / a fetch of it
  *   crlf / wide      line ends of CR LF and a lone CR / non-ASCII text
  *                    before the next token, on its line
@@ -476,6 +511,12 @@ function layout(req, res, query) {
 					helper(
 						`const s = document.createElement('script'); s.dataset.n = ${JSON.stringify(arg)}; ${kind === 'di' ? `s.text = ${JSON.stringify(ranText(arg))}` : `s.src = ${JSON.stringify(external(arg))}`}; document.currentScript.after(s);`,
 					),
+				);
+				break;
+			case 'fi':
+			case 'fw':
+				add(
+					`<script nonce="probes" src="${attribute(`/csp/insert.js?${new URLSearchParams({ n: arg, how: kind === 'fi' ? 'dom' : 'write' })}`)}"></script>`,
 				);
 				break;
 			case 'wi':

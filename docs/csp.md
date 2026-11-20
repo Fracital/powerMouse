@@ -133,7 +133,11 @@ where its text starts, as Chrome's does: the document's URL (no query, no
 fragment), the line (its line feeds counted; a carriage return alone ends
 none) and the column in UTF-16 units (`./violations.ts`
 `markupScriptSite`, read from the markup the inject received); an external
-one's names none, as natively. The console says what Chrome's says of
+one's names none, as natively. One the page's code inserts (through the
+DOM, by document.write) names the inserting call, as Chrome's does: in a
+script file, its place in the file's own text, from the map the service
+worker's rewrite of the file carries (`docs/rust-plan.md`, position maps).
+The console says what Chrome's says of
 each refusal (the page's directive, its notes on 'unsafe-inline' and on
 the fallback directive), and
 the page's ReportingObservers are handed a csp-violation report of it as the
@@ -141,6 +145,9 @@ browser hands its own: takeRecords has it at once, the callback in a task
 before the event, a buffered observer the reports before as it first
 observes, and the report and its body read as the browser's
 (`src/inject/reportsSeen.ts` `madeReport`; csp-meta-scripts compares them).
+A document reports a placed violation once, as Chrome does: the same code
+refused again at the same place (a script file run twice) fires its event
+and makes no second report.
 
 A script-src-attr handler and a style-src-attr style attribute run
 only by 'unsafe-inline' (or 'unsafe-hashes' with the value's hash); the
@@ -417,9 +424,10 @@ refuses fires a violation, natively either.
 - An external script after a meta a script inserts is not fetched; Chrome's
   preload scanner, which does not know the meta, fetches it (and does not
   run it).
-- A violation the inject makes of a script a script inserted (through the
-  DOM or document.write) names no place, nor its report; Chrome's names the
-  inserting call, which the rewritten script's positions do not give. A
+- A violation the inject makes of a script an inline script of the
+  page's markup inserted (through the DOM or document.write) names the
+  inserting call's place in the document the inject writes, not the
+  markup's (an inserting script file's is as natively). A
   report-only refusal of a load that went out (an image, a fetch: the
   worker's word, after the load) is reported, event and report, with no
   place, and without Chrome's console message; Chrome names where the
@@ -468,9 +476,10 @@ refuses fires a violation, natively either.
   form into its own window), or for a base set and inserted again within
   one task with the same URL (the last place is named). Every other
   directive's violation is not placed as natively, but for an inline
-  script of the markup's: the inject's own (the page's code it refuses
-  under script-src, style-src or Trusted Types, a report-only refusal of a
-  load) names no place, and the browser's names
+  script of the markup's or one a script file inserts: the inject's own
+  (the page's code it refuses under script-src-attr, style-src or Trusted
+  Types, a report-only refusal of a load) names no place, and the
+  browser's names
   the line and column of the inject's hook, with no sourceFile, where a
   hook made the load (a frame, an image, a worker, a connection).
 - A navigation's hop refused by one of two policies is reported by both
