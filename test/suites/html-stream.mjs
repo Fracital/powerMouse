@@ -31,7 +31,9 @@
 // - a head whose inline script trickles in (YouTube's 780 KB) is in, and
 //   the body's first heading after it, while the rest is on its way (the
 //   worker cut the markup only once twice as much had come as when it
-//   last found the script unfinished, which passed the document's end).
+//   last found the script unfinished, which passed the document's end),
+//   and so is one whose script's end tag comes in two pieces (the worker
+//   looks for it in what came last and the end of what came before).
 import {
 	done,
 	evaluateIsolated,
@@ -214,9 +216,9 @@ const trickleMidway = () =>
 			}
 		: null;
 
-async function trickleCase(proxied) {
+async function trickleCase(proxied, split = false) {
 	const { page, find } = await open(
-		`${FIXTURE}stream/trickle?wait=${WAIT}`,
+		`${FIXTURE}stream/trickle?wait=${WAIT}${split ? '&split' : ''}`,
 		proxied,
 	);
 	try {
@@ -350,6 +352,7 @@ const native = {
 	hidden: await hiddenCase(false),
 	slowhead: await slowheadCase(false),
 	trickle: await trickleCase(false),
+	split: await trickleCase(false, true),
 };
 ok(
 	'natively: the heading is in while the rest is on its way, and the page loads whole',
@@ -374,6 +377,7 @@ const proxied = {
 	hidden: await hiddenCase(true),
 	slowhead: await slowheadCase(true),
 	trickle: await trickleCase(true),
+	split: await trickleCase(true, true),
 };
 ok(
 	'proxied: while the rest is on its way, the page holds its first part (its heading, its write) and not the rest, and is loading',
@@ -464,6 +468,18 @@ ok(
 	!!native.trickle.end &&
 		JSON.stringify(proxied.trickle.end) === JSON.stringify(native.trickle.end),
 	`${JSON.stringify(proxied.trickle.end)} natively ${JSON.stringify(native.trickle.end)}`,
+);
+ok(
+	"proxied: while the rest of a page whose head script's end tag came in two pieces is on its way, the script ran and the first heading is in, as natively",
+	native.split.mid?.late === false &&
+		JSON.stringify(proxied.split.mid) === JSON.stringify(native.split.mid),
+	`${JSON.stringify(proxied.split.mid)} natively ${JSON.stringify(native.split.mid)}`,
+);
+ok(
+	"proxied: the page whose head script's end tag came in two pieces loads whole, as natively",
+	!!native.split.end &&
+		JSON.stringify(proxied.split.end) === JSON.stringify(native.split.end),
+	`${JSON.stringify(proxied.split.end)} natively ${JSON.stringify(native.split.end)}`,
 );
 
 await done(browser);

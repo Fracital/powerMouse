@@ -6,6 +6,7 @@
 // with the page or a crash) or the worker took longer than the timeout. A
 // port that closed or timed out is not used again.
 import type { Config } from '../config';
+import type { PackedRewrite } from '../prewrite';
 import {
 	RewrittenBy,
 	SCRIPT_FILE,
@@ -245,6 +246,50 @@ export class RewritePool {
 			preamble,
 			told,
 		);
+	}
+	/**
+	 * A document's inline script, rewritten with its preamble (a classic
+	 * one's) and packed for the table (packRewrite under the access helper
+	 * `access`) by the worker with the least in hand: the worker makes the
+	 * preamble and cuts it and the holder out, so this thread never copies,
+	 * hashes or compares the script's text and its rewrite (CNN's 2.46 MB
+	 * inline script and its 7.9 MB rewrite held it 60 ms). Null when none is
+	 * ready or answered in time, or the rewrite is the script as written.
+	 */
+	async packInline(
+		script: string,
+		url: StompURL,
+		config: Config,
+		type: ScriptType,
+		access: string,
+		told?: RewrittenBy,
+	): Promise<PackedRewrite | null> {
+		const answer = await this.#call(
+			'rewrite',
+			{
+				script,
+				url: url.toString(),
+				directory: url.directory,
+				codecKey: url.codec.key,
+				config,
+				type,
+				scopes: routeScopeList(),
+				...(url.mark === undefined ? {} : { mark: url.mark }),
+				source: { apart: true },
+				pack: access,
+			},
+			script.length,
+		);
+		// (unpacked: the rewrite is the script as written, or a worker of an
+		// older bundle made it without the preamble it was not sent; the page
+		// rewrites it then)
+		if (answer === null || typeof answer === 'string' || !answer.packed)
+			return null;
+		if (told) {
+			told.by = answer.by;
+			if (answer.map) told.map = answer.map;
+		}
+		return [answer.output, ...answer.packed];
 	}
 	/**
 	 * A handler of a document's markup (an onclick's text), rewritten by the

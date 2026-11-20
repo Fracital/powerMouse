@@ -9,6 +9,7 @@
 // blocker's engine from its lists when the service worker asks.
 import { buildEngine } from './blocker/build';
 import { parseConfig } from './config';
+import { packRewrite, scriptPreamble } from './prewrite';
 import { modifyJS, SCRIPT_FILE, type RewrittenBy } from './rewriteJS';
 import {
 	REWRITE_READY,
@@ -45,19 +46,37 @@ function scriptURL(request: RewriteRequest | RewriteBytesRequest): StompURL {
 function rewrite(request: RewriteRequest): string | RewriteAnswer {
 	const url = scriptURL(request);
 	const told: RewrittenBy = {};
+	const { script, pack } = request;
+	const kind = request.type === 'genericModule' ? 'm' : 'c';
 	const output = modifyJS(
-		request.script,
+		script,
 		url,
 		request.config,
 		request.type,
-		request.preamble ?? '',
+		pack === undefined
+			? (request.preamble ?? '')
+			: kind === 'c'
+				? scriptPreamble(script)
+				: '',
 		request.source,
 		told,
 	);
 	// (the map of code asked for apart: an inline script of a document,
 	// src/prewrite.ts)
 	const map = request.source?.apart ? takeApart() : '';
-	return told.by ? { output, by: told.by, ...(map ? { map } : {}) } : output;
+	if (!told.by) return output;
+	const answer: RewriteAnswer = {
+		output,
+		by: told.by,
+		...(map ? { map } : {}),
+	};
+	// (an inline script the rewrite left as it was goes to the page as it is)
+	if (pack !== undefined && output !== script) {
+		const [rest, at, holder] = packRewrite(kind, script, output, pack);
+		answer.output = rest;
+		answer.packed = [at, holder];
+	}
+	return answer;
 }
 
 /**
