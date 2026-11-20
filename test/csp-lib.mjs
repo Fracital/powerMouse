@@ -29,6 +29,7 @@ export function caseURL(
 		b = [],
 		h,
 		s,
+		sl,
 		js,
 		fs,
 		id,
@@ -52,6 +53,8 @@ export function caseURL(
 	// markup's <base> elements), true for the ordinary page with styles in
 	// its markup
 	if (s) query.set('s', s === true ? '1' : s);
+	// `sl`: a stylesheet <link> in the page's markup
+	if (sl) query.set('sl', '1');
 	for (const href of [].concat(b)) query.append('b', href);
 	if (h) query.set('h', h);
 	if (js) query.set('js', js);

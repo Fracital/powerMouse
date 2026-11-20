@@ -504,8 +504,9 @@ refuses fires a violation, natively either.
 - A javascript: URL whose code a Trusted Types default policy changes runs
   the changed code one task later than natively (it goes through a
   navigation of its own).
-- A stylesheet `<link>` the page's policy allows by its host where the
-  list also takes nonces is refused.
+- A stylesheet `<link>` the page's policy refuses keeps no href, so its
+  `sheet` is null; natively it is an empty sheet (csp-scripts lists it as
+  an expected difference).
 - A module worker of a `blob:` URL under a policy that refuses `blob:`
   scripts does not start (its bootstrap imports the page's module).
 - A report-only policy does not report an inline script an enforced one

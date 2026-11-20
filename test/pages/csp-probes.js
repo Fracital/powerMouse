@@ -658,6 +658,11 @@
 			node.remove();
 			return value.trim() || 'none';
 		},
+		'markup-sheet': () => {
+			const link = document.getElementById('markup-sheet');
+			if (!link) return 'no link';
+			return link.sheet ? 'sheet' : 'no sheet';
+		},
 		'markup-styles': () => {
 			const root = getComputedStyle(document.documentElement);
 			return ['nonce', 'plain']
