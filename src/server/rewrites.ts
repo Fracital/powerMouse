@@ -5643,6 +5643,22 @@ const RAW_START =
 /** a piece of markup is cut once this much is in hand, or after SEGMENT_MS */
 const SEGMENT_CHARS = 32 * 1024;
 const SEGMENT_MS = 30;
+/** how long a cut of a document's markup waits for its page to take its records, at most (the page may be busy) */
+const ROOM_WAIT_MS = 50;
+/** the slices a record is queued in */
+const SLICE_BYTES = 256 * 1024;
+/** how long a document's markup is read at a stretch before this thread's other tasks run */
+const READ_SLICE_MS = 5;
+/** a task of its own: what is queued before it (a rewrite worker's answer) runs first */
+const nextTask = () =>
+	new Promise<void>((resolve) => {
+		const channel = new MessageChannel();
+		channel.port1.onmessage = () => {
+			channel.port1.close();
+			resolve();
+		};
+		channel.port2.postMessage(null);
+	});
 
 const TOKEN_ALPHABET =
 	'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
@@ -5685,6 +5701,14 @@ function streamMarkup(
 	const decoder = read.decoder;
 	const encoder = new TextEncoder();
 	let total = read.bytes;
+	// a cut of the body waits (ROOM_WAIT_MS at most) while the page has
+	// records to take (`room`, which the stream's pull calls once it took
+	// them): it takes them as this thread hands them on, a task at a time,
+	// and a piece cut meanwhile (CNN's 2.46 MB inline script, tasks of 10 to
+	// 25 ms) held back the head before it (6.6 MB, 110 ms to the page,
+	// measured). The stream is in order: nothing behind would go out sooner
+	let room: (() => void) | null = null;
+	let gone = false;
 	const stream = new ReadableStream<Uint8Array>({
 		start(controller) {
 			let order = Promise.resolve();
@@ -5726,6 +5750,10 @@ function streamMarkup(
 						} catch (error) {
 							console.warn('Stomp: no prewritten table:', error);
 						}
+					// a task of its own: the record of a large piece (CNN's 2.46 MB
+					// inline script, 55 ms) held back what the page waits for
+					// meanwhile (its storage, through the synchronous bridge)
+					await nextTask();
 					const record = JSON.stringify([
 						segment,
 						table,
@@ -5733,7 +5761,10 @@ function streamMarkup(
 						...(said ? [said] : []),
 					]);
 					try {
-						controller.enqueue(encoder.encode(`${record.length}\n${record}`));
+						const bytes = encoder.encode(`${record.length}\n${record}`);
+						// (in slices: what the page has not taken is what is queued)
+						for (let from = 0; from < bytes.length; from += SLICE_BYTES)
+							controller.enqueue(bytes.subarray(from, from + SLICE_BYTES));
 						if (end) controller.close();
 					} catch (error) {
 						// the page went away
@@ -5753,9 +5784,27 @@ function streamMarkup(
 			let last = Date.now();
 			// what came since the last cut, when the origin pauses: cut then
 			let timer: ReturnType<typeof setTimeout> | null = null;
-			const cut = () => {
+			// a cut put off while the page has records to take (`room`)
+			let held: ReturnType<typeof setTimeout> | null = null;
+			const cut = (waited = false) => {
 				if (timer !== null) clearTimeout(timer);
 				timer = null;
+				if (!waited && !gone && (controller.desiredSize ?? 1) <= 0) {
+					if (held === null) {
+						const go = () => {
+							clearTimeout(held!);
+							held = null;
+							room = null;
+							if (pending.length >= tryAt) cut(true);
+						};
+						room = go;
+						held = setTimeout(go, ROOM_WAIT_MS);
+					}
+					return;
+				}
+				if (held !== null) clearTimeout(held);
+				held = null;
+				room = null;
 				let end = completeLength(pending);
 				// (never between the halves of a surrogate pair)
 				const unit = pending.charCodeAt(end - 1);
@@ -5789,23 +5838,50 @@ function streamMarkup(
 				void readRest();
 			});
 			const readRest = async () => {
+				// the last characters of what came (an end tag may be split
+				// between the chunks): an unfinished raw text element's end tag
+				// is looked for in them and the chunk alone. A search of
+				// `pending` flattened it each chunk, quadratic over CNN's 2.46 MB
+				// inline script (70 ms of this thread, measured)
+				let tail = '';
+				// when this thread last let its other tasks run
+				let slice = performance.now();
 				try {
 					for (let next = read.next; ; next = null) {
+						// a body that came at once is read in microtasks, which held
+						// back the rewrite workers' answers (CNN's head's table went
+						// out 160 ms after its scripts were rewritten, measured): they
+						// run every READ_SLICE_MS
+						if (performance.now() - slice >= READ_SLICE_MS) {
+							await nextTask();
+							slice = performance.now();
+						}
+						const asked = performance.now();
 						const chunk = await (next ?? reader.read());
 						if (chunk.done) break;
+						// (a read that waited let them run)
+						if (performance.now() - asked > 1) slice = performance.now();
 						total += chunk.value.byteLength;
-						pending += decoder.decode(chunk.value, { stream: true });
+						const text = decoder.decode(chunk.value, { stream: true });
+						const before = pending.length;
+						pending += text;
 						if (rawEnd !== null) {
-							rawEnd.lastIndex = searched;
-							const found = rawEnd.exec(pending);
+							// (once after a cut, the text before the chunk is searched)
+							const back = before - searched;
+							const hay =
+								back <= tail.length
+									? tail.slice(tail.length - back) + text
+									: pending.slice(searched);
+							rawEnd.lastIndex = 0;
+							const found = rawEnd.exec(hay);
+							tail = (tail + text).slice(-16);
 							if (!found) {
-								// (an end tag may be split between the pieces)
 								searched = Math.max(searched, pending.length - 16);
 								continue;
 							}
-							searched = found.index + 1;
+							searched += found.index + 1;
 							tryAt = 0;
-						}
+						} else tail = (tail + text).slice(-16);
 						if (pending.length < tryAt) continue;
 						if (
 							pending.length >= SEGMENT_CHARS ||
@@ -5824,10 +5900,16 @@ function streamMarkup(
 					// parser would have it
 				}
 				if (timer !== null) clearTimeout(timer);
+				if (held !== null) clearTimeout(held);
+				room = null;
 				send(pending, true);
 			};
 		},
+		pull() {
+			room?.();
+		},
 		cancel() {
+			gone = true;
 			reader.cancel().catch(() => {});
 		},
 	});
@@ -6391,7 +6473,6 @@ export function registerRewrites(
 				dispatches.push(new Promise((resolve) => (sent = resolve)));
 				try {
 					const type: ScriptType = kind === 'm' ? 'genericModule' : 'generic';
-					const preamble = kind === 'm' ? '' : scriptPreamble(source);
 					const key = rewrites
 						? await rewrites.key(
 								[
@@ -6414,21 +6495,35 @@ export function registerRewrites(
 							(await (await rewrites!.match(`${key}m`))?.text()) ?? '',
 						);
 					const told: RewrittenBy = {};
+					// with nothing to keep, the worker packs it for the table
+					if (key === null) {
+						const packing = pool.packInline(
+							source,
+							url,
+							config,
+							type,
+							access,
+							told,
+						);
+						sent();
+						const packed = await packing;
+						return packed === null
+							? null
+							: [kind, start, end, ...packed, told.map ?? '', places[index]!];
+					}
 					const rewriting = pool.rewriteInline(
 						source,
 						url,
 						config,
 						type,
-						preamble,
+						kind === 'm' ? '' : scriptPreamble(source),
 						told,
 					);
 					sent();
 					const output = await rewriting;
 					if (output === null || output === source) return null;
-					if (key !== null) {
-						void rewrites!.put(key, output);
-						if (told.map) void rewrites!.put(`${key}m`, told.map);
-					}
+					void rewrites!.put(key, output);
+					if (told.map) void rewrites!.put(`${key}m`, told.map);
 					return entry(output, told.map ?? '');
 				} finally {
 					sent();

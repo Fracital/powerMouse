@@ -23,7 +23,9 @@
 //              CSP that requires Trusted Types, scripts that test it
 //     trickle  a head whose inline script of 768 KB comes 64 KB at a time,
 //              20 ms apart (YouTube's is 780 KB), then the start of the
-//              body, and the rest after `wait`
+//              body, and the rest after `wait`; with `split`, the
+//              script's end tag comes in two writes (`</scr`, `ipt>`), 20 ms
+//              apart
 
 /** the head's padding: the worker reads the encoding from the first 1024 bytes */
 const PAD = `<!-- ${'pad '.repeat(300)} -->`;
@@ -125,14 +127,24 @@ export function stream(req, res) {
 				later(20, next);
 				return;
 			}
-			res.write(
-				`'; __order.push('big', String(window.__big.length));</script></head><body><h1 id="early">early</h1><script>__order.push('a');</script>`,
-			);
-			later(wait, () =>
-				res.end(
-					`<p id="late">late</p><script>__order.push('end'); window.__done = true;</script></body></html>`,
-				),
-			);
+			const rest = `'; __order.push('big', String(window.__big.length));</script></head><body><h1 id="early">early</h1><script>__order.push('a');</script>`;
+			const end = () =>
+				later(wait, () =>
+					res.end(
+						`<p id="late">late</p><script>__order.push('end'); window.__done = true;</script></body></html>`,
+					),
+				);
+			if (!url.searchParams.has('split')) {
+				res.write(rest);
+				end();
+				return;
+			}
+			const at = rest.indexOf('</script>') + '</scr'.length;
+			res.write(rest.slice(0, at));
+			later(20, () => {
+				res.write(rest.slice(at));
+				end();
+			});
 		};
 		later(20, next);
 		return true;
