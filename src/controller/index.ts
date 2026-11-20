@@ -1078,6 +1078,18 @@ export class StompController extends EventTarget {
 	#rewriteTimeout: number;
 	/** the bytes of the wasm modules loaded for `rewriter: 'wasm'`, once they are; every handshake carries them */
 	#modules: Record<string, ArrayBuffer> | null = null;
+	/**
+	 * The blocker's module compiled here and kept, never run. The service
+	 * worker compiles the handshake's bytes again on every start, and V8
+	 * finds the code it compiled for the same bytes in its process while any
+	 * thread still holds a module of them. Nothing else held the blocker's:
+	 * a worker that Chrome stopped and started again compiled the 944
+	 * functions its first navigation called (18.4 to 21.8 ms, measured on
+	 * Chrome 157), and with this page holding it, it compiles none. (V8 keeps
+	 * no code cache of it: none was produced for a compileStreaming from the
+	 * worker's own Cache Storage, measured the same way.)
+	 */
+	#blockerHeld?: WebAssembly.Module;
 	/** the same modules compiled, for the threads and pages of this agent cluster (none without `rewriter: 'wasm'`) */
 	#compiled: Promise<Record<string, WebAssembly.Module>> | null = null;
 	/** settles once the modules' bytes are in (#modules) */
@@ -2205,7 +2217,8 @@ export class StompController extends EventTarget {
 	 * when it already shook hands. One that fails to load or compile is left
 	 * out, and its JavaScript rewriter answers. The blocker's module
 	 * (`adblock`, docs/adblock.md) runs in the service worker alone: its
-	 * bytes go there and nothing here compiles them.
+	 * bytes go there, and the module compiled here is only kept
+	 * (#blockerHeld).
 	 */
 	async #compileModules(names: readonly BundleAsset[], compile = true) {
 		const compiled: Record<string, WebAssembly.Module> = {};
@@ -2227,7 +2240,12 @@ export class StompController extends EventTarget {
 					);
 					if (!response.ok) throw new Error(`HTTP ${response.status}`);
 					const bytes = await response.arrayBuffer();
-					if (compile && name !== 'blocker') {
+					if (name === 'blocker')
+						void compileModule(bytes).then(
+							(module) => (this.#blockerHeld = module),
+							() => {},
+						);
+					else if (compile) {
 						compiled[name] = await compileModule(bytes);
 						if (name === 'core')
 							publishCore(this.config.names?.client, compiled[name]);
