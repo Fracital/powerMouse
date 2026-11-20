@@ -429,6 +429,9 @@ const insertText = (name, how) => {
  *   og:<n>           a button whose onclick does, never clicked, then an
  *                    inline script (nonce="probes") that reads its onclick
  *                    and calls what it reads
+ *   or:<n>           a button whose onclick does, clicked as the page
+ *                    loads, then an inline script (nonce="probes") that
+ *                    reads its onclick (which compiles it)
  *   if:<n>           an iframe whose onload does (its about:blank loads as
  *                    the parser inserts it)
  *   wh:<n>           an inline script (nonce="probes") that writes a button
@@ -511,6 +514,14 @@ function layout(req, res, query) {
 					helper(
 						'const b = document.currentScript.previousElementSibling; const f = b.onclick; if (f) f.call(b);',
 					),
+				);
+				break;
+			case 'or':
+				add(
+					`<button data-n="${n}" data-click onclick="${attribute(ranText(arg))}"></button>`,
+				);
+				add(
+					helper('void document.currentScript.previousElementSibling.onclick;'),
 				);
 				break;
 			case 'if':

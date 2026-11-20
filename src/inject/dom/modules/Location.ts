@@ -108,8 +108,9 @@ export default class LocationModule extends Module<DocumentClient> {
 						moduleClient.navigationRoute(destination))
 					: navigateTo(destination);
 			// (a javascript: URL is judged as it starts: jsStarts)
-			moduleClient.jsStarts(global, destination.href);
-			return Reflect.apply(real[how], real, [route]);
+			return Reflect.apply(real[how], real, [
+				moduleClient.jsStarts(global, destination.href) ?? route,
+			]);
 		};
 
 		const members = new Map<string | symbol, PropertyDescriptor>();

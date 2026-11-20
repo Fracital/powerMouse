@@ -284,6 +284,7 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 					: form.getAttribute('target')) || baseTarget(global.document),
 				action,
 				event,
+				own('formaction') ? submitter! : form,
 			);
 			try {
 				let url = new URL(action);

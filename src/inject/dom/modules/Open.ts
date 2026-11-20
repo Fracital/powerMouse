@@ -41,6 +41,7 @@ export default class OpenModule extends Module<DocumentClient> {
 					clicked.getAttribute('target') || baseTarget(global.document),
 					clicked.getAttribute('href') ?? '',
 					event,
+					clicked,
 				);
 			if (event.defaultPrevented) return;
 			if (event.type === 'auxclick' && event.button !== 1) return;

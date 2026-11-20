@@ -42,7 +42,7 @@ const laid = (spec) => ({
 	probes: [
 		...spec.l
 			.filter((token) =>
-				/^(i|in|ix|e|en|eo|di|de|wi|we|fi|fw|img|fx|sty|oc|ob|oe|ol|ju|jt|bo|og|if|wh|jf|jc|jl|jq|js|jr|jw):/.test(
+				/^(i|in|ix|e|en|eo|di|de|wi|we|fi|fw|img|fx|sty|oc|ob|oe|ol|ju|jt|bo|og|or|if|wh|jf|jc|jl|jq|js|jr|jw):/.test(
 					token,
 				),
 			)
@@ -359,6 +359,13 @@ const HANDLER_PLACED = {
 		source: true,
 		l: ['bo:onload'],
 	}),
+	// (Chrome compiles a handler as its property is first read: one read
+	// before any policy governs code runs whatever policy comes)
+	'a handler read before a meta a script inserts': laid({
+		m: NONCE,
+		source: true,
+		l: ['body', 'or:early', 'mi:0'],
+	}),
 	'a handler read after a meta a script inserts': laid({
 		m: NONCE,
 		source: true,
@@ -448,19 +455,9 @@ const HANDLER_PLACED = {
 	}),
 };
 
-// A refused javascript: URL of statements has compiled as it is refused
-// (the check is its first call, which throws): its let is the window's,
-// never initialized, where natively there is none (docs/csp.md)
-const HANDLER_PLACED_EXPECTED = {
-	'a javascript: link of statements with a let after a meta': {
-		lexicalN: 'its let is declared and uninitialized: typeof throws',
-	},
-};
-
 await compareCases(browser, HANDLER_PLACED, {
 	fields: [...FIELDS, 'sourceFile', 'lineNumber', 'columnNumber'],
 	consoleMessages: true,
-	expected: HANDLER_PLACED_EXPECTED,
 });
 await compareCases(browser, PLACED, {
 	fields: [...FIELDS, 'sourceFile', 'lineNumber', 'columnNumber'],

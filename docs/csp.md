@@ -168,9 +168,15 @@ access API's `csp` first (`DocumentClient.codeRuns`, `./policyChecks.ts`
 runRefused), which judges it once by the policies then and keeps that
 verdict, as the compiled handler is kept: a handler parsed before a meta a
 script inserts is refused as it runs. Its property's getter judges it the
-same way and reads null where it is refused (hooked when the
-`policyChecks` part is made, so only in a document whose policy governs
-code). Its violation as it is compiled names the code that dispatched its
+same way and reads null where it is refused, and one read before any
+policy governs code compiles it, so it runs whatever policy comes, as
+natively (`./handlerGetters.ts`: a property's getters, on the few
+prototypes that have them, are hooked the first time the inject meets an
+attribute of its name in that document, before the element is in it, with
+one getter body that finds the name in a table of the native getters;
+hooking every handler's in every frame cost some 19 KB a frame, these
+about 2 KB in a frame that has a handler attribute and nothing in one
+that has none). Its violation as it is compiled names the code that dispatched its
 event or read its property, else its place in the markup (where its start
 tag ends, where V8 counts the handler's own frame from); as it is parsed,
 none, or the write. A javascript: URL is judged at script-src-elem as
@@ -184,7 +190,13 @@ element; the markup's frame and a new window's URL are judged twice there,
 as natively), and again as it runs, by its window's, at the document's
 first line. The rewritten URL asks `csp` before its code
 (`src/rewriteHTML.ts`), and a refusal runs none of it; a report-only
-policy reports it twice. One of statements has the call after its
+policy reports it twice. A URL the starting document's enforced policies
+refuse as it starts goes to a route that only judges it (`routeHTML`
+`judged`: a policy only grows, so every navigation the document starts to
+it is refused from now), so its code is never compiled and declares
+nothing. The violation events and reports of a check made as the
+navigation started are dispatched before the code runs, as natively, also
+where the code runs before that check's own task (a frame's, a form's). One of statements has the call after its
 directive prologue, and the rest stays the script's own (its `let` and
 `const` the window's, its value the URL's): a refusal throws what the
 inject's own error listener takes before any of the page's. Under
@@ -478,21 +490,17 @@ refuses fires a violation, natively either.
 - 'unsafe-hashes' with the hash of an event handler, a style attribute or a
   `javascript:` URL: the rewrite changes the text, and the browser refuses
   it.
-- A handler's property read before any policy of the page's governs code
-  (one a script inserts later) compiles nothing in the inject's eyes: the
-  getters are hooked only once one does (hooking them in every frame cost
-  some 19 KB a frame), so the handler is judged as it first runs after.
-  Chrome compiled it at the read, and runs it.
-- A refused javascript: URL of statements has compiled before its check
-  refuses it (the check is its first call): a `let`, `const` or `class` it
-  declares is the window's, never initialized (`typeof` throws, a later
-  declaration of the name is a SyntaxError); natively there is none.
-- A javascript: URL that runs before its first check's moment (a frame's,
-  a form's) fires its violation events after its code ran; natively they
-  come first.
-- A violation in the initial document of a new window a link opened
-  prints its console message in the opener's console (the opener's bundle
-  runs there; one open() opened has its own console's methods).
+- A javascript: URL of statements refused only as it runs (another
+  window's location set to it, which the setting document does not
+  judge; a markup frame's src parsed before a meta) has compiled before
+  its check refuses it (the check is its first call): a `let`, `const` or
+  `class` it declares is the window's, never initialized (`typeof`
+  throws, a later declaration of the name is a SyntaxError); natively
+  there is none. A link or form whose URL went to the judging route keeps
+  it: moved to a document that allows the code, it still runs none.
+- A javascript: URL whose code a Trusted Types default policy changes runs
+  the changed code one task later than natively (it goes through a
+  navigation of its own).
 - A stylesheet `<link>` the page's policy allows by its host where the
   list also takes nonces is refused.
 - A module worker of a `blob:` URL under a policy that refuses `blob:`

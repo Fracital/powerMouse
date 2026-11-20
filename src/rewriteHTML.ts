@@ -56,6 +56,13 @@ export function routeHTML(
 	config: Config,
 	form = false,
 	nested: string | false = false,
+	/**
+	 * a javascript: URL the policies of the document that navigates to it
+	 * refuse (src/inject/dom/policyChecks.ts jsStarts): it only judges its
+	 * code, which never compiles, so none of its declarations is made, as
+	 * natively (a script that throws has declared its let)
+	 */
+	judged = false,
 ) {
 	if (resource.url.protocol === 'data:') {
 		const { mime, data, attributes } = parseDataURI(
@@ -132,6 +139,7 @@ export function routeHTML(
 		// code runs
 		const csp = `${accessExpression(names.access)}.csp(0,${encodeURIComponent(JSON.stringify(`javascript:${body}`))}`;
 		const refused = `${csp})`;
+		if (judged) return `javascript:void (${inject},${refused})`;
 		const head = `((r,c)=>typeof r==='string'&&c?c.javascriptDocument(r,document.URL):r)((${inject},${refused}?void 0:(`;
 		const tail = `)),self[${client}]||(()=>{try{return ${creator}}catch(e){}})())`;
 		const expression = rewriter('singleExpression')(body)

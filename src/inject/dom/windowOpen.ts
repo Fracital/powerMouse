@@ -102,25 +102,29 @@ export function windowOpen(
 		// javascript: link (routeHTML rewrites its body)
 		if (destination !== null && destination.protocol === 'javascript:') {
 			// judged as it starts, by this document's policies (a new window's
-			// twice, measured)
+			// twice, measured): refused now, to a route that only judges it
+			let judged: string | undefined;
 			try {
-				deferred('policyChecks').jsStarts(
+				judged = deferred('policyChecks').jsStarts(
 					client,
 					name,
 					destination.href,
+					undefined,
 					undefined,
 					true,
 				);
 			} catch (error) {
 				// the window judges it as it runs
 			}
-			args[0] = routeHTML(
-				new StompURL(destination, client.url),
-				client.url,
-				client.config,
-				false,
-				aimed ? aimed.client.nestedRoute : client.nestedRoute,
-			);
+			args[0] =
+				judged ??
+				routeHTML(
+					new StompURL(destination, client.url),
+					client.url,
+					client.config,
+					false,
+					aimed ? aimed.client.nestedRoute : client.nestedRoute,
+				);
 		}
 		// a new tab: the host's to open, when it said so (then the page
 		// sees null, as with a popup blocker). Not for a sandboxed

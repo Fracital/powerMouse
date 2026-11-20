@@ -91,7 +91,15 @@ export default class IFrameModule extends Module<DocumentClient> {
 				moduleClient.names.client
 			] as DocumentClient;
 			if (client.applied) return;
-			if (popup) moduleClient.openedWindows.add(context);
+			if (popup) {
+				moduleClient.openedWindows.add(context);
+				// (the violations of its document are its console's)
+				try {
+					deferred('policyChecks').openedConsole(context);
+				} catch (error) {
+					// none
+				}
+			}
 			client.apply();
 		};
 
