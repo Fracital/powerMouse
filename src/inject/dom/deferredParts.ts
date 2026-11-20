@@ -136,7 +136,7 @@
 import { compileFilter, proceduralRunner } from '../../blocker/procedural';
 import { modifyHTML } from '../../htmlShell';
 import { noticeText } from '../../mixedContentNotices';
-import { integrityHoldsSync } from '../../sriDigest';
+import { dataIntegrity } from '../../sriDigest';
 import { codecBytes } from '../../wasm/codecBytes';
 import { modifyXML } from '../../xmlShell';
 import { accessFailures } from '../accessFailures';
@@ -401,7 +401,7 @@ export const parts = {
 	// first attribute of its name (./handlerGetters.ts;
 	// modules/DOMAttributes.ts)
 	hookHandlerName,
-	integrityHoldsSync,
+	dataIntegrity,
 	navigationRefusal,
 	precommitRedirect,
 	webTransportStandIn,
