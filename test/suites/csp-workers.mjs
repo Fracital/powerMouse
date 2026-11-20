@@ -89,19 +89,8 @@ const CASES = {
 	},
 };
 
-// listed in docs/csp.md
-const NO_DATA_PLACE =
-	"a data: worker's violation names no place (lineNumber and columnNumber 0): its realm tells none of its frames from the inject's";
-const EXPECTED = Object.fromEntries(
-	[
-		"the document's policy",
-		"the document's report-only policy",
-		"the document's default-src",
-	].map((name) => [name, { 'w-data-plain': NO_DATA_PLACE }]),
-);
-
 const browser = await launch();
-const native = await compareCases(browser, CASES, { expected: EXPECTED });
+const native = await compareCases(browser, CASES);
 // what the comparison rests on, natively
 const own = native["the worker's own policy"]?.results ?? {};
 ok(

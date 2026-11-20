@@ -91,10 +91,7 @@ const CASES = {
 // each listed in docs/csp.md
 const NO_HOP_VIOLATION =
 	"the hop the worker's policy refuses is refused (the service worker answers a network error, and the fetch rejects as natively) or let out, but its violation is not fired: the service worker cannot reach the worker's global";
-const BLOB_IMPORT_PLACE =
-	"a blob: worker's import() violation names the column the rewrite of the call maps to, natively its specifier's";
 const EXPECTED = {
-	"the document's script-src": { 'r-blob-plain': BLOB_IMPORT_PLACE },
 	"a redirect the worker's own policy refuses": {
 		'h-dedicated-connect': NO_HOP_VIOLATION,
 		'h-dedicated-ro': NO_HOP_VIOLATION,

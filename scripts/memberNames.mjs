@@ -192,6 +192,7 @@ export const MEMBERS = [
 	'releaseHeld',
 	'emulate',
 	'pendingForeign',
+	'bundleOrigin',
 ];
 
 const CHARACTERS =

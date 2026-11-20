@@ -70,6 +70,20 @@ const nativeSetTimeout = globalThis.setTimeout;
 const NativeMessageEvent = globalThis.MessageEvent;
 const NativeViolationEvent = globalThis.SecurityPolicyViolationEvent;
 const nativeStringify = JSON.stringify;
+/**
+ * The origin this bundle was loaded from, as the frame of its own first
+ * run names it (no page's script has run yet): a worker whose location is
+ * opaque (a data: worker's) has the proxy's origin nowhere else
+ */
+const loadedFrom = (() => {
+	try {
+		return /(https?:\/\/[^/\s()]+)\/\S*:\d+:\d+/.exec(
+			new Error().stack ?? '',
+		)?.[1];
+	} catch (error) {
+		return undefined;
+	}
+})();
 
 /** the events a held message or connect stands for */
 const HELD_TYPES = ['message', 'connect'];
@@ -105,6 +119,14 @@ function releasePreambleHeld() {
 export default class WorkerClient extends Client {
 	/** the version id when this worker is a page's emulated service worker (docs/service-workers.md) */
 	serviceWorkerVersion?: string;
+	/**
+	 * The origin of this worker's routes where its location is opaque (a
+	 * data: worker's): the one its bundle came from (Unroute proxyOrigin), so
+	 * its routes read back and its bundle's frames are the inject's
+	 */
+	get bundleOrigin(): string | undefined {
+		return this.global.location.origin === 'null' ? loadedFrom : undefined;
+	}
 	constructor(init: ParsedConfig, global: typeof globalThis) {
 		super(init, global);
 		this.isWorker = true;
@@ -389,24 +411,24 @@ export default class WorkerClient extends Client {
 		);
 		if (typeof NativeViolationEvent !== 'function') return refused;
 		const own = judged.named ?? this.url.url.href.replace(/#.*$/s, '');
-		// (the page's frame that made the request: the hook is under it. A
-		// data: worker's realm tells none of its frames from the inject's, so
-		// its violation names no place)
-		const site =
-			sourced && judged.named !== 'data'
-				? this.getModule(UnrouteModule)?.callerSite()
-				: undefined;
+		// (the page's frame that made the request: the hook is under it)
+		const site = sourced
+			? this.getModule(UnrouteModule)?.callerSite()
+			: undefined;
 		const sourceFile = sourced
 			? (judged.named ?? (site?.filename || own).replace(/[?#].*$/s, ''))
 			: '';
 		const lineNumber = site?.filename ? site.lineno : 0;
 		// (an import() is the one script-src-elem request reported once: the
-		// rewrite wraps the whole call, so in a script file, whose map places
-		// the wrap at `import`, the frame is there, where natively the place
-		// is its specifier's, `import(` on)
+		// rewrite wraps the whole call, so in a script the service worker
+		// rewrote (a file, a blob:), whose map places the wrap at `import`,
+		// the frame is there, where natively the place is its specifier's,
+		// `import(` on)
 		const columnNumber = site?.filename
 			? site.colno +
-				(directive === 'script-src-elem' && reportTimes === 1 && !judged.named
+				(directive === 'script-src-elem' &&
+				reportTimes === 1 &&
+				judged.named !== 'data'
 					? 7
 					: 0)
 			: 0;
