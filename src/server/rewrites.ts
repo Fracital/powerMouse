@@ -226,6 +226,7 @@ import {
 	byteRange,
 	clearsCache,
 	contentRange,
+	FINISHED_LENGTH,
 	HttpCache,
 	isCacheable,
 	isPartCacheable,
@@ -237,6 +238,7 @@ import {
 	partitionedKey,
 	sameVersion,
 	splitForStore,
+	wholeBodies,
 	type CacheHit,
 } from './cache';
 import { cacheMarkOf, renewCacheSecret } from './cacheMarks';
@@ -3255,6 +3257,13 @@ function genericForward(
 		// these loads).
 		const memoryDestination =
 			!navigation && MEMORY_DESTINATIONS.has(destination);
+		// a short image or font is read whole before it is answered
+		// (wholeResponse)
+		const wholeKind =
+			!navigation &&
+			!transformBody &&
+			serverRequest.method === 'GET' &&
+			WHOLE_DESTINATIONS.has(destination);
 		if (memoryDestination) {
 			requestHeaders.delete('if-none-match');
 			requestHeaders.delete('if-modified-since');
@@ -3718,6 +3727,11 @@ function genericForward(
 					headers: upstream.headers,
 				});
 				response.rawHeaders = upstream.rawHeaders;
+			} else if (wholeKind && wholeLength(upstream)) {
+				response = await wholeResponse(upstream);
+				const blob = wholeBodies.get(response);
+				if (blob && storable(upstream.status, upstream.headers))
+					cache!.put(cacheKey!, requestHeaders, upstream, blob);
 			} else if (upstream.body && storable(upstream.status, upstream.headers)) {
 				const [forStore, forPage] = splitForStore(
 					upstream.body,
@@ -3734,6 +3748,16 @@ function genericForward(
 				response = upstream;
 			}
 		}
+		// an HTTP cache entry of one: the store's Blob, which the browser
+		// hands over without reading it
+		if (
+			wholeKind &&
+			cached &&
+			!memory &&
+			response === hit?.response &&
+			wholeLength(response)
+		)
+			response = await wholeResponse(response);
 
 		// What a cache answers from an entry, as Chrome's does: a HEAD with
 		// no body, and a request for a range of a kept 200's bytes with a 206
@@ -3794,17 +3818,21 @@ function genericForward(
 			response.body &&
 			MemoryCache.keeps(response.status, response.headers)
 		) {
-			const [kept, forPage] = splitForStore(response.body, response.headers);
-			memoryCache
-				.put(memoryKey, requestHeaders, response, kept)
-				.catch(() => {});
-			const teed: typeof response = new Response(forPage, {
-				status: response.status,
-				statusText: response.statusText,
-				headers: response.headers,
-			});
-			teed.rawHeaders = response.rawHeaders;
-			response = teed;
+			const whole = wholeBodies.get(response);
+			if (whole) memoryCache.keep(memoryKey, requestHeaders, response, whole);
+			else {
+				const [kept, forPage] = splitForStore(response.body, response.headers);
+				memoryCache
+					.put(memoryKey, requestHeaders, response, kept)
+					.catch(() => {});
+				const teed: typeof response = new Response(forPage, {
+					status: response.status,
+					statusText: response.statusText,
+					headers: response.headers,
+				});
+				teed.rawHeaders = response.rawHeaders;
+				response = teed;
+			}
 		}
 
 		if (
@@ -4922,7 +4950,10 @@ function genericForward(
 			const encoded = typeof output === 'string' ? new Blob([output]) : null;
 			const transformed = encoded ?? output;
 
-			body = transformed !== false ? transformed : response.body!;
+			body =
+				transformed !== false
+					? transformed
+					: (wholeBody(response) ?? response.body!);
 
 			// The origin's Content-Length counts the origin's bytes, and a
 			// transformed body is the worker's own: it goes out with its own
@@ -5014,8 +5045,23 @@ function genericForward(
 		}
 
 		// an image or a font goes to the page as it arrives, and is kept for
-		// the same document's repeat of the request (REPEAT_DESTINATIONS)
+		// the same document's repeat of the request (REPEAT_DESTINATIONS):
+		// one read whole is kept as it is
 		if (
+			recentKey !== null &&
+			!transformBody &&
+			body instanceof Blob &&
+			response.status === 200 &&
+			!previousHop
+		)
+			rememberOutput(recentKey, {
+				body,
+				status: response.status,
+				statusText: response.statusText,
+				headers: [...responseHeaders],
+				bytes: body.size,
+			});
+		else if (
 			recentKey !== null &&
 			!transformBody &&
 			body instanceof ReadableStream &&
@@ -5289,6 +5335,72 @@ function forgetRecentOutputs() {
  * shared as it comes in (pendingOutputs).
  */
 const REPEAT_DESTINATIONS = new Set(['image', 'font']);
+
+/**
+ * The loads whose short bodies (FINISHED_LENGTH at most, by their
+ * Content-Length) are read whole, into a Blob, before the page is answered:
+ * the HTTP cache, the memory cache and the document's repeat (recentOutputs)
+ * keep that Blob, and the page is given it (cache.ts wholeBodies). Each
+ * store read a branch of the body before, a tee per store with every chunk
+ * through this thread for each, and the memory cache copied what it read
+ * into a Blob of its own: a page of a hundred images was three hundred
+ * streams. The browser decodes such a load only once it is whole, and the
+ * stores read it whole whatever the page does already (splitForStore).
+ */
+const WHOLE_DESTINATIONS = new Set(['image', 'font', 'track']);
+
+/** a 200 whose body is short by its Content-Length (WHOLE_DESTINATIONS) */
+function wholeLength(response: Response): boolean {
+	const length = response.headers.get('content-length');
+	return (
+		response.status === 200 &&
+		response.body !== null &&
+		length !== null &&
+		/^\d+$/.test(length) &&
+		Number(length) <= FINISHED_LENGTH
+	);
+}
+
+/**
+ * `response` with its body read whole into a Blob (wholeBodies). The Blob
+ * has no type, so that the page's response gets no Content-Type it did not
+ * have (an HTTP cache entry's own Blob is the browser's, read without a
+ * copy, and sliced for that). A body that breaks off fails the page's read
+ * of it, as before.
+ */
+async function wholeResponse<
+	R extends Response & { rawHeaders?: [string, string][] },
+>(response: R): Promise<R> {
+	const init = {
+		status: response.status,
+		statusText: response.statusText,
+		headers: response.headers,
+	};
+	let whole: R;
+	try {
+		const read = await response.blob();
+		const blob = read.type ? read.slice(0, read.size) : read;
+		whole = new Response(blob, init) as R;
+		wholeBodies.set(whole, blob);
+	} catch (error) {
+		whole = new Response(
+			new ReadableStream({
+				start(controller) {
+					controller.error(error);
+				},
+			}),
+			init,
+		) as R;
+	}
+	whole.rawHeaders = response.rawHeaders;
+	return whole;
+}
+
+/** the Blob that is all of `response`'s body, while nothing has read it (wholeBodies) */
+function wholeBody(response: Response): Blob | null {
+	const blob = wholeBodies.get(response);
+	return blob && !response.bodyUsed && !response.body?.locked ? blob : null;
+}
 /** a larger body is not kept for a repeat */
 const REPEAT_BYTES = 16 * 1024 * 1024;
 /** a repeatable response the worker is still reading, by recentOutputKey */
