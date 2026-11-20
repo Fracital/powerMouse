@@ -5,6 +5,7 @@
 // it can read their location and drive their history on the host's behalf.
 import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
 import { assetName } from '../config';
+import type { ExtensionsChange } from '../extensions/types';
 import { helperNames } from '../helperNames';
 import type { HookErrorInfo } from '../hooks';
 import type { PasskeyAnswer, PasskeyPrompt } from '../passkeys/types';
@@ -17,6 +18,7 @@ import { RpcHelper } from '../transport/rpc';
 import type { TransportNote } from '../transport/transportLog';
 import type { CarrierInfo } from '../transport/wispWebTransport';
 import { isApartAgent, outOfReach, runApartAgent } from './apart';
+import type { HubTabs } from './extensions';
 import { shareGeometry } from './geometry';
 import {
 	answerRun,
@@ -38,6 +40,27 @@ import {
 	STORAGE_BLOCKED,
 	TransportDescriptor,
 } from './messages';
+
+/** the host's frames as the extensions' tabs, asked over the frame's RPC */
+function hostTabs(
+	ask: (op: string, args: unknown[]) => Promise<unknown>,
+): HubTabs {
+	const call =
+		<T>(op: string) =>
+		(...args: unknown[]) =>
+			ask(op, args) as Promise<T>;
+	return {
+		list: call('list'),
+		ofClient: call('ofClient'),
+		create: call('create'),
+		navigate: call('navigate'),
+		reload: call('reload'),
+		back: call('back'),
+		forward: call('forward'),
+		close: call('close'),
+		activate: call('activate'),
+	};
+}
 
 function allowedOrigins(): string[] {
 	const meta = document.querySelector<HTMLMetaElement>(
@@ -177,7 +200,10 @@ else if (window === window.parent || !origins.length) {
 					};
 		}
 
-		const rpc = new RpcHelper<FrameBound, HostBound>(
+		const rpc: RpcHelper<FrameBound, HostBound> = new RpcHelper<
+			FrameBound,
+			HostBound
+		>(
 			{
 				init: async (init: ControllerFrameInit) => {
 					let registration: ServiceWorkerRegistration;
@@ -240,6 +266,10 @@ else if (window === window.parent || !origins.length) {
 						onIsolationWanted: (client) =>
 							void rpc.call('isolationWanted', client).catch(() => {}),
 						openTab: !!init.openTab,
+						// the extensions' tabs are the host's frames
+						extensionTabs: hostTabs((op, args) =>
+							rpc.call('extensionTabs', { op, args }),
+						),
 						// (the host page's, which it found out: nothing to ask here)
 						hostReload: init.hostReload ?? null,
 						...(init.cache === false ? { cache: false } : {}),
@@ -336,6 +366,13 @@ else if (window === window.parent || !origins.length) {
 									},
 								}
 							: {}),
+					});
+					// the extensions' hub tells the host what changed
+					controller.addEventListener('extensions', (event) => {
+						rpc.call(
+							'extensionChange',
+							(event as CustomEvent<ExtensionsChange>).detail,
+						);
 					});
 					// the host mirrors `stale` and its two events
 					controller.addEventListener('stale', (event) => {
@@ -484,6 +521,10 @@ else if (window === window.parent || !origins.length) {
 				goneClients: async (clients) => {
 					if (!controller) throw new Error('Controller is not initialised');
 					return [await controller.goneClients(clients), []];
+				},
+				extensions: async ({ call, args }) => {
+					if (!controller) throw new Error('Controller is not initialised');
+					return [await controller.extensionCall(call, args), []];
 				},
 				frameActivated: async ({ index, token, nested, origin }) => {
 					const win = historyWindow(index);

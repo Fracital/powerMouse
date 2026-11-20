@@ -23,6 +23,8 @@ import {
 	type BundleAsset,
 	type HostGeometry,
 } from '../config';
+import { extensionOfHost } from '../extensions/origin';
+import type { ExtensionCommand, ExtensionsChange } from '../extensions/types';
 import {
 	helperNames,
 	mintClientName,
@@ -124,6 +126,13 @@ import {
 	type ApartFrameInfo,
 } from './apart';
 import { ClientFrames } from './clientFrames';
+import {
+	codedError,
+	ExtensionHub,
+	Extensions,
+	framesAsTabs,
+	type HubTabs,
+} from './extensions';
 import { GeometryWatch, sharedGeometry, shareGeometry } from './geometry';
 import {
 	answerRun,
@@ -187,6 +196,24 @@ export type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
 export type { Config, ConfigCodec } from '../config';
 
 export { RemoteController, RemoteFrame, DEFAULT_SANDBOX } from './remote';
+export { Extensions } from './extensions';
+export { ExtensionError } from '../extensions/types';
+export type {
+	ActionState,
+	ClickResult,
+	ExtensionAction,
+	ExtensionErrorCode,
+	ExtensionFiles,
+	ExtensionInfo,
+	ExtensionNotification,
+	ExtensionOptions,
+	ExtensionOrigin,
+	ExtensionsChange,
+	ExtensionSource,
+	InstallOptions,
+	Manifest as ExtensionManifest,
+	PopupHandle,
+} from '../extensions/types';
 export type {
 	RemoteControllerInit,
 	RemotePasskeyRequest,
@@ -278,6 +305,8 @@ export interface ControllerInit {
 	 * natively as bare proxied tabs.
 	 */
 	onOpen?: (url: string, frame: Frame) => void;
+	/** @internal a RemoteController's frame: the extensions' tabs are the host's frames */
+	extensionTabs?: HubTabs;
 	/**
 	 * Called whenever a proxied page reports where it is (load, pushState,
 	 * hashchange, title change); the same information arrives as a
@@ -1248,6 +1277,18 @@ export class StompController extends EventTarget {
 	 * worker with the shields; the worker mixes it with each document's eTLD+1.
 	 */
 	readonly #fpSeed = fingerprintSeed();
+	/** the hub of the extensions (docs/extensions.md): backgrounds, actions, tabs */
+	#extensionHub!: ExtensionHub;
+	/**
+	 * Chrome extensions (docs/extensions.md): install, list, enable, remove
+	 * and update them, and show their toolbar buttons, popups and options
+	 */
+	readonly extensions!: Extensions;
+	/** each frame's tab id, as the extensions see it */
+	#tabIds = new WeakMap<Frame, number>();
+	#nextTab = 1;
+	/** the tab the host shows (extensions: tabs.query({ active: true })) */
+	activeTab: Frame | null = null;
 	/** the blocker's lists in force, while it is on (docs/adblock.md); its module is `#modules.blocker` */
 	#adblock: AdblockInit | null = null;
 	/**
@@ -1363,6 +1404,38 @@ export class StompController extends EventTarget {
 			this.#sites?.apply('shields', list);
 		}, init.onShieldsChange);
 		if (init.shields?.length) this.#shields.replace(init.shields);
+		this.#extensionHub = new ExtensionHub({
+			channel: () => this.config.directory,
+			scope: () => this.config.scope,
+			command: (command) => this.#call('extensions', command),
+			route: (url) => this.route(url),
+			container: () => document.body ?? document.documentElement,
+			sandbox: this.#sandbox,
+			tabs: init.extensionTabs ?? this.#extensionTabs(),
+			notify: (change) => {
+				this.extensions.changed(change);
+				this.dispatchEvent(new CustomEvent('extensions', { detail: change }));
+			},
+		});
+		const hub = this.#extensionHub;
+		(this as { extensions: Extensions }).extensions = new Extensions({
+			command: async (command) => {
+				await hub.ready;
+				return hub.command(command);
+			},
+			actionState: (id, tabId) => hub.actionState(id, tabId),
+			actions: (tabId) => hub.actions(tabId),
+			click: (id, tabId) => hub.click(id, tabId),
+			dispatch: async (id, name, args) => hub.dispatch(id, name, args),
+			menus: async (id) => hub.menus(id),
+			expectPopup: async (id, tabId, url) => hub.expectPopup(id, tabId, url),
+			route: (url) => this.route(url),
+			sandbox: this.#sandbox,
+			activeTab: () => {
+				const frame = this.activeTab ?? this.frames[0];
+				return frame ? this.tabIdOf(frame) : null;
+			},
+		});
 		this.directory = isUrlLike(init.directory)
 			? new URL(init.directory, location.href)
 			: defaultDirectory();
@@ -1687,7 +1760,10 @@ export class StompController extends EventTarget {
 			}
 			const navigate = navigateReport(event.data);
 			if (navigate) {
-				if (navigate.client) this.#clients.attribute(navigate.client, frame);
+				if (navigate.client) {
+					this.#clients.attribute(navigate.client, frame);
+					this.#extensionHub.place(navigate.client, this.tabIdOf(frame));
+				}
 				// (the controller's word, never the page's: navigateReport takes
 				// no such field from it)
 				if (navigate.client && this.#isolationWanted.has(navigate.client))
@@ -2686,6 +2762,8 @@ export class StompController extends EventTarget {
 					this.isReady = true;
 					this.#readySettled = true;
 					this.#readyResolve();
+					// the extensions' backgrounds start with the controller
+					this.#extensionHub.start();
 				},
 				startServiceWorker: async ({ id, url, type }) => {
 					// a page's emulated service worker (docs/service-workers.md):
@@ -3012,6 +3090,8 @@ export class StompController extends EventTarget {
 		const marked = given.find(
 			([name]) => name.toLowerCase() === SOCKET_PARTITION,
 		);
+		// an extension's origin has no server: nothing of it goes out
+		if (extensionOfHost(url.hostname)) throw new Error(HANDSHAKE_REFUSED);
 		const headers: RawHeaders = given.filter((header) => header !== marked);
 		const has = (name: string) =>
 			headers.some(([header]) => header.toLowerCase() === name);
@@ -3027,7 +3107,7 @@ export class StompController extends EventTarget {
 		// beside the question for the cookies (one more message each way,
 		// no wait of its own). A yes refuses the socket; no answer does not
 		const blocked =
-			this.#adblock || this.#dnrExtensions.size
+			this.#adblock || this.#dnrExtensions.size || this.#extensionHub.any
 				? this.#rpc
 						.call('socket', {
 							url: url.href,
@@ -3058,8 +3138,11 @@ export class StompController extends EventTarget {
 	 * it go
 	 */
 	#admitSession = async (url: URL, origin: string): Promise<boolean> => {
+		if (extensionOfHost(url.hostname)) return false;
 		if (
-			(!this.#adblock && !this.#dnrExtensions.size) ||
+			(!this.#adblock &&
+				!this.#dnrExtensions.size &&
+				!this.#extensionHub.any) ||
 			!this.isReady ||
 			!this.#rpc
 		)
@@ -3188,6 +3271,76 @@ export class StompController extends EventTarget {
 	}
 	/** the extensions with declarativeNetRequest rules in the worker */
 	#dnrExtensions = new Set<string>();
+	/** @internal a RemoteController's call of the extensions' hub (frame.ts) */
+	extensionCall(call: string, args: unknown[]): Promise<unknown> {
+		return this.#extensionCall(call, args).catch((error: unknown) => {
+			throw codedError(error);
+		});
+	}
+	#extensionCall(call: string, args: unknown[]): Promise<unknown> {
+		const hub = this.#extensionHub;
+		switch (call) {
+			case 'command':
+				return hub.ready.then(() => hub.command(args[0] as ExtensionCommand));
+			case 'actionState':
+				return hub.actionState(args[0] as string, args[1] as number | null);
+			case 'actions':
+				return hub.actions(args[0] as number | null);
+			case 'click':
+				return hub.click(args[0] as string, args[1] as number | null);
+			case 'dispatch':
+				return Promise.resolve(
+					hub.dispatch(
+						args[0] as string,
+						args[1] as string,
+						args[2] as unknown[],
+					),
+				);
+			case 'menus':
+				return Promise.resolve(hub.menus(args[0] as string));
+			case 'place':
+				hub.place(args[0] as string, args[1] as number);
+				return Promise.resolve();
+			case 'expectPopup':
+				return Promise.resolve(
+					hub.expectPopup(
+						args[0] as string,
+						args[1] as number | null,
+						args[2] as string,
+					),
+				);
+			default:
+				return Promise.reject(new Error(`${call} is not an extensions call`));
+		}
+	}
+	/** the tab id the extensions know a frame by */
+	tabIdOf(frame: Frame): number {
+		let id = this.#tabIds.get(frame);
+		if (id === undefined) this.#tabIds.set(frame, (id = this.#nextTab++));
+		return id;
+	}
+	/** the frames as the extensions' tabs */
+	#extensionTabs(): HubTabs {
+		return framesAsTabs<Frame>({
+			frames: () => this.frames,
+			closed: (frame) => {
+				this.frames = this.frames.filter((other) => other !== frame);
+			},
+			active: () => this.activeTab,
+			activate: (frame) => {
+				this.activeTab = frame;
+			},
+			tabIdOf: (frame) => this.tabIdOf(frame),
+			frameOf: (client) => this.#clients.frame(client),
+			isTop: (frame, client) => frame.lastNavigate?.client === client,
+			open: this.#init.onOpen,
+			request: (url) => {
+				const change: ExtensionsChange = { type: 'tab', url };
+				this.extensions.changed(change);
+				this.dispatchEvent(new CustomEvent('extensions', { detail: change }));
+			},
+		});
+	}
 	/** replace the request rules the service worker applies (see ControllerInit.rules) */
 	async setRules(rules: RequestRule[]): Promise<void> {
 		this.#rules = rules;

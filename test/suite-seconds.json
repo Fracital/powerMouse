@@ -90,6 +90,7 @@
 	"escape-docs": 5,
 	"escapes-isolated": 66,
 	"escapes-same-origin": 68,
+	"extensions": 10,
 	"fedcm": 5,
 	"fetch-adapter": 3,
 	"fetch-credentials": 3,

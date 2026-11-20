@@ -187,6 +187,9 @@ export function sited(client: string, sites: SiteFacts[] | undefined): string {
  * `isolation`: what the document is by its headers, when the host's page is
  * cross-origin isolated (src/isolation.ts isolationFacts).
  */
+/** markup a caller adds to the shell, given what its scripts carry (the loading one's, the inline one's) */
+export type ShellPart = (loading: string, attribute: string) => string;
+
 export function modifyHTML(
 	script: string,
 	url: StompURL,
@@ -217,6 +220,8 @@ export function modifyHTML(
 	served = false,
 	/** the client the document's navigation makes, as the worker that serves it knows (DocumentClient.servedClient) */
 	clientId?: string,
+	/** what goes before the inject bundle's script (the extensions' runtime and content scripts, docs/extensions.md) */
+	before?: ShellPart,
 ): string {
 	const { head, tail } = shell(
 		script,
@@ -239,6 +244,7 @@ export function modifyHTML(
 		served,
 		undefined,
 		clientId,
+		before,
 	);
 	return head + tail(prewritten);
 }
@@ -278,6 +284,7 @@ export function modifyHTMLStreamed(
 	stream?: string,
 	/** as modifyHTML's */
 	clientId?: string,
+	before?: ShellPart,
 ): { head: string; tail: (prewritten: Prewritten | null) => string } {
 	return shell(
 		script,
@@ -300,6 +307,7 @@ export function modifyHTMLStreamed(
 		true,
 		stream,
 		clientId,
+		before,
 	);
 }
 
@@ -326,6 +334,7 @@ function shell(
 	served = false,
 	stream?: string,
 	clientId?: string,
+	before?: ShellPart,
 ): { head: string; tail: (prewritten?: Prewritten | null) => string } {
 	// if(fragment) return '<script>document.currentScript.replaceWith(globalstomp.cloneIntoNewNode())
 	// a shell the page realm builds is of a document that inherits the
@@ -442,7 +451,7 @@ ${blocked}
 		? `<script${attribute}>${gapView(url.url, referrer && 'referrer' in referrer ? referrer.referrer : '')}</script>`
 		: '';
 	return {
-		head: `<!DOCTYPE HTML><html><head><meta charset="utf-8" /></head><body>${gap}${baseScript}${library}<script${loading} src="${injectDocumentJS(url, config)}" ${BUNDLE_CLIENT}="${names.client}"></script>${kept}`,
+		head: `<!DOCTYPE HTML><html><head><meta charset="utf-8" /></head><body>${gap}${baseScript}${library}${before ? before(loading, attribute) : ''}<script${loading} src="${injectDocumentJS(url, config)}" ${BUNDLE_CLIENT}="${names.client}"></script>${kept}`,
 		// the empty script after the one that loads the page: the client
 		// writes the page at its end tag (DocumentClient.loadHTML), before the
 		// shell's parse could end; a type no script runs as, so no policy

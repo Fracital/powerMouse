@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>trusted types target</title>
+		<script>
+			// what the first script of the page sees: document_start ran before it
+			window.__pageFirst = {
+				start: document.documentElement.dataset.start || null,
+				main: window.__mainRan || null,
+				storage: typeof (window.chrome && window.chrome.storage),
+				runtimeId: typeof (
+					window.chrome &&
+					window.chrome.runtime &&
+					window.chrome.runtime.id
+				),
+			};
+		</script>
+	</head>
+	<body>
+		<p id="target">target</p>
+		<script>
+			window.__bodyScript = true;
+		</script>
+	</body>
+</html>

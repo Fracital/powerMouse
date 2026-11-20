@@ -5,6 +5,7 @@ import type {
 } from '@mercuryworkshop/proxy-transports';
 import type { AdblockInit, SiteShields } from '../blocker/types';
 import type { Config } from '../config';
+import type { ExtensionCommand } from '../extensions/types';
 import type { IsolationEngine } from '../isolation';
 import type {
 	PasskeyCommand,
@@ -65,6 +66,17 @@ export const KEEPALIVE_MS = 20000;
  * StompController's #standIn.
  */
 export const SW_KICK = '$stomp$swKick';
+/**
+ * The extensions' BroadcastChannels (docs/extensions.md "Messaging"): each
+ * extension's contexts under one controller talk on
+ * `<EXTENSION_BUS_PREFIX><controller address>|<extension id>`, and the worker
+ * tells its webRequest events and storage changes there
+ */
+export const EXTENSION_BUS_PREFIX = '$stomp$ext:';
+/** worker -> controllers, on `<EXTENSION_CHANGES><scope>`: an extension was installed, changed or removed */
+export const EXTENSION_CHANGES = '$stomp$extChanges:';
+/** the property (a registered symbol's key) a controller's extension hub is found under on its window */
+export const EXTENSION_HUB = '$stomp$extHub';
 /**
  * SW -> controller, on the first port of a `standby` CONTROLLER_INIT the
  * worker turns down because it has the controller registered already, right
@@ -1362,6 +1374,8 @@ export type SWbound = {
 	suffixList: [undefined, { commit: string; date: string } | null];
 	/** the host reading, importing or wiping the cookie jar */
 	cookies: [CookieCommand, CookieResult];
+	/** the host managing extensions (docs/extensions.md): src/extensions/types.ts ExtensionCommand */
+	extensions: [ExtensionCommand, unknown];
 	/**
 	 * clear a site's virtualized storage on the proxy origin (localStorage,
 	 * sessionStorage, IndexedDB, Cache Storage): the "Forget me when I close

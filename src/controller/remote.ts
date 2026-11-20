@@ -14,6 +14,12 @@ import { assetFile } from '../config';
 // over postMessage. Proxied content is shown in sandboxed, cross-origin
 // frames the host page can neither read nor be read by.
 import type { Assets, Config, ConfigCodec, HostGeometry } from '../config';
+import type {
+	ActionState,
+	ClickResult,
+	ExtensionAction,
+	ExtensionsChange,
+} from '../extensions/types';
 import { validateNames, type HelperNames } from '../helperNames';
 import { validateHooks, type HookErrorInfo, type InitHooks } from '../hooks';
 import { askHost } from '../passkeys/host';
@@ -33,6 +39,7 @@ import type { CarrierInfo } from '../transport/wispWebTransport';
 import { BUILD, CONTROLLER_FRAME_SCRIPT } from '../version';
 import { drawAccountChooser } from './accountChooser';
 import { ClientFrames } from './clientFrames';
+import { Extensions, framesAsTabs, type HubTabs } from './extensions';
 import { GeometryWatch } from './geometry';
 import {
 	framePath,
@@ -248,6 +255,18 @@ export class RemoteController extends EventTarget {
 		this.#handovers.add(listener);
 		return () => this.#handovers.delete(listener);
 	}
+	/** the frame the host shows now: the extensions' active tab (see StompController.activeTab) */
+	activeTab: RemoteFrame | null = null;
+	/**
+	 * The extensions (docs/extensions.md): their hub is the controller
+	 * frame's, asked over its RPC; their tabs are this page's frames
+	 */
+	readonly extensions: Extensions;
+	#tabIds = new WeakMap<RemoteFrame, number>();
+	#nextTab = 1;
+	/** the client of each frame's top document, as its reports said */
+	#topClients = new WeakMap<RemoteFrame, string>();
+	#extensionTabs: HubTabs;
 	/**
 	 * The host's browser window as its frames' documents see it
 	 * (./geometry.ts), kept by the controller frame (and its slots' agents)
@@ -304,6 +323,54 @@ export class RemoteController extends EventTarget {
 					this.id = id;
 				});
 		this.#sandbox = init.sandbox ?? DEFAULT_SANDBOX;
+		this.#extensionTabs = framesAsTabs<RemoteFrame>({
+			frames: () => this.frames,
+			closed: (frame) => {
+				this.frames = this.frames.filter((other) => other !== frame);
+			},
+			active: () => this.activeTab,
+			activate: (frame) => {
+				this.activeTab = frame;
+			},
+			tabIdOf: (frame) => this.tabIdOf(frame),
+			frameOf: (client) => this.#clients.frame(client),
+			isTop: (frame, client) => this.#topClients.get(frame) === client,
+			open: init.onOpen,
+			request: (url) => {
+				const change: ExtensionsChange = { type: 'tab', url };
+				this.extensions.changed(change);
+				this.dispatchEvent(new CustomEvent('extensions', { detail: change }));
+			},
+		});
+		const hub = (call: string, ...args: unknown[]) =>
+			this.#ready.then(() => this.#rpc.call('extensions', { call, args }));
+		this.extensions = new Extensions({
+			command: (command, transfer) =>
+				this.#ready.then(() =>
+					this.#rpc.call(
+						'extensions',
+						{ call: 'command', args: [command] },
+						transfer,
+					),
+				) as Promise<never>,
+			actionState: (id, tabId) =>
+				hub('actionState', id, tabId) as Promise<ActionState>,
+			actions: (tabId) => hub('actions', tabId) as Promise<ExtensionAction[]>,
+			click: (id, tabId) => hub('click', id, tabId) as Promise<ClickResult>,
+			dispatch: async (id, name, args) => {
+				await hub('dispatch', id, name, args);
+			},
+			menus: (id) => hub('menus', id) as Promise<Record<string, unknown>[]>,
+			expectPopup: async (id, tabId, url) => {
+				await hub('expectPopup', id, tabId, url);
+			},
+			route: (url) => this.route(url),
+			sandbox: this.#sandbox,
+			activeTab: () => {
+				const frame = this.activeTab ?? this.frames[0];
+				return frame ? this.tabIdOf(frame) : null;
+			},
+		});
 
 		if (this.proxyOrigin === location.origin)
 			throw new Error(
@@ -437,6 +504,22 @@ export class RemoteController extends EventTarget {
 				handover: async () => {
 					for (const listener of [...this.#handovers]) listener();
 				},
+				// the controller frame's extensions' hub told a change
+				extensionChange: async (change) => {
+					this.extensions.changed(change);
+					this.dispatchEvent(new CustomEvent('extensions', { detail: change }));
+				},
+				// the hub asks about the tabs, which are this page's frames
+				extensionTabs: async ({ op, args }) => {
+					const tabs = this.#extensionTabs as unknown as Record<
+						string,
+						((...values: unknown[]) => Promise<unknown>) | undefined
+					>;
+					const run = Object.hasOwn(tabs, op) ? tabs[op] : undefined;
+					if (typeof run !== 'function')
+						throw new Error(`${op} is not a tabs call`);
+					return [await run(...args), []];
+				},
 				stale: async (info) => {
 					const was = this.stale;
 					this.stale = info;
@@ -511,7 +594,18 @@ export class RemoteController extends EventTarget {
 			}
 			const navigate = navigateReport(event.data);
 			if (navigate) {
-				if (navigate.client) this.#clients.attribute(navigate.client, frame);
+				if (navigate.client) {
+					this.#clients.attribute(navigate.client, frame);
+					this.#topClients.set(frame, navigate.client);
+					this.#ready
+						.then(() =>
+							this.#rpc.call('extensions', {
+								call: 'place',
+								args: [navigate.client, this.tabIdOf(frame)],
+							}),
+						)
+						.catch(() => {});
+				}
 				if (navigate.client && this.#isolationWanted.has(navigate.client))
 					navigate.isolation = 'wanted';
 				// where the frame's history can go is the controller frame's to
@@ -651,6 +745,12 @@ export class RemoteController extends EventTarget {
 	}
 	async wait(): Promise<void> {
 		await this.#ready;
+	}
+	/** the tab id the extensions know a frame by (see StompController.tabIdOf) */
+	tabIdOf(frame: RemoteFrame): number {
+		let id = this.#tabIds.get(frame);
+		if (id === undefined) this.#tabIds.set(frame, (id = this.#nextTab++));
+		return id;
 	}
 	async route(url: string): Promise<string> {
 		await this.#ready;

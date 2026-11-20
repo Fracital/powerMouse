@@ -1,5 +1,6 @@
 import {
 	BareCompatibleClient,
+	BareResponse,
 	type ProxyTransport,
 	type RawHeaders,
 } from '@mercuryworkshop/proxy-transports';
@@ -28,6 +29,7 @@ import {
 	type ScriptFacts,
 } from '../csp';
 import type { DnrOutcome } from '../extensions/dnr';
+import { CONTENT_SCRIPT_ROUTE, EXTENSION_API_ROUTE } from '../extensions/types';
 import { freshFrameDocument } from '../freshFrame';
 import { sourceKey } from '../functionSource';
 import { rewriteLinkHeader } from '../headers';
@@ -114,6 +116,7 @@ import {
 	ScriptType,
 } from '../rewriteJS';
 import {
+	extensionsRuntimeJS,
 	formQuery,
 	linkRouteURL,
 	parseRoutedURL,
@@ -310,6 +313,17 @@ import {
 } from './documentEncodings';
 import { embedderPolicyOf, rememberEmbedderPolicy } from './embedderPolicies';
 import { DOCUMENT_DESTINATIONS, hostErrorPage } from './errorPage';
+import { extensionApi } from './extensions/api';
+import {
+	contentScriptResponse,
+	documentShell,
+	type ExtensionShell,
+} from './extensions/contentScripts';
+import {
+	ExtensionPipeline,
+	type ExtensionRequest,
+} from './extensions/pipeline';
+import type { ExtensionRegistry } from './extensions/registry';
 import {
 	AdditionalFilter,
 	browserBytes,
@@ -1204,6 +1218,10 @@ interface Rewriter {
 	rules: CompiledRule[];
 	/** the built-in blocker, unless the host turned it off (docs/adblock.md) */
 	blocker?: BlockerLike;
+	/** the scope's extensions (docs/extensions.md) */
+	extensions?: ExtensionRegistry;
+	/** what the request path asks of them */
+	pipeline?: ExtensionPipeline;
 	/** the host asked for the blocker: the first navigation waits for its lists (on by default, for the snapshot alone) */
 	blockerAsked?: boolean;
 	/** the per-site shields the controller set (src/server/shields.ts) */
@@ -1262,6 +1280,13 @@ const HISTORY_STEP_MS = 10_000;
  * (natively until its load event, which the worker does not hear of)
  */
 const HARD_LOAD_MS = 30_000;
+
+/** an extension cancelled the request: to the page a network error, as Chrome's ERR_BLOCKED_BY_CLIENT */
+function extensionRefusal(): Error {
+	return Object.assign(new Error('blocked by an extension'), {
+		stompReported: true,
+	});
+}
 
 /** the page aborted the request (its signal fired) */
 const ABORTED = Symbol('aborted');
@@ -2487,7 +2512,13 @@ function genericForward(
 			!navigation &&
 			policyOrigin !== null &&
 			(policyOrigin === 'null' || policyOrigin !== url.url.origin);
-		const corsChecked = crossOrigin && policyMode === 'cors';
+		// an extension page reads any response of a host it has permission
+		// for, no CORS asked (as Chrome lets it)
+		const extensionReads =
+			crossOrigin &&
+			!!rewriter.extensions?.any &&
+			rewriter.extensions.crossOriginAllowed(policyOrigin, url.url);
+		const corsChecked = crossOrigin && policyMode === 'cors' && !extensionReads;
 		// a subresource the inject copies for a page under a grant: its bytes
 		// go to the page's process as a blob (not a download, which the page
 		// never holds, nor an object's or embed's document, a navigation)
@@ -3019,6 +3050,74 @@ function genericForward(
 				);
 			applyHeaderRule(requestHeaders, rule.action.requestHeaders);
 		}
+		// the extensions' rules and their webRequest listeners
+		// (docs/extensions.md): after the host's, which win, and before the
+		// caches, as the blocker's decision is. A request the worker makes
+		// for itself is nobody's to see
+		const extensionRequest: ExtensionRequest | null =
+			rewriter.pipeline?.active && !context?.internal
+				? rewriter.pipeline.request({
+						url: url.url.href,
+						method: serverRequest.method,
+						destination: navigation && topLevel ? 'document' : realDestination,
+						navigation,
+						top: topLevel,
+						initiator: policyOrigin,
+						site,
+						client: context?.clientId,
+					})
+				: null;
+		const extensionVerdict = extensionRequest
+			? await rewriter.pipeline!.before(extensionRequest)
+			: null;
+		if (extensionVerdict && 'cancel' in extensionVerdict) {
+			const page =
+				navigation && topLevel
+					? await hostErrorPage(rewriter, {
+							url: reportURL(url),
+							status: 403,
+							error: 'blocked by an extension',
+							kind: 'blocked',
+						})
+					: null;
+			rewriter.log?.({
+				url: reportURL(url),
+				method: serverRequest.method,
+				destination: serverRequest.destination || 'fetch',
+				status: 0,
+				ms: Date.now() - started,
+				cached: false,
+				bytes: null,
+				error: 'blocked by an extension',
+				kind: 'blocked',
+				...(page ? {} : { client: context?.clientId }),
+			});
+			return page ?? Response.error();
+		}
+		if (extensionVerdict) {
+			// a redirect (or an upgrade) goes to the same kind of route, as
+			// a site's own redirect would be followed
+			let target: URL;
+			try {
+				target =
+					'redirect' in extensionVerdict
+						? new URL(extensionVerdict.redirect, url.url)
+						: Object.assign(new URL(url.url), { protocol: 'https:' });
+			} catch (error) {
+				return Response.error();
+			}
+			return new Response(null, {
+				status: 307,
+				headers: {
+					location: `${oURL.origin}${rewriter.directory}${resource}/${new StompURL(
+						target,
+						url,
+					).encode()}`,
+					'cache-control': 'no-store',
+				},
+			});
+		}
+
 		// the extensions' request header changes, on the headers as they go
 		// out (onBeforeSendHeaders: the jar's Cookie among them)
 		if (dnrFlow) rewriter.dnr!.sendHeaders(dnrFlow, requestHeaders);
@@ -3130,26 +3229,65 @@ function genericForward(
 			let urgency = queueUrgency(shape);
 			if (first) urgency = Math.min(urgency, FIRST_IMAGES_URGENCY);
 			if (image && seenLately(page)) urgency = Math.min(urgency, SEEN_URGENCY);
-			const upstream = upload.then((body) =>
-				rewriter.bare
-					.fetch(url.toString(), {
-						method: serverRequest.method,
-						redirect: 'manual',
-						// redirect: serverRequest.redirect,
-						body,
-						headers: queued(
-							partitioned(chromeOrderedHeaders(headers, shape)),
-							urgency,
-							credentials,
-							id,
-							image,
-						),
-					})
-					.then((response) => {
-						upstreamFacts = factsOf(response.rawHeaders) ?? null;
-						return response;
-					}),
-			);
+			const upstream = upload.then(async (body) => {
+				let ordered = chromeOrderedHeaders(headers, shape);
+				// onBeforeSendHeaders and DNR's header changes, on the fields as
+				// they go out (docs/extensions.md)
+				if (extensionRequest) {
+					const sent = await rewriter.pipeline!.send(
+						extensionRequest,
+						ordered,
+						// (the proxy's own fields come after, never seen)
+						(name) => name.startsWith('$stomp$'),
+					);
+					if (!sent) throw extensionRefusal();
+					ordered = sent;
+				}
+				const response = await rewriter.bare.fetch(url.toString(), {
+					method: serverRequest.method,
+					redirect: 'manual',
+					// redirect: serverRequest.redirect,
+					body,
+					headers: queued(
+						partitioned(ordered),
+						urgency,
+						credentials,
+						id,
+						image,
+					),
+				});
+				upstreamFacts = factsOf(response.rawHeaders) ?? null;
+				if (!extensionRequest) return response;
+				const received = await rewriter.pipeline!.received(
+					extensionRequest,
+					response.status,
+					response.statusText,
+					response.rawHeaders ?? [...response.headers],
+				);
+				if (!received) return response;
+				if (received.cancel) {
+					response.body?.cancel().catch(() => {});
+					throw extensionRefusal();
+				}
+				const answer = BareResponse.fromTransferrableResponse(
+					received.redirect
+						? {
+								body: '',
+								status: 307,
+								statusText: 'Internal Redirect',
+								headers: [['location', received.redirect]],
+							}
+						: {
+								body: response.body as ReadableStream,
+								status: response.status,
+								statusText: response.statusText,
+								headers: received.headers!,
+							},
+					response.url || url.toString(),
+				);
+				if (received.redirect) response.body?.cancel().catch(() => {});
+				return answer;
+			});
 			// a start's list downloads wait for the first navigation's answer
 			if (shape.navigation) navigationUpstream(upstream);
 			if (image) {
@@ -6440,7 +6578,12 @@ export function registerRewrites(
 	tellApartServed?: () => void,
 	/** the extensions' declarativeNetRequest rules */
 	dnr?: DnrHost,
+	/** the scope's extensions (docs/extensions.md) */
+	extensions?: ExtensionRegistry,
 ) {
+	const pipeline = extensions
+		? new ExtensionPipeline(extensions, init.directory)
+		: undefined;
 	// (the newest controller's: an older one may be gone)
 	if (askBlobProbe) askBlobURL = askBlobProbe;
 	let isolationEngine: Promise<IsolationEngine> | undefined;
@@ -6494,9 +6637,19 @@ export function registerRewrites(
 		cache,
 		rewrites,
 		pool,
-		log,
+		// the host's request log, and the extensions' onCompleted and
+		// onErrorOccurred (nothing is built while neither listens)
+		get log() {
+			if (!pipeline?.logs) return log;
+			return (info: RequestInfo) => {
+				log?.(info);
+				pipeline.logged(info);
+			};
+		},
 		rules: [],
 		blocker,
+		extensions,
+		pipeline,
 		blockerAsked,
 		shields,
 		dnr,
@@ -6528,6 +6681,50 @@ export function registerRewrites(
 		// (what the transport says of each answer is noted: responseFacts.ts)
 		bare: new BareCompatibleClient(notingFacts(transport)),
 	};
+
+	// the extensions' routes (docs/extensions.md): their content scripts'
+	// functions, and their contexts' calls
+	if (extensions) {
+		const rewriteScript = (source: string, file: string) =>
+			modifyJS(
+				source,
+				new StompURL(file, rewriter.codec, rewriter.directory),
+				rewriter.config,
+				'generic',
+			);
+		router.routes.set(
+			new RegExp(`^/${CONTENT_SCRIPT_ROUTE}/`),
+			(request, path) =>
+				contentScriptResponse(extensions, request, path, rewriteScript),
+		);
+		router.routes.set(
+			new RegExp(`^/${EXTENSION_API_ROUTE}$`),
+			(request, _path, context) =>
+				extensionApi(
+					extensions,
+					request,
+					context?.clientId,
+					rewriter.directory,
+					(routed) => {
+						try {
+							return parseRoutedURL(
+								routed,
+								rewriter.codec,
+								`${new URL(routed).origin}${rewriter.directory}`,
+							).url.toString();
+						} catch (error) {
+							return routed;
+						}
+					},
+					rewriteScript,
+					(css, file) =>
+						modifyCSS(
+							css,
+							new StompURL(file, rewriter.codec, rewriter.directory),
+						),
+				),
+		);
+	}
 
 	// binary:set is a srcset candidate (routeImageSet), loaded the same way.
 	// A file's route hands on the body as the site sent it: a frame that
@@ -8020,6 +8217,28 @@ export function registerRewrites(
 								...(seed ? { syncSeed: seed } : {}),
 							}
 						: rewriter.config;
+				// the extensions whose content scripts the document runs, or
+				// the extension page it is (docs/extensions.md): nothing for a
+				// document no extension reaches
+				const extensionShell: ExtensionShell | null = rewriter.extensions?.any
+					? await documentShell(
+							rewriter.extensions,
+							{
+								url: url.url.href,
+								client: request.clientId ?? '',
+								top,
+								directory: rewriter.directory,
+							},
+							{
+								runtime: extensionsRuntimeJS(url, rewriter.config),
+								rewriteCSS: (css, file) =>
+									modifyCSS(
+										css,
+										new StompURL(file, rewriter.codec, rewriter.directory),
+									),
+							},
+						)
+					: null;
 				const partition =
 					mayKeep({
 						method: request.method,
@@ -8069,6 +8288,7 @@ export function registerRewrites(
 							request.routed,
 						).href,
 						served,
+						extensionShell?.head,
 					);
 					return encodeShell(shell.head + shell.tail(null), encoding);
 				}
@@ -8094,6 +8314,7 @@ export function registerRewrites(
 						syncBlocked,
 						true,
 						served,
+						extensionShell?.head,
 					);
 					return encoding === 'utf-8' ? shell : encodeShell(shell, encoding);
 				}
@@ -8123,6 +8344,7 @@ export function registerRewrites(
 					syncBlocked,
 					undefined,
 					served,
+					extensionShell?.head,
 				);
 				const first = encodeShell(head, encoding);
 				return new ReadableStream<Uint8Array>({
