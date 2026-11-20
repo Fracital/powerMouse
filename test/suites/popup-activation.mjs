@@ -155,11 +155,16 @@ for (const [mode, base] of [
 			return names;
 		},
 		// the demo shows each tab it opened: the page's tab is shown again
-		// for the user's next click
+		// for the user's next click, once the host's page has drawn that.
+		// The browser sends a click to the frame of another process it last
+		// saw drawn at that point (isolated mode): on a busy machine one
+		// sent at once reached the tab just hidden, and the page never had it
 		() =>
-			element.evaluate((own) => {
+			element.evaluate(async (own) => {
 				for (const other of document.querySelectorAll('.frame'))
 					other.classList.toggle('hidden', other !== own);
+				for (let i = 0; i < 2; i++)
+					await new Promise((resolve) => requestAnimationFrame(resolve));
 			}),
 	);
 	ok(

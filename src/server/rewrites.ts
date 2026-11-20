@@ -1149,6 +1149,12 @@ interface Rewriter {
 	 * window of its own
 	 */
 	isolationWanted?: (client: string) => void;
+	/**
+	 * a document is served with the proxy's Document-Isolation-Policy: the
+	 * controller starts the agent of such documents only once one was
+	 * (src/controller/apart.ts)
+	 */
+	apartServed?: () => void;
 }
 
 /** how long a decision waits for the controller to say what the browser makes of isolation (then Chrome's rules) */
@@ -4010,6 +4016,7 @@ function genericForward(
 			if (apart) {
 				note.apart = apart;
 				rememberApartClient(context?.clientId);
+				rewriter.apartServed?.();
 			}
 			rememberEmbedderPolicy(
 				serverRequest.url,
@@ -5887,6 +5894,7 @@ export function registerRewrites(
 	/** asks the controller's document for a blob: URL it minted (learnBlobsReadable) */
 	askBlobProbe?: () => Promise<string | null>,
 	tellIsolationWanted?: (client: string) => void,
+	tellApartServed?: () => void,
 ) {
 	// (the newest controller's: an older one may be gone)
 	if (askBlobProbe) askBlobURL = askBlobProbe;
@@ -5943,6 +5951,7 @@ export function registerRewrites(
 		storage,
 		isolated: !!init.isolated,
 		isolationWanted: tellIsolationWanted,
+		apartServed: tellApartServed,
 		// kept once the controller said; asked again after a failure, by
 		// Chrome's rules meanwhile
 		isolationEngine() {

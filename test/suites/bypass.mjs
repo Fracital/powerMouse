@@ -53,6 +53,24 @@ async function report(page) {
 	return state;
 }
 
+/**
+ * The user's click of the page's window.open() vector, in whichever frame
+ * holds the page: a popup opens only with a transient activation of the
+ * page's own, as with Chrome's popup blocker, which the proxy's tabs
+ * follow. Then up to ten seconds for its request (`seen`)
+ */
+async function clickOpen(page, seen) {
+	for (const frame of page.frames()) {
+		const ready = await frame
+			.evaluate(() => window.__bypass?.done === true)
+			.catch(() => false);
+		if (!ready) continue;
+		await frame.click('#open-vector', { timeout: 15000 }).catch(() => {});
+		break;
+	}
+	for (let i = 0; i < 40 && !(await seen()); i++) await sleep(250);
+}
+
 /** the vectors a run saw: marked requests, and the sockets that opened */
 function vectorsOf(urls, state) {
 	const seen = new Set(urls.map(vectorOf).filter(Boolean));
@@ -76,6 +94,9 @@ await nativePage.evaluate((url) => {
 	document.body.append(frame);
 }, `${FIXTURE}pages/bypass.html?k=native`);
 const nativeState = await report(nativePage);
+await clickOpen(nativePage, () =>
+	nativeRecorder.log.some((entry) => vectorOf(entry.url) === 'open'),
+);
 await sleep(4000);
 const fired = vectorsOf(
 	nativeRecorder.log.map((entry) => entry.url),
@@ -102,6 +123,11 @@ for (const [mode, base] of [
 	});
 	await submitLanding(page, `${FIXTURE}pages/bypass.html?k=${mode}`);
 	const state = await report(page);
+	await clickOpen(page, () =>
+		page.evaluate(() =>
+			window.__served.some((url) => /[?&]bypass=open\b/.test(url)),
+		),
+	);
 	// late loads (a refresh, a worker's fetch) and the request log's grace
 	await sleep(4000);
 	const served = await page.evaluate(() => window.__served);

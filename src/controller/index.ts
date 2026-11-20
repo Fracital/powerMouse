@@ -2043,8 +2043,16 @@ export class StompController extends EventTarget {
 	 * tried again a minute later)
 	 */
 	#apart: Promise<ApartAgent | null> | null = null;
+	/** the worker served a document with the proxy's Document-Isolation-Policy (Controllerbound apartServed) */
+	#apartServed = false;
 	/** @internal the agent of the documents a Document-Isolation-Policy isolates (./apart.ts) */
 	apartAgent(): Promise<ApartAgent | null> {
+		// none before the worker served such a document: until then a frame
+		// out of reach shows the host's initial about:blank (each new tab of
+		// a RemoteController's host), an error page or another origin, which
+		// no agent reaches, and starting one there put a document of its own
+		// in a process of its own under every such host
+		if (!this.#apartServed) return Promise.resolve(null);
 		return (this.#apart ??= (async () => {
 			await this.#ready;
 			const token = Array.from(
@@ -2359,6 +2367,9 @@ export class StompController extends EventTarget {
 					if (typeof client !== 'string') return;
 					keepClient(this.#isolationWanted, client);
 					this.#init.onIsolationWanted?.(client);
+				},
+				apartServed: async () => {
+					this.#apartServed = true;
 				},
 				// (kept a while: the worker reads it at once)
 				blobProbe: async () => {

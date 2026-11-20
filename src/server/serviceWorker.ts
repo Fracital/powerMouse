@@ -389,6 +389,7 @@ function registerController(
 		() => rpc.call('isolationEngine', undefined),
 		() => rpc.call('blobProbe', undefined),
 		(client) => void rpc.call('isolationWanted', client).catch(() => {}),
+		() => void rpc.call('apartServed', undefined).catch(() => {}),
 	);
 
 	const rpc = new RpcHelper<SWbound, Controllerbound>(

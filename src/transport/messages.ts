@@ -1501,6 +1501,13 @@ export type Controllerbound = {
 	 */
 	isolationWanted: [string];
 	/**
+	 * the worker served a document with the proxy's own
+	 * Document-Isolation-Policy (src/server/apartAgent.ts): only from then
+	 * may a frame out of the controller's reach show one, which its agent
+	 * (src/controller/apart.ts) reaches
+	 */
+	apartServed: [undefined];
+	/**
 	 * a blob: URL the controller's document minted, which the worker reads
 	 * to learn whether it reads its clients' (src/server/rewrites.ts
 	 * learnBlobsReadable); revoked a while later

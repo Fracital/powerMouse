@@ -522,12 +522,14 @@ else if (window === window.parent || !origins.length) {
 							apartFrame(index) &&
 							!(origin && controller?.siteOriginKnown(origin))
 						) {
-							if (command === 'typed' && routed)
+							const done =
+								(await controller!.apartCommand([index], command)) === true;
+							// (the worker hears of a typed address only where the
+							// agent reached the document it leaves: a new tab still
+							// on the host's about:blank is navigated as before)
+							if (done && command === 'typed' && routed)
 								await controller?.typed(routed).catch(() => {});
-							return [
-								(await controller!.apartCommand([index], command)) === true,
-								[],
-							];
+							return [done, []];
 						}
 						// the site pool: a document of a slot, stepped by its agent
 						if (!origin || !controller?.siteOriginKnown(origin))

@@ -48,6 +48,24 @@ async function report(page) {
 	return state;
 }
 
+/**
+ * The user's click of the page's window.open() vector, in whichever frame
+ * holds the page: a popup opens only with a transient activation of the
+ * page's own, as with Chrome's popup blocker, which the proxy's tabs
+ * follow. Then up to ten seconds for its request (`seen`)
+ */
+async function clickOpen(page, seen) {
+	for (const frame of page.frames()) {
+		const ready = await frame
+			.evaluate(() => window.__relbypass?.done === true)
+			.catch(() => false);
+		if (!ready) continue;
+		await frame.click('#open-vector', { timeout: 15000 }).catch(() => {});
+		break;
+	}
+	for (let i = 0; i < 40 && !(await seen()); i++) await sleep(250);
+}
+
 /** vector -> the set of real URLs (without the fragment) it requested */
 function byVector(urls) {
 	const map = new Map();
@@ -76,6 +94,9 @@ for (const [variant, query] of VARIANTS) {
 		document.body.append(frame);
 	}, `${PAGE}?${query}k=native`);
 	const nativeState = await report(nativePage);
+	await clickOpen(nativePage, () =>
+		nativeRecorder.log.some((entry) => vectorOf(entry.url) === 'open'),
+	);
 	await sleep(4000);
 	const native = byVector(
 		nativeRecorder.log
@@ -104,6 +125,11 @@ for (const [variant, query] of VARIANTS) {
 		});
 		await submitLanding(page, `${PAGE}?${query}k=${mode}`);
 		const state = await report(page);
+		await clickOpen(page, () =>
+			page.evaluate(() =>
+				window.__served.some((url) => /[?&]rb=open\b/.test(url)),
+			),
+		);
 		// late loads (a refresh, a worker's fetch) and the request log's grace
 		await sleep(4000);
 		const served = await page.evaluate(() => window.__served);

@@ -51,6 +51,8 @@
 		]
 	}
 </script>
+<!-- the suite's click: window.open() opens only with an activation -->
+<button id="open-vector">open</button>
 <p class="rel-font">text</p>
 <p class="rel-bg">text</p>
 <p class="rel-set">text</p>
@@ -383,7 +385,12 @@
 	later(2200, 'formaction', () =>
 		document.getElementById('formaction-button').click(),
 	);
-	later(3500, 'open', () => window.open(rel('open', 'sprite.svg')));
+	// a popup opens only with a transient activation of the page's own (the
+	// suite clicks this once the page is done): one from the suite's
+	// evaluations alone was refused when the proxied page had started with
+	// one (src/inject/dom/activation.ts)
+	document.getElementById('open-vector').onclick = () =>
+		attempt('open', () => window.open(rel('open', 'sprite.svg')));
 	// a URL the page moved to is what its relative URLs resolve against
 	// (the base, when there is one, stays)
 	later(5000, 'after-pushstate', () => {

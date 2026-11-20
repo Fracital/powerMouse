@@ -1535,11 +1535,15 @@ documents synchronously, and how each is had now:
   document of the proxy's origin in the cluster, the agent
   (`src/controller/apart.ts`), answers them over a MessagePort. The
   controller starts it the first time a frame shows a document out of its
-  reach, at a route of the service worker's that answers only a token the
-  controller gave it over its own channel, once; it runs the controller
-  frame's script (`dist/controllerFrame.js`), served with the policy, and
-  finds the frames through the windows of the host's page. A frame shows
-  such a document when its window throws on `document`.
+  reach once the service worker said it served one with the policy, at a
+  route of the service worker's that answers only a token the controller
+  gave it over its own channel, once; it runs the controller frame's
+  script (`dist/controllerFrame.js`), served with the policy, and finds
+  the frames through the windows of the host's page. A frame shows such a
+  document when its window throws on `document`; until a document was
+  served with the policy, such a frame shows the host's initial
+  about:blank (each new tab of a RemoteController), an error page or
+  another origin, and no agent is started for it.
 - **The host's geometry** (`HOST_GEOMETRY`) and **the compiled core
   module**, which a proxied top reads synchronously from the controller's
   window: the agent keeps both on its own window (the module compiled

@@ -29,6 +29,8 @@
 		"prefetch": [{ "source": "list", "urls": ["echo.json?bypass=speculation"] }]
 	}
 </script>
+<!-- the suite's click: window.open() opens only with an activation -->
+<button id="open-vector">open</button>
 <p class="bypass-font">text</p>
 <p class="bypass-bg">text</p>
 <p class="bypass-set">text</p>
@@ -204,6 +206,12 @@
 		),
 	);
 	attempt('import', () => import(mark('import', 'inline-script.js')));
+	// a popup opens only with a transient activation of the page's own (the
+	// suite clicks this once the page is done): one from the suite's
+	// evaluations alone was refused when the proxied page had started with
+	// one (src/inject/dom/activation.ts)
+	document.getElementById('open-vector').onclick = () =>
+		attempt('open', () => window.open(mark('open', 'sprite.svg')));
 	setTimeout(() => {
 		attempt('ping', () => document.getElementById('ping').click());
 		// an absolute ping URL, built from the page's own origin
@@ -217,10 +225,6 @@
 		setTimeout(
 			() => attempt('form', () => document.getElementById('form').submit()),
 			1500,
-		);
-		setTimeout(
-			() => attempt('open', () => window.open(mark('open', 'sprite.svg'))),
-			2500,
 		);
 	}, 1000);
 	setTimeout(
