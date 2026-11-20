@@ -54,9 +54,11 @@ for (let i = 0; i < 40; i++) {
 
 /**
  * Every card's bar copy against the live bar: its pieces (Back, Forward,
- * Reload, the address box, the status chip) measured in the card and scaled
- * back to page pixels must sit where the live bar's are, so expanding a card
- * lands each one on its counterpart. Also each card's URL and button states.
+ * Reload, Saved pages, the address box, the status chip, the extensions'
+ * puzzle piece) measured in the card and scaled back to page pixels must sit
+ * where the live bar's are, so expanding a card lands each one on its
+ * counterpart. Also each card's URL and button states (its four tools, the
+ * `.toolbtn` with a `data-tool`: the puzzle piece's copy is a `.toolbtn` too).
  */
 const cardBars = () =>
 	page.evaluate(() => {
@@ -69,6 +71,7 @@ const cardBars = () =>
 			'#toolSaved',
 			'#omni input',
 			'#chromeStatus',
+			'#toolExtensions',
 		].map((sel) => {
 			const r = document.querySelector(sel).getBoundingClientRect();
 			return [r.left - c.left, r.top - c.top, r.width, r.height];
@@ -78,9 +81,10 @@ const cardBars = () =>
 			const k = l.width / innerWidth;
 			const bar = label.querySelector('.cardChrome');
 			const pieces = [
-				...bar.querySelectorAll('.toolbtn'),
+				...bar.querySelectorAll('.toolbtn[data-tool]'),
 				bar.querySelector('.url'),
 				bar.querySelector('.status'),
+				bar.querySelector('.cardExtensions .extbtn'),
 			].map((el) => {
 				const r = el.getBoundingClientRect();
 				return [
@@ -92,7 +96,7 @@ const cardBars = () =>
 			});
 			return {
 				url: bar.querySelector('.url').textContent,
-				tools: [...bar.querySelectorAll('.toolbtn')].map((t) => [
+				tools: [...bar.querySelectorAll('.toolbtn[data-tool]')].map((t) => [
 					t.dataset.tool,
 					t.classList.contains('disabled'),
 					!!t.querySelector('img')?.complete,
@@ -290,7 +294,7 @@ const opened = await page.evaluate(() => {
 	return {
 		copy: [
 			bar.querySelector('.url').textContent,
-			...[...bar.querySelectorAll('.toolbtn')].map((t) =>
+			...[...bar.querySelectorAll('.toolbtn[data-tool]')].map((t) =>
 				t.classList.contains('disabled'),
 			),
 		],
