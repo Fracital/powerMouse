@@ -3462,8 +3462,11 @@ input:focus-visible {
 }
 
 /* the popup an extension's button opens: its document, sized as it asks,
-   in Chrome's square bubble with its 1px border; hidden until its document
-   has loaded */
+   in Chrome's square bubble with its 1px border. Hidden (and laid out, so
+   its document can measure itself) until its first size is in; the open
+   animation is the Shields panel's (.popover's popoverIn), held back by
+   .loading so it starts as the popup shows. Its frame takes every size at
+   once: never the universal transition, which grew it into shape */
 .extPopup {
 	overflow: hidden;
 	max-height: none;
@@ -3473,6 +3476,10 @@ input:focus-visible {
 }
 .extPopup.loading {
 	visibility: hidden;
+	animation: none;
+}
+.extPopup * {
+	transition: none;
 }
 .extPopupFrame {
 	display: block;

@@ -39,9 +39,13 @@
 //  - at 390px the buttons give way to the puzzle piece and at 320px the
 //    piece to the menu's item: the address box keeps 120px, the list, a
 //    popup and the page fit the window;
-//  - the same on the same-origin host (the bar's button, its popup).
+//  - the same on the same-origin host (the bar's button, its popup), the
+//    popup shown at its size with the Shields panel's open animation, the
+//    first click after a reload, and a tab older than its worker (a deploy),
+//    whose buttons, list and menus work from the first click.
 // (the demo page's own globals, read in the page)
 /* global activateTab, extAnchor, extButton, openExtensionsPage, openExtMenu, tabs */
+import { readFileSync } from 'node:fs';
 import { crc32, deflateRawSync } from 'node:zlib';
 import {
 	done,
@@ -1555,6 +1559,152 @@ ok(
 		!!sameFrame &&
 		samePopup >= 280,
 	JSON.stringify({ sameButtons, samePopup }),
+);
+await same.keyboard.press('Escape');
+await painted(same);
+
+// the popup shows at its document's size, with the Shields panel's open
+// animation, and never grows into shape (the universal transition did)
+const shieldsIn = await (async () => {
+	await same.click('#toolShields');
+	const names = await same.evaluate(() =>
+		document
+			.getElementById('shieldsPanel')
+			.getAnimations()
+			.map((a) => `${a.animationName} ${a.effect.getTiming().duration}`),
+	);
+	await same.keyboard.press('Escape');
+	await painted(same);
+	return names;
+})();
+await same.evaluate(() => {
+	const panel = document.getElementById('extPopup');
+	const frames = (window.__extPopupFrames = []);
+	const start = performance.now();
+	const tick = () => {
+		const style = getComputedStyle(panel);
+		const r = panel.getBoundingClientRect();
+		if (style.display !== 'none' && style.visibility === 'visible')
+			frames.push({
+				size: `${Math.round(r.width)}x${Math.round(r.height)}`,
+				opacity: Number(style.opacity),
+				animations: panel
+					.getAnimations()
+					.map((a) => `${a.animationName} ${a.effect.getTiming().duration}`),
+			});
+		if (performance.now() - start < 2000) requestAnimationFrame(tick);
+	};
+	requestAnimationFrame(tick);
+});
+await same.click('#extActions .extAction');
+await popupFrame(same);
+await sleep(2100);
+const opening = await same.evaluate(() => window.__extPopupFrames);
+const openSizes = [...new Set(opening.map((frame) => frame.size))];
+ok(
+	"the popup shows at its document's size and opens with the Shields panel's animation",
+	shieldsIn.length === 1 &&
+		openSizes.length === 1 &&
+		parseInt(openSizes[0]) >= 300 &&
+		opening[0].opacity < 0.6 &&
+		JSON.stringify(opening[0].animations) === JSON.stringify(shieldsIn),
+	JSON.stringify({ shieldsIn, openSizes, first: opening[0] }),
+);
+await same.keyboard.press('Escape');
+const shut = await same.evaluate(
+	() => getComputedStyle(document.getElementById('extPopup')).display,
+);
+ok("Escape closes it at once, as the Shields panel's", shut === 'none', shut);
+
+// the first click after a reload: once the worker lists the extension, the
+// controller's hub knows it (it answered "No enabled extension with id ...
+// is installed" until its own first list was in)
+await same.reload();
+const firstClick = await same.evaluate(async (id) => {
+	const start = Date.now();
+	while (!window.controller?.extensions && Date.now() - start < 30000)
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	const api = window.controller.extensions;
+	while (Date.now() - start < 30000)
+		if ((await api.list().catch(() => [])).some((info) => info.id === id))
+			break;
+	return api.clickAction(id).catch((error) => `error: ${error.message}`);
+}, id);
+ok(
+	'after a reload, the first click once the extension is listed opens its popup',
+	firstClick === 'popup',
+	firstClick,
+);
+
+// a tab open during a deploy (the page's build is older than the worker's):
+// the controller goes on with the worker, and so do the extensions, whose
+// buttons, list and menus work from the first click
+const pageBuild = JSON.parse(
+	readFileSync(new URL('../../dist/build.json', import.meta.url), 'utf8'),
+).build;
+const olderBuild = `${pageBuild.slice(0, -1)}${pageBuild.endsWith('0') ? '1' : '0'}`;
+// (the page's own copy of the controller, from a path the worker does not
+// answer: a route never sees what the worker answers)
+await same.route(PROXY, async (route) => {
+	const response = await route.fetch();
+	route.fulfill({
+		response,
+		body: (await response.text()).replace(
+			/\/stomp\/Controller\.js(\?[^"']*)?/,
+			'/stale-build/Controller.js',
+		),
+	});
+});
+await same.route('**/stale-build/Controller.js', (route) =>
+	route.fulfill({
+		contentType: 'text/javascript',
+		body: readFileSync(
+			new URL('../../dist/Controller.js', import.meta.url),
+			'utf8',
+		)
+			.split(pageBuild)
+			.join(olderBuild),
+	}),
+);
+// (a failed extensions call is a console warning: extFailed)
+const staleWarnings = [];
+same.on('console', (message) => {
+	if (/No enabled extension/.test(message.text()))
+		staleWarnings.push(message.text());
+});
+await same.reload();
+await same.waitForFunction(
+	() => /^(Ready|Error)/.test(document.getElementById('logMsg').textContent),
+	null,
+	{ timeout: 45000 },
+);
+const staleTab = await until(
+	same,
+	async (id) => ({
+		stale: window.controller.stale?.newer ?? null,
+		bar: document.querySelectorAll(`#extActions .extAction[data-ext="${id}"]`)
+			.length,
+		menu: await window.controller.extensions.contextMenu(id).then(
+			(entries) => entries.length,
+			(error) => error.message,
+		),
+	}),
+	(value) => value?.bar === 1,
+	15000,
+	id,
+);
+await same.click('#toolExtensions');
+await painted(same);
+await same.click(`#extPanel .extRowMain[data-ext="${id}"]`);
+const staleFrame = await popupFrame(same);
+ok(
+	"a tab older than its worker: the button, its menu and the list's row work at once",
+	staleTab?.stale === 'worker' &&
+		staleTab.bar === 1 &&
+		typeof staleTab.menu === 'number' &&
+		!!staleFrame &&
+		!staleWarnings.length,
+	JSON.stringify({ staleTab, staleWarnings }),
 );
 errors.push(...same.errors);
 await same.close();

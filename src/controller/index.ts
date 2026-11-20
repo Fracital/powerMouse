@@ -1873,6 +1873,9 @@ export class StompController extends EventTarget {
 			console.error(error);
 			this.#readyReject(error instanceof Error ? error : new Error(`${error}`));
 		});
+		// a controller that cannot start lists no extensions: what waits for
+		// the hub's first list fails with it
+		this.#ready.catch((error) => this.#extensionHub.fail(error));
 		this.#hostReload =
 			init.hostReload === undefined
 				? hostReload()
@@ -2093,6 +2096,8 @@ export class StompController extends EventTarget {
 			this.isReady = true;
 			this.#readySettled = true;
 			this.#readyResolve();
+			// the extensions run on the worker at hand too
+			this.#extensionHub.start();
 			this.dispatchEvent(new CustomEvent('stale', { detail: this.stale }));
 		};
 		// the second mismatch in a row: the update did not help
@@ -3452,27 +3457,23 @@ export class StompController extends EventTarget {
 			case 'toolbar':
 				return hub.toolbarCall(args[0] as ToolbarCall, args[1] as unknown[]);
 			case 'dispatch':
-				return Promise.resolve(
-					hub.dispatch(
-						args[0] as string,
-						args[1] as string,
-						args[2] as unknown[],
-					),
+				return hub.dispatch(
+					args[0] as string,
+					args[1] as string,
+					args[2] as unknown[],
 				);
 			case 'menus':
-				return Promise.resolve(hub.menus(args[0] as string));
+				return hub.menus(args[0] as string);
 			case 'place':
 				hub.place(args[0] as string, args[1] as number);
 				return Promise.resolve();
 			case 'tabEvent':
 				return hub.tabEvent(args[0] as TabEvent);
 			case 'expectPopup':
-				return Promise.resolve(
-					hub.expectPopup(
-						args[0] as string,
-						args[1] as number | null,
-						args[2] as string,
-					),
+				return hub.expectPopup(
+					args[0] as string,
+					args[1] as number | null,
+					args[2] as string,
 				);
 			case 'expect':
 				hub.expect(args[0] as string, args[1] as number);

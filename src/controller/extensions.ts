@@ -510,6 +510,15 @@ interface HubExtension {
 	>;
 }
 
+/** the commands after which the hub reads the list again: what is installed or on changed */
+const LISTED_AFTER = new Set<string>([
+	'install',
+	'enable',
+	'remove',
+	'update',
+	'reload',
+]);
+
 /** how long a popup the host mounts has to say hello */
 const POPUP_WAIT_MS = 15_000;
 
@@ -541,11 +550,19 @@ export class ExtensionHub {
 	#changes: BroadcastChannel | null = null;
 	#refreshing: Promise<void> | null = null;
 	#started = false;
-	/** settles once the hub listed the extensions the first time */
-	ready: Promise<void> = Promise.resolve();
+	/**
+	 * settles once the hub listed the extensions the first time (start):
+	 * until then it knows none, whatever the worker has installed
+	 */
+	ready: Promise<void>;
+	#settleReady!: { resolve: () => void; reject: (error: unknown) => void };
 
 	constructor(host: HubHost) {
 		this.#host = host;
+		this.ready = new Promise<void>((resolve, reject) => {
+			this.#settleReady = { resolve, reject };
+		});
+		this.ready.catch(() => {});
 	}
 
 	/** start listening (the controller is ready, its address known) */
@@ -559,21 +576,48 @@ export class ExtensionHub {
 			const change = event.data as ExtensionsChange;
 			this.refresh().then(() => this.#host.notify(change));
 		};
-		this.ready = this.refresh().then(() =>
-			this.#host.notify({ type: 'ready' }),
+		this.refresh().then(
+			() => {
+				this.#settleReady.resolve();
+				this.#host.notify({ type: 'ready' });
+			},
+			(error) => this.#settleReady.reject(error),
 		);
 		return this.ready;
+	}
+
+	/** the controller could not start: what waits for the first list fails with it */
+	fail(error: unknown) {
+		if (!this.#started) this.#settleReady.reject(error);
+	}
+
+	/**
+	 * The extensions as the worker lists them now: the hub's first list and
+	 * any read again in flight (a change another context made, which the
+	 * worker told every hub of) are in before an id is looked up, so a
+	 * button or a row the host drew from the worker's list is one the hub
+	 * knows
+	 */
+	async #listed(): Promise<void> {
+		await this.ready;
+		await this.#refreshing;
 	}
 
 	async command<T>(
 		command: ExtensionCommand,
 		transfer?: Transferable[],
 	): Promise<T> {
+		let result: T;
 		try {
-			return (await this.#host.command(command, transfer)) as T;
+			result = (await this.#host.command(command, transfer)) as T;
 		} catch (error) {
 			throw extensionErrorOf(error);
 		}
+		// a change of what is installed or on: the hub reads the list before
+		// its caller hears of it, so the caller's next call finds it (the
+		// worker's message to the hubs may come after the answer)
+		if (LISTED_AFTER.has(command.op)) await this.refresh().catch(() => {});
+		return result;
 	}
 
 	/** read the list again: open the buses of new ones, start their backgrounds */
@@ -1640,6 +1684,7 @@ export class ExtensionHub {
 
 	/** the action as the host shows it: its manifest's defaults, then what the extension set */
 	async actionState(id: string, tabId: number | null): Promise<ActionState> {
+		await this.#listed();
 		const ext = this.#found(id);
 		if (
 			ext.contentRules === null &&
@@ -1696,7 +1741,7 @@ export class ExtensionHub {
 
 	/** every button: the pinned in their order, then the others by name (the extensions menu's order) */
 	async actions(tabId: number | null): Promise<ExtensionAction[]> {
-		await this.ready;
+		await this.#listed();
 		const rows: ExtensionAction[] = [];
 		for (const ext of this.#extensions.values())
 			if (ext.info.hasAction)
@@ -1737,6 +1782,7 @@ export class ExtensionHub {
 	 * click grants activeTab, then shows the popup or tells action.onClicked
 	 */
 	async click(id: string, tabId: number | null): Promise<ClickResult> {
+		await this.#listed();
 		const ext = this.#found(id);
 		const state = await this.actionState(id, tabId);
 		if (!state.enabled) return 'disabled';
@@ -1806,6 +1852,7 @@ export class ExtensionHub {
 
 	/** pin the button to the toolbar (after the pinned ones), or unpin it */
 	async pin(id: string, pinned: boolean): Promise<ExtensionInfo> {
+		await this.#listed();
 		this.#found(id);
 		const info = await this.command<ExtensionInfo>({ op: 'pin', id, pinned });
 		await this.refresh();
@@ -1822,6 +1869,7 @@ export class ExtensionHub {
 		access: 'click' | 'site' | 'all',
 		tabId: number | null,
 	): Promise<ExtensionInfo> {
+		await this.#listed();
 		const ext = this.#found(id);
 		const url =
 			tabId === null
@@ -1854,6 +1902,7 @@ export class ExtensionHub {
 		id: string,
 		options: MenuOptions,
 	): Promise<ExtensionMenuEntry[]> {
+		await this.#listed();
 		const ext = this.#found(id);
 		const info = ext.info;
 		const tabId = options.tabId ?? null;
@@ -2060,6 +2109,7 @@ export class ExtensionHub {
 		command: string,
 		options: { tabId: number | null; menuItemId?: string },
 	): Promise<void> {
+		await this.#listed();
 		const ext = this.#found(id);
 		const tabId = options.tabId ?? null;
 		switch (command) {
@@ -2144,7 +2194,7 @@ export class ExtensionHub {
 	 * a button) with the shortcut it runs on now (the worker keeps them)
 	 */
 	async commands(): Promise<ExtensionShortcut[]> {
-		await this.ready;
+		await this.#listed();
 		return this.command<ExtensionShortcut[]>({ op: 'commands' });
 	}
 
@@ -2158,6 +2208,7 @@ export class ExtensionHub {
 		name: string,
 		tabId: number | null,
 	): Promise<CommandResult> {
+		await this.#listed();
 		const ext = this.#found(id);
 		if (/^_execute_(page_|browser_)?action$/.test(name)) {
 			if (!ext.info.hasAction) return 'disabled';
@@ -2210,7 +2261,7 @@ export class ExtensionHub {
 			case 'popupOpen':
 				return Promise.resolve(this.popupOpen);
 			case 'views':
-				return this.ready.then(() => this.views(id));
+				return this.#listed().then(() => this.views(id));
 			default:
 				return Promise.reject(new Error(`${call} is not a toolbar call`));
 		}
@@ -2224,7 +2275,8 @@ export class ExtensionHub {
 	}
 
 	/** tell the extension's contexts a chrome.* event (notifications, menus) */
-	dispatch(id: string, name: string, args: unknown[]) {
+	async dispatch(id: string, name: string, args: unknown[]) {
+		await this.#listed();
 		this.#post(this.#found(id), { t: 'event', name, args });
 	}
 
@@ -2258,11 +2310,13 @@ export class ExtensionHub {
 		});
 	}
 
-	expectPopup(id: string, tabId: number | null, url: string) {
+	async expectPopup(id: string, tabId: number | null, url: string) {
+		await this.#listed();
 		this.#found(id).popups.push({ url, tabId: tabId ?? -1, at: Date.now() });
 	}
 
-	menus(id: string): Record<string, unknown>[] {
+	async menus(id: string): Promise<Record<string, unknown>[]> {
+		await this.#listed();
 		return [...this.#found(id).menus.values()];
 	}
 }

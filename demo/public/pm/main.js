@@ -6494,11 +6494,17 @@ async function runExtAction(id, anchor) {
 	else if (result === 'disabled') openExtMenu(id, extAnchor(anchor));
 }
 
+/** how long a loaded popup that never said its size waits before it shows anyway */
+const EXT_POPUP_UNSIZED_MS = 500;
+
 /**
  * The extension's popup, under its button (popped out when unpinned): one
- * at a time, hidden until its document has loaded, then shown and focused;
- * sized as its document asks, clamped as Chrome clamps it. `byUser` false
- * (action.openPopup) leaves the button unpressed
+ * at a time, sized as its document asks (clamped as Chrome clamps it) and
+ * hidden until that first size is in, as Chrome sizes its bubble to the
+ * document before it shows it; then shown with the Shields panel's open
+ * animation (.popover's, which .loading holds back) and focused. A later
+ * size is taken at once. `byUser` false (action.openPopup) leaves the
+ * button unpressed
  */
 async function showExtPopup(id, { byUser = true } = {}) {
 	extPopupPopover.close();
@@ -6519,8 +6525,10 @@ async function showExtPopup(id, { byUser = true } = {}) {
 		extPopup.classList.remove('loading');
 		frame.focus();
 	};
+	// (a document that never says its size shows at the size it has)
 	frame.addEventListener('load', () => {
-		if (frame.src && frame.src !== 'about:blank') setTimeout(show, 50);
+		if (frame.src && frame.src !== 'about:blank')
+			setTimeout(show, EXT_POPUP_UNSIZED_MS);
 	});
 	let handle;
 	try {
