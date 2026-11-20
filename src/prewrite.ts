@@ -70,8 +70,8 @@ export interface Prewritten {
 		map: string,
 		place: [before: number, column: number],
 	][];
-	/** [where the style's text stands in the markup (start, end), its rewrite] */
-	styles: [start: number, end: number, output: string][];
+	/** [where the style's text stands in the markup (start, end), its rewrite (PackedStyle)] */
+	styles: [start: number, end: number, output: PackedStyle][];
 	/**
 	 * [where a handler's text stands in the markup (start, end), its rewrite
 	 * as the client makes it (handlerPreamble's preamble, no holder: the
@@ -140,6 +140,59 @@ export function packRewrite(
 		held ? key : 0,
 	];
 	return unpack(kind, source, packed, access) === output ? packed : whole;
+}
+
+/**
+ * A style's rewrite as the table carries it: whole, or as pieces, each the
+ * rewrite's own text or where the style's text it is stands ([start, end]).
+ * The rewrite of a large style is mostly the text as written (CNN's 2.78 MB
+ * style has 603 url()s in its 9019 rules), and the whole of it was 42% of
+ * the head's record: 2.8 MB more to stringify and encode in the worker,
+ * hand to the page and parse there
+ */
+export type PackedStyle = string | (string | [start: number, end: number])[];
+
+/** below this many characters a style's rewrite goes whole */
+const PACKED_STYLE = 16 * 1024;
+
+/** the rewrite `packed` stands for, of the style `source` */
+export function unpackStyle(source: string, packed: PackedStyle): string {
+	if (typeof packed === 'string') return packed;
+	let text = '';
+	for (const piece of packed)
+		text +=
+			typeof piece === 'string' ? piece : source.slice(piece[0], piece[1]);
+	return text;
+}
+
+/**
+ * `output`, the rewrite of the style `source`, as the table carries it: its
+ * rules (to each `}`) that are the source's as written are named by where
+ * they stand, when that is most of it and unpacks to `output` exactly
+ */
+export function packStyle(source: string, output: string): PackedStyle {
+	if (output.length < PACKED_STYLE) return output;
+	const pieces: (string | [number, number])[] = [];
+	let kept = 0;
+	let i = 0;
+	let j = 0;
+	while (i < source.length && j < output.length) {
+		const a = source.indexOf('}', i) + 1 || source.length;
+		const b = output.indexOf('}', j) + 1 || output.length;
+		const last = pieces[pieces.length - 1];
+		if (a - i === b - j && output.startsWith(source.slice(i, a), j)) {
+			kept += a - i;
+			if (typeof last === 'object' && last[1] === i) last[1] = a;
+			else pieces.push([i, a]);
+		} else if (typeof last === 'string')
+			pieces[pieces.length - 1] = last + output.slice(j, b);
+		else pieces.push(output.slice(j, b));
+		i = a;
+		j = b;
+	}
+	if (j < output.length) pieces.push(output.slice(j));
+	if (kept * 2 < output.length) return output;
+	return unpackStyle(source, pieces) === output ? pieces : output;
 }
 
 /** the MIME types a classic script may name, as Chrome takes them (DOMAttributes' scriptKind) */
@@ -404,8 +457,19 @@ export class PrewrittenTable {
 		if (table.url !== this.url) return;
 		for (const [kind, start, end, ...packed] of table.scripts)
 			this.#scripts.set(`${kind}\u0000${markup.slice(start, end)}`, packed);
-		for (const [start, end, output] of table.styles)
-			this.#styles.set(markup.slice(start, end), output);
+		for (const [start, end, output] of table.styles) {
+			const source = markup.slice(start, end);
+			// (unpackStyle, written out: a function of its own is one more
+			// closure in every frame)
+			let text = typeof output === 'string' ? output : '';
+			if (typeof output !== 'string')
+				for (const piece of output)
+					text +=
+						typeof piece === 'string'
+							? piece
+							: source.slice(piece[0], piece[1]);
+			this.#styles.set(source, text);
+		}
 		for (const [start, end, output, map, places] of table.handlers ?? []) {
 			const source = markup.slice(start, end);
 			const handlers = (this.#handlers ??= new Map());

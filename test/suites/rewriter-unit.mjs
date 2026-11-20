@@ -33,7 +33,7 @@ export { modifyCSS } from ${JSON.stringify(`${root}src/rewriteCSS.ts`)};
 export { default as StompURL } from ${JSON.stringify(`${root}src/StompURL.ts`)};
 export { parseConfig } from ${JSON.stringify(`${root}src/config.ts`)};
 export { keepEmbedded, originalSource, sourceKey } from ${JSON.stringify(`${root}src/functionSource.ts`)};
-export { inlineSources, packRewrite, PrewrittenTable, scriptPreamble } from ${JSON.stringify(`${root}src/prewrite.ts`)};
+export { inlineSources, packRewrite, packStyle, PrewrittenTable, scriptPreamble, unpackStyle } from ${JSON.stringify(`${root}src/prewrite.ts`)};
 export { compileModule } from ${JSON.stringify(`${root}src/wasm/module.ts`)};
 export { adoptModule } from ${JSON.stringify(`${root}src/wasm/thread.ts`)};
 `,
@@ -66,8 +66,10 @@ const {
 	originalSource,
 	inlineSources,
 	packRewrite,
+	packStyle,
 	PrewrittenTable,
 	scriptPreamble,
+	unpackStyle,
 	compileModule,
 	adoptModule,
 } = await import(`${bundle}?${Date.now()}`);
@@ -1436,6 +1438,47 @@ console.warn = warn;
 			table.script(false, 'var a = 1;') === undefined &&
 			packedSizes.slice(0, 4).every((smaller) => smaller === true),
 		JSON.stringify({ wrong, packedSizes }),
+	);
+}
+{
+	// a large style's rewrite goes in the table as the rules it changed and
+	// where the others stand in the style (PackedStyle), and the client gets
+	// the rewrite back byte for byte; one that is mostly changed, or whose
+	// rules do not pair up, goes whole
+	let css = '';
+	for (let i = 0; css.length < 64 * 1024; i++)
+		css +=
+			i % 8
+				? `.r${i}>p{margin:${i % 13}px}\n`
+				: `.r${i}{background:url(img/${i}.png)}\n`;
+	css += '/* no rule after this } */ .end{color:red';
+	const output = modifyCSS(css, url, 'stylesheet');
+	const packed = packStyle(css, output);
+	const doc = `<style>${css}</style>`;
+	const table = new PrewrittenTable(
+		{
+			url: url.toString(),
+			scripts: [],
+			styles: [[7, 7 + css.length, packed]],
+		},
+		doc,
+		'$s$j',
+	);
+	const changed = css.replace(/\{/g, '{x:1;');
+	const shifted = '}' + css;
+	const small = '.a{background:url(a.png)}';
+	ok(
+		"a large style's rewrite is carried as its changed rules and where the rest stand, and comes back byte for byte",
+		output !== css &&
+			Array.isArray(packed) &&
+			JSON.stringify(packed).length * 2 < output.length &&
+			unpackStyle(css, packed) === output &&
+			table.style(css) === output &&
+			typeof packStyle(css, changed) === 'string' &&
+			unpackStyle(shifted, packStyle(shifted, output)) === output &&
+			packStyle(small, modifyCSS(small, url, 'stylesheet')) ===
+				modifyCSS(small, url, 'stylesheet'),
+		JSON.stringify(packed).slice(0, 300),
 	);
 }
 {
