@@ -1302,12 +1302,13 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					// a javascript: URL runs in the frame, which a sandbox without
 					// allow-scripts forbids: natively nothing happens, so the frame
 					// is not navigated at all
-					if (
-						resource.url.protocol === 'javascript:' &&
-						!frameRunsScripts(element)
-					) {
-						element.removeAttribute('src');
-						return;
+					if (resource.url.protocol === 'javascript:') {
+						if (!frameRunsScripts(element)) {
+							element.removeAttribute('src');
+							return;
+						}
+						// judged as its navigation starts (DocumentClient jsStarts)
+						moduleClient.jsStarts(element, resource.url.href);
 					}
 					// a data: document's frame is a deferred part (an opaque
 					// document, ../rareAttributes.ts), made first: without it the

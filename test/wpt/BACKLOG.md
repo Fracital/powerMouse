@@ -115,19 +115,16 @@ another stream's while these were measured.
   served, `metaPolicies(markup)`), and in a data: document `'self'` is matched against the proxy's idea of its
   URL (`sourcesMatch` against `document.url` in `src/csp.ts`) instead of an
   opaque origin.
-- `content-security-policy/navigation/to-javascript-parent-initiated-parent-csp.html`
-  (5: the harness TIMEOUT, 2 FAIL "Javascript url executed" for iframe.src
-  and otherTab.location.href, 1 TIMEOUT, 1 NOTRUN; a frame's location and
-  an area into a frame or another tab pass since the initiator's first
-  check, `DocumentClient.jsStarts`),
-  `content-security-policy/navigation/to-javascript-url-script-src.html`
-  (5: the harness TIMEOUT and four subtests),
-  `content-security-policy/navigation/to-javascript-parent-initiated-check-csp-order.html`
-  (8: the harness TIMEOUT and 7 MISSING): a `javascript:` navigation of a
-  child frame or another window runs although the initiator's `script-src`
-  forbids it. A link's click, a location write and open() hand the target
-  the initiator's first check (`DocumentClient.jsStarts`); a frame's `src`
-  and these tests' other paths do not yet.
+- `content-security-policy/navigation/to-javascript-parent-initiated-check-csp-order.html`
+  (8: the harness TIMEOUT and 7 MISSING): the order of the initiator's and
+  the target's checks; the page times out through the proxy.
+
+Cleared by the javascript: URL starts of forms, frames and new windows
+(`DocumentClient.jsStarts`, a frame's `src` included, each target keeping
+its notes in order): `to-javascript-url-script-src.html` (all five) and
+`to-javascript-parent-initiated-parent-csp.html` (all eight; its
+"executed" failures were a second navigation of the same frame taking
+the first one's note).
 
 Cleared on the combined tree: `frame-src-same-document-meta.sub.html` (no
 fix names it).

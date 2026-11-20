@@ -124,12 +124,13 @@ export function routeHTML(
 		// by the script it is a part of, rewriteJS.ts ScriptSource.apart)
 		//
 		// The page's policy judges the code as it runs, as Chrome judges a
-		// javascript: URL as its navigation starts and runs: the access API's
-		// `csp` (src/inject/dom/Client.ts codeRuns), handed the URL as the
-		// page wrote it, decoded (the violation's sample; percent-encoded
-		// here, the browser decodes the URL before it runs it). Refused,
-		// nothing of the code runs
-		const csp = `${accessExpression(names.access)}.csp(0,${encodeURIComponent(JSON.stringify(`javascript:${body}`.slice(0, 40)))}`;
+		// javascript: URL as its navigation starts and runs, and its Trusted
+		// Types: the access API's `csp` (src/inject/dom/Client.ts codeRuns),
+		// handed the URL as the page wrote it, decoded (the violation's
+		// sample, the default policy's value; percent-encoded here, the
+		// browser decodes the URL before it runs it). Refused, nothing of the
+		// code runs
+		const csp = `${accessExpression(names.access)}.csp(0,${encodeURIComponent(JSON.stringify(`javascript:${body}`))}`;
 		const refused = `${csp})`;
 		const head = `((r,c)=>typeof r==='string'&&c?c.javascriptDocument(r,document.URL):r)((${inject},${refused}?void 0:(`;
 		const tail = `)),self[${client}]||(()=>{try{return ${creator}}catch(e){}})())`;
@@ -138,21 +139,13 @@ export function routeHTML(
 					modifyJS(body, url, config, 'generic', '', { ...kept, head, tail }),
 				)
 			: null;
-		if (expression === null) {
+		if (expression === null)
 			// statements: injected after their directive prologue, so a
-			// 'use strict' stays one, in a block the refusal leaves (labelled
-			// with the access API's name, which no page's code uses), closed
-			// after a line break, as the code may end in a line comment
-			const label = names.access;
-			// Statements that may declare a let, a const or a class, which a
-			// block would keep from the window, run as a script of their own:
-			// once judged, `csp` navigates the window to a javascript: URL of
-			// their rewrite (encoded twice: the browser decodes this URL, then
-			// that one)
-			if (/\b(?:let|const|class)\b/.test(body))
-				return `javascript:void (${inject},${csp},${encodeURIComponent(JSON.stringify(`javascript:${encodeURIComponent(modifyJS(body, url, config, 'generic', `void (${inject});`, kept))}`))}))`;
-			return `javascript:${modifyJS(body, url, config, 'generic', `void (${inject});${label}:{if(${refused})break ${label};`, kept)}\u2028}`;
-		}
+			// 'use strict' stays one, and the rest stays the script's own (its
+			// let and const the window's, its value the URL's): refused, `csp`
+			// throws what the inject's listener takes before any of the page's
+			// (DocumentClient codeRefusal)
+			return `javascript:${modifyJS(body, url, config, 'generic', `void (${inject});${csp},1);`, kept)}`;
 		return `javascript:${head}${expression}${tail}`;
 	}
 

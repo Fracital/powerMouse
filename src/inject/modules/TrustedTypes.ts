@@ -4,8 +4,6 @@ import { TRUSTED_KINDS } from '../trusted';
 import ProxyModule from './Proxy';
 
 const MEMBERS = ['createHTML', 'createScript', 'createScriptURL'] as const;
-// taken at load, before the Timers module wraps setTimeout
-const nativeSetTimeout = globalThis.setTimeout;
 
 /**
  * The page's Trusted Types at the sinks the inject writes for it (an
@@ -55,37 +53,8 @@ export default class TrustedTypesModule extends Module<Client> {
 		/** the page's own script text that reaches a sink the inject writes (a Text node), which its default policy is not asked of */
 		const approved = new Set<string>();
 
-		client.trustedJavascript = (page, _routed, proceed) => {
-			const required = client.trustedTypesRequired();
-			if (!required) return true;
-			// a javascript: navigation is async, as is its Trusted Types judgment:
-			// the inject does both after the page's call returns (so the default
-			// policy's call is not seen by the code that set location), then
-			// navigates to the rewrite or reports the refusal
-			nativeSetTimeout(() => {
-				const callback = callbacks[1];
-				let allowed = false;
-				if (typeof callback === 'function')
-					try {
-						const made: unknown = Reflect.apply(callback, undefined, [
-							page,
-							'TrustedScript',
-							'Location href',
-						]);
-						allowed = made !== null && made !== undefined;
-					} catch (error) {
-						allowed = false;
-					}
-				if (allowed) proceed();
-				else if (required === 'enforce')
-					client.reportTrustedSink('Location href', page);
-				else {
-					client.reportTrustedTypes('Location href', page);
-					proceed();
-				}
-			});
-			return false;
-		};
+		// (a javascript: URL's code: ../dom/policyChecks.ts runRefused)
+		client.defaultScript = () => callbacks[1];
 		client.trustedApprove = (value) => {
 			if (!callbacks[1]) return;
 			approved.add(`1${value}`);

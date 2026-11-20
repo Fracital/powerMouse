@@ -175,18 +175,24 @@ event or read its property, else its place in the markup (where its start
 tag ends, where V8 counts the handler's own frame from); as it is parsed,
 none, or the write. A javascript: URL is judged at script-src-elem as
 Chrome judges it: as its navigation starts, by the policies of the
-document whose code started it (a link's click, a location it set, its
-open()), at that code (`DocumentClient.jsStarts`, which hands the check
-to the window it runs in; another frame's violation targets the frame's
-element), and again as it runs, by its window's, at the document's first
-line. The rewritten URL asks `csp` before its code (`src/rewriteHTML.ts`),
-and a refusal runs none of it; a report-only policy reports it twice. One
-of statements runs in a block after its directive prologue, or, where it
-may declare a `let`, a `const` or a `class` (which a block would keep from
-the window), as a script of its own: `csp` navigates the window to a
-javascript: URL of its rewrite once it is judged. Their console messages
-are Chrome's ("Executing inline
-event handler", "Running the JavaScript URL", with no hash). A CSSOM write (an
+document whose code started it (a link's click, a location it set, a
+form it submitted, a frame's `src` it set, its open()), at that code
+(`DocumentClient.jsStarts`, which hands the check to the window it runs
+in, or, for a window with no document of the inject's yet, keeps it for
+that window to find; another frame's violation targets the frame's
+element; the markup's frame and a new window's URL are judged twice there,
+as natively), and again as it runs, by its window's, at the document's
+first line. The rewritten URL asks `csp` before its code
+(`src/rewriteHTML.ts`), and a refusal runs none of it; a report-only
+policy reports it twice. One of statements has the call after its
+directive prologue, and the rest stays the script's own (its `let` and
+`const` the window's, its value the URL's): a refusal throws what the
+inject's own error listener takes before any of the page's. Under
+`require-trusted-types-for 'script'` the code then goes to the page's
+default policy (`Location href`), and what it returns runs instead; with
+none, or null, the navigation is refused (report-only: reported) with
+Chrome's console message. Their console messages are Chrome's ("Executing
+inline event handler", "Running the JavaScript URL", with no hash). A CSSOM write (an
 element's `style` property, `setProperty`) is the browser's to allow, so the
 inject does not refuse it, only the `style` attribute the page sets as a
 string.
@@ -452,11 +458,8 @@ refuses fires a violation, natively either.
 ## Not yet as natively
 
 - Trusted Types: the browser reports a report-only refusal of a script
-  whose text landed as
-  a Text node, or of a javascript: URL, with the rewrite as the sample.
-  A javascript: URL of a link (its href is rewritten when it is set) is
-  judged by the browser with the rewrite's code: the default policy is
-  handed it, and a refusal's sample is it. A worker judges no
+  whose text landed as a Text node with the rewrite as the sample. A
+  worker judges no
   importScripts of the page's and reports no report-only refusal, and a
   module worker of a `blob:` URL does not start. An SVG script's
   rewritten text is let through only by a default policy, as the page's
@@ -480,11 +483,16 @@ refuses fires a violation, natively either.
   getters are hooked only once one does (hooking them in every frame cost
   some 19 KB a frame), so the handler is judged as it first runs after.
   Chrome compiled it at the read, and runs it.
-- A javascript: URL a form submits, a frame's `src` or a new window's
-  first URL is judged by the window it runs in only (Chrome: first by the
-  document that navigates), its first violation at no place.
-- A javascript: URL of statements that may declare a `let`, a `const` or a
-  `class` runs a task later than natively (a second navigation runs it).
+- A refused javascript: URL of statements has compiled before its check
+  refuses it (the check is its first call): a `let`, `const` or `class` it
+  declares is the window's, never initialized (`typeof` throws, a later
+  declaration of the name is a SyntaxError); natively there is none.
+- A javascript: URL that runs before its first check's moment (a frame's,
+  a form's) fires its violation events after its code ran; natively they
+  come first.
+- A violation in the initial document of a new window a link opened
+  prints its console message in the opener's console (the opener's bundle
+  runs there; one open() opened has its own console's methods).
 - A stylesheet `<link>` the page's policy allows by its host where the
   list also takes nonces is refused.
 - A module worker of a `blob:` URL under a policy that refuses `blob:`
