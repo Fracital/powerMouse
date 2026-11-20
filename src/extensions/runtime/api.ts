@@ -350,12 +350,98 @@ export function i18nApi(ctx: Context) {
 	};
 }
 
+/**
+ * What an extension page's window is marked with (entry.ts pageContext):
+ * its extension, its kind and its tab, read as getViews walks the frames.
+ * A registered symbol is every realm's own, so a page of the extension
+ * finds the mark another realm of it left.
+ */
+export const VIEW_MARK = Symbol.for('extension view');
+
+export interface ViewMark {
+	readonly id: string;
+	readonly kind: string;
+	readonly tabId: number;
+}
+
+/**
+ * The extension's pages under this window's top (Chrome's views of the
+ * extension in its process): its tabs, its popup and, for a background page
+ * (MV2), the background, each the page's own window. A service worker's
+ * stand-in page and an offscreen document are no view.
+ */
+export function extensionViews(
+	ctx: Context,
+	filter: { type?: string; tabId?: number; windowId?: number } = {},
+): Window[] {
+	const views: Window[] = [];
+	const mv3 = Number(ctx.ext.manifest.manifest_version) >= 3;
+	const visit = (win: Window, depth: number) => {
+		let mark: ViewMark | undefined;
+		try {
+			mark = (win as unknown as Record<symbol, ViewMark | undefined>)[
+				VIEW_MARK
+			];
+		} catch (error) {
+			// another origin's window: only its frames can be reached
+		}
+		if (mark && mark.id === ctx.ext.id) {
+			const kind = mark.kind;
+			const type =
+				kind === 'popup' ? 'popup' : kind === 'background' ? null : 'tab';
+			const wanted =
+				kind === 'offscreen' || (kind === 'background' && mv3)
+					? false
+					: filter.type === undefined
+						? true
+						: filter.type === type;
+			if (
+				wanted &&
+				(filter.tabId === undefined || filter.tabId === mark.tabId) &&
+				(filter.windowId === undefined ||
+					filter.windowId === -2 ||
+					filter.windowId === 1 ||
+					kind === 'background')
+			)
+				views.push(win);
+		}
+		if (depth > 32) return;
+		let length: number;
+		try {
+			length = win.length;
+		} catch (error) {
+			return;
+		}
+		for (let index = 0; index < length; index++) {
+			let child: Window | null;
+			try {
+				child = (win as unknown as Record<number, Window>)[index];
+			} catch (error) {
+				continue;
+			}
+			if (child) visit(child, depth + 1);
+		}
+	};
+	visit((natives.global.top ?? natives.global) as Window, 0);
+	return views;
+}
+
 export function extensionApi(ctx: Context) {
+	const page = ctx.kind !== 'content';
+	const background = () =>
+		page && Number(ctx.ext.manifest.manifest_version) < 3
+			? (extensionViews(ctx).find(
+					(view) =>
+						(view as unknown as Record<symbol, ViewMark>)[VIEW_MARK]?.kind ===
+						'background',
+				) ?? null)
+			: null;
 	const api: Record<string, unknown> = {
 		getURL: ctx.sync((path: unknown) => chromeExtensionURL(ctx.ext.id, path)),
 		inIncognitoContext: false,
-		getBackgroundPage: () => null,
-		getViews: () => [],
+		getBackgroundPage: background,
+		getViews: (fetch?: { type?: string; tabId?: number; windowId?: number }) =>
+			page ? extensionViews(ctx, fetch ?? {}) : [],
 		isAllowedIncognitoAccess: ctx.method(() => false),
 		isAllowedFileSchemeAccess: ctx.method(() => false),
 		setUpdateUrlData: () => {},
@@ -441,14 +527,50 @@ function imageDataUrl(data: {
 	return canvas.toDataURL('image/png');
 }
 
-function pickSize<T>(value: T | Record<string, T>): T | undefined {
+/**
+ * setIcon's path or imageData, at the toolbar's two sizes (16 and 32
+ * pixels): for each, the nearest bigger one given, else the nearest smaller
+ */
+function pickSizes<T>(value: T | Record<string, T>): Record<string, T> {
 	if (!value || typeof value !== 'object' || 'width' in (value as object))
-		return value as T;
+		return { 16: value as T, 32: value as T };
 	const entries = Object.entries(value as Record<string, T>).sort(
 		(a, b) => Number(a[0]) - Number(b[0]),
 	);
-	return (entries.find(([size]) => Number(size) >= 32) ??
-		entries[entries.length - 1])?.[1];
+	const out: Record<string, T> = {};
+	for (const size of [16, 32]) {
+		const found = (entries.find(([given]) => Number(given) >= size) ??
+			entries[entries.length - 1])?.[1];
+		if (found !== undefined) out[size] = found;
+	}
+	return out;
+}
+
+/** declarativeContent's rules as they travel to the hub: SetIcon's imageData as pictures */
+function contentRulesOut(rules: unknown): Record<string, unknown>[] {
+	const list = (Array.isArray(rules) ? rules : []) as Record<string, unknown>[];
+	return list.map((rule) => ({
+		...JSON.parse(JSON.stringify({ ...rule, actions: undefined })),
+		actions: ((rule?.actions ?? []) as Record<string, unknown>[]).map(
+			(action) => {
+				const plain = JSON.parse(
+					JSON.stringify({ ...action, imageData: undefined }),
+				) as Record<string, unknown>;
+				if (action?.imageData)
+					plain.icons = Object.fromEntries(
+						Object.entries(
+							pickSizes(
+								action.imageData as Record<
+									string,
+									{ width: number; height: number; data: ArrayLike<number> }
+								>,
+							),
+						).map(([size, data]) => [size, imageDataUrl(data)]),
+					);
+				return plain;
+			},
+		),
+	}));
 }
 
 export function actionApi(ctx: Context, kind: string) {
@@ -467,11 +589,19 @@ export function actionApi(ctx: Context, kind: string) {
 		typeof value === 'number' ? { tabId: value } : undefined;
 	const v = { voidResult: true };
 	return {
-		setBadgeText: m(
-			(details: Details & { text?: string | null }) =>
-				set(details, { badgeText: String(details?.text ?? '') }),
-			v,
-		),
+		setBadgeText: m((details: Details & { text?: string | null }) => {
+			const text = String(details?.text ?? '');
+			let bytes = 0;
+			for (const char of text) {
+				const code = char.codePointAt(0)!;
+				bytes += code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
+			}
+			if (bytes > 100)
+				throw new ApiError(
+					`Badge text size is ${bytes} bytes which exceeds the limit of 100 bytes.`,
+				);
+			return set(details, { badgeText: text });
+		}, v),
 		getBadgeText: m((details: Details) => get(details, 'badgeText')),
 		setBadgeBackgroundColor: m(
 			(details: Details & { color: unknown }) =>
@@ -504,27 +634,29 @@ export function actionApi(ctx: Context, kind: string) {
 					imageData?: unknown;
 				},
 			) => {
-				let iconUrl: string | null = null;
+				const icons: Record<string, string> = {};
 				if (details.imageData) {
-					const data = pickSize(
+					const sizes = pickSizes(
 						details.imageData as Record<
 							string,
 							{ width: number; height: number; data: ArrayLike<number> }
 						>,
 					);
-					if (data) iconUrl = imageDataUrl(data);
+					for (const [size, data] of Object.entries(sizes))
+						if (data) icons[size] = imageDataUrl(data);
 				} else if (details.path) {
 					// (getURL's chrome-extension:// URL is the emulated origin's)
-					const path = pickSize(details.path);
-					const url = path && resolveExtensionURL(path);
-					if (url)
-						iconUrl = /^(data|blob|https?):/.test(url)
-							? url
-							: extensionURL(ctx.ext.id, cleanPath(url));
+					for (const [size, path] of Object.entries(pickSizes(details.path))) {
+						const url = path && resolveExtensionURL(path);
+						if (url)
+							icons[size] = /^(data|blob|https?):/.test(url)
+								? url
+								: extensionURL(ctx.ext.id, cleanPath(url));
+					}
 				}
-				if (!iconUrl)
+				if (!Object.keys(icons).length)
 					throw new ApiError('Either path or imageData must be specified.');
-				return set(details, { iconUrl });
+				return set(details, { icons });
 			},
 			v,
 		),
@@ -532,7 +664,8 @@ export function actionApi(ctx: Context, kind: string) {
 			const popup = String(details.popup ?? '')
 				.replace(/^chrome-extension:\/\/[a-p]{32}\//, '')
 				.replace(/^https:\/\/[a-p]{32}\.invalid\//, '');
-			return set(details, { popup: popup ? cleanPath(popup) : null });
+			// (an empty one is no popup on the tab, whatever the manifest says)
+			return set(details, { popup: popup ? cleanPath(popup) : '' });
 		}, v),
 		getPopup: m(async (details: Details) => {
 			const popup = (await get(details, 'popup')) as string | null;
@@ -543,8 +676,11 @@ export function actionApi(ctx: Context, kind: string) {
 		isEnabled: m((tabId?: number) => get(tabArg(tabId), 'enabled')),
 		show: m((tabId?: number) => set(tabArg(tabId), { enabled: true }), v),
 		hide: m((tabId?: number) => set(tabArg(tabId), { enabled: false }), v),
-		openPopup: m(() => ctx.hub('openPopup'), v),
-		getUserSettings: m(() => ({ isOnToolbar: true })),
+		openPopup: m(
+			(options?: { windowId?: number }) => ctx.hub('openPopup', options ?? {}),
+			v,
+		),
+		getUserSettings: m(() => ctx.hub('action.settings')),
 		onClicked: ctx.event(`${kind}.onClicked`).api,
 		onUserSettingsChanged: ctx.event(`${kind}.onUserSettingsChanged`).api,
 	};
@@ -1120,8 +1256,32 @@ export function declarativeContentApi(ctx: Context) {
 		) {
 			Object.assign(this, options ?? {}, { instanceType: type });
 		};
+	// the rules live in the hub, which judges them on each page and keeps
+	// them (Chrome keeps them across restarts)
+	const event = ctx.event('declarativeContent.onPageChanged').api;
+	const answer = (cb: unknown, value: unknown) => {
+		if (typeof cb === 'function') (cb as (value: unknown) => void)(value);
+	};
+	const call = (op: string, given: unknown, cb: unknown) => {
+		ctx
+			.hub('content.rules', op, given)
+			.then((value) => answer(cb, value))
+			.catch((error: unknown) => ctx.listenerError(error));
+	};
 	return {
-		onPageChanged: ctx.event('declarativeContent.onPageChanged').api,
+		onPageChanged: {
+			...event,
+			addRules: (rules: unknown, cb?: unknown) =>
+				call('add', contentRulesOut(rules), cb),
+			removeRules: (ids?: unknown, cb?: unknown) =>
+				typeof ids === 'function'
+					? call('remove', null, ids)
+					: call('remove', ids ?? null, cb),
+			getRules: (ids?: unknown, cb?: unknown) =>
+				typeof ids === 'function'
+					? call('get', null, ids)
+					: call('get', ids ?? null, cb),
+		},
 		PageStateMatcher: rule('declarativeContent.PageStateMatcher'),
 		ShowAction: rule('declarativeContent.ShowAction'),
 		ShowPageAction: rule('declarativeContent.ShowPageAction'),

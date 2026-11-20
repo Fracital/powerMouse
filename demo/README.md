@@ -296,7 +296,14 @@ holyWisp is started.
     label and icon follow `fullscreenchange`, so Escape or the browser
     leaving fullscreen shows too. Where the page cannot be made fullscreen
     (`document.fullscreenEnabled` false, as on an iPhone's Safari) the item
-    is not offered. **Settings** opens the same dialog on the theme picker
+    is not offered. **Extensions** and **Themes** open submenus beside
+    their items (on a click, under the pointer or with the right arrow;
+    the left arrow and Escape close one alone). Extensions is Chrome 157's:
+    Manage extensions and Visit Chrome Web Store, and on a bar with no room
+    for the puzzle piece the installed extensions first. Themes lists
+    `PMTheme`'s themes with a check on the one shown, then Get themes (the
+    Web Store's themes) and Reset to default; without `PMTheme` the menu
+    has no Themes. **Settings** opens the same dialog on the theme picker
     (view `settings`): Default, Light, Dark, Follow system and the themes
     installed from the Chrome Web Store (docs/themes.md).
     **About** opens the Shields settings pages' dialog

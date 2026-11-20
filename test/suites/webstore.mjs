@@ -816,17 +816,23 @@ async function live() {
 	);
 	let button = null;
 	let frame = null;
-	for (let tries = 0; tries < 150 && !button; tries++) {
+	// (the store draws the button disabled, and enables it once its script
+	// has asked the API, about 0.6 s later)
+	for (let tries = 0; tries < 150 && button?.disabled !== false; tries++) {
 		frame = await activeFrame(page);
 		button = await frame
 			?.evaluate(() => {
-				const found = [...document.querySelectorAll('button')].find(
+				// (the one shown: the page has another for narrow layouts)
+				const all = [...document.querySelectorAll('button')].filter(
 					(element) => element.textContent.trim() === 'Add to Chrome',
 				);
+				const found =
+					all.find((element) => element.getClientRects().length) ?? all[0];
+				if (found) found.dataset.stompTestAdd = '';
 				return found ? { disabled: found.disabled } : null;
 			})
 			.catch(() => null);
-		if (!button) await sleep(200);
+		if (button?.disabled !== false) await sleep(200);
 	}
 	ok(
 		'live: the real store offers an enabled Add to Chrome',
@@ -834,7 +840,7 @@ async function live() {
 		JSON.stringify(button),
 	);
 	if (button?.disabled === false) {
-		await frame.click('button:text-is("Add to Chrome")');
+		await frame.click('[data-stomp-test-add]');
 		await until(
 			page,
 			() => !!document.getElementById('passkeyPrompt'),

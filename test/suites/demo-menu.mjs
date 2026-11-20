@@ -262,11 +262,17 @@ await page.click('#toolMenu');
 await painted(page);
 let menu = await menuState(page);
 ok(
-	'the menu opens fading in, with Fullscreen, Extensions, Settings and About, on its first item',
+	'the menu opens fading in, with Fullscreen, Extensions, Themes, Settings and About, on its first item',
 	menu.open &&
 		menu.fading &&
 		JSON.stringify(menu.items) ===
-			JSON.stringify(['Fullscreen', 'Extensions', 'Settings', 'About']) &&
+			JSON.stringify([
+				'Fullscreen',
+				'Extensions',
+				'Themes',
+				'Settings',
+				'About',
+			]) &&
 		menu.focused === 'Fullscreen' &&
 		menu.toolExpanded === 'true',
 	JSON.stringify(menu),
@@ -435,8 +441,8 @@ ok(
 await page.keyboard.press('Escape');
 
 // About, from the keyboard: Enter opens the menu on Fullscreen, ArrowDown
-// moves to Extensions, Settings and About and round to Fullscreen, ArrowUp
-// back to About, Enter chooses it
+// moves to Extensions, Themes, Settings and About and round to Fullscreen,
+// ArrowUp back to About, Enter chooses it
 await page.focus('#toolMenu');
 await page.keyboard.press('Enter');
 menu = await menuState(page);
@@ -452,15 +458,18 @@ const third = (await menuState(page)).focused;
 await page.keyboard.press('ArrowDown');
 const fourth = (await menuState(page)).focused;
 await page.keyboard.press('ArrowDown');
+const fifth = (await menuState(page)).focused;
+await page.keyboard.press('ArrowDown');
 const wrapped = (await menuState(page)).focused;
 await page.keyboard.press('ArrowUp');
 ok(
 	'the arrows move between the items, round the ends',
 	second === 'Extensions' &&
-		third === 'Settings' &&
-		fourth === 'About' &&
+		third === 'Themes' &&
+		fourth === 'Settings' &&
+		fifth === 'About' &&
 		wrapped === 'Fullscreen',
-	JSON.stringify({ second, third, fourth, wrapped }),
+	JSON.stringify({ second, third, fourth, fifth, wrapped }),
 );
 await page.keyboard.press('Enter');
 let dialog = await until(
@@ -708,7 +717,8 @@ await blocking.close();
 
 // ---- no Fullscreen API ----------------------------------------------------------
 // an iPhone's Safari has no element fullscreen, under either name (Chrome
-// still has the prefixed one): the menu has Extensions, Settings and About
+// still has the prefixed one): the menu has Extensions, Themes, Settings and
+// About
 const without = await browsing({}, (page) =>
 	page.addInitScript(() => {
 		for (const name of ['fullscreenEnabled', 'webkitFullscreenEnabled'])
@@ -719,9 +729,9 @@ await without.click('#toolMenu');
 await painted(without);
 menu = await menuState(without);
 ok(
-	'without the Fullscreen API the menu offers Extensions, Settings and About',
+	'without the Fullscreen API the menu offers Extensions, Themes, Settings and About',
 	JSON.stringify(menu.items) ===
-		JSON.stringify(['Extensions', 'Settings', 'About']) &&
+		JSON.stringify(['Extensions', 'Themes', 'Settings', 'About']) &&
 		menu.focused === 'Extensions',
 	JSON.stringify(menu),
 );

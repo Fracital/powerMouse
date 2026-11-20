@@ -140,6 +140,7 @@ import {
 	type FramesAsTabs,
 	type HubTabs,
 	type TabEvent,
+	type ToolbarCall,
 } from './extensions';
 import { GeometryWatch, sharedGeometry, shareGeometry } from './geometry';
 import {
@@ -1482,6 +1483,7 @@ export class StompController extends EventTarget {
 			actionState: (id, tabId) => hub.actionState(id, tabId),
 			actions: (tabId) => hub.actions(tabId),
 			click: (id, tabId) => hub.click(id, tabId),
+			toolbar: (call, args) => hub.toolbarCall(call, args),
 			dispatch: async (id, name, args) => hub.dispatch(id, name, args),
 			menus: async (id) => hub.menus(id),
 			expectPopup: async (id, tabId, url) => hub.expectPopup(id, tabId, url),
@@ -3447,6 +3449,8 @@ export class StompController extends EventTarget {
 				return hub.actions(args[0] as number | null);
 			case 'click':
 				return hub.click(args[0] as string, args[1] as number | null);
+			case 'toolbar':
+				return hub.toolbarCall(args[0] as ToolbarCall, args[1] as unknown[]);
 			case 'dispatch':
 				return Promise.resolve(
 					hub.dispatch(

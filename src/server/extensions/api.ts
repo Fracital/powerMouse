@@ -99,6 +99,22 @@ export async function extensionCommand(
 			case 'grant':
 				registry.grantActiveTab(String(command.id), Number(command.tabId));
 				return undefined;
+			case 'pin':
+				return await registry.setPinned(
+					String(command.id),
+					command.pinned === true,
+				);
+			case 'contentRules':
+				return await registry.contentRules(
+					String(command.id),
+					Array.isArray(command.rules) ? command.rules : undefined,
+				);
+			case 'siteAccess':
+				return await registry.setSiteAccess(
+					String(command.id),
+					command.access,
+					command.url,
+				);
 			default:
 				throw new ExtensionError(
 					'unsupported',

@@ -35,6 +35,7 @@ import {
 	type Manifest,
 	type RunAt,
 	type ShippedExtension,
+	type SiteAccess,
 	type ThemePayload,
 	type World,
 } from '../../extensions/types';
@@ -58,6 +59,7 @@ import {
 } from './store';
 import { verifyStorePackage } from './storeProof';
 import { isTheme, themeManifest, themeSections } from './themes';
+import { STORE_HOST } from './webstore';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -107,10 +109,45 @@ export interface Loaded {
 	sources: Map<string, string>;
 	/** storage.session.setAccessLevel let content scripts in */
 	sessionOpen: boolean;
+	/** its place among the pinned buttons (lower first), null when unpinned */
+	pinned: number | null;
+	/** its site access (the user's choice in its menu) */
+	siteAccess: SiteAccess;
+	/** the sites it asks for: host permissions and content scripts' matches */
+	requestedHosts: string[];
+	/** its button's icon at 16 and 32 pixels (the action's, else the extension's) */
+	toolbarIcons: Record<string, string>;
 }
 
 /** the reply of a call into the backend */
 export type BackendAnswer = unknown;
+
+/** a kept site access, or Chrome's default: every site it asks for */
+function siteAccessOf(kept: unknown): SiteAccess {
+	const value = kept as Partial<SiteAccess> | undefined;
+	return value && typeof value.withheld === 'boolean'
+		? {
+				withheld: value.withheld,
+				sites: Array.isArray(value.sites) ? value.sites.map(String) : [],
+			}
+		: { withheld: false, sites: [] };
+}
+
+/** the sites a manifest asks for: its host permissions and its content scripts' matches */
+function requestedHosts(manifest: Manifest): string[] {
+	const isHost = (pattern: unknown): pattern is string =>
+		typeof pattern === 'string' &&
+		(pattern === '<all_urls>' || pattern.includes('://'));
+	return [
+		...new Set([
+			...(manifest.host_permissions ?? []).filter(isHost),
+			...(manifest.permissions ?? []).filter(isHost),
+			...(manifest.content_scripts ?? []).flatMap((script) =>
+				(script.matches ?? []).filter(isHost),
+			),
+		]),
+	];
+}
 
 const STORAGE_AREAS = ['local', 'sync', 'session', 'managed'];
 const ICON_INLINE_MAX = 64 * 1024;
@@ -428,7 +465,11 @@ export class ExtensionRegistry {
 
 	/** a click on its button granted the extension activeTab for the tab */
 	grantActiveTab(id: string, tabId: number) {
-		if (!this.#loaded.get(id)?.granted.has('activeTab')) return;
+		const loaded = this.#loaded.get(id);
+		// (an extension whose sites are withheld runs on a click too: Chrome's
+		// ActiveTabPermissionGranter grants what it withheld for the tab)
+		if (!loaded?.granted.has('activeTab') && !loaded?.siteAccess.withheld)
+			return;
 		if (!this.#activeTabs.has(id)) this.#activeTabs.set(id, new Set());
 		this.#activeTabs.get(id)!.add(tabId);
 	}
@@ -653,7 +694,24 @@ export class ExtensionRegistry {
 			warnings,
 			sources: new Map(),
 			sessionOpen: this.#loaded.get(record.id)?.sessionOpen ?? false,
+			pinned:
+				((await extensionState.get(record.id, 'pinned')) as
+					number | undefined) ?? null,
+			siteAccess: siteAccessOf(
+				await extensionState.get(record.id, 'siteAccess'),
+			),
+			requestedHosts: requestedHosts(raw),
+			toolbarIcons: {},
 		};
+		// the toolbar's sizes: 16 pixels at 1x, 32 at 2x (Chrome's 16 dip
+		// action icon), the action's own icons first
+		for (const size of [16, 32]) {
+			const icon = await this.#icon(
+				record.id,
+				pickIcon(action?.default_icon, size) ?? pickIcon(raw.icons, size),
+			);
+			if (icon) loaded.toolbarIcons[size] = icon;
+		}
 		for (const entry of loaded.entries)
 			for (const path of [...entry.js, ...entry.css])
 				if (!record.files.includes(path))
@@ -705,7 +763,130 @@ export class ExtensionRegistry {
 					: 'none',
 			manifest: copy(manifest),
 			warnings: [...loaded.warnings],
+			pinned: loaded.pinned !== null,
+			pinOrder: loaded.pinned,
+			actionIcons: { ...loaded.toolbarIcons },
+			siteAccess: {
+				withheld: loaded.siteAccess.withheld,
+				sites: [...loaded.siteAccess.sites],
+			},
+			requestedHosts: [...loaded.requestedHosts],
+			homepageUrl:
+				typeof manifest.homepage_url === 'string' && manifest.homepage_url
+					? manifest.homepage_url
+					: record.source === 'webstore'
+						? `https://${STORE_HOST}/detail/${record.id}`
+						: null,
 		};
+	}
+
+	/** the pinned extensions in their order, then the others (the toolbar's) */
+	pinOrder(): string[] {
+		return [...this.#loaded.values()]
+			.filter((loaded) => loaded.pinned !== null)
+			.sort((a, b) => a.pinned! - b.pinned!)
+			.map((loaded) => loaded.record.id);
+	}
+
+	/** pin its button to the toolbar (after the pinned ones), or unpin it */
+	async setPinned(id: string, pinned: boolean): Promise<ExtensionInfo> {
+		await this.ready();
+		const loaded = this.#found(id);
+		if ((loaded.pinned !== null) !== pinned) {
+			loaded.pinned = pinned ? this.#nextPin() : null;
+			await extensionState.put(id, 'pinned', loaded.pinned ?? undefined);
+			this.#emit({ type: 'settings', id });
+		}
+		return this.info(loaded);
+	}
+
+	#nextPin(): number {
+		let last = 0;
+		for (const loaded of this.#loaded.values())
+			if (loaded.pinned !== null) last = Math.max(last, loaded.pinned);
+		return last + 1;
+	}
+
+	/**
+	 * Its site access, as its menu sets it (Chrome's UpdateSiteAccess): on a
+	 * click withholds every site (or takes the site of `url` off the granted
+	 * ones), on the site of `url` withholds every other, on all sites grants
+	 * every site it asks for
+	 */
+	async setSiteAccess(
+		id: string,
+		access: 'click' | 'site' | 'all',
+		url?: string,
+	): Promise<ExtensionInfo> {
+		await this.ready();
+		const loaded = this.#found(id);
+		let origin: string | null = null;
+		try {
+			origin = url ? new URL(url).origin : null;
+		} catch (error) {
+			origin = null;
+		}
+		const current = loaded.siteAccess;
+		let next: SiteAccess;
+		if (access === 'all') next = { withheld: false, sites: [] };
+		else if (access === 'site') {
+			if (!origin)
+				throw new ExtensionError('unsupported', 'No site was given.');
+			next = {
+				withheld: true,
+				sites: current.withheld
+					? [...new Set([...current.sites, origin])]
+					: [origin],
+			};
+		} else
+			next = {
+				withheld: true,
+				sites: current.withheld
+					? current.sites.filter((site) => site !== origin)
+					: [],
+			};
+		loaded.siteAccess = next;
+		await extensionState.put(id, 'siteAccess', next);
+		this.#emit({ type: 'settings', id });
+		return this.info(loaded);
+	}
+
+	/**
+	 * Whether the extension may read and change `url` (a page of tab
+	 * `tabId`): a site it asks for that its site access grants, or the tab a
+	 * click on its button granted
+	 */
+	siteGranted(loaded: Loaded, url: string, tabId = -1): boolean {
+		if (tabId >= 0 && this.#activeTabs.get(loaded.record.id)?.has(tabId))
+			return true;
+		if (!loaded.siteAccess.withheld) return true;
+		let origin: string;
+		try {
+			origin = new URL(url).origin;
+		} catch (error) {
+			return false;
+		}
+		return loaded.siteAccess.sites.includes(origin);
+	}
+
+	/** its declarativeContent rules (kept across restarts, as Chrome keeps them); `rules` replaces them */
+	async contentRules(
+		id: string,
+		rules?: Record<string, unknown>[],
+	): Promise<Record<string, unknown>[]> {
+		await this.ready();
+		this.#found(id);
+		if (rules) {
+			await extensionState.put(id, 'contentRules', rules);
+			return rules;
+		}
+		const kept = await extensionState.get(id, 'contentRules');
+		return Array.isArray(kept) ? (kept as Record<string, unknown>[]) : [];
+	}
+
+	/** the tab a service worker client's document is in, -1 when unknown */
+	tabOfClient(client: string | undefined): number {
+		return client ? (this.#clientTabs.get(client) ?? -1) : -1;
 	}
 
 	/** what a context is told of its extension */
@@ -840,6 +1021,15 @@ export class ExtensionRegistry {
 		};
 		const shown = this.currentTheme()?.record.id;
 		await records.put(record);
+		// Chrome 157 pins a new extension's button (kExtensionsPinnedByDefault,
+		// on by default, and its user setting's default): on its install,
+		// never on an update
+		const manifest = read.manifest;
+		if (
+			!previous &&
+			(manifest.action ?? manifest.browser_action ?? manifest.page_action)
+		)
+			await extensionState.put(read.id, 'pinned', this.#nextPin());
 		const loaded = await this.#load(record);
 		await this.#dnrSync(record.id);
 		if (loaded.theme && record.enabled)
@@ -1063,7 +1253,11 @@ export class ExtensionRegistry {
 		const id = /^https:\/\/([a-p]{32})\.invalid$/.exec(origin)?.[1];
 		if (!id) return false;
 		const loaded = this.#loaded.get(id);
-		return !!loaded?.record.enabled && hostPermitted(loaded.granted, url.href);
+		return (
+			!!loaded?.record.enabled &&
+			hostPermitted(loaded.granted, url.href) &&
+			this.siteGranted(loaded, url.href)
+		);
 	}
 
 	/** whether a page of `initiator` may load the extension's `path` (web_accessible_resources) */

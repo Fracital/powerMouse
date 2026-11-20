@@ -429,6 +429,7 @@ export class RemoteController extends EventTarget {
 				hub('actionState', id, tabId) as Promise<ActionState>,
 			actions: (tabId) => hub('actions', tabId) as Promise<ExtensionAction[]>,
 			click: (id, tabId) => hub('click', id, tabId) as Promise<ClickResult>,
+			toolbar: (call, args) => hub('toolbar', call, args),
 			dispatch: async (id, name, args) => {
 				await hub('dispatch', id, name, args);
 			},

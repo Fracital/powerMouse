@@ -26,7 +26,7 @@ import {
 	type ShippedEntry,
 	type ShippedExtension,
 } from '../types';
-import { buildChrome } from './api';
+import { buildChrome, VIEW_MARK, type ViewMark } from './api';
 import { Context, copy, messageOf } from './context';
 import { receiveMessages } from './messaging';
 import {
@@ -511,8 +511,23 @@ function contentContext(given: RuntimePayload, ext: ShippedExtension) {
 		.catch(() => {
 			ctx.announce();
 		});
-	// the CSS goes in first, before any of the page's markup
-	for (const entry of ext.entries ?? []) addSheet(entry.css);
+	// the CSS goes in first, before any of the page's markup (a site its
+	// site access withholds: once a click on its button runs them)
+	const start = (now: boolean) => {
+		for (const entry of ext.entries ?? []) addSheet(entry.css);
+		for (const entry of ext.entries ?? []) {
+			const run = () =>
+				runEntry(
+					ctx,
+					entry,
+					`${given.channel}${CONTENT_SCRIPT_ROUTE}/${ext.id}/${ext.generation ?? 0}/${entry.key}.js`,
+					userWorld,
+					isolated,
+				);
+			if (now) run();
+			else schedule(entry.runAt, run);
+		}
+	};
 	let userChrome: { value: unknown } | null = null;
 	const userWorld = () =>
 		(userChrome ??= { value: userScriptChrome(ctx, given) }).value;
@@ -540,16 +555,20 @@ function contentContext(given: RuntimePayload, ext: ShippedExtension) {
 			ctx.placed.then(() => made.placed(natives.JSON.stringify(ctx.place)));
 		return made;
 	};
-	for (const entry of ext.entries ?? [])
-		schedule(entry.runAt, () =>
-			runEntry(
-				ctx,
-				entry,
-				`${given.channel}${CONTENT_SCRIPT_ROUTE}/${ext.id}/${ext.generation ?? 0}/${entry.key}.js`,
-				userWorld,
-				isolated,
-			),
-		);
+	if (!ext.blocked) start(false);
+	else {
+		let unblocked = false;
+		ctx.on('unblock', (message) => {
+			if (unblocked || message.tabId !== ctx.place.tabId) return;
+			unblocked = true;
+			ctx.placed.then(() => schedule('document_end', () => start(true)));
+		});
+		// the button shows that scripts wait here (Chrome's ring around its icon)
+		ctx.placed.then(() => {
+			if (!unblocked && ctx.place.tabId >= 0)
+				ctx.hub('action.blocked', ctx.place.tabId).catch(() => {});
+		});
+	}
 	// what the extension's other contexts inject (scripting, tabs)
 	const sheets = new Map<string, CSSStyleSheet>();
 	ctx.on('exec', async (message) => {
@@ -636,12 +655,40 @@ function pageKind(given: RuntimePayload): {
 	return { kind: given.page!.kind, tabId: -1 };
 }
 
+/** IDS_WEB_FONT_FAMILY of Chrome's platform (Linux puts its UI font first) */
+function extensionFont(): string {
+	const agent =
+		(natives.global as unknown as Window).navigator?.userAgent ?? '';
+	if (/Windows/.test(agent)) return "'Segoe UI', Tahoma, sans-serif";
+	if (/CrOS/.test(agent)) return 'Roboto, sans-serif';
+	if (/Mac OS X/.test(agent)) return 'system-ui, sans-serif';
+	return 'system-ui, Arial, sans-serif';
+}
+
 function pageContext(given: RuntimePayload) {
 	const ext = given.page!;
 	const { kind, tabId } = pageKind(given);
 	// its origin as Chrome's, chrome-extension://, over the inject's hooks
 	presentExtensionPage(given.serviceWorker?.url);
 	const ctx = new Context(ext, kind, given.channel, given.url, undefined);
+	// the extension's other pages find this one as a view (getViews)
+	const mark: ViewMark = {
+		id: ext.id,
+		get kind() {
+			return ctx.kind;
+		},
+		get tabId() {
+			return ctx.place.tabId;
+		},
+	};
+	natives.defineProperty(global, VIEW_MARK, {
+		value: mark,
+		configurable: true,
+	});
+	// the stylesheet Chrome gives every extension page (extension_fonts.css):
+	// the platform's web UI font at 75%, which the page's own rules override
+	// (a layer under them, as Chrome's injected sheet comes before them)
+	addSheet(`@layer{body{font-family:${extensionFont()};font-size:75%}}`);
 	const chrome = buildChrome(ctx);
 	receiveMessages(ctx);
 	// the page's own `chrome` (the browser's, with its app and csi) gains the
@@ -818,6 +865,15 @@ function popupPage(ctx: Context) {
 		},
 		writable: true,
 		configurable: true,
+	});
+	// Escape the page left unhandled closes the popup (Chrome's bubble takes
+	// the key the popup's contents did not: ExtensionViewViews'
+	// HandleKeyboardEvent); the host's own Escape does not reach a frame
+	call(natives.addEventListener, global, 'keydown', (event: KeyboardEvent) => {
+		if (event.key !== 'Escape' || event.repeat) return;
+		natives.setTimeout(() => {
+			if (!event.defaultPrevented) ctx.hub('popup.close').catch(() => {});
+		}, 0);
 	});
 }
 let popupWatched = false;

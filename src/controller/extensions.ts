@@ -20,19 +20,23 @@ import {
 	serviceWorkerPage,
 	type ActionState,
 	type ClickResult,
+	type CommandResult,
 	type ExtensionAction,
 	type ExtensionCommand,
 	type ExtensionErrorCode,
 	type ExtensionInfo,
+	type ExtensionMenuEntry,
 	type ExtensionNotification,
 	type ExtensionOptions,
 	type ExtensionPrompt,
 	type ExtensionPromptAnswer,
 	type ExtensionPromptRequest,
 	type ExtensionsChange,
+	type ExtensionShortcut,
 	type ExtensionSource,
 	type InstallOptions,
 	type PopupHandle,
+	type SiteInteraction,
 	type ThemeImageFile,
 	type ThemeInfo,
 	type ThemePayload,
@@ -405,24 +409,71 @@ export interface HubHost {
 	notify(change: ExtensionsChange): void;
 }
 
-const DEFAULT_ACTION = (): Omit<
-	ActionState,
-	'title' | 'iconUrl' | 'popupUrl'
-> & {
+/**
+ * What the extension set of its action, for every tab or for one (null:
+ * not set, the manifest's or Chrome's default). Its colors are as it gave
+ * them (transparent is Chrome's default)
+ */
+interface RawAction {
 	title: string | null;
-	icon: string | null;
+	/** its icon by size (setIcon) */
+	icons: Record<string, string> | null;
 	popup: string | null;
-} => ({
+	badgeText: string;
+	badgeColor: string | null;
+	badgeTextColor: string | null;
+	/** shown (enable/show), hidden (disable/hide), or the default */
+	enabled: boolean | null;
+}
+
+const DEFAULT_ACTION = (): RawAction => ({
 	title: null,
-	icon: null,
+	icons: null,
 	popup: null,
 	badgeText: '',
-	badgeColor: '#5f6368',
+	badgeColor: null,
 	badgeTextColor: null,
-	enabled: true,
+	enabled: null,
 });
 
-type RawAction = ReturnType<typeof DEFAULT_ACTION>;
+/** a declarativeContent rule's conditions and actions, as the extension added them */
+interface ContentRule {
+	id: string;
+	priority?: number;
+	conditions?: Record<string, unknown>[];
+	actions?: Record<string, unknown>[];
+}
+
+/** Chrome's own strings of the extensions' menus (generated_resources.grd, en-US) */
+const MENU_TEXT = {
+	options: 'Options',
+	remove: (browser: string) => `Remove from ${browser}`,
+	policy: 'Installed by your administrator',
+	pin: 'Pin',
+	unpin: 'Unpin',
+	manage: 'Manage extension',
+	permissions: 'View web permissions',
+	inspect: 'Inspect popup',
+	cantAccess: "Can't read or change site's data",
+	access: 'This can read and change site data',
+	onClick: 'When you click the extension',
+	onSite: (site: string) => `On ${site}`,
+	onAll: 'On all sites',
+	learnMore: 'Learn more about site access',
+	wantsAccess: 'Wants access to this site',
+	hasAccess: 'Has access to this site',
+};
+/** where "Learn more about site access" leads */
+const SITE_ACCESS_HELP =
+	'https://support.google.com/chrome?p=enable_extensions';
+/** an action menu shows this many of the extension's own items at its top level (ACTION_MENU_TOP_LEVEL_LIMIT) */
+const ACTION_MENU_LIMIT = 6;
+/** a menu item's title is cut to this many characters (kMaxExtensionItemTitleLength) */
+const MENU_TITLE_MAX = 75;
+/** how long action.openPopup() waits for its popup (browserAction's 10 s) */
+const OPEN_POPUP_WAIT_MS = 10_000;
+/** the Chrome Web Store's host: no extension may read or change it */
+const STORE_SITE = 'chromewebstore.google.com';
 
 interface HubExtension {
 	info: ExtensionInfo;
@@ -436,6 +487,21 @@ interface HubExtension {
 	notifications: Map<string, ExtensionNotification>;
 	/** popups a host is mounting (mountPopup): the next page of the URL that says hello is one */
 	popups: { url: string; tabId: number; at: number }[];
+	/** the contexts of its popups that are open now */
+	openPopups: Set<string>;
+	/** action.openPopup() calls waiting for their popup to say hello */
+	popupWaiters: Set<() => void>;
+	/** the tabs a click (or a command) granted it, until they navigate */
+	grantedTabs: Set<number>;
+	/** the tabs where scripts of its wait for a click (site access withheld) */
+	blockedTabs: Set<number>;
+	/** its declarativeContent rules (null until the worker gave them) */
+	contentRules: ContentRule[] | null;
+	/** what the rules show and set on each tab, by its URL as they last judged it */
+	contentState: Map<
+		number,
+		{ show: boolean; icons: Record<string, string> | null }
+	>;
 }
 
 /** how long a popup the host mounts has to say hello */
@@ -520,7 +586,15 @@ export class ExtensionHub {
 				}
 				if (known) {
 					const updated = known.info.updatedAt !== info.updatedAt;
+					const pinned = known.info.pinned !== info.pinned;
 					known.info = info;
+					// (Chrome tells the extension, no user gesture with it)
+					if (pinned && Number(info.manifestVersion) >= 3)
+						this.#post(known, {
+							t: 'event',
+							name: 'action.onUserSettingsChanged',
+							args: [{ isOnToolbar: info.pinned }],
+						});
 					if (updated && known.background) {
 						this.#stopBackground(known);
 						this.#startBackground(known);
@@ -540,6 +614,12 @@ export class ExtensionHub {
 					menus: new Map(),
 					notifications: new Map(),
 					popups: [],
+					openPopups: new Set(),
+					popupWaiters: new Set(),
+					grantedTabs: new Set(),
+					blockedTabs: new Set(),
+					contentRules: null,
+					contentState: new Map(),
 				};
 				ext.bus.onmessage = (event) => this.#receive(ext, event.data);
 				this.#extensions.set(info.id, ext);
@@ -625,6 +705,8 @@ export class ExtensionHub {
 		}
 		if (message?.t === 'bye') {
 			this.#subframes.delete(String(message.ctx));
+			if (ext.openPopups.delete(String(message.ctx)))
+				this.#host.notify({ type: 'action', id: ext.info.id });
 			return;
 		}
 		if (message?.t !== 'hub') return;
@@ -763,6 +845,7 @@ export class ExtensionHub {
 		// one at a time: a tab's events come in the order they happened
 		const run = async () => {
 			if (event.e === 'removed') {
+				this.#forgetTab(event.tabId);
 				this.#tabState.delete(event.tabId);
 				for (const [key, frame] of this.#subframes)
 					if (frame.tabId === event.tabId) this.#subframes.delete(key);
@@ -801,6 +884,10 @@ export class ExtensionHub {
 					]);
 					return;
 				case 'commit': {
+					// a new document: what the extensions set for the tab goes
+					// (ExtensionAction::ClearAllValuesForTab), its grants too
+					this.#forgetTab(tabId);
+					this.#judgeContent(tabId, event.url);
 					const documentId = ExtensionHub.documentId(event.client);
 					this.#webNavigation(
 						'onBeforeNavigate',
@@ -840,6 +927,7 @@ export class ExtensionHub {
 					return;
 				}
 				case 'history': {
+					this.#judgeContent(tabId, event.url);
 					const state = this.#tabState.get(tabId);
 					const status = state?.status;
 					if (state) state.status = 'loading';
@@ -994,12 +1082,14 @@ export class ExtensionHub {
 				};
 				if (hello.name === 'background' || hello.name === 'offscreen')
 					return { tabId: -1, frameId: -1, tab: null };
-				if (hello.name === 'popup')
+				if (hello.name === 'popup') {
+					this.#popupOpened(ext, from);
 					return {
 						tabId: hello.tabId ?? -1,
 						frameId: -1,
 						tab: null,
 					};
+				}
 				// a popup the host mounts (its frame is none of the tabs)
 				const now = Date.now();
 				ext.popups = ext.popups.filter(
@@ -1010,6 +1100,7 @@ export class ExtensionHub {
 				);
 				if (popup >= 0 && hello.name !== 'content') {
 					const [{ tabId }] = ext.popups.splice(popup, 1);
+					this.#popupOpened(ext, from);
 					return { tabId, frameId: -1, tab: null, kind: 'popup' };
 				}
 				// a document reports its client to the controller as it loads: a
@@ -1095,7 +1186,10 @@ export class ExtensionHub {
 				const [tabId, patch] = args as [number | null, Record<string, unknown>];
 				const raw: Partial<RawAction> = {};
 				if ('title' in patch) raw.title = patch.title as string;
-				if ('iconUrl' in patch) raw.icon = patch.iconUrl as string;
+				if ('icons' in patch)
+					raw.icons = patch.icons as Record<string, string> | null;
+				else if ('iconUrl' in patch)
+					raw.icons = { 16: String(patch.iconUrl), 32: String(patch.iconUrl) };
 				if ('popup' in patch) raw.popup = patch.popup as string | null;
 				for (const key of [
 					'badgeText',
@@ -1115,28 +1209,106 @@ export class ExtensionHub {
 			}
 			case 'action.get': {
 				const state = this.#rawAction(ext, args[0] as number | null);
+				const declared = this.#declared(ext);
 				return {
-					title: state.title,
-					iconUrl: state.icon,
-					popup: state.popup,
+					title: state.title ?? declared?.default_title ?? ext.info.name,
+					popup:
+						state.popup ??
+						(declared?.default_popup
+							? cleanPath(declared.default_popup)
+							: null),
 					badgeText: state.badgeText,
 					badgeColor: state.badgeColor,
 					badgeTextColor: state.badgeTextColor,
-					enabled: state.enabled,
+					enabled: this.#visible(ext, args[0] as number | null),
 				};
 			}
 			case 'openPopup': {
+				// Chrome's checks, in its order and words (ActionOpenPopupFunction)
+				if (!ext.info.hasAction)
+					throw new Error('This extension has no action specified.');
+				const options = (args[0] ?? {}) as { windowId?: number };
+				if (
+					options.windowId !== undefined &&
+					options.windowId !== null &&
+					options.windowId !== 1 &&
+					options.windowId !== -2
+				)
+					throw new Error(`No window with id: ${options.windowId}.`);
 				const tabId = await this.#activeTab();
-				const state = this.#rawAction(ext, tabId);
-				if (!state.popup)
+				if (tabId === null)
 					throw new Error('Could not find an active browser window.');
+				// (declarativeContent's visibility does not count here)
+				if (!(await this.actionState(ext.info.id, tabId)).popupUrl)
+					throw new Error('Extension does not have a popup on the active tab.');
+				for (const other of this.#extensions.values())
+					if (other.openPopups.size) throw new Error('Failed to open popup.');
+				const shown = new Promise<boolean>((resolve) => {
+					const done = () => {
+						ext.popupWaiters.delete(done);
+						clearTimeout(timer);
+						resolve(true);
+					};
+					const timer = setTimeout(() => {
+						ext.popupWaiters.delete(done);
+						resolve(false);
+					}, OPEN_POPUP_WAIT_MS);
+					ext.popupWaiters.add(done);
+				});
 				this.#host.notify({
-					type: 'action',
+					type: 'popup',
 					id: ext.info.id,
-					...(tabId === null ? {} : { tabId }),
+					tabId,
 					popup: true,
-				} as ExtensionsChange);
+				});
+				if (!(await shown)) throw new Error('Failed to open popup.');
 				return undefined;
+			}
+			case 'action.settings':
+				return { isOnToolbar: ext.info.pinned };
+			case 'action.blocked': {
+				// a document's scripts wait for a click on the button
+				const tabId = Number(args[0]);
+				if (tabId >= 0 && !ext.blockedTabs.has(tabId)) {
+					ext.blockedTabs.add(tabId);
+					this.#host.notify({ type: 'action', id: ext.info.id, tabId });
+				}
+				return undefined;
+			}
+			case 'content.rules': {
+				// declarativeContent.onPageChanged's addRules, removeRules, getRules
+				const [op, given] = args as [string, unknown];
+				const rules = await this.#contentRules(ext);
+				if (op === 'get') {
+					const ids = Array.isArray(given) ? given.map(String) : null;
+					return ids ? rules.filter((rule) => ids.includes(rule.id)) : rules;
+				}
+				let next: ContentRule[];
+				let answer: unknown;
+				if (op === 'add') {
+					const added = (Array.isArray(given) ? given : []).map(
+						(rule: ContentRule, index) => ({
+							...rule,
+							id: String(rule?.id ?? `_${Date.now().toString(36)}${index}_`),
+							priority: Number(rule?.priority ?? 100),
+						}),
+					);
+					const ids = new Set(added.map((rule) => rule.id));
+					next = [...rules.filter((rule) => !ids.has(rule.id)), ...added];
+					answer = added;
+				} else {
+					const ids = Array.isArray(given) ? given.map(String) : null;
+					next = ids ? rules.filter((rule) => !ids.includes(rule.id)) : [];
+				}
+				ext.contentRules = next;
+				await this.command({
+					op: 'contentRules',
+					id: ext.info.id,
+					rules: next as unknown as Record<string, unknown>[],
+				});
+				for (const tab of await this.#host.tabs.list())
+					this.#judgeContent(tab.id, tab.url, ext);
+				return answer;
 			}
 			case 'openOptions': {
 				if (!ext.info.optionsUrl)
@@ -1331,30 +1503,180 @@ export class ExtensionHub {
 		return ext;
 	}
 
+	#declared(ext: HubExtension) {
+		const manifest = ext.info.manifest;
+		return manifest.action ?? manifest.browser_action ?? manifest.page_action;
+	}
+
+	#popupOpened(ext: HubExtension, from: string) {
+		ext.openPopups.add(from);
+		for (const done of [...ext.popupWaiters]) done();
+	}
+
+	/** a tab's new document (or its close): what the extensions set for it, and their grants, go */
+	#forgetTab(tabId: number) {
+		for (const ext of this.#extensions.values()) {
+			const had = [
+				ext.tabAction.delete(tabId),
+				ext.grantedTabs.delete(tabId),
+				ext.blockedTabs.delete(tabId),
+			].some(Boolean);
+			if (had) this.#host.notify({ type: 'action', id: ext.info.id, tabId });
+		}
+	}
+
+	async #contentRules(ext: HubExtension): Promise<ContentRule[]> {
+		if (!ext.contentRules)
+			ext.contentRules = await this.command<ContentRule[]>({
+				op: 'contentRules',
+				id: ext.info.id,
+			}).catch(() => []);
+		return ext.contentRules;
+	}
+
+	/**
+	 * declarativeContent: whether a rule's conditions hold for the tab's
+	 * page, judged by its URL (PageStateMatcher's pageUrl; its css and
+	 * isBookmarked conditions are not judged, and do not hold), and what
+	 * its actions show and set there
+	 */
+	#judgeContent(tabId: number, url: string, only?: HubExtension) {
+		for (const ext of only ? [only] : this.#extensions.values()) {
+			if (!ext.info.permissions.includes('declarativeContent')) continue;
+			const judge = async () => {
+				const rules = await this.#contentRules(ext);
+				let show = false;
+				let icons: Record<string, string> | null = null;
+				const shown = displayExtensionURL(url);
+				for (const rule of [...rules].sort(
+					(a, b) => Number(a.priority ?? 100) - Number(b.priority ?? 100),
+				)) {
+					const holds = (rule.conditions ?? []).some(
+						(condition) =>
+							!condition.css &&
+							!condition.isBookmarked &&
+							pageUrlMatches(
+								(condition.pageUrl ?? {}) as Record<string, unknown>,
+								shown,
+							),
+					);
+					if (!holds) continue;
+					for (const action of rule.actions ?? []) {
+						const type = String(action.instanceType ?? '');
+						if (/Show(Page)?Action$/.test(type)) show = true;
+						else if (/SetIcon$/.test(type) && action.icons)
+							icons = action.icons as Record<string, string>;
+					}
+				}
+				const before = ext.contentState.get(tabId);
+				if (show || icons) ext.contentState.set(tabId, { show, icons });
+				else ext.contentState.delete(tabId);
+				if (
+					!!before?.show !== show ||
+					JSON.stringify(before?.icons ?? null) !== JSON.stringify(icons)
+				)
+					this.#host.notify({ type: 'action', id: ext.info.id, tabId });
+			};
+			judge().catch(() => {});
+		}
+	}
+
+	/** visible on the tab (GetIsVisible): its tab value, then declarativeContent's, then its default */
+	#visible(ext: HubExtension, tabId: number | null): boolean {
+		const own = tabId === null ? undefined : ext.tabAction.get(tabId)?.enabled;
+		if (typeof own === 'boolean') return own;
+		if (tabId !== null && ext.contentState.get(tabId)?.show) return true;
+		if (typeof ext.action.enabled === 'boolean') return ext.action.enabled;
+		// a page action starts hidden, a browser action (and MV3's) shown
+		return !ext.info.manifest.page_action || !!ext.info.manifest.action;
+	}
+
+	/** whether the extension asks for the site of `url` (its requested hosts) */
+	#wants(ext: HubExtension, url: string): boolean {
+		return ext.info.requestedHosts.some((pattern) => urlMatches(pattern, url));
+	}
+
+	/** how the extension stands with the tab's site (SitePermissionsHelper::GetSiteInteraction) */
+	async #siteInteraction(
+		ext: HubExtension,
+		tabId: number | null,
+	): Promise<{ interaction: SiteInteraction; url: string | null }> {
+		const url =
+			tabId === null
+				? null
+				: String((await this.#tab(tabId).catch(() => null))?.url ?? '');
+		if (tabId === null || !url || restrictedURL(url))
+			return { interaction: 'none', url };
+		if (ext.grantedTabs.has(tabId)) return { interaction: 'granted', url };
+		if (this.#wants(ext, url)) {
+			const access = ext.info.siteAccess;
+			const granted =
+				!access.withheld || access.sites.includes(new URL(url).origin);
+			return { interaction: granted ? 'granted' : 'withheld', url };
+		}
+		if (ext.blockedTabs.has(tabId)) return { interaction: 'withheld', url };
+		if (ext.info.permissions.includes('activeTab'))
+			return { interaction: 'activeTab', url };
+		return { interaction: 'none', url };
+	}
+
 	/** the action as the host shows it: its manifest's defaults, then what the extension set */
 	async actionState(id: string, tabId: number | null): Promise<ActionState> {
 		const ext = this.#found(id);
+		if (
+			ext.contentRules === null &&
+			tabId !== null &&
+			ext.info.permissions.includes('declarativeContent')
+		) {
+			await this.#contentRules(ext);
+			const tab = await this.#tab(tabId).catch(() => null);
+			if (tab) this.#judgeContent(tabId, String(tab.url), ext);
+		}
 		const raw = this.#rawAction(ext, tabId);
-		const manifest = ext.info.manifest;
-		const declared =
-			manifest.action ?? manifest.browser_action ?? manifest.page_action;
+		const declared = this.#declared(ext);
 		const popup =
 			raw.popup === null ? (declared?.default_popup ?? null) : raw.popup;
-		const icon = raw.icon ?? ext.info.iconUrl;
+		// the icon: the tab's setIcon, declarativeContent's SetIcon, the
+		// extension's setIcon, its manifest's; at 16 pixels, 32 on a 2x screen
+		const tabIcons =
+			tabId === null ? undefined : ext.tabAction.get(tabId)?.icons;
+		const icons =
+			tabIcons ??
+			(tabId === null ? null : ext.contentState.get(tabId)?.icons) ??
+			ext.action.icons ??
+			ext.info.actionIcons;
+		const size =
+			typeof devicePixelRatio === 'number' && devicePixelRatio > 1 ? 32 : 16;
+		const icon = icons ? pickIconSize(icons, size) : null;
+		const { interaction } = await this.#siteInteraction(ext, tabId);
+		const visible = this.#visible(ext, tabId);
+		const title = raw.title || declared?.default_title || ext.info.name;
+		const badge = badgeColors(raw.badgeColor, raw.badgeTextColor);
 		return {
-			title: raw.title ?? declared?.default_title ?? ext.info.name,
+			title,
 			iconUrl:
 				icon && !/^(data|blob):/.test(icon)
 					? await this.#host.route(icon)
 					: icon,
 			badgeText: raw.badgeText,
-			badgeColor: raw.badgeColor,
-			badgeTextColor: raw.badgeTextColor,
-			popupUrl: popup ? extensionURL(id, popup.replace(/^\/+/, '')) : null,
-			enabled: raw.enabled && (!manifest.page_action || raw.enabled),
+			badgeColor: badge.background,
+			badgeTextColor: badge.text,
+			popupUrl: popup ? extensionURL(id, cleanPath(popup)) : null,
+			enabled:
+				visible || interaction === 'withheld' || interaction === 'activeTab',
+			visible,
+			siteInteraction: interaction,
+			wantsToRun: tabId !== null && ext.blockedTabs.has(tabId),
+			tooltip:
+				interaction === 'granted'
+					? `${title}\n${MENU_TEXT.hasAccess}`
+					: interaction === 'none'
+						? title
+						: `${title}\n${MENU_TEXT.wantsAccess}`,
 		};
 	}
 
+	/** every button: the pinned in their order, then the others by name (the extensions menu's order) */
 	async actions(tabId: number | null): Promise<ExtensionAction[]> {
 		await this.ready;
 		const rows: ExtensionAction[] = [];
@@ -1363,20 +1685,49 @@ export class ExtensionHub {
 				rows.push({
 					id: ext.info.id,
 					name: ext.info.name,
+					pinned: ext.info.pinned,
 					...(await this.actionState(ext.info.id, tabId)),
 				});
-		return rows;
+		const order = (row: ExtensionAction) =>
+			this.#extensions.get(row.id)?.info.pinOrder ?? Infinity;
+		return rows.sort(
+			(a, b) =>
+				order(a) - order(b) ||
+				a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
+		);
 	}
 
-	/** a click on the toolbar button: the popup, or action.onClicked in the background */
+	/** grant the extension the tab (activeTab, its withheld sites): its waiting scripts run */
+	async #grant(ext: HubExtension, tabId: number) {
+		const { interaction } = await this.#siteInteraction(ext, tabId);
+		if (
+			!ext.info.permissions.includes('activeTab') &&
+			interaction !== 'withheld'
+		)
+			return;
+		await this.command({ op: 'grant', id: ext.info.id, tabId }).catch(() => {});
+		ext.grantedTabs.add(tabId);
+		ext.blockedTabs.delete(tabId);
+		this.#post(ext, { t: 'unblock', tabId });
+		this.#host.notify({ type: 'action', id: ext.info.id, tabId });
+	}
+
+	/**
+	 * A click on the toolbar button, as Chrome runs it
+	 * (ExtensionActionViewModel::ExecuteUserAction, RunAction): a disabled
+	 * one opens its menu; scripts waiting on the tab only run; else the
+	 * click grants activeTab, then shows the popup or tells action.onClicked
+	 */
 	async click(id: string, tabId: number | null): Promise<ClickResult> {
 		const ext = this.#found(id);
 		const state = await this.actionState(id, tabId);
 		if (!state.enabled) return 'disabled';
-		// the click grants activeTab for the tab, until it navigates
-		// (declarativeNetRequest's rules for the tab, as in Chrome)
-		if (tabId !== null && ext.info.permissions.includes('activeTab'))
-			await this.command({ op: 'grant', id, tabId }).catch(() => {});
+		if (tabId !== null && state.wantsToRun) {
+			await this.#grant(ext, tabId);
+			return 'granted';
+		}
+		if (tabId !== null) await this.#grant(ext, tabId);
+		if (!state.visible) return 'granted';
 		if (state.popupUrl) return 'popup';
 		this.#startBackground(ext);
 		await ext.backgroundReady;
@@ -1390,6 +1741,452 @@ export class ExtensionHub {
 					: 'browserAction.onClicked';
 		this.#post(ext, { t: 'event', name: event, args: [tab] });
 		return 'clicked';
+	}
+
+	/** pin the button to the toolbar (after the pinned ones), or unpin it */
+	async pin(id: string, pinned: boolean): Promise<ExtensionInfo> {
+		this.#found(id);
+		const info = await this.command<ExtensionInfo>({ op: 'pin', id, pinned });
+		await this.refresh();
+		return info;
+	}
+
+	/**
+	 * Its site access, as its menu's "This can read and change site data"
+	 * sets it: on a click, on the tab's site, on all sites. Granting the
+	 * tab's site runs the scripts that waited there
+	 */
+	async setSiteAccess(
+		id: string,
+		access: 'click' | 'site' | 'all',
+		tabId: number | null,
+	): Promise<ExtensionInfo> {
+		const ext = this.#found(id);
+		const url =
+			tabId === null
+				? ''
+				: String((await this.#tab(tabId).catch(() => null))?.url ?? '');
+		const info = await this.command<ExtensionInfo>({
+			op: 'siteAccess',
+			id,
+			access,
+			...(url ? { url } : {}),
+		});
+		await this.refresh();
+		if (tabId !== null && access !== 'click' && ext.blockedTabs.delete(tabId))
+			this.#post(ext, { t: 'unblock', tabId });
+		this.#host.notify({
+			type: 'action',
+			id,
+			...(tabId === null ? {} : { tabId }),
+		});
+		return info;
+	}
+
+	/**
+	 * The menu of an extension's button (or of its row in the extensions
+	 * menu, `source` `menu`), as Chrome's ExtensionContextMenuModel::InitMenu
+	 * makes it in 157: its name, its own items, its site access, Options,
+	 * Remove, Pin, Manage extension, View web permissions, Inspect popup
+	 */
+	async contextMenu(
+		id: string,
+		options: MenuOptions,
+	): Promise<ExtensionMenuEntry[]> {
+		const ext = this.#found(id);
+		const info = ext.info;
+		const tabId = options.tabId ?? null;
+		const entries: ExtensionMenuEntry[] = [
+			{
+				type: 'item',
+				command: 'home',
+				label: info.name,
+				enabled: !!info.homepageUrl,
+				...(info.homepageUrl ? { url: info.homepageUrl } : {}),
+			},
+		];
+		const items = this.#actionItems(ext);
+		if (items.length) entries.push({ type: 'separator' }, ...items);
+		entries.push({ type: 'separator' });
+		const { url } = await this.#siteInteraction(ext, tabId);
+		const restricted = !url || restrictedURL(url);
+		const activeTab = info.permissions.includes('activeTab') && !restricted;
+		const canAffect = info.requestedHosts.length > 0 && !info.policy;
+		if (url && (canAffect || activeTab)) {
+			const wants = !restricted && this.#wants(ext, url);
+			const allLike = info.requestedHosts.some(allSitesPattern);
+			if (restricted || (!activeTab && !wants))
+				entries.push({
+					type: 'item',
+					command: 'cantAccess',
+					label: MENU_TEXT.cantAccess,
+					enabled: false,
+				});
+			else {
+				const site = new URL(url);
+				const access = info.siteAccess;
+				const checked =
+					wants && !access.withheld && allLike
+						? 'all'
+						: wants && (!access.withheld || access.sites.includes(site.origin))
+							? 'site'
+							: 'click';
+				entries.push({
+					type: 'submenu',
+					command: 'siteAccess',
+					label: MENU_TEXT.access,
+					children: [
+						{
+							type: 'radio',
+							command: 'site:click',
+							label: MENU_TEXT.onClick,
+							enabled: wants || activeTab,
+							checked: checked === 'click',
+						},
+						{
+							type: 'radio',
+							command: 'site:site',
+							label: MENU_TEXT.onSite(site.hostname.replace(/^www\./, '')),
+							enabled: wants,
+							checked: checked === 'site',
+						},
+						{
+							type: 'radio',
+							command: 'site:all',
+							label: MENU_TEXT.onAll,
+							enabled: allLike,
+							checked: checked === 'all',
+						},
+						{ type: 'separator' },
+						{
+							type: 'item',
+							command: 'learnMore',
+							label: MENU_TEXT.learnMore,
+							url: SITE_ACCESS_HELP,
+						},
+					],
+				});
+			}
+			entries.push({ type: 'separator' });
+		}
+		if (info.optionsUrl)
+			entries.push({
+				type: 'item',
+				command: 'options',
+				label: MENU_TEXT.options,
+			});
+		entries.push(
+			info.policy
+				? {
+						type: 'item',
+						command: 'policy',
+						label: MENU_TEXT.policy,
+						enabled: false,
+					}
+				: {
+						type: 'item',
+						command: 'uninstall',
+						label: MENU_TEXT.remove(options.browserName ?? 'Chrome'),
+					},
+		);
+		if ((options.source ?? 'toolbar') === 'toolbar' && info.hasAction)
+			entries.push(
+				info.pinned
+					? { type: 'item', command: 'unpin', label: MENU_TEXT.unpin }
+					: { type: 'item', command: 'pin', label: MENU_TEXT.pin },
+			);
+		entries.push(
+			{ type: 'separator' },
+			{ type: 'item', command: 'manage', label: MENU_TEXT.manage },
+			{ type: 'item', command: 'permissions', label: MENU_TEXT.permissions },
+		);
+		if (options.developerMode && info.hasAction) {
+			const state = await this.actionState(id, tabId);
+			entries.push(
+				{ type: 'separator' },
+				{
+					type: 'item',
+					command: 'inspect',
+					label: MENU_TEXT.inspect,
+					enabled: !!state.popupUrl,
+				},
+			);
+		}
+		return tidyMenu(entries);
+	}
+
+	/** the extension's own items an action menu shows (ContextMenuMatcher, its action filter) */
+	#actionItems(ext: HubExtension): ExtensionMenuEntry[] {
+		const manifest = ext.info.manifest;
+		const context =
+			Number(ext.info.manifestVersion) >= 3
+				? 'action'
+				: manifest.page_action
+					? 'page_action'
+					: 'browser_action';
+		const all = [...ext.menus.values()];
+		const relevant = (parent: unknown) =>
+			all.filter((item) => {
+				if ((item.parentId ?? null) !== (parent ?? null)) return false;
+				const contexts = Array.isArray(item.contexts)
+					? (item.contexts as string[])
+					: ['page'];
+				return contexts.includes('all') || contexts.includes(context);
+			});
+		const build = (
+			items: Record<string, unknown>[],
+			top: boolean,
+		): ExtensionMenuEntry[] => {
+			const out: ExtensionMenuEntry[] = [];
+			let last = 'normal';
+			let shown = 0;
+			for (const [index, item] of items.entries()) {
+				const type = String(item.type ?? 'normal');
+				// a run of radios has a separator before and after it
+				if (last === 'radio' && type !== 'radio') {
+					out.push({ type: 'separator' });
+					last = 'separator';
+				}
+				if (top && shown >= ACTION_MENU_LIMIT) break;
+				const visible = item.visible !== false;
+				if (visible) shown++;
+				const label = menuTitle(String(item.title ?? ''));
+				const enabled = item.enabled !== false;
+				const menuItemId = String(item.id);
+				if (type === 'separator') out.push({ type: 'separator' });
+				else if (type === 'checkbox' || type === 'radio') {
+					if (type === 'radio' && index > 0 && last !== 'radio')
+						out.push({ type: 'separator' });
+					if (visible)
+						out.push({
+							type,
+							command: 'item',
+							label,
+							enabled,
+							checked: item.checked === true,
+							menuItemId,
+						});
+				} else if (visible) {
+					const children = build(relevant(item.id), false);
+					out.push(
+						children.length
+							? {
+									type: 'submenu',
+									command: 'item',
+									label,
+									enabled,
+									menuItemId,
+									children,
+								}
+							: { type: 'item', command: 'item', label, enabled, menuItemId },
+					);
+				}
+				last = type;
+			}
+			return out;
+		};
+		return build(relevant(null), true);
+	}
+
+	/**
+	 * Run an entry of `contextMenu()` that the hub carries out: `pin`,
+	 * `unpin`, `site:click`, `site:site`, `site:all`, and `item` (the
+	 * extension's own: contextMenus.onClicked, with Chrome's info for an
+	 * action menu, the tab, and activeTab granted)
+	 */
+	async runMenuCommand(
+		id: string,
+		command: string,
+		options: { tabId: number | null; menuItemId?: string },
+	): Promise<void> {
+		const ext = this.#found(id);
+		const tabId = options.tabId ?? null;
+		switch (command) {
+			case 'pin':
+			case 'unpin':
+				await this.pin(id, command === 'pin');
+				return;
+			case 'site:click':
+			case 'site:site':
+			case 'site:all':
+				await this.setSiteAccess(
+					id,
+					command.slice(5) as 'click' | 'site' | 'all',
+					tabId,
+				);
+				return;
+			case 'item': {
+				const item = ext.menus.get(String(options.menuItemId));
+				if (!item)
+					throw new ExtensionError(
+						'not-found',
+						`No menu item ${options.menuItemId}.`,
+					);
+				const info: Record<string, unknown> = {
+					menuItemId: item.id,
+					...(item.parentId !== undefined && item.parentId !== null
+						? { parentMenuItemId: item.parentId }
+						: {}),
+					editable: false,
+				};
+				const type = String(item.type ?? 'normal');
+				if (type === 'checkbox' || type === 'radio') {
+					const was = item.checked === true;
+					info.wasChecked = was;
+					info.checked = type === 'radio' ? true : !was;
+					this.#check(ext, item, info.checked as boolean);
+				}
+				if (tabId !== null) await this.#grant(ext, tabId);
+				this.#startBackground(ext);
+				await ext.backgroundReady;
+				const tab =
+					tabId === null
+						? undefined
+						: await this.#tab(tabId).catch(() => undefined);
+				this.#post(ext, {
+					t: 'event',
+					name: 'contextMenus.onClicked',
+					args: [info, tab],
+				});
+				return;
+			}
+			default:
+				throw new ExtensionError(
+					'unsupported',
+					`${command} is a command the host carries out.`,
+				);
+		}
+	}
+
+	/** a checkbox's or radio's new state (a radio unchecks the others of its run) */
+	#check(ext: HubExtension, item: Record<string, unknown>, checked: boolean) {
+		item.checked = checked;
+		if (item.type === 'radio' && checked) {
+			const siblings = [...ext.menus.values()].filter(
+				(other) => (other.parentId ?? null) === (item.parentId ?? null),
+			);
+			const at = siblings.indexOf(item);
+			for (const step of [-1, 1])
+				for (
+					let index = at + step;
+					siblings[index]?.type === 'radio';
+					index += step
+				)
+					siblings[index].checked = false;
+		}
+		this.#host.notify({ type: 'menus', id: ext.info.id });
+	}
+
+	/** the extensions' keyboard shortcuts (manifest `commands`), as suggested for this platform */
+	async commands(): Promise<ExtensionShortcut[]> {
+		await this.ready;
+		const platform =
+			typeof navigator === 'undefined'
+				? 'linux'
+				: /Mac/i.test(navigator.platform)
+					? 'mac'
+					: /Win/i.test(navigator.platform)
+						? 'windows'
+						: /CrOS/.test(navigator.userAgent)
+							? 'chromeos'
+							: 'linux';
+		const out: ExtensionShortcut[] = [];
+		for (const ext of this.#extensions.values()) {
+			const commands = (ext.info.manifest.commands ?? {}) as Record<
+				string,
+				{
+					description?: string;
+					suggested_key?: Record<string, string> | string;
+				}
+			>;
+			for (const [name, command] of Object.entries(commands)) {
+				const suggested = command?.suggested_key;
+				const shortcut =
+					typeof suggested === 'string'
+						? suggested
+						: (suggested?.[platform] ?? suggested?.default ?? '');
+				out.push({
+					id: ext.info.id,
+					name,
+					description: String(command?.description ?? ''),
+					shortcut,
+				});
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * Run an extension's command, as its shortcut does: `_execute_action`
+	 * (`_execute_browser_action`, `_execute_page_action`) clicks its button,
+	 * any other tells commands.onCommand, with activeTab granted
+	 */
+	async runCommand(
+		id: string,
+		name: string,
+		tabId: number | null,
+	): Promise<CommandResult> {
+		const ext = this.#found(id);
+		if (/^_execute_(page_|browser_)?action$/.test(name)) {
+			if (!ext.info.hasAction) return 'disabled';
+			if (name === '_execute_page_action' && !this.#visible(ext, tabId))
+				return 'disabled';
+			return this.click(id, tabId);
+		}
+		if (tabId !== null) await this.#grant(ext, tabId);
+		this.#startBackground(ext);
+		await ext.backgroundReady;
+		const tab =
+			tabId === null
+				? undefined
+				: await this.#tab(tabId).catch(() => undefined);
+		this.#post(ext, {
+			t: 'event',
+			name: 'commands.onCommand',
+			args: [name, tab],
+		});
+		return 'command';
+	}
+
+	/** the public API's toolbar calls, one door for both controllers (a RemoteController's over its RPC) */
+	toolbarCall(call: ToolbarCall, args: unknown[]): Promise<unknown> {
+		const [id, a, b] = args as [string, unknown, unknown];
+		switch (call) {
+			case 'pin':
+				return this.pin(id, a === true);
+			case 'setSiteAccess':
+				return this.setSiteAccess(
+					id,
+					a as 'click' | 'site' | 'all',
+					(b as number | null) ?? null,
+				);
+			case 'contextMenu':
+				return this.contextMenu(id, (a ?? {}) as MenuOptions);
+			case 'runMenuCommand':
+				return this.runMenuCommand(
+					id,
+					String(a),
+					(b ?? { tabId: null }) as {
+						tabId: number | null;
+						menuItemId?: string;
+					},
+				);
+			case 'commands':
+				return this.commands();
+			case 'runCommand':
+				return this.runCommand(id, String(a), (b as number | null) ?? null);
+			case 'popupOpen':
+				return Promise.resolve(this.popupOpen);
+			default:
+				return Promise.reject(new Error(`${call} is not a toolbar call`));
+		}
+	}
+
+	/** whether a popup of any extension's is open (Chrome shows one at a time) */
+	get popupOpen(): boolean {
+		for (const ext of this.#extensions.values())
+			if (ext.openPopups.size) return true;
+		return false;
 	}
 
 	/** tell the extension's contexts a chrome.* event (notifications, menus) */
@@ -1454,6 +2251,222 @@ function urlMatches(pattern: string, url: string): boolean {
 	);
 }
 
+/** what `ExtensionsBackend.toolbar` carries */
+export type ToolbarCall =
+	| 'pin'
+	| 'setSiteAccess'
+	| 'contextMenu'
+	| 'runMenuCommand'
+	| 'commands'
+	| 'runCommand'
+	| 'popupOpen';
+
+/** a host page's `contextMenu()` options */
+export interface MenuOptions {
+	/** the tab the menu is about (the active one) */
+	tabId?: number | null;
+	/** `toolbar`: the button's menu (with Pin / Unpin); `menu`: its row's in the extensions menu */
+	source?: 'toolbar' | 'menu';
+	/** developer mode is on: "Inspect popup" is in it */
+	developerMode?: boolean;
+	/** the browser in "Remove from Chrome" */
+	browserName?: string;
+}
+
+/** a URL no extension may read or change (PermissionsData::IsRestrictedUrl): not a web page, or the Web Store's */
+function restrictedURL(url: string): boolean {
+	try {
+		const parsed = new URL(url);
+		return (
+			!/^(https?|file|ftp):$/.test(parsed.protocol) ||
+			parsed.hostname === STORE_SITE
+		);
+	} catch (error) {
+		return true;
+	}
+}
+
+/** a pattern that asks for every site: <all_urls>, or any host of http, https or both */
+function allSitesPattern(pattern: string): boolean {
+	return pattern === '<all_urls>' || /^(\*|https?):\/\/\*\//.test(pattern);
+}
+
+/** the icon of `icons` for `size`: the nearest bigger, else the nearest smaller */
+function pickIconSize(
+	icons: Record<string, string>,
+	size: number,
+): string | null {
+	const sizes = Object.keys(icons)
+		.map(Number)
+		.filter(Number.isFinite)
+		.sort((a, b) => a - b);
+	const best = sizes.find((candidate) => candidate >= size) ?? sizes.at(-1);
+	return best === undefined ? null : icons[String(best)];
+}
+
+/** a CSS color's [r, g, b, a] (a 0-255), as the runtime wrote it (#hex or rgba()) */
+function rgbaOf(css: string | null): [number, number, number, number] | null {
+	if (!css) return null;
+	const hex = /^#([0-9a-f]{3,8})$/i.exec(css.trim())?.[1];
+	if (hex) {
+		const full =
+			hex.length <= 4 ? [...hex].map((char) => char + char).join('') : hex;
+		const at = (index: number) => parseInt(full.slice(index, index + 2), 16);
+		return [at(0), at(2), at(4), full.length === 8 ? at(6) : 255];
+	}
+	const parts = /rgba?\(([^)]+)\)/i
+		.exec(css)?.[1]
+		.split(/[,\s/]+/)
+		.filter(Boolean)
+		.map(Number);
+	if (!parts || parts.length < 3) return null;
+	return [
+		parts[0],
+		parts[1],
+		parts[2],
+		parts[3] === undefined ? 255 : Math.round(parts[3] * 255),
+	];
+}
+
+/** white or #202124, whichever stands out more on `rgb` (color_utils::GetColorWithMaxContrast) */
+function maxContrast([r, g, b]: number[]): string {
+	const linear = (value: number) => {
+		const c = value / 255;
+		return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+	};
+	const luminance = (red: number, green: number, blue: number) =>
+		0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue);
+	const own = luminance(r, g, b);
+	const dark = luminance(0x20, 0x21, 0x24);
+	return 1.05 / (own + 0.05) >= (own + 0.05) / (dark + 0.05)
+		? '#ffffff'
+		: '#202124';
+}
+
+/**
+ * The badge's colors as Chrome draws them (IconWithBadgeImageSource): a
+ * transparent background is the default (null), any other is made
+ * opaque; the text's own color, else the one that stands out more
+ */
+function badgeColors(
+	background: string | null,
+	text: string | null,
+): { background: string | null; text: string | null } {
+	const bg = rgbaOf(background);
+	const solid = bg && bg[3] > 0 ? bg : null;
+	const fg = rgbaOf(text);
+	return {
+		background: solid ? `rgb(${solid[0]}, ${solid[1]}, ${solid[2]})` : null,
+		text:
+			fg && fg[3] > 0
+				? `rgba(${fg[0]}, ${fg[1]}, ${fg[2]}, ${fg[3] / 255})`
+				: solid
+					? maxContrast(solid)
+					: null,
+	};
+}
+
+/** a menu item's title as Chrome shows it: `%s` empty, cut at a word to 75 characters, `&&` as `&` */
+function menuTitle(title: string): string {
+	let text = title.replace(/%s/g, '');
+	if (text.length > MENU_TITLE_MAX) {
+		const cut = text.slice(0, MENU_TITLE_MAX - 1);
+		const space = cut.lastIndexOf(' ');
+		text = `${(space > 0 ? cut.slice(0, space) : cut).trimEnd()}…`;
+	}
+	// a lone & marks the mnemonic (not drawn), && is one &
+	return text.replace(/&(&?)/g, (_, double: string) => double);
+}
+
+/** no separator first, last or after another (a views menu drops them) */
+function tidyMenu(entries: ExtensionMenuEntry[]): ExtensionMenuEntry[] {
+	const out: ExtensionMenuEntry[] = [];
+	for (const entry of entries) {
+		if (
+			entry.type === 'separator' &&
+			(!out.length || out.at(-1)!.type === 'separator')
+		)
+			continue;
+		out.push(
+			entry.type === 'separator'
+				? entry
+				: {
+						enabled: true,
+						...entry,
+						...(entry.children ? { children: tidyMenu(entry.children) } : {}),
+					},
+		);
+	}
+	while (out.at(-1)?.type === 'separator') out.pop();
+	return out;
+}
+
+/** declarativeContent's PageStateMatcher pageUrl (UrlFilter) against a page's URL */
+function pageUrlMatches(
+	filter: Record<string, unknown>,
+	href: string,
+): boolean {
+	let url: URL;
+	try {
+		url = new URL(href);
+	} catch (error) {
+		return false;
+	}
+	const host = url.hostname;
+	const path = url.pathname;
+	const query = url.search.replace(/^\?/, '');
+	const noRef = href.split('#')[0];
+	const text = (key: string) =>
+		typeof filter[key] === 'string' ? String(filter[key]) : null;
+	const checks: [string, (value: string) => boolean][] = [
+		['hostContains', (value) => `.${host}`.includes(value)],
+		['hostEquals', (value) => host === value.toLowerCase()],
+		['hostPrefix', (value) => host.startsWith(value.toLowerCase())],
+		['hostSuffix', (value) => `.${host}`.endsWith(value.toLowerCase())],
+		['pathContains', (value) => path.includes(value)],
+		['pathEquals', (value) => path === value],
+		['pathPrefix', (value) => path.startsWith(value)],
+		['pathSuffix', (value) => path.endsWith(value)],
+		['queryContains', (value) => query.includes(value)],
+		['queryEquals', (value) => query === value],
+		['queryPrefix', (value) => query.startsWith(value)],
+		['querySuffix', (value) => query.endsWith(value)],
+		['urlContains', (value) => noRef.includes(value)],
+		['urlEquals', (value) => noRef === value],
+		['urlPrefix', (value) => noRef.startsWith(value)],
+		['urlSuffix', (value) => noRef.endsWith(value)],
+		['urlMatches', (value) => new RegExp(value).test(noRef)],
+		[
+			'originAndPathMatches',
+			(value) => new RegExp(value).test(url.origin + path),
+		],
+	];
+	for (const [key, check] of checks) {
+		const value = text(key);
+		if (value !== null && !check(value)) return false;
+	}
+	if (
+		Array.isArray(filter.schemes) &&
+		!filter.schemes.includes(url.protocol.slice(0, -1))
+	)
+		return false;
+	if (Array.isArray(filter.ports)) {
+		const port = Number(
+			url.port ||
+				(url.protocol === 'https:' ? 443 : url.protocol === 'http:' ? 80 : 0),
+		);
+		if (
+			!filter.ports.some((entry) =>
+				Array.isArray(entry)
+					? port >= Number(entry[0]) && port <= Number(entry[1])
+					: port === Number(entry),
+			)
+		)
+			return false;
+	}
+	return true;
+}
+
 // ---- the public API -------------------------------------------------------
 
 /** what `controller.extensions` needs: the hub (local or over the frame's RPC) and routing */
@@ -1462,6 +2475,8 @@ export interface ExtensionsBackend {
 	actionState(id: string, tabId: number | null): Promise<ActionState>;
 	actions(tabId: number | null): Promise<ExtensionAction[]>;
 	click(id: string, tabId: number | null): Promise<ClickResult>;
+	/** the toolbar's other calls (ExtensionHub.toolbarCall) */
+	toolbar(call: ToolbarCall, args: unknown[]): Promise<unknown>;
 	dispatch(id: string, name: string, args: unknown[]): Promise<void>;
 	menus(id: string): Promise<Record<string, unknown>[]>;
 	/** the popup of `url` the host mounts next is the extension's popup for the tab */
@@ -1600,6 +2615,7 @@ export class Extensions {
 			actionState: coded(backend.actionState.bind(backend)),
 			actions: coded(backend.actions.bind(backend)),
 			click: coded(backend.click.bind(backend)),
+			toolbar: coded(backend.toolbar.bind(backend)),
 			dispatch: coded(backend.dispatch.bind(backend)),
 			menus: coded(backend.menus.bind(backend)),
 			expectPopup: coded(backend.expectPopup.bind(backend)),
@@ -1884,6 +2900,101 @@ export class Extensions {
 	}
 
 	/**
+	 * Pin the extension's button to the toolbar, or unpin it (Chrome keeps
+	 * the order: a pinned one goes after the others). Chrome 157 pins an
+	 * extension with a button when it is installed. The extension hears
+	 * action.onUserSettingsChanged
+	 */
+	pin(id: string, pinned = true): Promise<ExtensionInfo> {
+		return this.#backend.toolbar('pin', [id, pinned]) as Promise<ExtensionInfo>;
+	}
+
+	/**
+	 * The extension's site access, as its menu's "This can read and change
+	 * site data" sets it for the tab's site: `click` (When you click the
+	 * extension), `site` (On <site>), `all` (On all sites). A withheld site
+	 * holds its content scripts and requests until a click on its button
+	 */
+	setSiteAccess(
+		id: string,
+		access: 'click' | 'site' | 'all',
+		tabId: number | null = this.#backend.activeTab(),
+	): Promise<ExtensionInfo> {
+		return this.#backend.toolbar('setSiteAccess', [
+			id,
+			access,
+			tabId,
+		]) as Promise<ExtensionInfo>;
+	}
+
+	/**
+	 * The menu of the extension's button (right click, or its row's More
+	 * button in the extensions menu with `source: 'menu'`), entry by entry
+	 * as Chrome 157 makes it. Draw it, and on a choice do `home`,
+	 * `options`, `uninstall`, `manage`, `permissions`, `learnMore` and
+	 * `inspect` yourself; pass the rest to `runMenuCommand`
+	 */
+	contextMenu(
+		id: string,
+		options: MenuOptions = {},
+	): Promise<ExtensionMenuEntry[]> {
+		return this.#backend.toolbar('contextMenu', [
+			id,
+			{
+				...options,
+				tabId:
+					options.tabId === undefined
+						? this.#backend.activeTab()
+						: options.tabId,
+			},
+		]) as Promise<ExtensionMenuEntry[]>;
+	}
+
+	/** carry out an entry of `contextMenu()`: pin, unpin, site:click, site:site, site:all, item */
+	async runMenuCommand(
+		id: string,
+		entry: ExtensionMenuEntry | string,
+		tabId: number | null = this.#backend.activeTab(),
+	): Promise<void> {
+		const command = typeof entry === 'string' ? entry : String(entry.command);
+		await this.#backend.toolbar('runMenuCommand', [
+			id,
+			command,
+			{
+				tabId,
+				...(typeof entry === 'object' && entry.menuItemId !== undefined
+					? { menuItemId: entry.menuItemId }
+					: {}),
+			},
+		]);
+	}
+
+	/** every enabled extension's keyboard shortcuts (manifest `commands`) */
+	commands(): Promise<ExtensionShortcut[]> {
+		return this.#backend.toolbar('commands', []) as Promise<
+			ExtensionShortcut[]
+		>;
+	}
+
+	/**
+	 * Run a command, as its shortcut does: `_execute_action` acts as a click
+	 * of the button (`popup`: show it with `mountPopup`; a host closes an
+	 * open popup of the extension's instead, as Chrome does), any other
+	 * tells commands.onCommand (`command`)
+	 */
+	runCommand(
+		id: string,
+		name: string,
+		tabId: number | null = this.#backend.activeTab(),
+	): Promise<CommandResult> {
+		return this.#backend.toolbar('runCommand', [
+			id,
+			name,
+			tabId,
+		]) as Promise<CommandResult>;
+	}
+
+	/**
 	 * Show the extension's popup in an element of the host's (an iframe it
 	 * placed): sized as the popup's document asks, clamped as Chrome clamps
 	 * it, closed when the popup calls window.close()
@@ -1931,14 +3042,19 @@ export class Extensions {
 		const result = await this.#backend.click(id, tabId);
 		if (result !== 'popup') return null;
 		const element = document.createElement('iframe');
+		// Chrome's bubble: square, a 1 px border and two shadows, its content's
+		// right edge 1 px inside the button's and its top 1 px below it
 		element.style.cssText =
-			'position:fixed;z-index:2147483647;border:0;border-radius:8px;box-shadow:0 2px 12px rgba(0,0,0,.3);background:#fff;width:25px;height:25px';
+			'position:fixed;z-index:2147483647;box-sizing:content-box;border:1px solid rgba(0,0,0,.2);border-radius:0;box-shadow:0 2px 8px rgba(0,0,0,.2),0 2px 12px rgba(0,0,0,.1);background:#fff;width:25px;height:25px';
 		const at = options.at;
-		if (at instanceof HTMLElement) {
+		const place = (width: number) => {
+			if (!(at instanceof HTMLElement)) return;
 			const box = at.getBoundingClientRect();
-			element.style.left = `${Math.max(0, box.right - 25)}px`;
-			element.style.top = `${box.bottom + 4}px`;
-		} else if (at) {
+			element.style.left = `${Math.max(0, Math.min(innerWidth - width - 2, box.right - width - 2))}px`;
+			element.style.top = `${box.bottom}px`;
+		};
+		if (at instanceof HTMLElement) place(25);
+		else if (at) {
 			element.style.left = `${at.x}px`;
 			element.style.top = `${at.y}px`;
 		} else {
@@ -1951,10 +3067,7 @@ export class Extensions {
 		popup.onResize((size) => {
 			element.style.width = `${size.width}px`;
 			element.style.height = `${size.height}px`;
-			if (at instanceof HTMLElement) {
-				const box = at.getBoundingClientRect();
-				element.style.left = `${Math.max(0, Math.min(innerWidth - size.width, box.right - size.width))}px`;
-			}
+			place(size.width);
 		});
 		return popup;
 	}

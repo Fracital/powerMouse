@@ -5,13 +5,20 @@
 //  - the page adds a .zip (its card: name, version, where it came from,
 //    its permissions in Chrome's words), says what a bad Web Store address
 //    did, turns an extension off and on, and removes it after asking;
-//  - the bar's button for the extension, its initial for an icon and the
-//    badge its background set for the tab, after the address box;
-//  - a click shows its popup under the button, in the menu's popover, sized
+//  - the bar's button for the extension (pinned as Chrome 157 pins a new
+//    one), its initial for an icon, the badge its background set for the
+//    tab and Chrome's tooltip, after the address box;
+//  - a click shows its popup under the button, in Chrome's bubble, sized
 //    as its document asks; the popup's window.close() closes it, and so do
 //    a click outside and Escape, which unload it;
-//  - its menu (a right click): the extension's own action items, Options,
-//    Manage extension, Remove; an item chosen reaches the background;
+//  - its menu (a right click), entry for entry Chrome 157's: its name, its
+//    own action items, its site access submenu, Options, Remove, Unpin,
+//    Manage extension, View web permissions; the arrows move and open the
+//    submenu, an item chosen reaches the background;
+//  - the puzzle piece's list as Chrome's extensions menu: the sections by
+//    access, the pin; unpinned, the button leaves the bar and pops out
+//    while its popup shows;
+//  - Remove from its menu asks in Chrome's dialog, then it is gone;
 //  - Options opens its page in a tab whose bar shows chrome-extension://,
 //    and such an address typed in the bar opens it; no shields there;
 //  - the content script runs in the tab's page;
@@ -226,15 +233,43 @@ async function browsing(base, viewport = {}) {
 	return page;
 }
 
-/** add the probe through the Extensions page (opened from the puzzle's list) */
+/** the submenu: open, beside its item, its rows (checked, off), the focus */
+const subMenuState = (page) =>
+	page.evaluate(() => {
+		const sub = document.querySelector('.extSubmenu');
+		const owner = document.querySelector(
+			'[aria-haspopup="menu"][aria-expanded="true"]',
+		);
+		const r = sub.getBoundingClientRect();
+		const o = owner?.getBoundingClientRect();
+		return {
+			open: !sub.classList.contains('hidden'),
+			entries: [...sub.children].map((item) =>
+				item.classList.contains('extMenuRule')
+					? '---'
+					: `${item.getAttribute('aria-checked') === 'true' ? '(x) ' : ''}${item.disabled ? '(off) ' : ''}${(item.querySelector('.extMenuLabel') ?? item).textContent.trim()}`,
+			),
+			expanded: document
+				.getElementById('menuExtensions')
+				.getAttribute('aria-expanded'),
+			beside: !!o && (r.left >= o.right - 1 || r.right <= o.left + 1),
+			focused: document.activeElement?.textContent?.trim(),
+		};
+	});
+
+/** add the probe through the Extensions page (from the puzzle's list, or the menu's Extensions) */
 async function addProbe(page, { viaMenu = false } = {}) {
 	if (viaMenu) {
 		await page.click('#toolMenu');
 		await painted(page);
 		await page.click('#menuExtensions');
-	} else await page.click('#toolExtensions');
-	await painted(page);
-	await page.click('#extPanel .extManage');
+		await painted(page);
+		await page.click('.extSubmenu [data-command="manage"]');
+	} else {
+		await page.click('#toolExtensions');
+		await painted(page);
+		await page.click('#extPanel .extManage');
+	}
 	await painted(page);
 	await page.setInputFiles('#spExtFileInput', PROBE_FILE);
 	const added = await until(
@@ -403,7 +438,7 @@ ok(
 	"the bar's button: its title, its initial, the badge and colour its background set",
 	buttons.length === 1 &&
 		buttons[0].id === id &&
-		buttons[0].label === 'Demo probe' &&
+		buttons[0].label === 'Demo probe\nHas access to this site' &&
 		buttons[0].letter === 'D' &&
 		buttons[0].badge === '7' &&
 		buttons[0].badgeColor === 'rgb(221, 51, 51)' &&
@@ -493,22 +528,30 @@ await page.click(`#extActions .extAction[data-ext="${id}"]`, {
 await painted(page);
 const menu = await page.evaluate(() => ({
 	open: getComputedStyle(document.getElementById('extMenu')).display !== 'none',
-	head: document.querySelector('#extMenu .extPanelHead')?.textContent,
-	items: [...document.querySelectorAll('#extMenu .pmMenuItem')].map((item) =>
-		item.textContent.trim(),
+	entries: [...document.querySelectorAll('#extMenu > *')].map((item) =>
+		item.classList.contains('extMenuRule')
+			? '---'
+			: `${item.disabled ? '(off) ' : ''}${item.textContent.trim()}`,
 	),
 	focused: document.activeElement?.textContent?.trim(),
 }));
 ok(
-	'a right click opens its menu: its action items (not its page ones), Options, Manage, Remove',
+	"a right click opens its menu, Chrome 157's: its name, its action items (not its page ones), site access, Options, Remove, Unpin, Manage, View web permissions",
 	menu.open &&
-		menu.head === NAME &&
-		JSON.stringify(menu.items) ===
+		JSON.stringify(menu.entries) ===
 			JSON.stringify([
+				`(off) ${NAME}`,
+				'---',
 				'Say hi',
+				'---',
+				'This can read and change site data',
+				'---',
 				'Options',
-				'Manage extension',
 				'Remove from powerMouse',
+				'Unpin',
+				'---',
+				'Manage extension',
+				'View web permissions',
 			]) &&
 		menu.focused === 'Say hi',
 	JSON.stringify(menu),
@@ -516,6 +559,36 @@ ok(
 await page.keyboard.press('ArrowDown');
 const movedTo = await page.evaluate(() =>
 	document.activeElement?.textContent?.trim(),
+);
+await page.keyboard.press('ArrowRight');
+await painted(page);
+const submenu = await page.evaluate(() => ({
+	open: !document.querySelector('.extSubmenu').classList.contains('hidden'),
+	entries: [...document.querySelectorAll('.extSubmenu > *')].map((item) =>
+		item.classList.contains('extMenuRule')
+			? '---'
+			: `${item.getAttribute('aria-checked') === 'true' ? '(x) ' : ''}${item.textContent.trim()}`,
+	),
+	focused: document.activeElement?.textContent?.trim(),
+}));
+await page.keyboard.press('ArrowLeft');
+const backTo = await page.evaluate(() =>
+	document.activeElement?.textContent?.trim(),
+);
+ok(
+	"the right arrow opens the site access submenu, Chrome's radios checked on all sites; the left arrow goes back",
+	submenu.open &&
+		JSON.stringify(submenu.entries) ===
+			JSON.stringify([
+				'When you click the extension',
+				'On 127.0.0.1',
+				'(x) On all sites',
+				'---',
+				'Learn more about site access',
+			]) &&
+		submenu.focused === 'When you click the extension' &&
+		backTo === 'This can read and change site data',
+	JSON.stringify({ submenu, backTo }),
 );
 await page.keyboard.press('ArrowUp');
 await page.keyboard.press('Enter');
@@ -527,14 +600,177 @@ const hi = await until(
 );
 ok(
 	'the arrows move in the menu, and an item chosen reaches its background (contextMenus.onClicked)',
-	movedTo === 'Options' && hi === 'hi',
+	movedTo === 'This can read and change site data' && hi === 'hi',
 	JSON.stringify({ movedTo, hi }),
 );
 
-// the menu's Extensions item: the same list, with its badge
+// the menu's Extensions: Chrome 157's submenu (ExtensionsMenuModel),
+// Manage extensions and Visit Chrome Web Store, opened by the pointer and
+// by the keyboard
 await page.click('#toolMenu');
 await painted(page);
-await page.click('#menuExtensions');
+await page.hover('#menuExtensions');
+await painted(page);
+const appExtensions = await subMenuState(page);
+ok(
+	"the menu's Extensions opens under the pointer: Chrome 157's submenu, beside it",
+	appExtensions.open &&
+		JSON.stringify(appExtensions.entries) ===
+			JSON.stringify(['Manage extensions', 'Visit Chrome Web Store']) &&
+		appExtensions.expanded === 'true' &&
+		appExtensions.beside,
+	JSON.stringify(appExtensions),
+);
+await page.hover('#menuAbout');
+await painted(page);
+const afterAbout = await subMenuState(page);
+ok(
+	'another item under the pointer closes it',
+	!afterAbout.open && afterAbout.expanded === 'false',
+	JSON.stringify(afterAbout),
+);
+await page.focus('#menuExtensions');
+await page.keyboard.press('ArrowRight');
+await painted(page);
+const byKeys = await subMenuState(page);
+await page.keyboard.press('ArrowDown');
+const secondRow = await page.evaluate(() =>
+	document.activeElement?.textContent?.trim(),
+);
+await page.keyboard.press('ArrowDown');
+const wrappedRow = await page.evaluate(() =>
+	document.activeElement?.textContent?.trim(),
+);
+await page.keyboard.press('ArrowLeft');
+const leftTo = await subMenuState(page);
+await page.keyboard.press('ArrowRight');
+await page.keyboard.press('Escape');
+const escapedTo = await subMenuState(page);
+const menuStill = await page.evaluate(
+	() => !document.getElementById('pmMenu').classList.contains('hidden'),
+);
+ok(
+	'the right arrow opens it on its first row, the arrows go round it, the left arrow and Escape close it alone',
+	byKeys.open &&
+		byKeys.focused === 'Manage extensions' &&
+		secondRow === 'Visit Chrome Web Store' &&
+		wrappedRow === 'Manage extensions' &&
+		!leftTo.open &&
+		leftTo.focused === 'Extensions' &&
+		!escapedTo.open &&
+		escapedTo.focused === 'Extensions' &&
+		menuStill,
+	JSON.stringify({
+		byKeys,
+		secondRow,
+		wrappedRow,
+		leftTo,
+		escapedTo,
+		menuStill,
+	}),
+);
+await page.keyboard.press('ArrowRight');
+await page.keyboard.press('Enter');
+await painted(page);
+const managed = await page.evaluate(() => ({
+	view: document.getElementById('shieldsPage').dataset.view,
+	menu: !document.getElementById('pmMenu').classList.contains('hidden'),
+	sub: !document.querySelector('.extSubmenu').classList.contains('hidden'),
+}));
+ok(
+	'Manage extensions opens the Extensions page, the menus closed',
+	managed.view === 'extensions' && !managed.menu && !managed.sub,
+	JSON.stringify(managed),
+);
+await page.keyboard.press('Escape');
+await painted(page);
+
+// the menu's Themes, over globalThis.PMTheme (a stand-in where the demo
+// has no theme system): none without it, the themes with a check on the
+// one shown, Get themes and Reset to default
+await page.evaluate(() => {
+	globalThis.keptPMTheme = globalThis.PMTheme;
+	delete globalThis.PMTheme;
+});
+await page.click('#toolMenu');
+await painted(page);
+const withoutThemes = await page.evaluate(
+	() => document.getElementById('menuThemes').hidden,
+);
+await page.keyboard.press('Escape');
+await page.evaluate(() => {
+	if (globalThis.keptPMTheme) {
+		globalThis.PMTheme = globalThis.keptPMTheme;
+		return;
+	}
+	const events = new EventTarget();
+	const themes = [
+		['default', 'Default'],
+		['light', 'Light'],
+		['dark', 'Dark'],
+		['system', 'Follow system'],
+	].map(([id, name]) => ({ id, name, source: 'builtin' }));
+	let shown = 'default';
+	globalThis.PMTheme = {
+		list: () => themes,
+		current: () => themes.find((theme) => theme.id === shown),
+		apply(theme) {
+			shown = typeof theme === 'string' ? theme : theme.id;
+			events.dispatchEvent(
+				new CustomEvent('change', { detail: { reason: 'apply', id: shown } }),
+			);
+		},
+		addEventListener: events.addEventListener.bind(events),
+		removeEventListener: events.removeEventListener.bind(events),
+	};
+});
+await page.click('#toolMenu');
+await painted(page);
+await page.hover('#menuThemes');
+await painted(page);
+const themesMenu = await subMenuState(page);
+ok(
+	'Themes: hidden without PMTheme; with it the themes, a check on the one shown, Get themes and Reset to default (off at the default)',
+	withoutThemes &&
+		themesMenu.open &&
+		JSON.stringify(themesMenu.entries.slice(0, 4)) ===
+			JSON.stringify(['(x) Default', 'Light', 'Dark', 'Follow system']) &&
+		JSON.stringify(themesMenu.entries.slice(-3)) ===
+			JSON.stringify(['---', 'Get themes', '(off) Reset to default']),
+	JSON.stringify({ withoutThemes, themesMenu }),
+);
+await page.click('.extSubmenu [data-theme="dark"]');
+await painted(page);
+const darkShown = await page.evaluate(() => ({
+	shown: globalThis.PMTheme.current().id,
+	menu: !document.getElementById('pmMenu').classList.contains('hidden'),
+}));
+await page.click('#toolMenu');
+await painted(page);
+await page.hover('#menuThemes');
+await painted(page);
+const afterDark = await subMenuState(page);
+// a change made elsewhere shows in the open submenu at once
+await page.evaluate(() => globalThis.PMTheme.apply('light'));
+await painted(page);
+const followed = await subMenuState(page);
+await page.click('.extSubmenu [data-command="resetTheme"]');
+await painted(page);
+const reset = await page.evaluate(() => globalThis.PMTheme.current().id);
+ok(
+	'a theme chosen there is shown and checked, the open submenu follows a change, Reset to default goes back',
+	darkShown.shown === 'dark' &&
+		!darkShown.menu &&
+		afterDark.entries.includes('(x) Dark') &&
+		!afterDark.entries.includes('(off) Reset to default') &&
+		followed.entries.includes('(x) Light') &&
+		!followed.entries.includes('(x) Dark') &&
+		reset === 'default',
+	JSON.stringify({ darkShown, afterDark, followed, reset }),
+);
+
+// the puzzle piece's list, with the badge
+await page.click('#toolExtensions');
 await painted(page);
 const listed = await page.evaluate(() => ({
 	open:
@@ -547,11 +783,104 @@ const listed = await page.evaluate(() => ({
 	})),
 }));
 ok(
-	"the menu's Extensions item opens the list: the extension and its badge",
+	"the puzzle piece's list: the extension and its badge",
 	listed.open &&
 		JSON.stringify(listed.rows) ===
 			JSON.stringify([{ name: NAME, badge: 'hi' }]),
 	JSON.stringify(listed),
+);
+const sections = await page.evaluate(() => ({
+	title: document.querySelector('#extPanel .extPanelTitle')?.textContent,
+	heads: [...document.querySelectorAll('#extPanel .extPanelHead')].map(
+		(head) => head.textContent,
+	),
+	pin: document.querySelector('#extPanel .extPin')?.getAttribute('aria-label'),
+	more: document
+		.querySelector('#extPanel .extRowMore[aria-haspopup]')
+		?.getAttribute('aria-label'),
+}));
+ok(
+	"the list is Chrome's extensions menu: its title, the extension under Full access, its pin and More options",
+	sections.title === 'Extensions' &&
+		JSON.stringify(sections.heads) === JSON.stringify(['Full access']) &&
+		sections.pin === `Unpin ${NAME}` &&
+		sections.more === `More options for ${NAME}`,
+	JSON.stringify(sections),
+);
+// a right click on its row: the same menu as More options, without Pin
+await page.click('#extPanel .extRowMain', { button: 'right' });
+await painted(page);
+const rowMenu = await page.evaluate(() =>
+	[...document.querySelectorAll('#extMenu .pmMenuItem')].map((item) =>
+		item.textContent.trim(),
+	),
+);
+await page.keyboard.press('Escape');
+ok(
+	"a right click on its row in the list opens its menu there, without Pin or Unpin (Chrome's More options)",
+	rowMenu.includes('Remove from powerMouse') &&
+		rowMenu.includes('Manage extension') &&
+		!rowMenu.includes('Unpin') &&
+		!rowMenu.includes('Pin'),
+	JSON.stringify(rowMenu),
+);
+// unpinned from the list: its button leaves the bar, and pops out while
+// its popup shows
+await page.click('#extPanel .extPin');
+const unpinned = await until(
+	page,
+	() => ({
+		bar: document.querySelectorAll('#extActions .extAction').length,
+		pin: document
+			.querySelector('#extPanel .extPin')
+			?.getAttribute('aria-label'),
+	}),
+	(value) => value?.bar === 0 && /^Pin /.test(value.pin ?? ''),
+	15000,
+);
+await page.click('#extPanel .extRowMain');
+await popupFrame(page);
+const popped = await page.evaluate(() => {
+	const button = document.querySelector('#extActions .extAction');
+	const popup = document.getElementById('extPopup').getBoundingClientRect();
+	const r = button?.getBoundingClientRect();
+	return {
+		buttons: document.querySelectorAll('#extActions .extAction').length,
+		pressed: button?.getAttribute('aria-expanded'),
+		under: r ? Math.abs(popup.right - r.right) <= 2 : false,
+		list: getComputedStyle(document.getElementById('extPanel')).display,
+	};
+});
+await page.mouse.click(10, 300);
+const back = await until(
+	page,
+	() => document.querySelectorAll('#extActions .extAction').length,
+	(n) => n === 0,
+	10000,
+);
+ok(
+	'unpinned: its button leaves the bar, pops out (pressed) under its popup from the list, and goes when the popup closes',
+	unpinned?.bar === 0 &&
+		popped.buttons === 1 &&
+		popped.pressed === 'true' &&
+		popped.under &&
+		popped.list === 'none' &&
+		back === 0,
+	JSON.stringify({ unpinned, popped, back }),
+);
+await page.click('#toolExtensions');
+await painted(page);
+await page.click('#extPanel .extPin');
+const repinned = await until(
+	page,
+	() => document.querySelectorAll('#extActions .extAction').length,
+	(n) => n === 1,
+	15000,
+);
+ok(
+	'pinned again: its button is back on the bar',
+	repinned === 1,
+	String(repinned),
 );
 await page.keyboard.press('Escape');
 
@@ -563,7 +892,7 @@ await page.click(`#extActions .extAction[data-ext="${id}"]`, {
 	button: 'right',
 });
 await painted(page);
-await page.click('#extMenu .pmMenuItem:nth-of-type(2)');
+await page.click('#extMenu [data-command="options"]');
 const optionsUrl = `chrome-extension://${id}/options.html`;
 const options = await until(
 	page,
@@ -686,18 +1015,26 @@ await page.click(`#extActions .extAction[data-ext="${id}"]`, {
 	button: 'right',
 });
 await painted(page);
-await page.click('#extMenu .pmMenuItem:last-of-type');
+await page.click('#extMenu [data-command="uninstall"]');
 await painted(page);
-list = await cards(page);
-const asked = await page.evaluate(() => document.activeElement?.textContent);
+const asked = await page.evaluate(() => ({
+	title: document.querySelector('#extMenu .extDialogTitle')?.textContent,
+	buttons: [...document.querySelectorAll('#extMenu .extDialog .spBtn')].map(
+		(button) => button.textContent,
+	),
+	focused: document.activeElement?.textContent,
+}));
 ok(
-	'Remove from its menu opens the page asking, on the Remove button',
-	/Remove Demo probe\?/.test(list[0]?.confirm ?? '') &&
-		JSON.stringify(list[0]?.buttons) === JSON.stringify(['Remove', 'Cancel']) &&
-		asked === 'Remove',
-	JSON.stringify({ list, asked }),
+	"Remove from its menu asks in Chrome's dialog, on the Remove button",
+	asked.title === `Remove "${NAME}"?` &&
+		JSON.stringify(asked.buttons) === JSON.stringify(['Remove', 'Cancel']) &&
+		asked.focused === 'Remove',
+	JSON.stringify(asked),
 );
-await page.click(`#spExtList [data-control="${id}:confirm"]`);
+await page.click('#extMenu .extDialog .spBtn:first-child');
+await page.click('#toolExtensions');
+await painted(page);
+await page.click('#extPanel .extManage');
 const removed = await until(
 	page,
 	() => ({
@@ -721,14 +1058,69 @@ if (process.env.EXT_SHOTS) {
 		() => document.querySelectorAll('#extActions .extAction').length,
 		(n) => n === 1,
 	);
+	// the fixture's page, where the probe has full access
+	await submitOmni(page, PAGE);
+	await until(
+		page,
+		() => document.querySelector('#omni input').value,
+		(v) => /bookmark-a/.test(v ?? ''),
+	);
+	await sleep(800);
+	const shot = (name, clip) =>
+		page.screenshot({
+			path: `${process.env.EXT_SHOTS}/${name}.png`,
+			...(clip ? { clip } : {}),
+		});
+	const bar = { x: 880, y: 0, width: 400, height: 48 };
+	await shot('stomp-toolbar', bar);
 	await page.click('#extActions .extAction');
 	await popupFrame(page);
 	await sleep(500);
 	await page.screenshot({ path: `${process.env.EXT_SHOTS}/desktop-popup.png` });
+	await shot('stomp-popup', { x: 760, y: 0, width: 520, height: 260 });
 	await page.mouse.click(10, 300);
+	const action = await box(page, '#extActions .extAction');
+	await page.mouse.click(action.left + 17, action.top + 17, {
+		button: 'right',
+	});
+	await painted(page);
+	await sleep(300);
+	await shot('stomp-menu');
+	await page.keyboard.press('ArrowDown');
+	await page.keyboard.press('ArrowRight');
+	await painted(page);
+	await sleep(300);
+	await shot('stomp-submenu');
+	await page.keyboard.press('Escape');
+	await page.keyboard.press('Escape');
+	// the menu's Extensions and Themes
+	await page.click('#toolMenu');
+	await painted(page);
+	await page.hover('#menuExtensions');
+	await painted(page);
+	await sleep(300);
+	await shot('stomp-app-menu-extensions', {
+		x: 720,
+		y: 0,
+		width: 560,
+		height: 260,
+	});
+	await page.hover('#menuThemes');
+	await painted(page);
+	await sleep(300);
+	await shot('stomp-app-menu-themes', {
+		x: 720,
+		y: 0,
+		width: 560,
+		height: 420,
+	});
+	await page.keyboard.press('Escape');
+	await page.keyboard.press('Escape');
 	await page.click('#toolExtensions');
 	await painted(page);
+	await sleep(300);
 	await page.screenshot({ path: `${process.env.EXT_SHOTS}/desktop-list.png` });
+	await shot('stomp-puzzle', { x: 860, y: 0, width: 420, height: 300 });
 	await page.click('#extPanel .extManage');
 	await painted(page);
 	await page.screenshot({ path: `${process.env.EXT_SHOTS}/desktop-page.png` });
@@ -766,6 +1158,7 @@ for (const [width, height] of [
 			fit.menu <= width,
 		JSON.stringify(fit),
 	);
+	// (with no room for the puzzle piece, the menu's Extensions lists them)
 	if (width >= 360) await phone.click('#toolExtensions');
 	else {
 		await phone.click('#toolMenu');
@@ -773,13 +1166,28 @@ for (const [width, height] of [
 		await phone.click('#menuExtensions');
 	}
 	await painted(phone);
-	const panel = await box(phone, '#extPanel');
+	const panel = await box(phone, width >= 360 ? '#extPanel' : '.extSubmenu');
+	const phoneRows = await subMenuState(phone);
 	ok(
-		`${width}px: the list fits the window`,
-		panel?.display !== 'none' && panel.left >= 0 && panel.right <= width,
-		JSON.stringify(panel),
+		`${width}px: the list fits the window${width < 360 ? ", the menu's Extensions listing the extension before Chrome's two rows" : ''}`,
+		panel?.display !== 'none' &&
+			panel.left >= 0 &&
+			panel.right <= width &&
+			(width >= 360 ||
+				JSON.stringify(phoneRows.entries) ===
+					JSON.stringify([
+						NAME,
+						'---',
+						'Manage extensions',
+						'Visit Chrome Web Store',
+					])),
+		JSON.stringify({ panel, phoneRows }),
 	);
-	await phone.click('#extPanel .extRowMain');
+	await phone.click(
+		width >= 360
+			? '#extPanel .extRowMain'
+			: '.extSubmenu [data-command="extension"]',
+	);
 	const phoneFrame = await popupFrame(phone);
 	await until(
 		phone,
@@ -809,7 +1217,7 @@ for (const [width, height] of [
 	await painted(phone);
 	await phone.click('#menuExtensions');
 	await painted(phone);
-	await phone.click('#extPanel .extManage');
+	await phone.click('.extSubmenu [data-command="manage"]');
 	await painted(phone);
 	await sleep(300);
 	const sheet = await phone.evaluate(() => {

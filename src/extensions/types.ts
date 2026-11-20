@@ -144,7 +144,50 @@ export interface ExtensionInfo {
 	manifest: Manifest;
 	/** what went wrong reading parts of it (an unreadable ruleset, a missing content script) */
 	warnings: string[];
+	/**
+	 * Its button is pinned to the toolbar (`pin()`). Chrome 157 pins an
+	 * extension with a button when it is installed (Chrome's "pinned by
+	 * default"), never on an update
+	 */
+	pinned: boolean;
+	/** its place among the pinned buttons (lower is further left), null when unpinned */
+	pinOrder: number | null;
+	/**
+	 * Its button's icon by size (16 and 32 pixels, for a device pixel ratio
+	 * of 1 and of 2): the action's `default_icon`, else the extension's
+	 * icons; empty when it has neither (Chrome draws a letter tile then)
+	 */
+	actionIcons: Record<string, string>;
+	/** where it reads and changes sites (Chrome's site access, `setSiteAccess()`) */
+	siteAccess: SiteAccess;
+	/**
+	 * The sites it asks to read and change: its host permissions and its
+	 * content scripts' matches (Chrome's requested host permissions)
+	 */
+	requestedHosts: string[];
+	/** where its name in its menu leads: `homepage_url`, else its Web Store page for one installed from there */
+	homepageUrl: string | null;
 }
+
+/**
+ * An extension's site access, as Chrome keeps it (runtime host
+ * permissions): every site it asks for (`withheld` false: "On all sites"),
+ * or only the origins in `sites` ("On <site>"; none: "When you click the
+ * extension"), where a click on its button grants the tab until it
+ * navigates
+ */
+export interface SiteAccess {
+	withheld: boolean;
+	sites: string[];
+}
+
+/**
+ * How the extension stands with the tab's site (Chrome's SiteInteraction):
+ * `none` it asks for no access there, `granted` it has it, `withheld` it
+ * asks and waits for a click (or "On <site>"), `activeTab` it has activeTab
+ * and runs on a click
+ */
+export type SiteInteraction = 'none' | 'granted' | 'withheld' | 'activeTab';
 
 /** an extension's toolbar button, for one tab or its defaults */
 export interface ActionState {
@@ -152,19 +195,63 @@ export interface ActionState {
 	/** a URL an `<img>` can show directly: a data: URL, or the icon's routed URL */
 	iconUrl: string | null;
 	badgeText: string;
-	/** CSS color */
-	badgeColor: string;
-	/** CSS color, null for the browser's choice */
+	/**
+	 * The badge's background as Chrome draws it (made opaque), a CSS
+	 * color; null for Chrome's default (#F2F2F2, #282828 in a dark theme)
+	 */
+	badgeColor: string | null;
+	/**
+	 * The badge's text color, a CSS color: the one the extension set, else
+	 * white or #202124, whichever stands out more on its background; null
+	 * with the default background (#202124 on it, white in a dark theme)
+	 */
 	badgeTextColor: string | null;
 	/** the popup page's URL, null when a click fires `action.onClicked` */
 	popupUrl: string | null;
+	/**
+	 * Enabled for the tab: a disabled one is greyed (a page action not
+	 * shown, `action.disable()`, declarativeContent's rules not met), and a
+	 * click on it opens its menu
+	 */
 	enabled: boolean;
+	/** how it stands with the tab's site (its tooltip's second line, the extensions menu's section) */
+	siteInteraction: SiteInteraction;
+	/** the tooltip Chrome gives the button: its title, then a line on its site access */
+	tooltip: string;
+	/**
+	 * Scripts of its wait on the tab for a click (its site access withholds
+	 * the site): Chrome rings its icon with a white circle
+	 */
+	wantsToRun: boolean;
+	/** visible on the tab (a hidden one can still be enabled, by its site access) */
+	visible: boolean;
 }
 
-/** `actions()`'s rows: one per enabled extension that has an action */
+/** `actions()`'s rows: one per enabled extension that has an action, the pinned first in their order */
 export interface ExtensionAction extends ActionState {
 	id: string;
 	name: string;
+	pinned: boolean;
+}
+
+/**
+ * One row of an extension's menu (`extensions.contextMenu()`), as Chrome's
+ * ExtensionContextMenuModel makes it: `command` says what choosing it does
+ * (the host does `home`, `options`, `uninstall`, `manage`, `permissions`,
+ * `inspect` and `learnMore`; `pin`, `unpin`, `site:*` and `item` go back
+ * through `runMenuCommand`)
+ */
+export interface ExtensionMenuEntry {
+	type: 'item' | 'separator' | 'checkbox' | 'radio' | 'submenu';
+	command?: string;
+	label?: string;
+	enabled?: boolean;
+	checked?: boolean;
+	/** the URL a `home` or `learnMore` entry opens */
+	url?: string;
+	/** a contextMenus item's id (`command` `item`) */
+	menuItemId?: string;
+	children?: ExtensionMenuEntry[];
 }
 
 /** what `onChange` hears */
@@ -179,6 +266,8 @@ export interface ExtensionsChange {
 		| 'notification'
 		| 'menus'
 		| 'tab'
+		| 'settings'
+		| 'popup'
 		| 'ready'
 		| 'theme';
 	/** the extension it is about (none for `ready`; for `theme`, the theme now shown, none for the default) */
@@ -191,6 +280,12 @@ export interface ExtensionsChange {
 	 * would in onOpen
 	 */
 	url?: string;
+	/**
+	 * `popup`: the extension asked to show its popup (`action.openPopup()`)
+	 * or its `_execute_action` command ran: the host shows it for `tabId`
+	 * as it does for a click (`mountPopup`)
+	 */
+	popup?: boolean;
 	/** `notification`: what the extension showed or cleared */
 	notification?: ExtensionNotification;
 }
@@ -207,8 +302,27 @@ export interface ExtensionNotification {
 	silent?: boolean;
 }
 
-/** `clickAction()`'s answer */
-export type ClickResult = 'popup' | 'clicked' | 'disabled';
+/**
+ * `clickAction()`'s answer: `popup` to show, `clicked` (action.onClicked
+ * went to its background), `granted` (the click only let its waiting
+ * scripts run on the tab, as Chrome's first click on a withheld extension
+ * does), `disabled` (Chrome opens the button's menu instead)
+ */
+export type ClickResult = 'popup' | 'clicked' | 'granted' | 'disabled';
+
+/** a keyboard shortcut of an extension's (manifest `commands`), `extensions.commands()` */
+export interface ExtensionShortcut {
+	/** the extension's id */
+	id: string;
+	/** the command's name: `_execute_action` (and MV2's `_execute_browser_action`, `_execute_page_action`) clicks its button */
+	name: string;
+	description: string;
+	/** as the manifest suggests it for this platform, `Ctrl+Shift+Y`; empty when none */
+	shortcut: string;
+}
+
+/** what `extensions.runCommand()` did: what a click does, or `command` (commands.onCommand) */
+export type CommandResult = ClickResult | 'command';
 
 /**
  * What the host asks the user before the Chrome Web Store's page installs
@@ -335,6 +449,12 @@ export interface ShippedExtension {
 	generation?: number;
 	/** a content document's entries that match it */
 	entries?: ShippedEntry[];
+	/**
+	 * Its site access withholds the document's site: its entries wait for a
+	 * click on its button (the hub's `unblock` for the tab), as Chrome
+	 * holds an extension's scripts until it runs them on the click
+	 */
+	blocked?: boolean;
 }
 
 /** what the shell hands the runtime (its `prepare`) */
@@ -493,6 +613,17 @@ export type ExtensionCommand =
 	| { op: 'expect'; url: string; tabId: number }
 	/** a click on the extension's button granted it activeTab for the tab */
 	| { op: 'grant'; id: string; tabId: number }
+	/** its declarativeContent rules, kept as Chrome keeps them (set when `rules` is given) */
+	| { op: 'contentRules'; id: string; rules?: Record<string, unknown>[] }
+	/** pin its button to the toolbar, or unpin it */
+	| { op: 'pin'; id: string; pinned: boolean }
+	/** its site access: on a click, on the site of `url`, or on every site it asks for */
+	| {
+			op: 'siteAccess';
+			id: string;
+			access: 'click' | 'site' | 'all';
+			url?: string;
+	  }
 	/** a nested document's frame id, which the worker keeps (its requests carry it too) */
 	| { op: 'frame'; client: string }
 	/** a frame's next document (its window reported it) keeps the frame id of its last */

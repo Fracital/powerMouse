@@ -92,6 +92,13 @@
 	--pm-badge-text: #fff;
 	--pm-letter: #555753;
 	--pm-letter-text: #fff;
+	/* an extension button's badge where it gives no colour (Chrome's
+	   kColorExtensionIconBadgeBackgroundDefault: Neutral15 dark, Neutral95
+	   light, its text the colour of most contrast), and the circle behind a
+	   button whose scripts wait for a click */
+	--pm-ext-badge: #282828;
+	--pm-ext-badge-text: #fff;
+	--pm-ext-highlight: #fff;
 	/* Powermouse's outline buttons */
 	--pm-btn-blue: #2a9fd6;
 	--pm-btn-green: #77b300;
@@ -183,6 +190,8 @@
    icons, on white surfaces */
 :root[data-pm-theme='light'] {
 	color-scheme: light;
+	--pm-ext-badge: #f2f2f2;
+	--pm-ext-badge-text: #202124;
 	--pm-page: #e4e6e1;
 	--pm-page-image: none;
 	--pm-text: #2e3436;
@@ -3107,9 +3116,10 @@ input:focus-visible {
 }
 
 /* ---- extensions: the bar's buttons, the puzzle piece's list, a popup ------ */
-/* Each enabled extension's button for the active tab after the address box,
-   its icon at 20px and its badge over the lower right corner, as in Chrome;
-   then the puzzle piece (a .toolbtn). A phone's bar has room for neither the
+/* The pinned extensions' buttons for the active tab after the address box,
+   as in Chrome 157: a 34px button, its 16px icon in the middle of a 28px
+   area and its badge at the area's bottom; then the puzzle piece (a
+   .toolbtn). A phone's bar has room for neither the
    buttons (the puzzle piece and the menu list them) nor, at 320px, the
    puzzle piece: the address box keeps its 120px. */
 .extActions {
@@ -3126,8 +3136,8 @@ input:focus-visible {
 	flex: none;
 	display: grid;
 	place-items: center;
-	width: 32px;
-	height: 32px;
+	width: 34px;
+	height: 34px;
 	padding: 0;
 	border: 1px solid transparent;
 	border-radius: 0.25rem;
@@ -3143,45 +3153,80 @@ input:focus-visible {
 	outline: 2px solid var(--pm-focus);
 	outline-offset: 1px;
 }
-.extAction .extIcon {
-	width: 20px;
-	height: 20px;
-	display: block;
+/* the icon's 28px area (IconWithBadgeImageSource): the icon at 16px in its
+   middle, greyed when the action is off for the tab (Chrome's HSL shift: no
+   colour, a fifth of the way to white), ringed when scripts of its wait
+   for a click (a 24px white circle behind it, with Chrome's two shadows) */
+.extIconArea {
+	position: relative;
+	flex: none;
+	display: grid;
+	place-items: center;
+	width: 28px;
+	height: 28px;
 	pointer-events: none;
 }
-.extAction.off .extIcon {
-	filter: grayscale(1);
-	opacity: 0.45;
+.extIconArea .extIcon {
+	position: relative;
+	width: 16px;
+	height: 16px;
+	display: block;
+}
+.extIconArea.off .extIcon {
+	filter: grayscale(1) contrast(0.8) brightness(1.2);
+}
+.extIconArea.wants::before {
+	content: '';
+	position: absolute;
+	inset: 2px;
+	border-radius: 50%;
+	background: var(--pm-ext-highlight);
+	box-shadow:
+		0 1px 4px rgba(var(--pm-shadow-rgb), calc(0.3 * var(--pm-shadow-k))),
+		0 2px 12px rgba(var(--pm-shadow-rgb), calc(0.15 * var(--pm-shadow-k)));
 }
 .extLetter {
 	display: grid;
 	place-items: center;
-	border-radius: 5px;
+	border-radius: 2px;
 	background: var(--pm-letter);
 	color: var(--pm-letter-text);
-	font-family: 'Montserrat', sans-serif;
+	font-family: system-ui, sans-serif;
 	font-size: 11px;
-	font-weight: 700;
+	font-weight: 400;
 	line-height: 1;
 }
+/* Chrome's badge: 14px high, its width set by pm/main.js (its text's, cut
+   at 23px on both sides, and 2px each side), at the area's bottom right,
+   or its middle once 20px wide; its corners 4px; Chrome's default colours
+   in a dark theme unless the extension set its own */
 .extBadge {
 	position: absolute;
-	right: -1px;
+	right: 0;
 	bottom: 0;
-	min-width: 16px;
+	display: flex;
+	justify-content: center;
+	overflow: hidden;
 	height: 14px;
-	padding: 0 3px;
+	min-width: 14px;
 	box-sizing: border-box;
-	border-radius: 3px;
-	background: var(--pm-badge);
-	color: var(--pm-badge-text);
-	font-family: 'Montserrat', sans-serif;
+	border-radius: 4px;
+	background: var(--pm-ext-badge);
+	color: var(--pm-ext-badge-text);
+	font-family: system-ui, sans-serif;
 	font-size: 9px;
 	font-weight: 700;
 	line-height: 14px;
-	text-align: center;
 	white-space: nowrap;
 	pointer-events: none;
+}
+.extBadge.wide {
+	right: auto;
+	left: 50%;
+	transform: translateX(-50%);
+}
+.extBadgeText {
+	flex: none;
 }
 .extBadge[hidden],
 .toolbtn.extbtn[hidden] {
@@ -3210,10 +3255,23 @@ input:focus-visible {
 	}
 }
 
-/* the puzzle piece's list: the menu's rows, each extension's with its menu
-   button at the end */
+/* the puzzle piece's list, Chrome's extensions menu: its title and close
+   button, the extensions by their access to the site (a heading and a note
+   each), each row its button, its pin and More options, then Manage
+   extensions; 320px wide as Chrome's */
 .extPanel {
-	width: 300px;
+	width: 320px;
+}
+.extPanelTitle {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 2px 0 2px 12px;
+	font-size: 15px;
+	font-weight: 600;
+}
+.extPanelHead + .extPanelNote {
+	padding-top: 0;
 }
 .extPanelHead {
 	padding: 6px 12px 8px;
@@ -3241,20 +3299,15 @@ input:focus-visible {
 	width: auto;
 	min-width: 0;
 }
-.extRowMain .extIcon {
-	flex: none;
-	width: 20px;
-	height: 20px;
+.pmMenuItem.extRowMain {
+	gap: 8px;
+	padding: 3px 8px;
 }
 .extRowName {
 	flex: 1 1 auto;
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
-}
-.extBadge.inline {
-	position: static;
-	flex: none;
 }
 .extRowMore {
 	flex: none;
@@ -3282,6 +3335,9 @@ input:focus-visible {
 	outline: 2px solid var(--pm-panel-accent);
 	outline-offset: -2px;
 }
+.extPin.on {
+	color: var(--pm-panel-accent);
+}
 .extMenuRule {
 	height: 1px;
 	margin: 6px 4px;
@@ -3305,13 +3361,102 @@ input:focus-visible {
 	border-width: 0 2px 2px 0;
 	transform: rotate(45deg);
 }
+/* a radio's mark is Chrome's: a ring, with a dot when it is the one */
+.extMenuMark.radio::before {
+	content: '';
+	position: absolute;
+	inset: 3px;
+	border: 2px solid var(--pm-panel-text-2);
+	border-radius: 50%;
+}
+.pmMenuItem[aria-checked='true'] .extMenuMark.radio::before {
+	border-color: var(--pm-panel-accent);
+}
+.pmMenuItem[aria-checked='true'] .extMenuMark.radio::after {
+	left: 7px;
+	top: 7px;
+	width: 6px;
+	height: 6px;
+	border: none;
+	border-radius: 50%;
+	background: var(--pm-panel-accent);
+	transform: none;
+}
+/* an extension's menu (Chrome's entries, no icons: a mark's column), and a
+   submenu beside its entry, over the menu */
+.extMenuLabel {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.extMenuEntry .shieldsIcon {
+	flex: none;
+	width: 16px;
+	height: 16px;
+	margin-right: -4px;
+}
+.pmMenuItem[aria-haspopup='menu'][aria-expanded='true'] {
+	background: rgba(255, 255, 255, 0.06);
+}
+.extSubmenu {
+	z-index: 62;
+}
+/* a submenu's item: its arrow at the end */
+.pmMenuItem .pmSubmenuArrow {
+	flex: none;
+	width: 16px;
+	height: 16px;
+	margin: 0 -4px 0 auto;
+}
+/* a row's icon in a submenu (the Web Store's, an extension's), 16 px in
+   the marks' 20 px column */
+.pmMenuItem .pmMenuLead {
+	flex: none;
+	width: 16px;
+	height: 16px;
+	margin: 0 2px;
+}
+.extLetter.pmMenuLead {
+	display: grid;
+}
+/* Chrome's removal dialog: its icon, 'Remove "<name>"?', Remove and Cancel */
+.extDialog {
+	width: 320px;
+	padding: 10px 10px 6px;
+}
+.extDialogHead {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	margin-bottom: 14px;
+}
+.extDialogIcon {
+	flex: none;
+	width: 32px;
+	height: 32px;
+}
+.extDialogTitle {
+	font-size: 15px;
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+.extDialogButtons {
+	justify-content: flex-end;
+}
 
-/* the popup an extension's button opens: its document, sized as it asks */
+/* the popup an extension's button opens: its document, sized as it asks,
+   in Chrome's square bubble with its 1px border; hidden until its document
+   has loaded */
 .extPopup {
 	overflow: hidden;
 	max-height: none;
-	border-radius: 10px;
+	border: 1px solid var(--pm-panel-outline);
+	border-radius: 0;
 	background: #fff;
+}
+.extPopup.loading {
+	visibility: hidden;
 }
 .extPopupFrame {
 	display: block;
@@ -3346,10 +3491,14 @@ input:focus-visible {
 	height: 32px;
 	display: block;
 }
-.extAction .extLetter,
-.extRowMain .extLetter,
+.extIconArea .extLetter,
+.extLetter.extDialogIcon,
 .extLetter.extCardIcon {
 	display: grid;
+}
+.extLetter.extDialogIcon {
+	font-size: 15px;
+	border-radius: 4px;
 }
 .extLetter.extCardIcon {
 	font-size: 15px;

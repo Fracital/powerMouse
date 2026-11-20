@@ -224,7 +224,19 @@ export async function documentShell(
 			// an extension that may inject into the document (scripting,
 			// tabs.executeScript) has its runtime there with no entry
 			if (!entries.length && !registry.reaches(loaded, doc.url)) continue;
-			content.push({ ...registry.shipped(loaded), entries });
+			// a site its site access withholds: the entries wait for a click
+			const blocked =
+				entries.length > 0 &&
+				!registry.siteGranted(
+					loaded,
+					doc.url,
+					registry.tabOfClient(doc.client ?? undefined),
+				);
+			content.push({
+				...registry.shipped(loaded),
+				entries,
+				...(blocked ? { blocked: true } : {}),
+			});
 			if (doc.client)
 				payload.tokens[loaded.record.id] = await documentToken(
 					loaded.record.id,

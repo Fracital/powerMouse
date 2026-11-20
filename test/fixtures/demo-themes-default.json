@@ -1,7 +1,7 @@
 {
 	"views": {
 		"landing": {
-			"digest": "a143eb7bdc80649dc79dfc672fb3642844c98b1d923d14612cb3adf04425c1f5",
+			"digest": "ca80f924c47391ef5d6a6cc0ab294a855a3b9ab52a16891556f14662186496b3",
 			"common": {
 				"::placeholderbackground-color": "rgba(0, 0, 0, 0)",
 				"::placeholderbackground-image": "none",
@@ -388,7 +388,7 @@
 			}
 		},
 		"browser": {
-			"digest": "da6253ad41ab4e2b6872114ebbade3c2af33c15022c7196335c0e7a8b19f624a",
+			"digest": "d8aa51ebf8dda93d2788c3212a93a88e6ec098518514ba6b1bd58a7302ce36c9",
 			"common": {
 				"::placeholderbackground-color": "rgba(0, 0, 0, 0)",
 				"::placeholderbackground-image": "none",
@@ -787,7 +787,7 @@
 			}
 		},
 		"shields": {
-			"digest": "7ab623bdfbdf38c8807776b92eb6f06cac8e7df0cd4393e244dc3a5b5c076794",
+			"digest": "660783fc606b114ca3127c75e2f90275ebf88846beda89da058f25e29a7ad79d",
 			"common": {
 				"::afterbackground-color": null,
 				"::afterbackground-image": null,
@@ -801,10 +801,10 @@
 				"background-position": "0% 0%",
 				"background-repeat": "repeat",
 				"background-size": "auto",
-				"border-bottom-color": "rgb(228, 228, 229)",
-				"border-left-color": "rgb(228, 228, 229)",
-				"border-right-color": "rgb(228, 228, 229)",
-				"border-top-color": "rgb(228, 228, 229)",
+				"border-bottom-color": "rgb(201, 201, 202)",
+				"border-left-color": "rgb(201, 201, 202)",
+				"border-right-color": "rgb(201, 201, 202)",
+				"border-top-color": "rgb(201, 201, 202)",
 				"box-shadow": "none",
 				"caret-color": "rgb(255, 255, 255)",
 				"color": "rgb(255, 255, 255)",
@@ -1156,6 +1156,10 @@
 				"div#shieldsPanel": {
 					"::placeholdercolor": "rgb(228, 228, 229)",
 					"background-color": "rgb(28, 28, 29)",
+					"border-bottom-color": "rgb(228, 228, 229)",
+					"border-left-color": "rgb(228, 228, 229)",
+					"border-right-color": "rgb(228, 228, 229)",
+					"border-top-color": "rgb(228, 228, 229)",
 					"box-shadow": "rgba(0, 0, 0, 0.55) 0px 12px 40px 0px, rgba(255, 255, 255, 0.06) 0px 0px 0px 1px",
 					"caret-color": "rgb(228, 228, 229)",
 					"color": "rgb(228, 228, 229)",
@@ -1165,12 +1169,19 @@
 					"::placeholdercolor": "rgb(228, 228, 229)",
 					"background-color": "rgb(37, 37, 39)",
 					"border-bottom-color": "rgb(48, 48, 50)",
+					"border-left-color": "rgb(228, 228, 229)",
+					"border-right-color": "rgb(228, 228, 229)",
+					"border-top-color": "rgb(228, 228, 229)",
 					"caret-color": "rgb(228, 228, 229)",
 					"color": "rgb(228, 228, 229)",
 					"outline-color": "rgb(228, 228, 229)"
 				},
 				"div#shieldsPanel>div.shieldsCard:0>div.shieldsHead:0": {
 					"::placeholdercolor": "rgb(228, 228, 229)",
+					"border-bottom-color": "rgb(228, 228, 229)",
+					"border-left-color": "rgb(228, 228, 229)",
+					"border-right-color": "rgb(228, 228, 229)",
+					"border-top-color": "rgb(228, 228, 229)",
 					"caret-color": "rgb(228, 228, 229)",
 					"color": "rgb(228, 228, 229)",
 					"outline-color": "rgb(228, 228, 229)"
@@ -1182,6 +1193,10 @@
 					"background-position": "50% 50%",
 					"background-repeat": "no-repeat",
 					"background-size": "20px 20px",
+					"border-bottom-color": "rgb(228, 228, 229)",
+					"border-left-color": "rgb(228, 228, 229)",
+					"border-right-color": "rgb(228, 228, 229)",
+					"border-top-color": "rgb(228, 228, 229)",
 					"box-shadow": "rgba(0, 0, 0, 0.4) 0px 1px 4px 0px",
 					"caret-color": "rgb(228, 228, 229)",
 					"color": "rgb(228, 228, 229)",
@@ -1204,10 +1219,6 @@
 				"div#shieldsPanel>div.shieldsCard:0>div.shieldsCount:1": {
 					"::placeholdercolor": "rgb(201, 201, 202)",
 					"background-color": "rgb(28, 28, 29)",
-					"border-bottom-color": "rgb(201, 201, 202)",
-					"border-left-color": "rgb(201, 201, 202)",
-					"border-right-color": "rgb(201, 201, 202)",
-					"border-top-color": "rgb(201, 201, 202)",
 					"box-shadow": "rgba(0, 0, 0, 0.4) 0px 1px 4px 0px",
 					"caret-color": "rgb(201, 201, 202)",
 					"color": "rgb(201, 201, 202)",
@@ -1236,10 +1247,6 @@
 				},
 				"div#shAdvanced>div.shieldsRows>div.shieldsRow:0>svg.shieldsIcon": {
 					"::placeholdercolor": "rgb(201, 201, 202)",
-					"border-bottom-color": "rgb(201, 201, 202)",
-					"border-left-color": "rgb(201, 201, 202)",
-					"border-right-color": "rgb(201, 201, 202)",
-					"border-top-color": "rgb(201, 201, 202)",
 					"caret-color": "rgb(201, 201, 202)",
 					"color": "rgb(201, 201, 202)",
 					"fill": "rgb(201, 201, 202)",
@@ -1258,10 +1265,6 @@
 				},
 				"div#shAds>ul.shieldsDropList>li:0": {
 					"::placeholdercolor": "rgb(201, 201, 202)",
-					"border-bottom-color": "rgb(201, 201, 202)",
-					"border-left-color": "rgb(201, 201, 202)",
-					"border-right-color": "rgb(201, 201, 202)",
-					"border-top-color": "rgb(201, 201, 202)",
 					"caret-color": "rgb(201, 201, 202)",
 					"color": "rgb(201, 201, 202)",
 					"outline-color": "rgb(201, 201, 202)"
@@ -1293,6 +1296,9 @@
 				},
 				"div#shieldsPanel>div.shieldsFooter:2": {
 					"::placeholdercolor": "rgb(228, 228, 229)",
+					"border-bottom-color": "rgb(228, 228, 229)",
+					"border-left-color": "rgb(228, 228, 229)",
+					"border-right-color": "rgb(228, 228, 229)",
 					"border-top-color": "rgb(48, 48, 50)",
 					"caret-color": "rgb(228, 228, 229)",
 					"color": "rgb(228, 228, 229)",
@@ -1321,10 +1327,6 @@
 				},
 				"button#menuFullscreen>svg.shieldsIcon>path": {
 					"::placeholdercolor": "rgb(201, 201, 202)",
-					"border-bottom-color": "rgb(201, 201, 202)",
-					"border-left-color": "rgb(201, 201, 202)",
-					"border-right-color": "rgb(201, 201, 202)",
-					"border-top-color": "rgb(201, 201, 202)",
 					"caret-color": "rgb(201, 201, 202)",
 					"color": "rgb(201, 201, 202)",
 					"fill": "none",
