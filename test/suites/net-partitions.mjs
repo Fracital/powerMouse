@@ -22,6 +22,7 @@ import {
 	ok,
 	openDemo,
 	PROXY,
+	RUN,
 	sleep,
 	submitLanding,
 } from '../lib.mjs';
@@ -31,7 +32,7 @@ const B = new URL(FIXTURE.replace('127.0.0.1', 'localhost')).origin;
 // the third site, whose server every step reaches
 const C = B.replace('localhost', 'c.localhost');
 const part = (role, t, site) =>
-	`${site}/pages/net-part.html?role=${role}&t=${t}&c=${encodeURIComponent(C)}`;
+	`${site}/pages/net-part.html?role=${role}&t=${t}${RUN}&c=${encodeURIComponent(C)}`;
 const framing = (site, src) =>
 	`${site}/pages/net-part-top.html?src=${encodeURIComponent(src)}`;
 /** the steps, their names under the run's own tag */

@@ -14,7 +14,7 @@ import { shapes } from './shapes-server.mjs';
 import { sop } from './sop-server.mjs';
 import { stream } from './stream-server.mjs';
 import { visited } from './visited-server.mjs';
-import { wpt, wptUpgrade } from './wpt-server.mjs';
+import { wpt, wptForget, wptUpgrade } from './wpt-server.mjs';
 
 // /pages/<file> serves test/pages/<file> as is; a `<file>.headers.json`
 // next to it adds response headers (Set-Cookie, a Content-Type charset), and
@@ -1054,6 +1054,7 @@ export function startFixture(port = 8084) {
 		// every interface, so http://localhost:PORT/ (a second proxied origin
 		// for the suites) answers over ::1 as well as 127.0.0.1
 		server.once('error', reject);
+		server.once('close', () => wptForget(port));
 		server.listen(port, () => resolve(server));
 	});
 }
