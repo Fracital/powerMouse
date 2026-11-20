@@ -34,6 +34,8 @@ const FLAG_REVISION = 32;
 const FLAG_PARSES = 64;
 const FLAG_SINGLE = 128;
 const FLAG_PRINT = 256;
+// the output carries the map of itself to the script's text (rust/rwjs/src/positions.rs)
+export const FLAG_POSITIONS = 512;
 const STATUS_INVALID = 7;
 const ROUTE_IMPORT = 1;
 const ROUTE_SOURCE_MAP = 2;
@@ -44,6 +46,7 @@ interface Source {
 	text?: string | null;
 	shifts?: number[];
 	embed?: boolean;
+	positions?: boolean;
 }
 
 /**
@@ -83,7 +86,7 @@ export function rewriterRevision(): string | null {
  * the page wrote it, and a revision 1 module takes the flags of the parse
  * questions for a rewrite.
  */
-export const REVISION = '18';
+export const REVISION = '19';
 
 /** whether an instance answered REVISION, asked once of each */
 const speaks = new WeakMap<BufferInstance, boolean>();
@@ -284,6 +287,7 @@ export function rewriteWith(
 	const loose = !script.isWellFormed();
 	if (loose) key ??= sourceKey(script);
 	let flags = isModule ? FLAG_MODULE : 0;
+	if (source?.positions) flags |= FLAG_POSITIONS;
 	if (source?.text === undefined) {
 		// the script's own text is the one kept: written into the output by
 		// the module when a function of it is marked, or kept in this realm
