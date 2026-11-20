@@ -75,10 +75,11 @@ import type {
 	TransferrableResponse,
 	WebSocketDataType,
 } from '@mercuryworkshop/proxy-transports';
-import { isPortBody, receiveBody } from './bodyPort';
+import { isPortBody, receiveCounted } from './bodyPort';
 import { transferablesOf } from './messages';
 import { NETWORK_PARTITION } from './networkPartition';
 import { promptSink } from './promptSink';
+import { changedResponse } from './responseFacts';
 import type { Ride } from './riderPace';
 import { RpcHelper } from './rpc';
 import {
@@ -918,13 +919,12 @@ class ShardedTransport implements ProxyTransport {
 				ticket.done();
 				return response;
 			}
-			return {
-				...response,
+			return changedResponse(response, {
 				body: watched(
 					response.body as ReadableStream<Uint8Array>,
 					this.#reading(ticket),
 				),
-			};
+			});
 		}
 		const sent = crossable(body);
 		const response = await ticket.remote.call(
@@ -945,7 +945,7 @@ class ShardedTransport implements ProxyTransport {
 		}
 		return {
 			...rest,
-			body: receiveBody(got, this.#reading(ticket)),
+			...receiveCounted(got, this.#reading(ticket)),
 		} as TransferrableResponse;
 	}
 
