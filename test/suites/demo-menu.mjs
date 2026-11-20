@@ -232,6 +232,8 @@ const bar = await page.evaluate(() => {
 	return {
 		button: box(button),
 		form: box(form),
+		// the extensions' puzzle piece, between them as in Chrome
+		puzzle: box(document.getElementById('toolExtensions')),
 		inForm: form.contains(button),
 		inBar: button.parentElement.classList.contains('chrome'),
 		label: button.getAttribute('aria-label'),
@@ -239,11 +241,12 @@ const bar = await page.evaluate(() => {
 	};
 });
 ok(
-	'the menu button is in the bar beside the address box, not in it',
+	'the menu button is in the bar after the address box and the puzzle piece, not in the box',
 	!bar.inForm &&
 		bar.inBar &&
-		bar.button.left >= bar.form.right &&
-		bar.button.left - bar.form.right <= 8 &&
+		bar.puzzle.left >= bar.form.right &&
+		bar.button.left >= bar.puzzle.right &&
+		bar.button.left - bar.puzzle.right <= 8 &&
 		bar.label === 'Menu' &&
 		bar.haspopup === 'menu',
 	JSON.stringify(bar),
@@ -259,10 +262,11 @@ await page.click('#toolMenu');
 await painted(page);
 let menu = await menuState(page);
 ok(
-	'the menu opens fading in, with Fullscreen and About, on its first item',
+	'the menu opens fading in, with Fullscreen, Extensions and About, on its first item',
 	menu.open &&
 		menu.fading &&
-		JSON.stringify(menu.items) === JSON.stringify(['Fullscreen', 'About']) &&
+		JSON.stringify(menu.items) ===
+			JSON.stringify(['Fullscreen', 'Extensions', 'About']) &&
 		menu.focused === 'Fullscreen' &&
 		menu.toolExpanded === 'true',
 	JSON.stringify(menu),
@@ -431,7 +435,8 @@ ok(
 await page.keyboard.press('Escape');
 
 // About, from the keyboard: Enter opens the menu on Fullscreen, ArrowDown
-// moves to About, Enter chooses it
+// moves to Extensions and About and round to Fullscreen, ArrowUp back to
+// About, Enter chooses it
 await page.focus('#toolMenu');
 await page.keyboard.press('Enter');
 menu = await menuState(page);
@@ -443,12 +448,14 @@ ok(
 await page.keyboard.press('ArrowDown');
 const second = (await menuState(page)).focused;
 await page.keyboard.press('ArrowDown');
+const third = (await menuState(page)).focused;
+await page.keyboard.press('ArrowDown');
 const wrapped = (await menuState(page)).focused;
 await page.keyboard.press('ArrowUp');
 ok(
 	'the arrows move between the items, round the ends',
-	second === 'About' && wrapped === 'Fullscreen',
-	JSON.stringify({ second, wrapped }),
+	second === 'Extensions' && third === 'About' && wrapped === 'Fullscreen',
+	JSON.stringify({ second, third, wrapped }),
 );
 await page.keyboard.press('Enter');
 let dialog = await until(
@@ -696,7 +703,7 @@ await blocking.close();
 
 // ---- no Fullscreen API ----------------------------------------------------------
 // an iPhone's Safari has no element fullscreen, under either name (Chrome
-// still has the prefixed one): the menu has About only
+// still has the prefixed one): the menu has Extensions and About only
 const without = await browsing({}, (page) =>
 	page.addInitScript(() => {
 		for (const name of ['fullscreenEnabled', 'webkitFullscreenEnabled'])
@@ -707,9 +714,9 @@ await without.click('#toolMenu');
 await painted(without);
 menu = await menuState(without);
 ok(
-	'without the Fullscreen API the menu offers About only',
-	JSON.stringify(menu.items) === JSON.stringify(['About']) &&
-		menu.focused === 'About',
+	'without the Fullscreen API the menu offers Extensions and About only',
+	JSON.stringify(menu.items) === JSON.stringify(['Extensions', 'About']) &&
+		menu.focused === 'Extensions',
 	JSON.stringify(menu),
 );
 errors.push(...without.errors);

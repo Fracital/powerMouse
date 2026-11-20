@@ -53,6 +53,12 @@ await frame.go(controller.extensions.resolveUrl(options.displayUrl));
 `controller.activeTab` (a frame or null) is the tab `chrome.tabs.query({ active: true })`
 answers; a host with tabs sets it as the user switches.
 
+The demo (`demo/public/pm/main.js`, its "extensions" section) is a host
+built on these calls: the bar's buttons with their badges, popups in a
+popover through `mountPopup`, each extension's menu from `menus()`, an
+Extensions page that installs from the Web Store, a file or a folder, and
+`displayUrl`/`resolveUrl` in its address bar.
+
 Every call rejects with an `ExtensionError` whose `code` says what went
 wrong: `bad-source` (nothing installable was given), `bad-package` (not a
 .crx or .zip STomp can read), `no-manifest`, `bad-manifest`, `webstore` (the

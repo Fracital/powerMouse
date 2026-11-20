@@ -1270,6 +1270,10 @@ const goForward = (tab) => step(tab, 'forward');
 
 function activateTab(tab) {
 	activeTab = tab;
+	// the tab chrome.tabs.query({ active: true }) answers, and whose badges
+	// the extensions' buttons show
+	if (controller) controller.activeTab = tab.frame;
+	syncExtensions();
 	for (const other of tabs)
 		other.element.classList.toggle('hidden', other !== tab);
 	landing.classList.add('hidden');
@@ -1325,6 +1329,7 @@ function closeTab(tab, { stayInRecents = false } = {}) {
 	const frames = controller.frames.indexOf(tab.frame);
 	if (frames !== -1) controller.frames.splice(frames, 1);
 	if (tab === activeTab) activeTab = tabs[Math.max(0, index - 1)] || null;
+	if (!activeTab) controller.activeTab = null;
 	if (stayInRecents) {
 		recentsIndex = Math.min(recentsIndex, Math.max(0, tabs.length - 1));
 		if (tabs.length) renderRecents();
@@ -1516,7 +1521,7 @@ function syncCardBar(tab) {
 	const tools = label.querySelectorAll('.toolbtn');
 	tools[0].classList.toggle('disabled', !canStep(tab, 'back'));
 	tools[1].classList.toggle('disabled', !canStep(tab, 'forward'));
-	label.querySelector('.urlText').textContent = shownUrl(tab);
+	label.querySelector('.urlText').textContent = barUrl(shownUrl(tab));
 	syncStar(label.querySelector('.starbtn'), tab);
 }
 
@@ -1531,6 +1536,32 @@ function mirrorLiveBar(label) {
 	const live = $('toolStar');
 	star.disabled = live.disabled;
 	star.setAttribute('aria-pressed', live.getAttribute('aria-pressed'));
+	label.querySelector('.cardExtensions')?.replaceWith(extensionsCopy());
+}
+
+/**
+ * A picture of the bar's extension buttons and puzzle piece, for a card's
+ * copy of the bar: the same boxes, so the address box is as wide as the
+ * live one it lands on
+ */
+function extensionsCopy() {
+	const copy = document.createElement('span');
+	copy.className = 'cardExtensions';
+	copy.setAttribute('aria-hidden', 'true');
+	const actions = $('extActions').cloneNode(true);
+	actions.removeAttribute('id');
+	for (const button of actions.querySelectorAll('button')) {
+		const picture = document.createElement('span');
+		picture.className = button.className;
+		picture.append(...button.childNodes);
+		button.replaceWith(picture);
+	}
+	const puzzle = document.createElement('span');
+	puzzle.className = 'toolbtn extbtn';
+	puzzle.hidden = $('toolExtensions').hidden;
+	puzzle.append($('toolExtensions').querySelector('img').cloneNode());
+	copy.append(actions, puzzle);
+	return copy;
 }
 
 function createLabel(tab) {
@@ -1611,7 +1642,7 @@ function createLabel(tab) {
 	menu.className = 'menubtn';
 	menu.setAttribute('aria-hidden', 'true');
 	menu.append($('toolMenu').querySelector('img').cloneNode());
-	chrome.append(box, menu);
+	chrome.append(box, extensionsCopy(), menu);
 
 	const close = document.createElement('button');
 	close.className = 'close';
@@ -2016,7 +2047,16 @@ document.addEventListener('auxclick', proxyLink);
 let pressedEarly = false;
 
 async function navigate(input, { newTab = false } = {}) {
-	const url = normalizeUrl(SEARCH.query(input.trim()));
+	const typed = input.trim();
+	// an extension's page, as the bar shows it (chrome-extension://<id>/...)
+	// or as its extension serves it, opens as that page: no search for it
+	const extensions = controller?.extensions;
+	const url = normalizeUrl(
+		extensions &&
+			(/^chrome-extension:\/\//i.test(typed) || extensions.extensionOf(typed))
+			? extensions.resolveUrl(typed)
+			: SEARCH.query(typed),
+	);
 	if (!controller) {
 		// still booting (service worker, transport module): a press must switch
 		// to the browser view at once, not get dropped. Show the view now and
@@ -2049,7 +2089,7 @@ async function navigate(input, { newTab = false } = {}) {
 	tab.stayedOn = null;
 	// a fresh navigation: the blocked count starts over for this tab's page
 	blockedCounts.set(tab.frame, 0);
-	omni.url.value = url;
+	omni.url.value = barUrl(url);
 	syncToolbar();
 	syncCardBar(tab);
 	// the page a browser navigates to from its address bar has focus (its
@@ -2078,6 +2118,9 @@ async function navigate(input, { newTab = false } = {}) {
 const shownUrl = (tab) =>
 	tab.goingTo?.url || tab.stayedOn || tab.frame.url || tab.url || '';
 
+/** a URL as the address bar shows it: an extension's page as chrome-extension:// */
+const barUrl = (url) => controller?.extensions?.displayUrl(url) ?? url;
+
 /** the frame has a document other than the one the navigation leaves: committed */
 function settleGoing(tab, reported = tab.reported) {
 	if (!tab.goingTo) return;
@@ -2105,7 +2148,8 @@ function syncOmnibox(force = false) {
 	recordUrl(activeTab);
 	syncToolbar();
 	if (!force && document.activeElement === omni.url) return;
-	if (omni.url.value !== url) omni.url.value = url;
+	const shown = barUrl(url);
+	if (omni.url.value !== shown) omni.url.value = shown;
 	writeHash(url);
 }
 
@@ -3767,6 +3811,8 @@ const shieldsScrim = $('shieldsScrim');
 
 function activeHost() {
 	const url = pageUrl(activeTab);
+	// (an extension's own page has no shields, as in Chrome)
+	if (url && controller?.extensions?.extensionOf(url)) return null;
 	try {
 		return url ? new URL(url).hostname : null;
 	} catch {
@@ -5227,6 +5273,7 @@ function openShieldsPage(view, from = null) {
 	if (view === 'global') buildGlobalPage();
 	else if (view === 'passkeys') buildPasskeysPage();
 	else if (view === 'about') buildAboutPage();
+	else if (view === 'extensions') buildExtensionsPage();
 	else buildFilterListsPage();
 	if (!shieldsPageOpen()) {
 		shieldsPageInert = [...document.body.children].filter(
@@ -5323,9 +5370,10 @@ function shieldsComingSoon(title) {
  * it closes (its button again, a click outside, Escape, an item chosen): the
  * global .hidden, so nothing of it is left to see, click or focus. Escape
  * closes it before anything else sees the key, and the focus goes back to
- * its button when it was in the popover.
+ * its button when it was in the popover. `onClose` hears each close (an
+ * extension's popup unloads then).
  */
-function popover(panel, scrim) {
+function popover(panel, scrim, { onClose = null } = {}) {
 	let anchor = null;
 	const isOpen = () => !panel.classList.contains('hidden');
 	const position = () => {
@@ -5351,6 +5399,7 @@ function popover(panel, scrim) {
 		scrim.classList.add('hidden');
 		anchor.setAttribute('aria-expanded', 'false');
 		if (inside && anchor.isConnected) anchor.focus();
+		onClose?.();
 	};
 	scrim.addEventListener('click', close);
 	addEventListener('resize', () => {
@@ -5390,11 +5439,12 @@ shieldsButton.addEventListener('click', () => {
 	else openShields();
 });
 
-// ---- the menu: Fullscreen and About -----------------------------------------
+// ---- the menu: Fullscreen, Extensions and About -----------------------------
 // The button beside the address box (and its twin in the tab manager, which
 // hides the bar) opens the Shields panel's popover as a menu: Fullscreen puts
-// this page, STomp's window, in fullscreen and takes it out again, and About
-// shows the proxy's build.
+// this page, STomp's window, in fullscreen and takes it out again, Extensions
+// lists the extensions as the puzzle piece does (which a narrow bar has no
+// room for), and About shows the proxy's build.
 const menuPanel = $('pmMenu');
 const menuPopover = popover(menuPanel, $('menuScrim'));
 const menuFullscreen = $('menuFullscreen');
@@ -5523,6 +5573,669 @@ menuAbout.addEventListener('click', () => {
 	openShieldsPage('about');
 });
 
+// ---- extensions ------------------------------------------------------------------
+// Chrome extensions (docs/extensions.md) on the bar after the address box, as
+// in Chrome: each enabled one's button for the active tab, with its icon and
+// badge (four at most, none on a phone's bar), then the puzzle piece. Its
+// list has every enabled extension, each with its menu, and opens the
+// Extensions page (the settings-page dialog): add one from the Chrome Web
+// Store, a .crx or .zip, or an unpacked folder; turn one on or off; its
+// options, its permissions; update or remove it. A click on a button does
+// what Chrome's does: it shows the popup under the button, or the background
+// hears action.onClicked. The menu's Extensions item opens the same list.
+const extActions = $('extActions');
+const extButton = $('toolExtensions');
+const extPanel = $('extPanel');
+const extMenu = $('extMenu');
+const extPopup = $('extPopup');
+const menuExtensions = $('menuExtensions');
+const EXT_ON_BAR = 4;
+// the contexts of a menu item an extension's button shows (Chrome's action menu)
+const EXT_ACTION_CONTEXTS = ['action', 'browser_action', 'page_action', 'all'];
+Object.assign(SHIELD_ICONS, {
+	puzzle:
+		'<path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" d="M4.5 8.5h3.6a2.4 2.4 0 1 1 4.3-1.6c0 .6-.1 1.1-.5 1.6h3.6v3.6a2.4 2.4 0 1 1 1.6 4.3c-.6 0-1.1-.1-1.6-.5v3.6h-11v-4.2a2.4 2.4 0 1 0 0-3.6z"/>',
+	more: '<circle cx="12" cy="5.5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="18.5" r="1.7"/>',
+	remove:
+		'<path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12"/>',
+});
+menuExtensions.innerHTML = `${shieldIcon('puzzle')}<span>Extensions</span>`;
+
+// (made top first: Escape closes the one in front, an extension's menu
+// before the list it opened from)
+let extPopupHandle = null;
+const extMenuPopover = popover(extMenu, $('extMenuScrim'));
+const extPanelPopover = popover(extPanel, $('extScrim'));
+const extPopupPopover = popover(extPopup, $('extPopupScrim'), {
+	// however it closes, the popup's document unloads (Chrome's does)
+	onClose: () => {
+		const handle = extPopupHandle;
+		extPopupHandle = null;
+		handle?.close();
+		extPopup.replaceChildren();
+	},
+});
+
+/** the installed extensions and the active tab's buttons, as last read */
+let extInstalled = [];
+let extShown = [];
+let extSyncs = 0;
+let extSyncTimer = 0;
+/** the button the puzzle piece's list opened from (the puzzle, or the menu's) */
+let extPanelAnchor = extButton;
+/** what the Extensions page does once drawn: { focus: id } or { remove: id } */
+let extPageAsk = null;
+
+const extApi = () => controller?.extensions ?? null;
+
+/** read the extensions and the active tab's buttons again, and redraw */
+async function syncExtensions() {
+	const api = extApi();
+	if (!api) return;
+	const sync = ++extSyncs;
+	let installed;
+	let actions;
+	try {
+		[installed, actions] = await Promise.all([api.list(), api.actions()]);
+	} catch (error) {
+		console.warn('Extensions:', error.message);
+		return;
+	}
+	if (sync !== extSyncs) return; // a newer read is on its way
+	extInstalled = installed;
+	extShown = actions;
+	renderExtActions();
+	if (extPanelPopover.isOpen()) renderExtPanel();
+	if (shieldsPageOpen() && shieldsPage.dataset.view === 'extensions')
+		renderExtensionsPage();
+}
+
+/** a burst of changes (badges as a page loads) is one read */
+function scheduleExtSync() {
+	clearTimeout(extSyncTimer);
+	extSyncTimer = setTimeout(syncExtensions, 40);
+}
+
+/** an extension's icon (its action's for the tab), or its initial without one */
+function extIcon(name, iconUrl, className = 'extIcon') {
+	if (iconUrl) {
+		const image = element('img', className);
+		image.src = iconUrl;
+		image.alt = '';
+		image.draggable = false;
+		return image;
+	}
+	return element(
+		'span',
+		`${className} extLetter`,
+		(name || '?').trim().charAt(0).toUpperCase(),
+	);
+}
+
+function extBadge(action, className = 'extBadge') {
+	const badge = element('span', className, action?.badgeText ?? '');
+	badge.hidden = !action?.badgeText;
+	if (action?.badgeColor) badge.style.background = action.badgeColor;
+	if (action?.badgeTextColor) badge.style.color = action.badgeTextColor;
+	return badge;
+}
+
+/** the bar's buttons, each kept from draw to draw (a popover is anchored at one) */
+function renderExtActions() {
+	const kept = new Map(
+		[...extActions.children].map((button) => [button.dataset.ext, button]),
+	);
+	const buttons = extShown.slice(0, EXT_ON_BAR).map((action) => {
+		let button = kept.get(action.id);
+		if (!button) {
+			button = element('button', 'extAction');
+			button.type = 'button';
+			button.dataset.ext = action.id;
+			button.setAttribute('aria-haspopup', 'dialog');
+			button.addEventListener('click', () => runExtAction(action.id, button));
+			button.addEventListener('contextmenu', (event) => {
+				event.preventDefault();
+				openExtMenu(action.id, button);
+			});
+		}
+		button.title = action.title || action.name;
+		button.setAttribute('aria-label', action.title || action.name);
+		// (Chrome greys an action off for this tab; its menu still opens)
+		button.classList.toggle('off', !action.enabled);
+		button.replaceChildren(
+			extIcon(action.name, action.iconUrl),
+			extBadge(action),
+		);
+		return button;
+	});
+	extActions.replaceChildren(...buttons);
+}
+
+/** a failed call of the extensions API, said where the user is */
+function extFailed(error) {
+	if (shieldsPageOpen() && shieldsPage.dataset.view === 'extensions')
+		setShieldsPageStatus(error.message, true);
+	else setStatus(`Extension: ${error.message}`, true);
+}
+
+/** a visible button to anchor a popup or a menu at, for one that is hidden */
+const extAnchor = (button) =>
+	button?.isConnected && button.getClientRects().length
+		? button
+		: extButton.getClientRects().length
+			? extButton
+			: menuButton;
+
+/** what a click on an extension's button does: its popup, or onClicked */
+async function runExtAction(id, anchor) {
+	const api = extApi();
+	extPanelPopover.close();
+	extMenuPopover.close();
+	if (extPopupHandle?.id === id && extPopupPopover.isOpen())
+		return extPopupPopover.close(); // its button again closes it
+	let result;
+	try {
+		result = await api.clickAction(id);
+	} catch (error) {
+		return extFailed(error);
+	}
+	// `clicked`: the background heard action.onClicked; `disabled`: nothing
+	if (result === 'popup') showExtPopup(id, extAnchor(anchor));
+}
+
+async function showExtPopup(id, anchor) {
+	extPopupPopover.close();
+	const frame = element('iframe', 'extPopupFrame');
+	frame.title = 'Extension popup';
+	extPopup.replaceChildren(frame);
+	extPopupPopover.open(anchor);
+	let handle;
+	try {
+		handle = await extApi().mountPopup(id, frame);
+	} catch (error) {
+		extPopupPopover.close();
+		return extFailed(error);
+	}
+	// closed while it mounted
+	if (!extPopup.contains(frame)) return handle.close();
+	extPopupHandle = handle;
+	// the size its document asks for, clamped as Chrome clamps popups
+	handle.onResize(({ width, height }) => {
+		frame.style.width = `${width}px`;
+		frame.style.height = `${height}px`;
+	});
+	// its window.close()
+	handle.onClose(() => {
+		if (extPopupHandle === handle) extPopupPopover.close();
+	});
+}
+
+/** the puzzle piece's list: every enabled extension, its button and its menu */
+function renderExtPanel() {
+	const focused = extPanel.contains(document.activeElement)
+		? document.activeElement.dataset.ext
+		: null;
+	extPanel.replaceChildren(element('div', 'extPanelHead', 'Extensions'));
+	const enabled = extInstalled.filter((info) => info.enabled);
+	if (!enabled.length)
+		extPanel.append(
+			element(
+				'p',
+				'extPanelNote',
+				extInstalled.length
+					? 'Every extension is turned off.'
+					: 'No extensions yet. Add one from the Chrome Web Store, a file or a folder.',
+			),
+		);
+	for (const info of enabled) {
+		const action = extShown.find((shown) => shown.id === info.id);
+		const row = element('div', 'extRow');
+		row.dataset.ext = info.id;
+		const main = element('button', 'pmMenuItem extRowMain');
+		main.type = 'button';
+		main.dataset.ext = info.id;
+		main.title = action?.title || info.name;
+		main.append(
+			extIcon(info.name, action?.iconUrl ?? info.iconUrl),
+			element('span', 'extRowName', info.name),
+			extBadge(action, 'extBadge inline'),
+		);
+		// an extension without a button has nothing to click: its card
+		main.addEventListener('click', () =>
+			action
+				? runExtAction(info.id, extPanelAnchor)
+				: (extPanelPopover.close(), openExtensionsPage({ focus: info.id })),
+		);
+		const more = element('button', 'extRowMore');
+		more.type = 'button';
+		more.dataset.ext = `${info.id}:more`;
+		more.setAttribute('aria-label', `${info.name}: menu`);
+		more.setAttribute('aria-haspopup', 'menu');
+		more.innerHTML = shieldIcon('more');
+		more.addEventListener('click', () => openExtMenu(info.id, more));
+		row.append(main, more);
+		extPanel.append(row);
+	}
+	extPanel.append(element('div', 'extMenuRule'));
+	const manage = element('button', 'pmMenuItem extManage');
+	manage.type = 'button';
+	manage.dataset.ext = 'manage';
+	manage.innerHTML = `${shieldIcon('gear')}<span>Manage extensions</span>`;
+	manage.addEventListener('click', () => {
+		extPanelPopover.close();
+		openExtensionsPage();
+	});
+	extPanel.append(manage);
+	if (focused)
+		extPanel.querySelector(`[data-ext="${CSS.escape(focused)}"]`)?.focus();
+}
+
+function openExtPanel(anchor) {
+	extPanelAnchor = anchor;
+	renderExtPanel();
+	extPanelPopover.open(anchor);
+	extPanel.querySelector('button')?.focus();
+	syncExtensions();
+}
+
+extButton.addEventListener('click', () => {
+	if (extPanelPopover.isOpen()) return extPanelPopover.close();
+	openExtPanel(extButton);
+});
+menuExtensions.addEventListener('click', () => {
+	menuPopover.close();
+	openExtPanel(extAnchor(extButton));
+});
+
+/** an extension's menu: its own action items, then Options, Manage, Remove */
+async function openExtMenu(id, anchor) {
+	const info = extInstalled.find((installed) => installed.id === id);
+	if (!info) return;
+	let items = [];
+	try {
+		items = await extApi().menus(id);
+	} catch {
+		// its own items are left out
+	}
+	items = items.filter(
+		(item) =>
+			item.visible !== false &&
+			item.parentId === undefined &&
+			(item.contexts ?? ['page']).some((context) =>
+				EXT_ACTION_CONTEXTS.includes(context),
+			),
+	);
+	extMenu.replaceChildren(element('div', 'extPanelHead', info.name));
+	const add = (label, icon, run, item = null) => {
+		const button = element('button', 'pmMenuItem');
+		button.type = 'button';
+		button.tabIndex = -1;
+		const checkable = item?.type === 'checkbox' || item?.type === 'radio';
+		button.setAttribute(
+			'role',
+			checkable
+				? item.type === 'radio'
+					? 'menuitemradio'
+					: 'menuitemcheckbox'
+				: 'menuitem',
+		);
+		if (checkable) button.setAttribute('aria-checked', String(!!item.checked));
+		button.disabled = item?.enabled === false;
+		button.innerHTML = icon
+			? shieldIcon(icon)
+			: '<span class="extMenuMark" aria-hidden="true"></span>';
+		button.append(element('span', '', label));
+		button.addEventListener('click', () => {
+			extMenuPopover.close();
+			extPanelPopover.close();
+			run();
+		});
+		extMenu.append(button);
+	};
+	for (const item of items) {
+		if (item.type === 'separator') {
+			extMenu.append(element('div', 'extMenuRule'));
+			continue;
+		}
+		add(
+			String(item.title ?? item.id),
+			null,
+			() => clickExtMenu(info, item),
+			item,
+		);
+	}
+	if (items.length) extMenu.append(element('div', 'extMenuRule'));
+	if (info.optionsUrl) add('Options', 'gear', () => openExtOptions(id));
+	add('Manage extension', 'puzzle', () => openExtensionsPage({ focus: id }));
+	add('Remove from powerMouse', 'remove', () =>
+		openExtensionsPage({ remove: id }),
+	);
+	extMenuPopover.open(anchor);
+	extMenuItems()[0]?.focus();
+}
+
+const extMenuItems = () =>
+	[...extMenu.querySelectorAll('.pmMenuItem')].filter((item) => !item.disabled);
+
+/** tell the extension its item was chosen (contextMenus.onClicked) */
+function clickExtMenu(info, item) {
+	const checkable = item.type === 'checkbox' || item.type === 'radio';
+	const page = activeTab ? pageUrl(activeTab) : null;
+	extApi()
+		.clickMenu(info.id, {
+			menuItemId: item.id,
+			editable: false,
+			...(page && { pageUrl: page }),
+			...(checkable && {
+				wasChecked: !!item.checked,
+				checked: item.type === 'radio' ? true : !item.checked,
+			}),
+		})
+		.catch(extFailed);
+}
+
+/** its options page, in a tab of its own (the bar shows chrome-extension://) */
+async function openExtOptions(id) {
+	try {
+		const options = await extApi().options(id);
+		navigate(options.displayUrl, { newTab: true });
+	} catch (error) {
+		extFailed(error);
+	}
+}
+
+// the extension menu's keys, as the menu's: the arrows, Home and End move,
+// Tab leaves it, and no key reaches the tab manager behind it
+addEventListener(
+	'keydown',
+	(event) => {
+		if (!extMenuPopover.isOpen()) return;
+		const items = extMenuItems();
+		const at = items.indexOf(document.activeElement);
+		const next = {
+			ArrowDown: (at + 1) % items.length,
+			ArrowUp: (at <= 0 ? items.length : at) - 1,
+			Home: 0,
+			End: items.length - 1,
+		}[event.key];
+		if (event.key === 'Tab') return extMenuPopover.close();
+		if (event.key === 'Escape') return; // the popover's own
+		event.stopImmediatePropagation();
+		if (next === undefined) return;
+		event.preventDefault();
+		items[next]?.focus();
+	},
+	true,
+);
+
+/** the Extensions page, its card for `focus` or its removal asked (`remove`) */
+function openExtensionsPage(ask = null) {
+	extPageAsk = ask;
+	openShieldsPage('extensions');
+}
+
+function buildExtensionsPage() {
+	shieldsPage.dataset.view = 'extensions';
+	shieldsPage.innerHTML = `
+		<div class="spHead">
+			<h2 class="spTitle" id="shieldsPageTitle">Extensions</h2>
+			<button class="spClose" id="spClose" type="button" aria-label="Close">×</button>
+		</div>
+		<div class="spBody">
+			<section class="spSection">
+				<h3 class="spSectionTitle">Add an extension</h3>
+				<p class="spSectionNote">From the Chrome Web Store (the extension's page or its id), a .crx or .zip file, or an unpacked extension's folder. An extension runs on the sites you visit here, with the permissions it asks for.</p>
+				<form class="spAddRow" id="spExtStoreForm" autocomplete="off">
+					<input class="spInput" id="spExtStore" type="text" spellcheck="false" placeholder="Web Store address or extension id" aria-label="Chrome Web Store address or extension id" />
+					<button class="spBtn" id="spExtAdd" type="submit">Add</button>
+				</form>
+				<div class="spRowButtons">
+					<button class="spBtn ghost" id="spExtFile" type="button">Add a file</button>
+					<button class="spBtn ghost" id="spExtFolder" type="button">Load a folder</button>
+				</div>
+				<input id="spExtFileInput" type="file" accept=".crx,.zip" hidden />
+				<input id="spExtFolderInput" type="file" webkitdirectory hidden />
+			</section>
+			<section class="spSection">
+				<h3 class="spSectionTitle">Installed</h3>
+				<div class="extList" id="spExtList" aria-busy="true"></div>
+			</section>
+			<div class="spStatus" id="spStatus" aria-live="polite"></div>
+		</div>`;
+	const page = (selector) => shieldsPage.querySelector(selector);
+	page('#spClose').addEventListener('click', closeShieldsPage);
+	page('#spExtStoreForm').addEventListener('submit', (event) => {
+		event.preventDefault();
+		const value = page('#spExtStore').value.trim();
+		if (!value) return;
+		installExtension(value, 'from the Chrome Web Store').then((info) => {
+			if (info) page('#spExtStore').value = '';
+		});
+	});
+	const file = page('#spExtFileInput');
+	const folder = page('#spExtFolderInput');
+	page('#spExtFile').addEventListener('click', () => file.click());
+	page('#spExtFolder').addEventListener('click', () => folder.click());
+	file.addEventListener('change', () => {
+		const chosen = file.files[0];
+		if (chosen)
+			installExtension(chosen, chosen.name, { filename: chosen.name });
+		file.value = '';
+	});
+	folder.addEventListener('change', () => {
+		const files = folder.files;
+		if (files.length) installExtension(files, 'the folder');
+		folder.value = '';
+	});
+	renderExtensionsPage();
+	syncExtensions();
+}
+
+async function installExtension(source, what, options = {}) {
+	setShieldsPageStatus(`Adding ${what}…`);
+	try {
+		const info = await extApi().install(source, options);
+		setShieldsPageStatus(`Added ${info.name} ${info.version}.`);
+		extPageAsk = { focus: info.id };
+		await syncExtensions();
+		return info;
+	} catch (error) {
+		setShieldsPageStatus(error.message, true);
+		return null;
+	}
+}
+
+const EXT_SOURCES = {
+	webstore: 'Chrome Web Store',
+	package: 'From a file',
+	unpacked: 'Unpacked',
+};
+
+/** what an extension may reach, in Chrome's words where it has them */
+function extReach(info) {
+	const all = info.hostPermissions.some((pattern) =>
+		/^(<all_urls>|\*:\/\/\*\/\*|https?:\/\/\*\/\*)$/.test(pattern),
+	);
+	const lines = [];
+	if (all) lines.push('Read and change all your data on all websites');
+	else
+		for (const pattern of info.hostPermissions)
+			lines.push(`Read and change your data on ${pattern}`);
+	for (const permission of info.permissions) lines.push(permission);
+	return lines;
+}
+
+/** the Extensions page's cards, one per installed extension */
+function renderExtensionsPage() {
+	const list = shieldsPage.querySelector('#spExtList');
+	if (!list) return;
+	const ask = extPageAsk;
+	// a redraw keeps a removal asked and the focus where they were
+	const confirming =
+		ask?.remove ??
+		list.querySelector('.extConfirm')?.closest('[data-ext]')?.dataset.ext;
+	const focused = list.contains(document.activeElement)
+		? document.activeElement.dataset.control
+		: null;
+	list.replaceChildren();
+	list.removeAttribute('aria-busy');
+	if (!extInstalled.length)
+		list.append(element('p', 'spSectionNote', 'No extensions installed.'));
+	for (const info of extInstalled) {
+		const card = element('div', `extCard${info.enabled ? '' : ' off'}`);
+		card.dataset.ext = info.id;
+		const head = element('div', 'extCardHead');
+		const text = element('div', 'spRowText');
+		const name = element('div', 'spListName', info.name);
+		name.append(' ', element('span', 'spTag', info.version));
+		text.append(name);
+		if (info.description)
+			text.append(element('div', 'spListSource', info.description));
+		const toggle = element('input', 'shieldsToggle small');
+		toggle.type = 'checkbox';
+		toggle.checked = info.enabled;
+		toggle.dataset.control = `${info.id}:toggle`;
+		toggle.setAttribute('aria-label', `${info.name} on`);
+		toggle.addEventListener('change', async () => {
+			const on = toggle.checked;
+			try {
+				await (on ? extApi().enable(info.id) : extApi().disable(info.id));
+				setShieldsPageStatus(`${info.name} is ${on ? 'on' : 'off'}.`);
+			} catch (error) {
+				toggle.checked = !on;
+				setShieldsPageStatus(error.message, true);
+			}
+			syncExtensions();
+		});
+		head.append(extIcon(info.name, info.iconUrl, 'extCardIcon'), text, toggle);
+		const facts = element(
+			'div',
+			'spListSource extFacts',
+			`${EXT_SOURCES[info.source] ?? info.source} · Manifest V${info.manifestVersion} · ID ${info.id}`,
+		);
+		facts.dir = 'ltr';
+		card.append(head, facts);
+		const reach = extReach(info);
+		if (reach.length || info.warnings.length) {
+			const details = element('details', 'extPerms');
+			details.append(
+				element(
+					'summary',
+					'',
+					reach.length
+						? `Permissions (${reach.length})`
+						: `Warnings (${info.warnings.length})`,
+				),
+			);
+			const rows = element('ul');
+			for (const line of reach) rows.append(element('li', '', line));
+			for (const warning of info.warnings)
+				rows.append(element('li', 'warn', warning));
+			details.append(rows);
+			card.append(details);
+		}
+		const buttons = element('div', 'spRowButtons extButtons');
+		const button = (label, control, run, kind = 'ghost') => {
+			const node = element('button', `spBtn ${kind}`, label);
+			node.type = 'button';
+			node.dataset.control = `${info.id}:${control}`;
+			node.addEventListener('click', run);
+			buttons.append(node);
+			return node;
+		};
+		if (confirming === info.id) {
+			const line = element(
+				'div',
+				'extConfirm',
+				`Remove ${info.name}? Its settings and data go with it.`,
+			);
+			buttons.append(line);
+			button(
+				'Remove',
+				'confirm',
+				async () => {
+					extPageAsk = null;
+					try {
+						await extApi().remove(info.id);
+						setShieldsPageStatus(`Removed ${info.name}.`);
+					} catch (error) {
+						setShieldsPageStatus(error.message, true);
+					}
+					syncExtensions();
+				},
+				'danger',
+			);
+			button('Cancel', 'cancel', () => {
+				extPageAsk = null;
+				line.remove();
+				renderExtensionsPage();
+				list.querySelector(`[data-control="${info.id}:remove"]`)?.focus();
+			});
+		} else {
+			if (info.optionsUrl)
+				button('Options', 'options', () => {
+					closeShieldsPage();
+					openExtOptions(info.id);
+				});
+			if (info.source === 'webstore')
+				button('Update', 'update', async () => {
+					setShieldsPageStatus(`Updating ${info.name}…`);
+					try {
+						const updated = await extApi().update(info.id);
+						setShieldsPageStatus(`${updated.name} is at ${updated.version}.`);
+					} catch (error) {
+						setShieldsPageStatus(error.message, true);
+					}
+					syncExtensions();
+				});
+			button('Remove', 'remove', () => {
+				extPageAsk = { remove: info.id };
+				renderExtensionsPage();
+			});
+		}
+		card.append(buttons);
+		list.append(card);
+	}
+	const target =
+		(ask?.remove &&
+			list.querySelector(`[data-control="${ask.remove}:confirm"]`)) ||
+		(ask?.focus &&
+			list.querySelector(`[data-ext="${ask.focus}"] .shieldsToggle`)) ||
+		(focused && list.querySelector(`[data-control="${focused}"]`)) ||
+		(confirming &&
+			list.querySelector(`[data-control="${confirming}:confirm"]`));
+	if (ask?.focus) {
+		extPageAsk = null;
+		target?.scrollIntoView({ block: 'nearest' });
+	}
+	target?.focus();
+}
+
+/** follow the extensions once the controller is up */
+function watchExtensions() {
+	const api = extApi();
+	if (!api) {
+		extButton.hidden = true;
+		menuExtensions.hidden = true;
+		return;
+	}
+	api.onChange((change) => {
+		// an extension opened a tab while the host had none to open it from
+		if (change.type === 'tab' && change.url)
+			navigate(barUrl(change.url), { newTab: true });
+		// another tab's badge: nothing on this bar changes
+		if (
+			change.type === 'action' &&
+			change.tabId !== undefined &&
+			activeTab &&
+			change.tabId !== controller.tabIdOf(activeTab.frame)
+		)
+			return;
+		scheduleExtSync();
+	});
+	syncExtensions();
+}
+
 /** About: the proxy's build and what the console badges said */
 function buildAboutPage() {
 	shieldsPage.dataset.view = 'about';
@@ -5646,6 +6359,7 @@ booted
 		// a kept, non-default filter-list config is applied once the controller
 		// is up (a fresh visit loads the defaults with no extra engine build)
 		applyAdblockConfigOnBoot();
+		watchExtensions(); // the bar's extension buttons
 		// restore a proxied URL from the fragment after a refresh (unless a
 		// page was asked for while the controller came up, or the user went
 		// home, which leaves no fragment)
