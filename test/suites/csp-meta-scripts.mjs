@@ -11,7 +11,7 @@
 // console's messages are compared with the page loaded natively, in both
 // modes. The same page under a header policy is the baseline.
 import { createHash } from 'node:crypto';
-import { compareCases } from '../csp-lib.mjs';
+import { compareCases, FIELDS } from '../csp-lib.mjs';
 import { ranText } from '../csp-server.mjs';
 import { done, launch } from '../lib.mjs';
 
@@ -36,7 +36,9 @@ const laid = (spec) => ({
 	...spec,
 	probes: [
 		...spec.l
-			.filter((token) => /^(i|in|ix|e|en|eo|di|de|wi|we|sty):/.test(token))
+			.filter((token) =>
+				/^(i|in|ix|e|en|eo|di|de|wi|we|img|fx|sty):/.test(token),
+			)
 			.map((token) => token.slice(token.indexOf(':') + 1)),
 		'reports',
 	],
@@ -181,7 +183,59 @@ const STYLE_CASES = {
 	}),
 };
 
+// Where each violation and report of a script of the parser says its code
+// was (`source`: sourceFile, lineNumber, columnNumber): the document's URL
+// and where an inline script's text starts in the markup, its lines its
+// line feeds (CR LF and a lone CR, `crlf`) and its columns UTF-16 units
+// (`wide`), in the first piece of the markup and a later one; an external
+// one's names none. A script's violations come in the order the parser
+// prepares them.
+const PLACED = {
+	'where a meta refuses': laid({
+		m: NONCE,
+		source: true,
+		l: [
+			'meta',
+			'crlf',
+			'i:a',
+			'wide',
+			'i:b',
+			'e:c',
+			'wide',
+			'e:d',
+			'in:ok',
+			'gap',
+			'i:late',
+			'e:lateext',
+			'body',
+			'i:bodyscript',
+		],
+	}),
+	'where a header refuses': laid({
+		p: NONCE,
+		source: true,
+		l: ['crlf', 'i:a', 'wide', 'i:b', 'e:c', 'gap', 'i:late', 'body', 'i:end'],
+	}),
+};
+
+// A report-only policy's refusals of loads that went out (an image, a
+// fetch: the worker's) and of an external script under a list of nonces
+// (the inject's) are reported, a report each, as natively (not where:
+// docs/csp.md). Chrome's console messages of the loads are not the
+// inject's to write, so they are not compared.
+const REPORTED = {
+	'report-only loads': laid({
+		ro: "img-src 'none'; connect-src 'none'; script-src 'nonce-probes'",
+		l: ['img:pic', 'fx:fetched', 'e:ext', 'i:plain', 'img:pic2'],
+	}),
+};
+
 const browser = await launch();
 await compareCases(browser, CASES, { consoleMessages: true });
 await compareCases(browser, STYLE_CASES, { consoleMessages: true });
+await compareCases(browser, PLACED, {
+	fields: [...FIELDS, 'sourceFile', 'lineNumber', 'columnNumber'],
+	consoleMessages: true,
+});
+await compareCases(browser, REPORTED);
 await done(browser);

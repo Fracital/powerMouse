@@ -382,6 +382,10 @@ export const ranText = (name) =>
  *                    inline / external script of <n> after itself, no nonce
  *   wi:<n> / we:<n>  the same by document.write
  *   sty:<n>          an inline <style id="<n>"> that sets --<n> on the root
+ *   img:<n> / fx:<n> an image by /csp/ran.js?n=<n> / a fetch of it
+ *   crlf / wide      line ends of CR LF and a lone CR / non-ASCII text
+ *                    before the next token, on its line
+ * Each token but crlf and wide ends its line.
  * With `br` the page goes brotli-compressed, each piece flushed.
  */
 function layout(req, res, query) {
@@ -402,7 +406,8 @@ function layout(req, res, query) {
 		const kind = colon === -1 ? token : token.slice(0, colon);
 		const arg = colon === -1 ? '' : token.slice(colon + 1);
 		const n = attribute(arg);
-		const add = (markup) => (parts[parts.length - 1] += markup);
+		// (a line each, for the places violations name)
+		const add = (markup) => (parts[parts.length - 1] += `${markup}\n`);
 		switch (kind) {
 			case 'meta':
 				add(arg ? meta(metas[Number(arg)] ?? '') : metas.map(meta).join(''));
@@ -420,6 +425,22 @@ function layout(req, res, query) {
 			case 'gap':
 				add(`<!--${'.'.repeat(2048)}-->`);
 				parts.push('');
+				break;
+			// line ends as the parser counts them (CR LF one, a lone CR one),
+			// and characters outside the BMP before the next token on its line
+			case 'crlf':
+				parts[parts.length - 1] +=
+					'<!-- a -->\r\n<!-- b -->\r<!-- c -->\r\n<!-- d -->\r';
+				break;
+			// a load another directive judges: an image, a fetch
+			case 'img':
+				add(`<img data-n="${n}" src="${attribute(external(arg))}">`);
+				break;
+			case 'fx':
+				add(helper(`fetch(${JSON.stringify(external(arg))}).catch(() => {});`));
+				break;
+			case 'wide':
+				parts[parts.length - 1] += '<!-- \u00e9\u{1f600} -->';
 				break;
 			case 'body':
 				add('</head><body>');

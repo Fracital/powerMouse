@@ -13,8 +13,21 @@
 	window.__ran = (name) => {
 		ran[name] = (ran[name] ?? 0) + 1;
 	};
+	// where each violation's code was, with `source` (csp-lib caseURL)
+	const places = query.has('source');
+	const place = (from) =>
+		places
+			? {
+					sourceFile: from.sourceFile,
+					lineNumber: from.lineNumber,
+					columnNumber: from.columnNumber,
+				}
+			: {};
 	const events = [];
+	// (not the document's icon, which the browser fetches as it likes)
+	const icon = (url) => /\/favicon\.ico$/.test(url);
 	document.addEventListener('securitypolicyviolation', (event) => {
+		if (icon(event.blockedURI)) return;
 		const target = event.target;
 		events.push({
 			blockedURI: event.blockedURI,
@@ -25,6 +38,7 @@
 			documentURI: event.documentURI,
 			statusCode: event.statusCode,
 			sample: event.sample,
+			...place(event),
 			target:
 				target === document
 					? 'document'
@@ -47,18 +61,20 @@
 		new ReportingObserver(
 			(list) => {
 				for (const { type, body } of list)
-					reports.push(
-						JSON.stringify({
-							type,
-							blockedURL: body.blockedURL,
-							effectiveDirective: body.effectiveDirective,
-							originalPolicy: body.originalPolicy,
-							disposition: body.disposition,
-							documentURL: body.documentURL,
-							statusCode: body.statusCode,
-							sample: body.sample,
-						}),
-					);
+					if (!icon(body.blockedURL))
+						reports.push(
+							JSON.stringify({
+								type,
+								blockedURL: body.blockedURL,
+								effectiveDirective: body.effectiveDirective,
+								originalPolicy: body.originalPolicy,
+								disposition: body.disposition,
+								documentURL: body.documentURL,
+								statusCode: body.statusCode,
+								sample: body.sample,
+								...place(body),
+							}),
+						);
 			},
 			{ types: ['csp-violation'], buffered: true },
 		).observe();

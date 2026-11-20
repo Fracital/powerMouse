@@ -204,8 +204,8 @@ export function reportsSeen(view: ReportView, reports: unknown): unknown {
 /** what a csp-violation report's body holds, in the order its toJSON has it */
 export interface ViolationReportBody {
 	sourceFile: string | null;
-	lineNumber: number;
-	columnNumber: number;
+	lineNumber: number | null;
+	columnNumber: number | null;
 	documentURL: string;
 	referrer: string;
 	blockedURL: string;
