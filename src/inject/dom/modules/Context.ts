@@ -232,6 +232,16 @@ interface ParsedPostMessageArgs {
 	targetOrigin: string;
 }
 
+/** the error of `global`'s postMessage for a target origin that is no URL */
+export const invalidTargetOrigin = (
+	global: typeof globalThis,
+	target: string,
+): DOMException =>
+	new global.DOMException(
+		`Failed to execute 'postMessage' on 'Window': Invalid target origin '${target}' in a call to 'postMessage'.`,
+		'SyntaxError',
+	);
+
 /** whether `value` is a window, of any origin, as `client`'s realm reads it */
 export function isWindow(
 	client: DocumentClient,
@@ -603,14 +613,7 @@ export default class ContextModule extends Module<DocumentClient> {
 						try {
 							return new URL(target).origin;
 						} catch (error) {
-							throw withStack(
-								new moduleClient.global.DOMException(
-									"Failed to execute 'postMessage' on 'Window': Invalid target origin '" +
-										target +
-										"' in a call to 'postMessage'.",
-									'SyntaxError',
-								),
-							);
+							throw withStack(invalidTargetOrigin(moduleClient.global, target));
 						}
 					})();
 		return wanted !== 'null' && wanted === receiverOrigin;

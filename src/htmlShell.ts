@@ -14,7 +14,7 @@ import { CACHE_MARK_SHAPE, realmCacheMark } from './memoryMark';
 import type { Prewritten } from './prewrite';
 import type { ReferrerInfo } from './referrerPolicy';
 import { providedShell } from './rewriteHTML';
-import { injectDocumentJS, rewriterLibJS } from './routeURL';
+import { BUNDLE_CLIENT, injectDocumentJS, rewriterLibJS } from './routeURL';
 import type { ControlInfo } from './serviceWorkerTypes';
 import type { SiteFacts } from './siteFacts';
 import StompURL from './StompURL';
@@ -321,14 +321,19 @@ function shell(
 			: '';
 	const inject = (
 		prewritten?: Prewritten | null,
-	) => `if (typeof globalThis.createClient !== 'function') {
+	) => `if (!(${JSON.stringify(names.client)} in globalThis) && typeof globalThis.createClient !== 'function') {
 	document.write("Stomp bundle did not load. See devtools output for more information.");
 } else {
 	${controlled}if (!(${JSON.stringify(names.client)} in globalThis))
 		createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
 	else {
 		delete globalThis.createClient;
-		${names.client}.takeNamedBase();
+		${names.client}.takeNamedBase();${
+			served
+				? `
+		delete document.URL; delete document.documentURI; delete document.baseURI; delete document.referrer; delete document.domain;`
+				: ''
+		}
 	}${keptFacts(names.client, facts)}${marked(names.client, url)}${
 		clientId
 			? `
@@ -404,7 +409,7 @@ ${blocked}
 		? `<script${attribute}>${gapView(url.url, referrer && 'referrer' in referrer ? referrer.referrer : '')}</script>`
 		: '';
 	return {
-		head: `<!DOCTYPE HTML><html><head><meta charset="utf-8" /></head><body>${gap}${baseScript}${library}<script${loading} src="${injectDocumentJS(url, config)}"></script>${kept}`,
+		head: `<!DOCTYPE HTML><html><head><meta charset="utf-8" /></head><body>${gap}${baseScript}${library}<script${loading} src="${injectDocumentJS(url, config)}" ${BUNDLE_CLIENT}="${names.client}"></script>${kept}`,
 		// the empty script after the one that loads the page: the client
 		// writes the page at its end tag (DocumentClient.loadHTML), before the
 		// shell's parse could end; a type no script runs as, so no policy

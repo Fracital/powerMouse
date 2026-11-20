@@ -17,7 +17,7 @@ import { OwnWeakMap } from '../ownCollections';
 import type DocumentClient from './Client';
 import { deferred } from './deferred';
 import type ContextModule from './modules/Context';
-import { isWindow } from './modules/Context';
+import { invalidTargetOrigin, isWindow } from './modules/Context';
 import { markerPrefix } from './modules/MutationObserver';
 import { Pool } from './pool';
 import { pageSandbox, sandboxTokens } from './sandbox';
@@ -623,12 +623,7 @@ function makeSiteWindows() {
 			try {
 				to = new URL(to).origin;
 			} catch (error) {
-				throw new client.global.DOMException(
-					"Failed to execute 'postMessage' on 'Window': Invalid target origin '" +
-						to +
-						"' in a call to 'postMessage'.",
-					'SyntaxError',
-				);
+				throw invalidTargetOrigin(client.global, to);
 			}
 		// the window's own (cross-origin) postMessage: this realm's would
 		// post to this window, whatever it is called on

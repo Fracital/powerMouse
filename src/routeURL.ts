@@ -439,6 +439,17 @@ export function injectDocumentFile(config?: Config) {
 	return hash ? `${name}?${encodeURIComponent(hash)}` : name;
 }
 
+/**
+ * The attribute of a shell's document bundle script that names the
+ * client the bundle makes. In a window that already holds that client (a
+ * frame its parent injected before it navigated, whose Window the browser
+ * kept) the bundle evaluates nothing: its first statement reads this
+ * (build.js DOCUMENT_GUARD), and what it would make the shell throws away.
+ * In the script's attributes, not its URL, so the file stays one cache
+ * entry and one compiled script for every controller.
+ */
+export const BUNDLE_CLIENT = 'data-c';
+
 export function injectDocumentJS(url: StompURL, config?: Config) {
 	return `${assetBase(url, config)}${injectDocumentFile(config)}`;
 }

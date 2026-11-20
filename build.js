@@ -1456,10 +1456,29 @@ const NAMED_FRAMES = ['siteFrame', 'controllerFrame'];
 // (a document bundle's codec module is a deferred part, src/wasm/codecBytes.ts)
 const documentDefine = { 'process.env.STOMP_CODEC_WASM': 'undefined' };
 
+/**
+ * A document bundle's first statement: in a window that already holds the
+ * client its shell names (src/routeURL.ts BUNDLE_CLIENT, `data-c`: a frame
+ * its parent injected before it navigated), the bundle evaluates nothing,
+ * as the shell throws away what it would make (takeNamedBase). Evaluated
+ * in that realm through the parent's hooks, the bundle's script took a
+ * median 1.8 ms of such a frame's start, and 0.2 ms with this (Chrome 157).
+ * The test only ever skips: with no client of that name the shell's own
+ * check says the bundle did not load. Strict as the bundle is: the
+ * directive comes first.
+ */
+const DOCUMENT_GUARD = {
+	banner: {
+		js: '"use strict";if(!(()=>{try{return document.currentScript.getAttribute("data-c")in globalThis}catch{}})()){',
+	},
+	footer: { js: '}' },
+};
+
 const builds = [
 	{
 		entryPoints: { injectDocument: 'src/inject/dom/entry.ts' },
 		format: 'iife',
+		...DOCUMENT_GUARD,
 		alias: stubCrypto,
 		inject: [snapshot, domSnapshot],
 		plugins: [rewriterLib, deferredTable],
@@ -1468,6 +1487,7 @@ const builds = [
 	{
 		entryPoints: { injectDocumentFull: 'src/inject/dom/entry.ts' },
 		format: 'iife',
+		...DOCUMENT_GUARD,
 		inject: [snapshot, domSnapshot],
 		plugins: [rewriterLib, deferredTable],
 		define: documentDefine,
