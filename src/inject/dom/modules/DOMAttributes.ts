@@ -953,58 +953,33 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 		// unrewritten). The attribute is href by any prefix: the browser
 		// looks the prefix up (q:href, with q bound to xlink), and a prefix
 		// it finds no namespace for animates nothing, whatever its values.
-		// A change of the animation's own href retargets it: routed again.
+		// A change of the animation's own href retargets it: routed again. The
+		// routing is a deferred part (../animatedHref.ts), made at a document's
+		// first animation of an href: without it the animation's values are
+		// emptied, and it animates the href to nothing.
 		const ANIMATED = ['to', 'from', 'by', 'values'];
-		const animatedTarget = (element: CustomElement): Element | null => {
-			const reference =
-				element.getAttribute('href') ??
-				element.getAttribute(xlinkName(element));
-			if (reference?.startsWith('#'))
-				return (
-					(element.getRootNode() as Document | ShadowRoot).getElementById?.(
-						reference.slice(1),
-					) ?? null
-				);
-			return element.parentElement;
-		};
 		const animatedHook = (element: CustomElement) => {
 			element.restoreAttributesOG(...ANIMATED);
 			const name = element.getAttribute('attributeName');
 			if (name === null || !/^(?:[^:]+:)?href$/.test(name)) return;
-			const target = animatedTarget(element);
-			const link = target ? target.localName === 'a' : null;
-			const route = (value: string): string => {
-				const trimmed = value.trim();
-				if (trimmed === '' || trimmed.startsWith('#')) return value;
-				try {
-					const url = pageURL(trimmed);
-					// (a link's route rewrites a javascript: URL's code)
-					if (link === true || url.url.protocol === 'javascript:')
-						return moduleClient.linkRoute(url);
-					return routeBinary(url);
-				} catch (error) {
-					// no URL: the browser makes nothing of it either
-					return value;
+			let animate: DeferredParts['animatedHref'];
+			try {
+				animate = deferred('animatedHref');
+			} catch (error) {
+				for (const attribute of ANIMATED) {
+					if (!element.hasAttribute(attribute)) continue;
+					element.setAttributeOG(attribute, element.getAttribute(attribute)!);
+					element.setAttribute(attribute, '');
 				}
-			};
-			for (const attribute of ANIMATED) {
-				if (!element.hasAttribute(attribute)) continue;
-				const value = element.getAttribute(attribute)!;
-				// `values` is a list, split at semicolons before any is a URL
-				const routed =
-					attribute === 'values'
-						? value.split(';').map(route).join(';')
-						: route(value);
-				if (routed === value) continue;
-				if (attribute === 'values') {
-					const written = value.split(';');
-					routed
-						.split(';')
-						.forEach((part, i) => animatedValues.set(part, written[i]));
-				} else animatedValues.set(routed, value);
-				element.setAttributeOG(attribute, value);
-				element.setAttribute(attribute, routed);
+				return;
 			}
+			animate(element, {
+				moduleClient,
+				pageURL,
+				animatedValues,
+				xlinkName,
+				ANIMATED,
+			});
 		};
 		domHooksModule.useAttributes(
 			animatedHook,

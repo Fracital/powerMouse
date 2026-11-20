@@ -414,6 +414,7 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			'loginStatus',
 			'execCommand',
 			'contextualFragment',
+			'animatedHref',
 			'blankSetHTML',
 			'open',
 			// (before the policed calls: their policy refuses frames)
@@ -589,6 +590,12 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 			reached: answer.reached,
 		}),
 	);
+	ok(
+		"with the parts, an SVG animation of a link's href animates it to its value, read as the page wrote it",
+		answer.out?.animatedHref?.animVal === 'https://animated.example/to' &&
+			answer.out.animatedHref.to === 'https://animated.example/to',
+		JSON.stringify(answer.out?.animatedHref),
+	);
 	// (the default sanitizer leaves the <b>; setHTMLUnsafe the <b> and the
 	// <img>. The frame's initial about:blank gets no counting stand-ins: the
 	// parsed nodes are what reached the browser's parser)
@@ -747,6 +754,7 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		'notFunction',
 		'blankCopy',
 		'xmlLoad',
+		'animatedHref',
 		'blankSetHTML',
 		'cspOpaque',
 		...POLICED,
@@ -864,6 +872,12 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		"without the parts, an <object>'s context loads nothing of a server's",
 		objectNavigations.length === 0,
 		JSON.stringify(objectNavigations),
+	);
+	ok(
+		"without the parts, an SVG animation of a link's href animates it to nothing, and the page reads its value as it wrote it",
+		out.animatedHref?.animVal === '' &&
+			out.animatedHref.to === 'https://animated.example/to',
+		JSON.stringify(out.animatedHref),
 	);
 	ok(
 		'without the parts, setHTML, setHTMLUnsafe and getHTML on an element of a frame on its initial about:blank throw, and nothing is parsed',

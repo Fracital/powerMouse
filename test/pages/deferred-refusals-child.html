@@ -594,6 +594,28 @@
 					outcome(() =>
 						document.createRange().createContextualFragment('<b>x</b>'),
 					),
+				// an SVG animation of a link's href, its values routed by a
+				// deferred part (src/inject/dom/animatedHref.ts): what the link's
+				// animated href reads while it runs, and the animation's value
+				animatedHref: () =>
+					new Promise((resolve) => {
+						const SVG = 'http://www.w3.org/2000/svg';
+						const svg = document.createElementNS(SVG, 'svg');
+						const link = document.createElementNS(SVG, 'a');
+						const set = document.createElementNS(SVG, 'set');
+						set.setAttribute('attributeName', 'href');
+						set.setAttribute('to', 'https://animated.example/to');
+						link.append(set);
+						svg.append(link);
+						document.body.append(svg);
+						setTimeout(() => {
+							resolve({
+								animVal: link.href.animVal,
+								to: set.getAttribute('to'),
+							});
+							svg.remove();
+						}, 300);
+					}),
 				// the sanitizing and parsing members on an element of a frame on
 				// its initial about:blank, which its creator's bundle hooks
 				// (src/inject/dom/markupSinks.ts): what each did, and whether
