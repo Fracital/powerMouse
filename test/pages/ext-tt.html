@@ -15,6 +15,22 @@
 					window.chrome.runtime.id
 				),
 			};
+			// the page's own string write, which its Trusted Types refuse; and
+			// the violations (an isolated world's writes make none)
+			window.__violations = 0;
+			window.__violationList = [];
+			document.addEventListener('securitypolicyviolation', (event) => {
+				window.__violations++;
+				window.__violationList.push(
+					`${event.violatedDirective} ${event.sample}`.slice(0, 120),
+				);
+			});
+			try {
+				document.createElement('div').innerHTML = '<i>page</i>';
+				window.__ownWrite = 'written';
+			} catch (error) {
+				window.__ownWrite = 'refused';
+			}
 		</script>
 	</head>
 	<body>

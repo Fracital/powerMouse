@@ -292,6 +292,8 @@ export interface ShippedExtension {
 	blocking: boolean;
 	/** userScripts.configureWorld gave the USER_SCRIPT world messaging */
 	userScriptMessaging?: boolean;
+	/** the install's generation, which its scripts' routes name */
+	generation?: number;
 	/** a content document's entries that match it */
 	entries?: ShippedEntry[];
 }
@@ -308,6 +310,8 @@ export interface RuntimePayload {
 	top: boolean;
 	/** what the worker checks on a content document's calls, by extension */
 	tokens: Record<string, string>;
+	/** the inject's access API's name (src/helperNames.ts), which an isolated world asks a window's `location` and `top` of */
+	access?: string;
 	/** a content document: the extensions whose scripts run in it */
 	content?: ShippedExtension[];
 	/** an extension page: its extension, and what the worker made of its path */
@@ -331,6 +335,9 @@ export const CONTEXT_NAME_PREFIX = 'ext-context:';
 
 /** the global the runtime asset leaves for the shell's scripts (deleted as the page's document opens) */
 export const RUNTIME_GLOBAL = '__extensionRuntime';
+
+/** the name an isolated world's bundle leaves its factory under, in the world's realm (taken at once) */
+export const WORLD_FACTORY = '__extensionWorld';
 
 /** the generated page an extension's background runs in */
 export const BACKGROUND_PAGE = '_generated_background_page.html';

@@ -126,10 +126,11 @@ controller.extensions  --RPC-->  ExtensionHub (with the controller)    Extension
   reaches gets none of it, and the inject bundle carries no extension code
   (only the runtime's file name, in the bundles' name table, 41 bytes). The
   runtime is served by its `init.assets` name, `extensionsRuntime`. Each
-  entry's files are joined, rewritten once, wrapped as a function of its
-  world's `chrome`, and kept in Cache Storage under a route that names the
-  extension's generation, so every later document's load of it is a cache
-  read with the browser's code cache.
+  entry's files are joined once: an ISOLATED entry's as the source its
+  world evaluates (Isolated worlds, below), a MAIN or USER_SCRIPT entry's
+  rewritten as page code and wrapped as a function of its `chrome`. Either
+  is kept in Cache Storage under a route that names the extension's
+  generation, so every later document's load of it is a cache read.
 - **When they run.** The runtime wraps `document.open` and `document.write`
   with functions shaped as the natives (the inject hooks over them in
   turn). The inject opens the document right before it writes the page's
@@ -138,11 +139,8 @@ controller.extensions  --RPC-->  ExtensionHub (with the controller)    Extension
   (Chrome's DidCreateDocumentElement point). document_end runs after the
   document's DOMContentLoaded listeners, document_idle a task later or at
   the window's load, whichever is first.
-- **Worlds.** An ISOLATED script is a function of its `chrome`; the page
-  never sees it. The worker rewrites `window.chrome`, `self.chrome` and
-  `globalThis.chrome` in an isolated world's source to that `chrome`, and the
-  runtime puts it on the window while the script's top level runs. MAIN
-  scripts run as page code. USER_SCRIPT scripts (`userScripts.register`
+- **Worlds.** ISOLATED scripts run in an isolated world of their
+  extension's (below). MAIN scripts run as page code. USER_SCRIPT scripts (`userScripts.register`
   and `userScripts.execute`) get no `chrome` unless
   `userScripts.configureWorld({ messaging: true })`, and then Chrome's:
   the page's `csi` and `loadTimes`, and a `runtime` of `id`, `dynamicId`,
@@ -150,7 +148,7 @@ controller.extensions  --RPC-->  ExtensionHub (with the controller)    Extension
   enums, on the window too while they run.
 - **Policies.** Content scripts load as script elements from routes, never
   through the page's `Function` or `eval`, so a page's CSP and Trusted Types
-  do not refuse them (the browser enforces neither on proxied documents;
+  do not refuse them (an isolated world's writes are exempt too, below) (the browser enforces neither on proxied documents;
   the inject enforces them against the page's own code). An extension's
   own resources (its web accessible scripts, styles and images) load past
   the page's CSP, as Chrome lets `chrome-extension:` URLs past it;
@@ -267,6 +265,64 @@ controller.extensions  --RPC-->  ExtensionHub (with the controller)    Extension
   dropped. Of several verdicts, a cancel wins, then the first redirect,
   then the last headers.
 
+### Isolated worlds
+
+In Chrome an ISOLATED content script shares the page's DOM and nothing
+else: its globals, prototypes and expandos are its own, and the page's CSP
+and Trusted Types do not apply to it. STomp makes the same world per
+extension and document, the first time one of the extension's ISOLATED
+scripts or injections runs there (`src/extensions/runtime/worlds.ts`).
+
+The runtime appends a hidden element to the root, makes an about:blank
+frame in its closed shadow root, evaluates the world's bundle in the
+frame's realm and removes the element again, in one synchronous run with
+the inject's own mutations hidden. The page never sees the frame:
+`window.length` and `frames` stay as they were, and no observer record,
+load event or global of it reaches the page. The realm keeps its
+JavaScript (`Object`, `Array`, `Promise`, `eval`) after the frame is gone,
+and that is the world's.
+
+The world reaches the page's DOM through proxies
+(`src/extensions/runtime/world/membrane.ts`). A DOM object is seen with
+the page's interfaces as the runtime found them at document_start, before
+any page or MAIN script ran, so a page's `Document.prototype.styleSheets`
+or `addEventListener` override is not what the world calls, and the page's
+expandos on elements are not there. What crosses back (event details,
+message data, a promise's value) is copied into the world's own objects,
+so `detail instanceof Object` holds. The world's own functions are handed
+to the page as functions of the page's realm, because the browser runs no
+callback of a realm whose frame is gone. One the page reads back (a handler
+property the world set) has the world's function's name and length and
+reads as native code, by the inject's `toString`.
+
+Every web name of the world's window (`fetch`, `setTimeout`, `Element`,
+`innerWidth`) is the page's through the membrane from its first use; names
+the world sets stay its own, and the page's are none of its. A script runs
+as global code, so its `var` and function declarations are seen by the
+extension's other scripts in the document, as in Chrome.
+
+Markup and script URLs the world writes into the page's Trusted Types
+sinks go through a policy of the world's, and the inject's CSP checks are
+not applied to the world's code, so a page's `require-trusted-types-for
+'script'` refuses only the page's own writes.
+
+A content script's `import()` resolves in the world: the worker turns the
+extension's module (and what it imports) into a description the world
+links and runs, with the world's `chrome` and its `chrome-extension://`
+URL as `import.meta.url`. As in Chrome, a module must be in
+web_accessible_resources for the page's origin. The worker takes that
+origin from the request's client (the document that asked), never from
+the request, and refuses a request whose client it cannot name, so a page
+reads no module it could not fetch itself.
+
+The runtime grew by the world's bundle (about 62 kB of
+`dist/extensionsRuntime.js`), which only documents an extension reaches
+load. Taking the page's interfaces at document_start takes about 3 to 4 ms
+per document (20 ms cold) and is done only when an extension has ISOLATED
+scripts there or `scripting`, `tabs` or `activeTab`. The inject bundle
+grows only by the call that hands the runtime its way to hide mutations
+(24 bytes).
+
 ### declarativeNetRequest
 
 The rules run in each controller's server's DnrHost (`src/server/dnr.ts`,
@@ -325,10 +381,16 @@ document changes, which getMatchedRules reads.
   ports: a transfer list is cloned, not moved. With the scope open in two
   tabs, each tab's hub runs the worker's page, and a fetch event goes to
   whichever answers first.
-- An isolated world shares the page's realm: its top-level declarations
-  stay its own (each entry is a function), but globals and prototypes are
-  the page's, and separate content_scripts entries do not share
-  declarations. The page cannot see `chrome`.
+- In an isolated world, top-level `let`, `const` and `class` declarations
+  are not shared between scripts (`var` and functions are), and a
+  script's `'use strict'` does not make it strict. Code made with
+  `new Function` or an indirect `eval` runs in the world's realm but sees
+  the gone frame's `document`, `location` and `top`. A named property of
+  the window (an element's id) is not a global there.
+- A document whose policy forbids `eval` (a sandboxed frame without
+  `allow-scripts`, under STomp's sandbox policy) can make no world: its
+  ISOLATED scripts run in the page's realm with the extension's `chrome`, as
+  before isolated worlds, and see the page's globals and prototypes.
 - No content scripts in documents STomp does not inject (image viewer
   documents) or in about:blank frames (`match_about_blank`,
   `match_origin_as_fallback`). A text document is served as UTF-8, so
@@ -357,8 +419,6 @@ document changes, which getMatchedRules reads.
   the frame's id and parent.
 - `scripting.executeScript({ files })` runs the files but answers no
   result (a `func` answers its return value, as in Chrome).
-- A module a content script loads with `import()` runs as page code,
-  without the extension's `chrome`.
 - Namespaces STomp does not implement answer what their kind would: an
   empty list for `getFontList`, `getAll` or `query`, Chrome's defaults for
   `privacy.*` and `proxy.settings` (which `set` changes for the context),

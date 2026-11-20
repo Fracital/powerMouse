@@ -15,12 +15,60 @@
 					window.chrome.runtime.id
 				),
 			};
+			// what a page could see of an extension's isolated world (it sees
+			// none): a frame, a node, a load event
+			window.__seen = { lengths: [window.length], added: [], loads: [] };
+			new MutationObserver((records) => {
+				for (const record of records)
+					for (const node of record.addedNodes)
+						if (
+							node.nodeType === 1 &&
+							!/^(P|B|SCRIPT|BODY|HEAD|META|TITLE|LINK|STYLE)$/.test(
+								node.nodeName,
+							) &&
+							// (the idle script's own frame)
+							!/ext-tab-probe/.test(node.src)
+						)
+							window.__seen.added.push(node.nodeName);
+			}).observe(document, { childList: true, subtree: true });
+			document.addEventListener(
+				'load',
+				(event) => {
+					if (!/ext-tab-probe/.test(event.target.src))
+						window.__seen.loads.push(String(event.target.nodeName));
+				},
+				true,
+			);
+			// what the page changes, which no isolated world sees
+			window.__pageVar = 1;
+			Array.prototype.__pagePolluted = 1;
+			Object.defineProperty(Document.prototype, 'styleSheets', {
+				configurable: true,
+				get: () => 'patched',
+			});
+			const add = EventTarget.prototype.addEventListener;
+			window.__pageAdds = 0;
+			EventTarget.prototype.addEventListener = function (...args) {
+				if (args[0] === 'world-ping') window.__pageAdds++;
+				return add.apply(this, args);
+			};
 		</script>
 	</head>
 	<body>
 		<p id="target">target</p>
 		<script>
 			window.__bodyScript = true;
+			document.getElementById('target').pageExpando = 'page';
+			window.__seen.lengths.push(window.length);
+			addEventListener('load', () =>
+				setTimeout(() => {
+					window.__seen.lengths.push(window.length);
+					document.dispatchEvent(
+						new CustomEvent('page-ping', { detail: { list: [1, 2] } }),
+					);
+					postMessage({ from: 'page' }, '*');
+				}, 0),
+			);
 		</script>
 	</body>
 </html>

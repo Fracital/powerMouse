@@ -1195,6 +1195,51 @@ const activationPart = {
 };
 
 /**
+ * `extensions-world:source` in the extensions' runtime: the text of the
+ * isolated world's bundle (src/extensions/runtime/world/entry.ts), which
+ * the runtime evaluates in each world's realm (src/extensions/runtime/
+ * worlds.ts). Built with the runtime's own options, so the two mangle the
+ * members they share alike
+ */
+const extensionsWorld = {
+	name: 'extensions-world',
+	setup(pluginBuild) {
+		pluginBuild.onResolve({ filter: /^extensions-world:source$/ }, (args) => ({
+			path: args.path,
+			namespace: 'extensions-world',
+		}));
+		pluginBuild.onLoad(
+			{ filter: /.*/, namespace: 'extensions-world' },
+			async () => {
+				const options = pluginBuild.initialOptions;
+				const built = await esbuildBuild({
+					entryPoints: ['src/extensions/runtime/world/entry.ts'],
+					bundle: true,
+					write: false,
+					metafile: true,
+					format: 'iife',
+					platform: 'browser',
+					target: options.target,
+					minify: options.minify,
+					mangleProps: options.mangleProps,
+					mangleCache: options.mangleCache,
+					legalComments: 'none',
+					define: options.define,
+					logLevel: 'silent',
+				});
+				return {
+					contents: `export default ${JSON.stringify(built.outputFiles[0].text)};\n`,
+					loader: 'js',
+					watchFiles: Object.keys(built.metafile.inputs).map((file) =>
+						resolve(file),
+					),
+				};
+			},
+		);
+	},
+};
+
+/**
  * `stomp:deferred-shared` in the document bundles: a function that makes,
  * when the parts are first evaluated, what they read of the bundle
  * (deferredSharing), by file and name
@@ -1870,6 +1915,7 @@ const builds = [
 		// captures the natives it talks over unhooked
 		entryPoints: { extensionsRuntime: 'src/extensions/runtime/entry.ts' },
 		format: 'iife',
+		plugins: [extensionsWorld],
 	},
 	{
 		entryPoints: { SearchBuilder: 'src/bootstrapper/entry.ts' },

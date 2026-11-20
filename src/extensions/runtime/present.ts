@@ -12,8 +12,16 @@
 import { displayExtensionOrigin, displayExtensionURL } from '../origin';
 import { masking, natives } from './natives';
 
-const { defineProperty, getOwnPropertyDescriptor } = natives;
-const apply = natives.Reflect.apply;
+// (read at each call: the runtime's natives are filled after its modules load)
+const defineProperty = (
+	object: object,
+	key: PropertyKey,
+	descriptor: PropertyDescriptor,
+) => natives.defineProperty(object, key, descriptor);
+const getOwnPropertyDescriptor = (object: object, key: PropertyKey) =>
+	natives.getOwnPropertyDescriptor(object, key);
+const apply = (fn: Function, that: unknown, args: ArrayLike<unknown>) =>
+	natives.Reflect.apply(fn, that, args);
 
 /** a URL of an emulated origin as Chrome's (a blob: URL's too); anything else as it is */
 export const shown = (value: string) =>
@@ -77,7 +85,7 @@ function showGetter(
 ) {
 	const descriptor = prototype && getOwnPropertyDescriptor(prototype, name);
 	const get = descriptor?.get;
-	if (!get || !descriptor.configurable) return;
+	if (!prototype || !get || !descriptor.configurable) return;
 	defineProperty(prototype, name, {
 		...descriptor,
 		get: getterLike(name, function () {
