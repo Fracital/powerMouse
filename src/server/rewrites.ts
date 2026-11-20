@@ -3247,6 +3247,10 @@ function genericForward(
 		// never is
 		const takesStale =
 			cacheMode === 'force-cache' || cacheMode === 'only-if-cached';
+		// (a navigation that takes a stale entry is Back or Forward: Chrome
+		// asks its HTTP cache so for a history step alone, and the entry is
+		// the page that step shows again, whatever cookies were set since)
+		const historyStep = navigation && takesStale;
 		const memoryKey =
 			memoryDestination &&
 			frameSite !== null &&
@@ -3268,7 +3272,7 @@ function genericForward(
 			cacheMode !== 'no-store' &&
 			cacheMode !== 'reload' &&
 			(serverRequest.method === 'GET' || serverRequest.method === 'HEAD')
-				? await cache.match(cacheKey!, requestHeaders)
+				? await cache.match(cacheKey!, requestHeaders, historyStep)
 				: null;
 		let response: Response & { rawHeaders?: [string, string][] };
 		let cached = false;

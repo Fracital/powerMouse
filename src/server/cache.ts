@@ -14,8 +14,9 @@
 // purpose: an
 // entry made for a request with credentials (a Cookie or Authorization
 // header) is confirmed with the origin before a request with other
-// credentials is given it, where Chrome hands it over; the proxy's cache
-// outlives what a site takes for a session. Entries keep the upstream
+// credentials is given it, where Chrome hands it over (a document's Back
+// or Forward is given it as natively); the proxy's cache outlives what a
+// site takes for a session. Entries keep the upstream
 // (pre-rewrite) body and headers, so the rewriters run on hits as on fetches.
 
 const STORE = 'stomp-http-cache';
@@ -450,7 +451,17 @@ export class HttpCache {
 	}
 	/** writes in flight, by URL: a request for the same URL waits for them */
 	private pending = new Map<string, Promise<void>>();
-	async match(url: string, requestHeaders: Headers): Promise<CacheHit | null> {
+	/**
+	 * the entry for a request, or null. A history navigation (`history`:
+	 * Back or Forward to a document) is given it whatever credentials it
+	 * was made for, as Chrome gives it: it is the page that history entry
+	 * showed.
+	 */
+	async match(
+		url: string,
+		requestHeaders: Headers,
+		history = false,
+	): Promise<CacheHit | null> {
 		// the entry a previous request is still writing (its body streams in)
 		// counts as stored: a follow-up request must not race it upstream
 		await this.pending.get(url);
@@ -467,7 +478,8 @@ export class HttpCache {
 				headers.get(VARY) !==
 					HttpCache.varyKey(headers.get('vary'), requestHeaders)) ||
 			// made for a request with credentials, and this one has others
-			(made !== '' &&
+			(!history &&
+				made !== '' &&
 				!control.has('public') &&
 				made !== credentialsKey(requestHeaders));
 		const revalidate = alwaysRevalidated(headers) || mismatch;
