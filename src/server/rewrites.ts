@@ -7548,6 +7548,9 @@ export function registerRewrites(
 					embedded !== 'apply'
 						? request.partition
 						: null;
+				// the client the navigation makes, which its shell hands over
+				// (DocumentClient.servedClient)
+				const served = request.navigation ? request.clientId : undefined;
 				// the rest of the markup is still to come: the shell goes out now,
 				// and the markup to the client as it comes (streamMarkup)
 				if (read?.rest) {
@@ -7582,6 +7585,7 @@ export function registerRewrites(
 							`${rewriter.directory}${MARKUP_ROUTE}-${token}`,
 							request.routed,
 						).href,
+						served,
 					);
 					return encodeShell(shell.head + shell.tail(null), encoding);
 				}
@@ -7606,6 +7610,7 @@ export function registerRewrites(
 						facts,
 						syncBlocked,
 						true,
+						served,
 					);
 					return encoding === 'utf-8' ? shell : encodeShell(shell, encoding);
 				}
@@ -7633,6 +7638,8 @@ export function registerRewrites(
 					policies.texts,
 					facts,
 					syncBlocked,
+					undefined,
+					served,
 				);
 				const first = encodeShell(head, encoding);
 				return new ReadableStream<Uint8Array>({

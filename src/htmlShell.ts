@@ -182,6 +182,8 @@ export function modifyHTML(
 	syncXHRBlocked?: boolean,
 	/** the service worker serves the document: its shell answers for it in the gap (src/gapView.ts) */
 	served = false,
+	/** the client the document's navigation makes, as the worker that serves it knows (DocumentClient.servedClient) */
+	clientId?: string,
 ): string {
 	const { head, tail } = shell(
 		script,
@@ -202,6 +204,8 @@ export function modifyHTML(
 		facts,
 		syncXHRBlocked,
 		served,
+		undefined,
+		clientId,
 	);
 	return head + tail(prewritten);
 }
@@ -239,6 +243,8 @@ export function modifyHTMLStreamed(
 	 * MARKUP_ROUTE): the shell holds none of it, and `script` is not read
 	 */
 	stream?: string,
+	/** as modifyHTML's */
+	clientId?: string,
 ): { head: string; tail: (prewritten: Prewritten | null) => string } {
 	return shell(
 		script,
@@ -260,6 +266,7 @@ export function modifyHTMLStreamed(
 		syncXHRBlocked,
 		true,
 		stream,
+		clientId,
 	);
 }
 
@@ -285,6 +292,7 @@ function shell(
 	syncXHRBlocked?: boolean,
 	served = false,
 	stream?: string,
+	clientId?: string,
 ): { head: string; tail: (prewritten?: Prewritten | null) => string } {
 	// if(fragment) return '<script>document.currentScript.replaceWith(globalstomp.cloneIntoNewNode())
 	// a shell the page realm builds is of a document that inherits the
@@ -321,7 +329,12 @@ function shell(
 	else {
 		delete globalThis.createClient;
 		${names.client}.takeNamedBase();
-	}${keptFacts(names.client, facts)}${marked(names.client, url)}
+	}${keptFacts(names.client, facts)}${marked(names.client, url)}${
+		clientId
+			? `
+	${names.client}.servedClient = ${JSON.stringify(clientId).replace(/</g, '\\u003c')};`
+			: ''
+	}
 
 ${sited(names.client, sites)}${referred(names.client, referrer)}${policyTexts(names.client, policies)}${syncXHR(names.client, syncXHRBlocked)}${
 		upgradeInsecure
