@@ -19,6 +19,17 @@
 // ever Pending; the packet is written to the stream as `write()` is called,
 // in order, as 0075 does.
 //
+// Only a sink that waits reads `ready`: IntoSink reads it before every
+// write. A build with 0075 never reads it and only watches each `write()`
+// for a failure, in a JsFuture of its own. A JsFuture whose callback is
+// called at once never drops its closures (wasm-bindgen-futures 0.4.50
+// keeps them after `then` returns, and the callback drops what it finds
+// kept), so they keep its state and it keeps them: two closures and their
+// slots of wasm-bindgen's heap for every packet, for the worker's life (a
+// shard grew 6 to 8 MB a minute on news sites). So `write()` returns a
+// settled thenable only to a writer whose `ready` was read, a build that
+// waits, which keeps that cost; to the others it returns a promise.
+//
 // A packet that is a view of a larger buffer (wasm memory) is copied: it is
 // written after the call returns. A write the stream rejects fails the
 // writer's `ready` and every later `write()`, as a dead WebSocket's sends.
@@ -61,10 +72,15 @@ export function promptSink(
 ): WritableStream<Uint8Array> {
 	const writer = stream.getWriter();
 	let failed: { error: unknown } | null = null;
+	// the writer waits on its promises (see the top of the file)
+	let waits = false;
 	const state = () =>
 		failed ? new Settled(false, failed.error) : new Settled(true, undefined);
+	const settled = () =>
+		waits ? state() : failed ? Promise.reject(failed.error) : Promise.resolve();
 	const prompt = {
 		get ready() {
+			waits = true;
 			return state();
 		},
 		get closed() {
@@ -74,7 +90,7 @@ export function promptSink(
 			return writer.desiredSize;
 		},
 		write(packet: Uint8Array) {
-			if (failed) return state();
+			if (failed) return settled();
 			const own =
 				packet.byteOffset !== 0 ||
 				packet.byteLength !== packet.buffer.byteLength
@@ -83,7 +99,7 @@ export function promptSink(
 			writer.write(own).catch((error: unknown) => {
 				failed ??= { error };
 			});
-			return state();
+			return settled();
 		},
 		close() {
 			return writer.close();
