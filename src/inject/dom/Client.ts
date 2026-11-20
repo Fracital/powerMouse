@@ -3118,10 +3118,21 @@ export default class DocumentClient extends Client {
 		if (!this.topPostMessage) return false;
 		// a window that is its own top (a popup) has no host above it: the
 		// message would reach the page's own listeners, which never hear one
-		// natively
-		if ((this.top as unknown) === this.global) return false;
+		// natively. Nor has a frame of a popup: its top is a proxied document
+		// (one with a client), whose page posts on what it hears
+		// (cookies/samesite/about-blank-toplevel.https.html relays it to the
+		// opener). A host is never proxied, and one of another origin (a
+		// slot's) throws on the read
+		const top = this.top;
+		if ((top as unknown) === this.global) return false;
 		try {
-			Reflect.apply(this.topPostMessage, this.top, [message, '*']);
+			if (Reflect.getOwnPropertyDescriptor(top, this.names.client))
+				return false;
+		} catch (error) {
+			// a host of another origin
+		}
+		try {
+			Reflect.apply(this.topPostMessage, top, [message, '*']);
 			return true;
 		} catch (error) {
 			return false;

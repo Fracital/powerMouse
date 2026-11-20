@@ -1,20 +1,6 @@
 {
-	"/cookies/samesite/about-blank-subresource.https.html": {
-		"(harness)": "TIMEOUT: ",
-		"SameSite cookies on subresource of top-level about:blank window": "TIMEOUT: Test timed out"
-	},
-	"/cookies/samesite/form-get-blank.https.html": {
-		"Cross-site top-level form GETs are laxly same-site": "FAIL: assert_equals: SameSite=Lax cookies are sent with lax requests. expected (string) \"0.7428033700212177\" but got (undefined) undefined",
-		"Cross-site redirecting to subdomain top-level form GETs are laxly same-site": "FAIL: assert_equals: SameSite=Lax cookies are sent with lax requests. expected (string) \"0.5042836433951114\" but got (undefined) undefined",
-		"Same-host redirecting to cross-site top-level form GETs are laxly same-site": "FAIL: assert_equals: SameSite=Lax cookies are sent with lax requests. expected (string) \"0.4607928065843304\" but got (undefined) undefined",
-		"Subdomain redirecting to cross-site top-level form GETs are laxly same-site": "FAIL: assert_equals: SameSite=Lax cookies are sent with lax requests. expected (string) \"0.3622739808998392\" but got (undefined) undefined",
-		"Cross-site redirecting to cross-site top-level form GETs are laxly same-site": "FAIL: assert_equals: SameSite=Lax cookies are sent with lax requests. expected (string) \"0.3142784043105974\" but got (undefined) undefined"
-	},
 	"/cookies/samesite/sandbox-iframe-nested.https.html": {
 		"SameSite cookies with intervening sandboxed iframe and navigation": "FAIL: assert_equals: `samesite_lax=0.8650443226240954` in request to `http://localhost:PORT`. expected (undefined) undefined but got (string) \"0.8650443226240954\""
-	},
-	"/cookies/samesite/setcookie-lax.https.html": {
-		"Cross-site window shouldn't be able to set `SameSite=Lax` or `SameSite=Strict` cookies.": "FAIL: assert_equals: `samesite_strict=0.34958826241492746` in `document.cookie` expected false but got true"
 	},
 	"/cookies/samesite/setcookie-navigation.https.html": {
 		"(harness)": "TIMEOUT: timeout: no report within 30 s",
@@ -26,12 +12,5 @@
 		"Cross-site to same-site iframe navigation should only be able to set SameSite=None cookies.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Same-site to cross-site-site iframe navigation should only be able to set SameSite=None cookies.": "MISSING: the harness ended TIMEOUT before this subtest",
 		"Cross-site to cross-site iframe navigation should only be able to set SameSite=None cookies.": "MISSING: the harness ended TIMEOUT before this subtest"
-	},
-	"/cookies/samesite/window-open.https.html": {
-		"Cross-site auxiliary navigations are laxly same-site": "FAIL: assert_equals: SameSite=Lax cookies are sent with lax requests. expected (string) \"0.4706772605399365\" but got (undefined) undefined",
-		"Cross-site redirecting to subdomain auxiliary navigations are laxly same-site": "FAIL: assert_equals: SameSite=Lax cookies are sent with lax requests. expected (string) \"0.31214495354655014\" but got (undefined) undefined",
-		"Same-host redirecting to cross-site auxiliary navigations are laxly same-site": "FAIL: assert_equals: SameSite=Lax cookies are sent with lax requests. expected (string) \"0.30924806884719747\" but got (undefined) undefined",
-		"Subdomain redirecting to cross-site auxiliary navigations are laxly same-site": "FAIL: assert_equals: SameSite=Lax cookies are sent with lax requests. expected (string) \"0.4673909944786693\" but got (undefined) undefined",
-		"Cross-site redirecting to cross-site auxiliary navigations are laxly same-site": "FAIL: assert_equals: SameSite=Lax cookies are sent with lax requests. expected (string) \"0.2365837217987915\" but got (undefined) undefined"
 	}
 }
