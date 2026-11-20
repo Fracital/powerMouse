@@ -1,7 +1,8 @@
-// The demo's bookmarks: the eight it starts with (the maker's four and the
-// quick links), each once (a removed one stays removed, and a list seeded
-// with the first four before the quick links joined gets those once); the
-// page's description where it gives one, under the title; the home page's star tab in its own band between the
+// The demo's bookmarks: the nine it starts with (the maker's four, the
+// quick links and the Chrome Web Store), each once (a removed one stays
+// removed, and a list seeded with the first four before the quick links
+// joined gets those once); the page's description where it gives one,
+// under the title; the home page's star tab in its own band between the
 // status line and the commits, hanging off the card's left edge; the
 // sidebar it opens (empty state, rows, open, remove, Escape); the address
 // bar's star and every tab card's, in step with each other, the sidebar and
@@ -79,6 +80,13 @@ const DEFAULTS = [
 		icon: '/pm/icons/discord.png',
 		description:
 			'Discord is great for playing games and chilling with friends, or even building a worldwide community. Customize your own space to talk, play, and hang out.',
+	},
+	{
+		title: 'Chrome Web Store',
+		url: 'https://chromewebstore.google.com/',
+		icon: '/pm/icons/chromewebstore.png',
+		description:
+			'Add new features to your browser and personalize your browsing experience.',
 	},
 ];
 const N = DEFAULTS.length;
@@ -296,7 +304,7 @@ async function run(mode, base) {
 			(await page.getAttribute('#bookmarksTab', 'aria-expanded')) === 'true',
 	);
 	ok(
-		`${mode}: the first visit starts with Fracital, vibeOS, Estro, Krunk and the quick links Reddit, Google, YouTube and Discord, each with its bundled icon and the description its page gave`,
+		`${mode}: the first visit starts with Fracital, vibeOS, Estro, Krunk and the quick links Reddit, Google, YouTube and Discord, then the Chrome Web Store, each with its bundled icon and the description its page gave`,
 		JSON.stringify(await rows(page)) === JSON.stringify(DEFAULTS) &&
 			(await until(
 				page,
@@ -312,7 +320,7 @@ async function run(mode, base) {
 		JSON.stringify(await rows(page)),
 	);
 	// Estro's and Krunker's icons are whole tiles and cover theirs; vibeOS's
-	// is drawn at 22 px and shows at that size, never stretched
+	// 32 px Tango computer shows at 22 px, as every other icon does
 	const tiles = await page.evaluate(() =>
 		[...document.querySelectorAll('#bookmarksList .bookmarkTile')].map(
 			(tile) => {
@@ -333,13 +341,13 @@ async function run(mode, base) {
 		),
 	);
 	ok(
-		`${mode}: Estro's and Krunk's icons fill their 34 px tiles, vibeOS's shows at its natural 22 px`,
+		`${mode}: Estro's and Krunk's icons fill their 34 px tiles, vibeOS's 32 px one shows at 22 px`,
 		JSON.stringify(tiles.map((t) => t.tile)) ===
 			JSON.stringify(DEFAULTS.map(() => [34, 34])) &&
 			JSON.stringify(tiles[2].image) === '[0,0,34,34]' &&
 			JSON.stringify(tiles[3].image) === '[0,0,34,34]' &&
 			JSON.stringify(tiles[1].image.slice(2)) === '[22,22]' &&
-			JSON.stringify(tiles[1].natural) === '[22,22]',
+			JSON.stringify(tiles[1].natural) === '[32,32]',
 		JSON.stringify(tiles),
 	);
 	ok(
@@ -802,7 +810,7 @@ async function run(mode, base) {
 	await reopen();
 	await page.click('#bookmarksTab');
 	ok(
-		`${mode}: Discord, removed, does not come back on a reload`,
+		`${mode}: the Chrome Web Store, removed, does not come back on a reload`,
 		urlsOf(await rows(page)) === JSON.stringify(DEFAULT_URLS.slice(0, -1)) &&
 			urlsOf(await stored(page)) === JSON.stringify(DEFAULT_URLS.slice(0, -1)),
 		urlsOf(await rows(page)),
@@ -863,7 +871,7 @@ async function run(mode, base) {
 	const migrated = [A, ...DEFAULT_URLS.slice(0, 3), ...DEFAULT_URLS.slice(4)];
 	await page.click('#bookmarksTab');
 	ok(
-		`${mode}: a list seeded with the first four gets the quick links once, after it, and a removed default stays away`,
+		`${mode}: a list seeded with the first four gets the quick links and the Web Store once, after it, and a removed default stays away`,
 		urlsOf(
 			await until(
 				page,

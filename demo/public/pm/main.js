@@ -3018,13 +3018,15 @@ const BOOKMARKS_KEY = 'stomp-demo:bookmarks';
 // links are: Fracital's, Estro's and Krunker's are copies of Fracital's
 // public/icon.svg, estro.svg and krunker.png (Apache-2.0, the same owner),
 // vibeOS (which declares none) has the Tango computer from vibeOS's own
-// icon set, and globe.png, the Tango web browser from the same set, stands
-// in for a page whose icon could not be had. The quick links follow them,
-// at the URLs their tiles open, in their tiles' colours: their titles,
-// descriptions and icons are what their pages gave the public demo
-// (2026-11; reddit.png, google.png and discord.png are the icons the pages
-// declared, at 64 px). Reddit answered with its bot wall, so its name only;
-// Google's page declares no description, nor do Fracital's and vibeOS's
+// icon set (at 32 px, the largest it serves), and globe.png, the Tango web
+// browser from the same set, stands in for a page whose icon could not be
+// had. The quick links follow them, at the URLs their tiles open, in their
+// tiles' colours, then the Chrome Web Store, which the Extensions page
+// installs from. Their titles, descriptions and icons are what their pages
+// gave (2026-11; reddit.png, google.png, discord.png and chromewebstore.png
+// are the icons the pages declared, at 64 px). Reddit answers with its bot
+// wall, so its name only; Google's, Fracital's and vibeOS's pages declare
+// no description.
 const DEFAULT_BOOKMARKS = [
 	{
 		title: 'Fracital',
@@ -3082,6 +3084,16 @@ const DEFAULT_BOOKMARKS = [
 			'Discord is great for playing games and chilling with friends, or even building a worldwide community. Customize your own space to talk, play, and hang out.',
 		icon: '/pm/icons/discord.png',
 		color: '#2a4cd2',
+	},
+	{
+		title: 'Chrome Web Store',
+		url: 'https://chromewebstore.google.com/',
+		description:
+			'Add new features to your browser and personalize your browsing experience.',
+		icon: '/pm/icons/chromewebstore.png',
+		// it declares no theme colour: the blue of its own Chrome mark, on
+		// which its white bag reads (on white only the bag's grey band shows)
+		color: '#4989f4',
 	},
 ];
 const GLOBE_ICON = '/pm/icons/globe.png';

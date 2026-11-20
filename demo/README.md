@@ -265,12 +265,12 @@ holyWisp is started.
     (a long press with a finger) or Alt+Up/Down reorders them. The
     first visit bookmarks Fracital, vibeOS, Estro and Krunk, then the quick
     links Reddit, Google, YouTube and Discord at the URLs their tiles open,
+    then the Chrome Web Store (which the Extensions page installs from),
     each once: `stomp-demo:bookmarks-seeded` keeps the URLs already offered
     (it was `1` when the defaults were the first four), so one the user
     removes stays removed and a default added later still comes to a list
     seeded before it. They carry curated icons and tile colours bundled in
-    `pm/icons/`, and the titles and descriptions their pages gave the public
-    demo.
+    `pm/icons/`, and the titles and descriptions their pages gave.
 
 13. **Sign in with token (Discord).** A key button in the address bar, to the
     left of the status ticker, shows only on a discord.com page (its real
