@@ -59,7 +59,10 @@ export default class Router {
 		request: Request,
 		status: number,
 		message: string,
+		context?: RouteContext,
 	) => Promise<Response | null>;
+	/** the script that has the built-in page report its navigation (errorReportScript; createServer sets it) */
+	errorReport?: (request: Request, context?: RouteContext) => string;
 	constructor(directory: string) {
 		this.directory = directory;
 		this.routes = new Map();
@@ -143,6 +146,7 @@ export default class Router {
 					request,
 					httpError.status,
 					httpError.message,
+					context,
 				);
 				if (host) return host;
 				return new Response(
@@ -150,6 +154,7 @@ export default class Router {
 <html>
 <head>
 <meta charset='utf-8' />
+${this.errorReport?.(request, context) ?? ''}
 <title>Error</title>
 </head>
 <body>

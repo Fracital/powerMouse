@@ -111,7 +111,7 @@ import createServer, {
 	slotHome,
 	StompServer,
 } from './createServer';
-import { hostErrorPage } from './errorPage';
+import { errorReportScript, hostErrorPage } from './errorPage';
 import { extensionCommand } from './extensions/api';
 import { extensionRegistry } from './extensions/registry';
 import { identityDone, identityState } from './identityStates';
@@ -1757,34 +1757,44 @@ async function timedOut(
 	request: Request,
 	ms: number,
 	ref: ControllerRef,
+	client: string,
 ): Promise<Response> {
 	const message = `Stomp: no answer for ${request.url} within ${ms / 1000} seconds`;
 	console.warn(message);
-	if (DOCUMENT_DESTINATIONS.has(request.destination))
+	if (DOCUMENT_DESTINATIONS.has(request.destination)) {
+		// the page tells the host where its frame is, once the real URL is known
+		const real = ref.ready?.realURL(request.url);
+		const report = real ? { client } : undefined;
 		return (
-			(await hostErrorPage(ref.config, {
-				url: ref.ready?.realURL(request.url) ?? request.url,
-				status: 504,
-				error: message,
-				kind: 'timeout',
-			})) ??
+			(await hostErrorPage(
+				ref.config,
+				{
+					url: real ?? request.url,
+					status: 504,
+					error: message,
+					kind: 'timeout',
+				},
+				report,
+			)) ??
 			new Response(
-				`<!doctype html><title>504</title><h1>504</h1><p>${escapeHTML(message)}</p>`,
+				`<!doctype html>${real ? errorReportScript(real, client) : ''}<title>504</title><h1>504</h1><p>${escapeHTML(message)}</p>`,
 				{
 					status: 504,
 					headers: { 'content-type': 'text/html; charset=utf-8' },
 				},
 			)
 		);
+	}
 	return new Response(null, { status: 504 });
 }
 
 /** the response, or a 504 when it takes longer than a bound set by config.fetchTimeout (tests) */
 function bounded(
-	request: Request,
+	event: FetchEvent,
 	response: Promise<Response>,
 	ref: ControllerRef,
 ): Promise<Response> {
+	const { request } = event;
 	const ms = ref.config.fetchTimeout;
 	if (!ms) return response;
 	let timer: ReturnType<typeof setTimeout>;
@@ -1792,7 +1802,7 @@ function bounded(
 	const timeout = new Promise<Response>((resolve) => {
 		timer = setTimeout(() => {
 			late = true;
-			resolve(timedOut(request, ms, ref));
+			resolve(timedOut(request, ms, ref, event.resultingClientId));
 		}, ms);
 	});
 	// the answer that comes after the 504 went out is read by nobody: its
@@ -2283,7 +2293,7 @@ function answerFor(
 		// the server is still opening its databases: decide once it's up
 		if (ref.ready && !ref.ready.router.willRoute(event.request.url))
 			return null;
-		const answer = bounded(event.request, serve(event, ref), ref);
+		const answer = bounded(event, serve(event, ref), ref);
 		return ref.config.isolated ? isolatedHost(event.request, answer) : answer;
 	}
 	const orphan = orphanOf(pathname);

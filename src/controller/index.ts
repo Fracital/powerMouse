@@ -4420,11 +4420,26 @@ export class Frame extends EventTarget {
 		const win = this.element.contentWindow;
 		return win && outOfReach(win) ? framePath(window, win) : null;
 	}
-	/** the frame's last report came from a document out of this realm's reach (an error page, which is too, never reports) */
+	/** the frame's last report came from a document out of this realm's reach (Chrome's own error page, which is too, never reports) */
 	#reportedApart = false;
+	/**
+	 * the document of the frame's last report when it runs no inject (the
+	 * page the worker answered a failed document with), whose URL only its
+	 * report says
+	 */
+	#reportedBare: WeakRef<Document> | null = null;
 	/** @internal the window the frame's document reported from */
 	reportedFrom(source: Window | null) {
 		this.#reportedApart = !!source && outOfReach(source);
+		this.#reportedBare = null;
+		if (!source || this.#reportedApart) return;
+		const name = helperNames(this.controller.config).client;
+		try {
+			if (!(source as unknown as Record<string, unknown>)[name])
+				this.#reportedBare = new WeakRef(source.document);
+		} catch (error) {
+			// a window gone since it posted
+		}
 	}
 	/** what the agent last said of the history of the frame's document out of reach */
 	#apartHistory: { back: boolean | null; forward: boolean | null } | null =
@@ -4684,10 +4699,13 @@ export class Frame extends EventTarget {
 		try {
 			const win = this.element.contentWindow as
 				(Window & Record<string, { url?: { toString(): string } }>) | null;
-			return (
-				win?.[helperNames(this.controller.config).client]?.url?.toString() ??
-				null
-			);
+			const client = win?.[helperNames(this.controller.config).client];
+			if (client) return client.url?.toString() ?? null;
+			// an error page says where it is in its report (src/server/errorPage.ts)
+			const bare = this.#reportedBare?.deref();
+			return bare && bare === win?.document
+				? (this.lastNavigate?.url ?? null)
+				: null;
 		} catch {
 			// a document out of this realm's reach (./apart.ts) says where it
 			// is in its reports

@@ -2792,12 +2792,16 @@ function genericForward(
 			// document is the user's own navigation: the host's page says why
 			const page =
 				navigation && topLevel
-					? await hostErrorPage(rewriter, {
-							url: reportURL(url),
-							status: 403,
-							error: 'blocked by the content blocker',
-							kind: 'blocked',
-						})
+					? await hostErrorPage(
+							rewriter,
+							{
+								url: reportURL(url),
+								status: 403,
+								error: 'blocked by the content blocker',
+								kind: 'blocked',
+							},
+							{ client: context?.clientId },
+						)
 					: null;
 			rewriter.log?.({
 				url: reportURL(url),
@@ -2809,7 +2813,8 @@ function genericForward(
 				bytes: null,
 				error: 'blocked by the content blocker',
 				kind: 'blocked',
-				...(page ? {} : { client: context?.clientId }),
+				// the host's page tells the host which client it is, as a proxied page does
+				client: context?.clientId,
 			});
 			return page ?? Response.error();
 		}
@@ -2939,12 +2944,16 @@ function genericForward(
 			// the same error: the element it hides is the page's to hide)
 			const page =
 				navigation && topLevel
-					? await hostErrorPage(rewriter, {
-							url: reportURL(url),
-							status: 403,
-							error: `blocked by ${by}`,
-							kind: 'blocked',
-						})
+					? await hostErrorPage(
+							rewriter,
+							{
+								url: reportURL(url),
+								status: 403,
+								error: `blocked by ${by}`,
+								kind: 'blocked',
+							},
+							{ client: context?.clientId },
+						)
 					: null;
 			rewriter.log?.({
 				url: reportURL(url),
@@ -2956,7 +2965,8 @@ function genericForward(
 				bytes: null,
 				error: `blocked by ${by}`,
 				kind: 'blocked',
-				...(page ? {} : { client: context?.clientId }),
+				// the host's page tells the host which client it is, as a proxied page does
+				client: context?.clientId,
 			});
 			return page ?? Response.error();
 		};
@@ -2995,7 +3005,6 @@ function genericForward(
 				headers?: Record<string, string>,
 				error?: string,
 				kind?: RequestErrorKind,
-				hostPage = false,
 			) => {
 				rewriter.log?.({
 					url: reportURL(url),
@@ -3007,28 +3016,25 @@ function genericForward(
 					bytes: 0,
 					...(error ? { error } : {}),
 					...(kind ? { kind } : {}),
-					// the host's page never reports a client id: no attribution to wait for
-					...(hostPage ? {} : { client: context?.clientId }),
+					client: context?.clientId,
 					rule: rule.index,
 				});
 				return new Response(null, { status, headers });
 			};
 			if (rule.action === 'block') {
 				const page = DOCUMENT_DESTINATIONS.has(serverRequest.destination)
-					? await hostErrorPage(rewriter, {
-							url: reportURL(url),
-							status: 403,
-							error: 'blocked by a rule',
-							kind: 'blocked',
-						})
+					? await hostErrorPage(
+							rewriter,
+							{
+								url: reportURL(url),
+								status: 403,
+								error: 'blocked by a rule',
+								kind: 'blocked',
+							},
+							{ client: context?.clientId },
+						)
 					: null;
-				const built = answer(
-					403,
-					undefined,
-					'blocked by a rule',
-					'blocked',
-					!!page,
-				);
+				const built = answer(403, undefined, 'blocked by a rule', 'blocked');
 				return page ?? built;
 			}
 			if (rule.action.status !== undefined)
@@ -3073,12 +3079,16 @@ function genericForward(
 		if (extensionVerdict && 'cancel' in extensionVerdict) {
 			const page =
 				navigation && topLevel
-					? await hostErrorPage(rewriter, {
-							url: reportURL(url),
-							status: 403,
-							error: 'blocked by an extension',
-							kind: 'blocked',
-						})
+					? await hostErrorPage(
+							rewriter,
+							{
+								url: reportURL(url),
+								status: 403,
+								error: 'blocked by an extension',
+								kind: 'blocked',
+							},
+							{ client: context?.clientId },
+						)
 					: null;
 			rewriter.log?.({
 				url: reportURL(url),
@@ -3090,7 +3100,8 @@ function genericForward(
 				bytes: null,
 				error: 'blocked by an extension',
 				kind: 'blocked',
-				...(page ? {} : { client: context?.clientId }),
+				// the host's page tells the host which client it is, as a proxied page does
+				client: context?.clientId,
 			});
 			return page ?? Response.error();
 		}
@@ -5431,12 +5442,16 @@ function genericForward(
 				// not a routed URL after all: reported as it came
 			}
 			// the report says 0 (no response); the document needs a status: 502
-			const page = await hostErrorPage(rewriter, {
-				url: real,
-				status: 502,
-				error: String(error),
-				kind: 'transport',
-			});
+			const page = await hostErrorPage(
+				rewriter,
+				{
+					url: real,
+					status: 502,
+					error: String(error),
+					kind: 'transport',
+				},
+				{ client: context?.clientId },
+			);
 			if (!(error as { stompReported?: boolean }).stompReported)
 				rewriter.log?.({
 					url: real,
@@ -5448,8 +5463,9 @@ function genericForward(
 					kind: 'transport',
 					bytes: null,
 					error: String(error),
-					// the host's page never reports a client id: no attribution to wait for
-					...(page ? {} : { client: context?.clientId }),
+					// the error page (the host's, or the router's own when the
+					// host has none) tells the host which client it is
+					client: context?.clientId,
 				});
 			if (page) return page;
 			throw error;

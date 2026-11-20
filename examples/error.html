@@ -34,7 +34,9 @@
 			The host's own error page (ControllerInit.errorPage). The service
 			worker serves it under the frame's URL for a document it failed to
 			produce, with globalThis.stompError = { url, status, error, kind }
-			in the head; location.reload() retries the real page.
+			in the head; location.reload() retries the real page. The worker's
+			own script after it tells the host the failed URL and this page's
+			title, once this page's scripts ran and whenever the title changes.
 		-->
 		<main>
 			<h1 id="title">Page unavailable</h1>
@@ -49,8 +51,10 @@
 				timeout: 'The site took too long',
 				routing: 'Something went wrong',
 				blocked: 'Blocked by this host',
+				controller: 'This proxy session has ended',
 			};
-			document.getElementById('title').textContent =
+			// the heading and the tab's title (the host hears the title)
+			document.title = document.getElementById('title').textContent =
 				titles[info.kind] || 'Page unavailable';
 			document.getElementById('url').textContent = info.url || location.href;
 			document.getElementById('detail').textContent = info.error

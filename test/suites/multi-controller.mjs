@@ -606,7 +606,8 @@ ok(
 ok(
 	'with no live controller of its codec the host error page shows kind controller',
 	stale.b64?.error?.kind === 'controller' &&
-		stale.b64?.title === 'Page unavailable' &&
+		// examples/error.html titles itself by the kind
+		stale.b64?.title === 'This proxy session has ended' &&
 		stale.b64?.path?.startsWith('/stomp/gone-b64/html/'),
 	JSON.stringify(stale.b64),
 );
