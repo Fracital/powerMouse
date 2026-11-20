@@ -166,6 +166,7 @@ import { windowArrays } from '../windowArrays';
 import { workerStart } from '../workerStart';
 import { checkedHeader, checkedMethod, notOpened } from '../xhrChecks';
 import { ancestorOriginsList } from './ancestorOriginsList';
+import { animatedHref } from './animatedHref';
 import { attributeViewMethods } from './attributeViewMethods';
 import { relayBeacon } from './beaconRelay';
 import {
@@ -349,6 +350,9 @@ export const parts = {
 	// the rare markup sinks' work and the document.domain setter's, at a
 	// page's first call of one (./markupSinks.ts; modules/DOMHooks.ts)
 	markupSinks,
+	// an SVG animation of an href, its values routed, at a document's first
+	// (./animatedHref.ts; modules/DOMAttributes.ts)
+	animatedHref,
 	// a frame's fresh browsing context, at the first frame of a document
 	// that is to show another origin's document (./freshSwap.ts;
 	// ./freshContext.ts, modules/IFrame.ts)
