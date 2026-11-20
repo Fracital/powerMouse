@@ -882,6 +882,74 @@ export const REPORT_GRACE_MS = 1000;
 const HANDOVER_GRACE_MS = 1000;
 /** how long register() and the constructor wait for a worker to activate before going on with what there is */
 export const REGISTER_WAIT_MS = 30000;
+
+/**
+ * What a controller's start waits for before its first handshake, begun by
+ * register() while the service worker installs: the wasm modules' and the
+ * rewriter library's fetches, and the transport worker's script. Begun by
+ * the start itself, once the worker was activated, the fetches went one
+ * after another and the transport worker started beside them: 39 ms from
+ * activation to the worker's first answer on Chrome 157, where it is 28 ms
+ * now (the page's thread is idle through the install). Each is taken once,
+ * by its URL (bootFetch, bootWorker); what no start takes is let go after
+ * EARLY_KEEP_MS.
+ */
+const earlyFetches = new Map<string, Promise<Response>>();
+/** the transport worker scripts register() started, and whether one failed to */
+const earlyWorkers = new Map<string, { worker: Worker; failed: boolean }>();
+const EARLY_KEEP_MS = 30000;
+/** `url` fetched, or the early fetch of it register() made */
+function bootFetch(url: URL): Promise<Response> {
+	const early = earlyFetches.get(url.href);
+	if (!early) return fetch(url);
+	earlyFetches.delete(url.href);
+	return early;
+}
+/**
+ * The transport worker register() started at `url`, unless its script
+ * failed (a new one fails where TransportWorker hears why). Nothing posts
+ * to the page before the transport's init but the clock's tick, the first
+ * KEEPALIVE_MS after the start.
+ */
+function bootWorker(url: URL): Worker | undefined {
+	const early = earlyWorkers.get(url.href);
+	if (!early) return undefined;
+	earlyWorkers.delete(url.href);
+	if (!early.failed) return early.worker;
+	early.worker.terminate();
+}
+/** begin what a controller's start in `scope` waits for (see earlyFetches) */
+function bootEarly(scope: URL, assets: Assets | undefined) {
+	const fetches = [
+		coreFile(assets),
+		assetFile(assets, 'blocker'),
+		libraryFile(assets),
+	].map((file) => {
+		const url = new URL(file, scope).href;
+		const early = fetch(url);
+		early.catch(() => {});
+		earlyFetches.set(url, early);
+		return [url, early] as const;
+	});
+	const url = new URL(assetFile(assets, 'transportWorker'), scope).href;
+	let worker: { worker: Worker; failed: boolean } | undefined;
+	try {
+		worker = { worker: new Worker(url), failed: false };
+		const started = worker;
+		started.worker.addEventListener('error', () => (started.failed = true));
+		earlyWorkers.set(url, started);
+	} catch (error) {
+		// the start makes its own, and says why it cannot
+	}
+	setTimeout(() => {
+		for (const [url, early] of fetches)
+			if (earlyFetches.get(url) === early) earlyFetches.delete(url);
+		if (worker && earlyWorkers.get(url) === worker) {
+			earlyWorkers.delete(url);
+			worker.worker.terminate();
+		}
+	}, EARLY_KEEP_MS);
+}
 const DOCUMENT_DESTINATIONS = new Set([
 	'document',
 	'iframe',
@@ -1198,6 +1266,7 @@ export class StompController extends EventTarget {
 		const scope = isUrlLike(directory)
 			? new URL(directory, location.href)
 			: defaultDirectory();
+		bootEarly(scope, options.assets);
 		const registration = await navigator.serviceWorker.register(
 			new URL(
 				options.assets?.serviceWorker ?? DEFAULT_ASSETS.serviceWorker,
@@ -1930,6 +1999,7 @@ export class StompController extends EventTarget {
 				this.#admitSession,
 				this.#carrierChosen,
 				(note) => this.#note(note),
+				bootWorker(url),
 			);
 			if (this.#debugTransport) worker.debugTransport(true);
 			const host = this.#carrierHost(descriptor);
@@ -1963,13 +2033,18 @@ export class StompController extends EventTarget {
 	#startClock() {
 		const own = () => setInterval(this.#keepAlive, KEEPALIVE_MS);
 		try {
+			const url = new URL(
+				assetFile(this.config.assets, 'transportWorker'),
+				this.directory,
+			);
 			const clock = new TransportWorker(
-				new URL(
-					assetFile(this.config.assets, 'transportWorker'),
-					this.directory,
-				),
+				url,
 				this.#handshakeHeaders,
 				this.#keepAlive,
+				undefined,
+				undefined,
+				undefined,
+				bootWorker(url),
 			);
 			clock.onFailure(() => {
 				clock.terminate();
@@ -2103,7 +2178,7 @@ export class StompController extends EventTarget {
 			);
 		let response: Response;
 		try {
-			response = await fetch(url);
+			response = await bootFetch(url);
 		} catch (error) {
 			throw missing(`${error}`);
 		}
@@ -2228,7 +2303,7 @@ export class StompController extends EventTarget {
 				try {
 					// the core module by the URL a page's synchronous fetch of it
 					// asks (routeURL.ts coreWasm), which the HTTP cache answers
-					const response = await fetch(
+					const response = await bootFetch(
 						new URL(
 							name === 'core'
 								? coreFile(this.config.assets)

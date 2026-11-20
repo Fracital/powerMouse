@@ -34,9 +34,11 @@ export default class TransportWorker {
 		admit?: AdmitSession,
 		carrier?: (info: CarrierInfo) => void,
 		note?: (note: TransportNote) => void,
+		/** the worker at `url`, already started (the controller's register()) */
+		started?: Worker,
 	) {
 		// a classic worker (see build.js: emscripten's environment detection)
-		this.#worker = new Worker(url);
+		this.#worker = started ?? new Worker(url);
 		this.#rpc = new RpcHelper<WorkerToController, WorkerBound>(
 			{
 				decorate: async ({ url, headers }) => [
