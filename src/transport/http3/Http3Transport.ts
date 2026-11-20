@@ -52,7 +52,11 @@ export interface Http3Options {
 	pem?: string;
 	/** ms a QUIC handshake may take before the origin is marked broken (10000) */
 	timeout?: number;
-	/** ms a request waits for a reconnect to an origin QUIC already worked for (300) */
+	/**
+	 * ms a request waits for a reconnect to an origin QUIC already worked
+	 * for, and the head start a first QUIC connection from an HTTPS record
+	 * gets over the base transport (300)
+	 */
 	wait?: number;
 	/** instance hosts only (a function cannot cross into a worker): how to open a UDP channel when the base transport has no `client.connect_udp` */
 	udp?: UdpOpener;
@@ -146,6 +150,16 @@ const RELAY_REASONS = new Set([0x42, 0x48]);
 const NO_UDP_EXTENSION =
 	/ExtensionsNotSupported|Protocol extensions .* not supported/;
 const DNS_NEGATIVE_MS = 5 * 60 * 1000;
+/**
+ * How long a first request to a name waits for its HTTPS record. Chrome
+ * asks for the record beside the name's addresses and uses an alpn that
+ * names h3 for the very first request; a proxied page's names are resolved
+ * by the wisp server, so the record is asked over DoH here, and an answer
+ * later than this is used from the next request on.
+ */
+const DNS_WAIT_MS = 300;
+/** HTTPS record answers kept before the expired ones are dropped */
+const DNS_KEPT = 512;
 const RECENT = 64;
 /** methods a failed h3 attempt may be retried on the base transport with (RFC 9110 9.2.2, minus those with bodies that matter) */
 const RETRYABLE = new Set(['GET', 'HEAD', 'OPTIONS']);
@@ -190,6 +204,17 @@ interface Relay {
 	refused: Set<string>;
 	/** HTTP/3 is off for every origin until then */
 	offUntil: number;
+	/**
+	 * A first QUIC connection's head start ran out with no datagram ever
+	 * back: no more head starts over this relay until one comes back
+	 */
+	missed: boolean;
+}
+
+/** what an HTTPS record says of a name's h3: where, and for how long (s) */
+interface DnsH3 {
+	port: number;
+	ttl: number;
 }
 
 const hex = (reason: number) => `0x${reason.toString(16).padStart(2, '0')}`;
@@ -317,6 +342,10 @@ export default class Http3Transport implements ProxyTransport {
 	#workerUrl: string | null;
 	#module: Promise<H3Module> | null = null;
 	#moduleError: string | null = null;
+	/** `dns` is the base transport's own resolver (constructor) */
+	readonly #sharedDns: boolean;
+	/** stomp-h3 has loaded (#loadModule) */
+	#moduleReady = false;
 	#cache = new AltSvcCache();
 	#connections = new Map<string, H3Connection>();
 	#pending = new Map<string, Promise<H3Connection | null>>();
@@ -327,8 +356,12 @@ export default class Http3Transport implements ProxyTransport {
 		carried: false,
 		refused: new Set(),
 		offUntil: 0,
+		missed: false,
 	};
-	#dnsAsked = new Map<string, number>();
+	/** by name: its HTTPS record's h3 alternative (null: none), until when that stands */
+	#dns = new Map<string, { until: number; answer: Promise<DnsH3 | null> }>();
+	/** origins whose first QUIC connection's head start ran out while it was still being made */
+	#late = new Set<string>();
 	#recent: Http3Info['recent'] = [];
 	/**
 	 * Connections that ended because their wisp UDP stream did (the stream
@@ -351,9 +384,16 @@ export default class Http3Transport implements ProxyTransport {
 		options: Http3Options = {},
 		moduleUrl?: string,
 		workerUrl?: string,
+		/**
+		 * `dns` is the base transport's own resolver (epoxy's `ech_dns`): a
+		 * base that answers HTTPS records itself (httpsAnswer) is asked
+		 * instead of the DoH server
+		 */
+		sharedDns = false,
 	) {
 		this.base = base;
 		this.#options = options;
+		this.#sharedDns = sharedDns;
 		this.#moduleUrl = options.module ?? moduleUrl ?? null;
 		this.#workerUrl = workerUrl ?? null;
 		for (const entry of options.force || []) {
@@ -411,6 +451,9 @@ export default class Http3Transport implements ProxyTransport {
 		this.base.ready = value;
 	}
 
+	// Nothing of HTTP/3 happens at startup: a name's HTTPS record is asked at
+	// its first request, and stomp-h3 is loaded once a record or an Alt-Svc
+	// names h3
 	init(): Promise<void> {
 		return this.base.init();
 	}
@@ -477,7 +520,11 @@ export default class Http3Transport implements ProxyTransport {
 		// an origin the last wisp connection's relay refused is not broken
 		// on a new one
 		if (usable) this.#currentRelay();
-		const alt = usable ? this.#lookup(key, origin) : null;
+		let alt = usable ? this.#lookup(key, origin) : null;
+		// a name not met before: its HTTPS record, as Chrome's resolver asks
+		// for it with the addresses, may name h3 for this first request
+		if (!alt && usable && this.#options.dns && this.#asksDns(key, remote))
+			alt = await this.#fromDns(key, remote, headers, this.#headStart(key));
 		let retryBody = body;
 		let via: Http3Info['recent'][number]['via'] = 'base';
 		/** the QUIC connection that failed under this request, when it did */
@@ -524,8 +571,6 @@ export default class Http3Transport implements ProxyTransport {
 					via = 'base-after-h3';
 				}
 			}
-		} else if (usable && this.#options.dns) {
-			void this.#askDns(key, remote);
 		}
 
 		const response = await this.base.request(
@@ -632,6 +677,7 @@ export default class Http3Transport implements ProxyTransport {
 			carried: false,
 			refused: new Set(),
 			offUntil: 0,
+			missed: false,
 		};
 		this.#cache.forgetRefused();
 	}
@@ -710,15 +756,21 @@ export default class Http3Transport implements ProxyTransport {
 			)) as H3Module;
 			await module.default();
 			return module;
-		})().catch((error) => {
-			this.#moduleError = String(error?.message || error);
-			console.warn('Stomp: HTTP/3 is off, stomp-h3 did not load:', error);
-			if (transportLog.on)
-				logTransport(
-					`HTTP/3 falls back for every origin: stomp-h3 did not load (${this.#moduleError}); ${OVER_TCP}`,
-				);
-			throw error;
-		});
+		})().then(
+			(module) => {
+				this.#moduleReady = true;
+				return module;
+			},
+			(error) => {
+				this.#moduleError = String(error?.message || error);
+				console.warn('Stomp: HTTP/3 is off, stomp-h3 did not load:', error);
+				if (transportLog.on)
+					logTransport(
+						`HTTP/3 falls back for every origin: stomp-h3 did not load (${this.#moduleError}); ${OVER_TCP}`,
+					);
+				throw error;
+			},
+		);
 		return this.#module;
 	}
 
@@ -746,14 +798,48 @@ export default class Http3Transport implements ProxyTransport {
 			);
 			this.#pending.set(origin, pending);
 		}
+		// A first connection from an HTTPS record races the base transport
+		// as Chrome's QUIC job races its TCP one: it gets a head start, and
+		// the base transport takes the request when it is not up by then
+		const first = alt.source === 'dns' && !this.#confirmed.has(origin);
+		const headStart = first && this.#headStart(origin);
 		const wait =
 			alt.source === 'force'
 				? (this.#options.timeout ?? DEFAULT_TIMEOUT_MS) + 1000
-				: this.#confirmed.has(origin)
+				: this.#confirmed.has(origin) || headStart
 					? (this.#options.wait ?? DEFAULT_WAIT_MS)
 					: 0;
 		if (!wait) return null;
-		return Promise.race([pending, sleep(wait)]);
+		const conn = await Promise.race([pending, sleep(wait)]);
+		if (!conn && first && this.#pending.get(origin) === pending) {
+			// not up in time: the requests after this one do not wait on it
+			// either, and a relay nothing has come back from gives no more
+			// head starts
+			this.#late.add(origin);
+			const relay = this.#currentRelay();
+			if (!relay.carried) relay.missed = true;
+			void pending.finally(() => this.#late.delete(origin));
+		}
+		return conn;
+	}
+
+	/**
+	 * Whether a first QUIC connection to `origin` from an HTTPS record gets a
+	 * head start (and its request waits for the record): only once stomp-h3
+	 * has loaded (the first record or Alt-Svc that names h3 loads it; until
+	 * then a name's record is asked beside its first request, which does not
+	 * wait for it), not once one has run out for it, nor over a relay whose
+	 * head starts ran out with nothing ever back, nor while HTTP/3 is off
+	 */
+	#headStart(origin: string): boolean {
+		const relay = this.#currentRelay();
+		return (
+			this.#moduleReady &&
+			!this.#late.has(origin) &&
+			!this.#moduleError &&
+			relay.offUntil <= Date.now() &&
+			(relay.carried || !relay.missed)
+		);
 	}
 
 	async #connect(
@@ -1108,46 +1194,149 @@ export default class Http3Transport implements ProxyTransport {
 		} as TransferrableResponse;
 	}
 
-	/** ask the DoH server for `remote`'s HTTPS record, once per name per answer's TTL */
-	async #askDns(key: string, remote: URL) {
-		const origin = key;
-		if (remote.port && remote.port !== '443') return;
-		if (this.#cache.known(origin)) return;
-		const name = remote.hostname;
-		if (/^[\d.]+$|:/.test(name)) return;
-		const until = this.#dnsAsked.get(name);
-		if (until && until > Date.now()) return;
-		this.#dnsAsked.set(name, Date.now() + DNS_NEGATIVE_MS);
+	/** whether `remote` is one an HTTPS record is asked for: https on 443, a name, not known in `key` */
+	#asksDns(key: string, remote: URL): boolean {
+		if (remote.port && remote.port !== '443') return false;
+		if (/^[\d.]+$|:|^\[/.test(remote.hostname)) return false;
+		// the DoH server's own name is not asked of it, as Chrome resolves its
+		// secure DNS server's name without it (the transport's warm-up of
+		// epoxy's resolver is no first request to a name)
+		if (remote.hostname === this.#dnsHost) return false;
+		return !this.#cache.known(key);
+	}
+
+	/** the DoH server's name, or null when `dns` is no URL */
+	get #dnsHost(): string | null {
 		try {
-			const url = new URL(this.#options.dns!);
-			url.searchParams.set('dns', base64url(httpsQuery(name)));
-			const response = await this.base.request(
-				url,
-				'GET',
-				null,
-				[['accept', 'application/dns-message']],
-				undefined,
-			);
-			if (response.status !== 200) return;
-			const record = parseHttpsAnswer(
-				await new Response(response.body as BodyInit).arrayBuffer(),
-			);
-			if (!record) return;
-			this.#dnsAsked.set(
-				name,
-				Date.now() + Math.max(record.ttl * 1000, DNS_NEGATIVE_MS),
-			);
-			if (!record.h3) return;
-			const entry: AltService = {
-				host: name,
-				port: record.port ?? 443,
-				expires: Date.now() + Math.max(record.ttl, 60) * 1000,
-				source: 'dns',
-			};
-			this.#cache.add(origin, entry);
-			void this.#connectionFor(origin, entry);
-		} catch (error) {
-			console.warn(`Stomp: HTTPS record lookup for ${name} failed:`, error);
+			return new URL(this.#options.dns!).hostname;
+		} catch {
+			return null;
 		}
+	}
+
+	/**
+	 * The alternative `remote`'s HTTPS record gives `key`, when it names h3
+	 * and comes within DNS_WAIT_MS (`wait`; without it the request does not
+	 * wait at all). A later answer is added for the next request, and its
+	 * connection is started then.
+	 */
+	async #fromDns(
+		key: string,
+		remote: URL,
+		headers: RawHeaders,
+		wait: boolean,
+	): Promise<AltService | null> {
+		const name = remote.hostname;
+		const answer = this.#dnsAnswer(name, headers);
+		const add = (h3: DnsH3 | null): AltService | null => {
+			if (!h3) return null;
+			this.#cache.add(key, {
+				host: name,
+				port: h3.port,
+				expires: Date.now() + Math.max(h3.ttl, 60) * 1000,
+				source: 'dns',
+			});
+			return this.#lookup(key, remote.origin);
+		};
+		const later = () =>
+			void answer.then((h3) => {
+				const alt = add(h3);
+				if (alt) void this.#connectionFor(key, alt);
+			});
+		if (!wait) {
+			later();
+			return null;
+		}
+		const got = await Promise.race([
+			answer.then((h3) => ({ h3 })),
+			sleep(DNS_WAIT_MS),
+		]);
+		if (!got) {
+			later();
+			return null;
+		}
+		return add(got.h3);
+	}
+
+	/**
+	 * Ask the DoH server for `name`'s HTTPS record, once per name per
+	 * answer's TTL, one question for every request that waits on it. Answers
+	 * are kept per network partition, as Chrome's host cache is split by its
+	 * network anonymization key: one site cannot time whether another's pages
+	 * looked a name up.
+	 */
+	#dnsAnswer(name: string, headers: RawHeaders): Promise<DnsH3 | null> {
+		// kept by the request's network partition (the field the service
+		// worker names it in), as Chrome's host cache is
+		const partition = Array.isArray(headers)
+			? headers.find(
+					([field]) => field.toLowerCase() === NETWORK_PARTITION,
+				)?.[1]
+			: undefined;
+		const id = `${partition ?? ''} ${name}`;
+		const known = this.#dns.get(id);
+		if (known && known.until > Date.now()) return known.answer;
+		if (this.#dns.size >= DNS_KEPT)
+			for (const [old, entry] of this.#dns)
+				if (entry.until <= Date.now()) this.#dns.delete(old);
+		const entry: { until: number; answer: Promise<DnsH3 | null> } = {
+			until: Date.now() + DNS_NEGATIVE_MS,
+			answer: Promise.resolve(null),
+		};
+		entry.answer = (async (): Promise<DnsH3 | null> => {
+			try {
+				const bytes = await this.#httpsAnswer(name, headers);
+				const record = bytes && parseHttpsAnswer(bytes);
+				if (!record) return null;
+				entry.until = Date.now() + Math.max(record.ttl * 1000, DNS_NEGATIVE_MS);
+				return record.h3 ? { port: record.port ?? 443, ttl: record.ttl } : null;
+			} catch (error) {
+				console.warn(`Stomp: HTTPS record lookup for ${name} failed:`, error);
+				return null;
+			}
+		})();
+		this.#dns.set(id, entry);
+		return entry.answer;
+	}
+
+	/**
+	 * The DoH answer for `name`'s HTTPS record, or null. A base transport
+	 * that answers it itself (the epoxy build's httpsAnswer, through the
+	 * wrappers and shards between, with the request's fields, which name
+	 * its network partition) is asked when `dns` is its own resolver:
+	 * the one question its ECH lookup asks before the connection's TLS
+	 * serves both, as Chrome's one HTTPS query gives the alpn and the ECH
+	 * config, so a first request pays no round trip of its own. Otherwise
+	 * the DoH server is asked through the base transport.
+	 */
+	async #httpsAnswer(
+		name: string,
+		headers: RawHeaders,
+	): Promise<ArrayBuffer | null> {
+		const base = this.base as {
+			fieldSupport?: { httpsAnswer?: boolean };
+			httpsAnswer?: (
+				host: string,
+				headers?: RawHeaders,
+			) => Promise<ArrayBuffer | null>;
+		};
+		if (
+			this.#sharedDns &&
+			base.fieldSupport?.httpsAnswer &&
+			typeof base.httpsAnswer === 'function'
+		)
+			// the request's own fields: epoxy reads its partition from them
+			return base.httpsAnswer(name, headers);
+		const url = new URL(this.#options.dns!);
+		url.searchParams.set('dns', base64url(httpsQuery(name)));
+		const response = await this.base.request(
+			url,
+			'GET',
+			null,
+			[['accept', 'application/dns-message']],
+			undefined,
+		);
+		const bytes = await new Response(response.body as BodyInit).arrayBuffer();
+		return response.status === 200 ? bytes : null;
 	}
 }
