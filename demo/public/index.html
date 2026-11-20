@@ -7,6 +7,13 @@
 		<link type="image/x-icon" rel="shortcut icon" href="/favicon.ico" />
 		<title>powerMouse</title>
 		<link rel="stylesheet" href="/pm/main.css" />
+		<script>
+			// a page named in the fragment (a reload, a restored session, a link
+			// to a tab) opens in the browser view from the first paint: the home
+			// screen below is never drawn before it (pm/main.js takes it over)
+			if (location.hash.length > 1)
+				document.documentElement.classList.add('opening');
+		</script>
 		<script src="/config.js"></script>
 		<script>
 			// npm run dev only: live reload client (the server sets dev in config)

@@ -654,6 +654,16 @@ body {
 	height: calc(100% - 48px); /* navigation bar, like #landing and the stage */
 }
 
+/* a page named in the fragment: the browser view from the first paint, until
+   pm/main.js sets the views' own classes (index.html sets .opening) */
+html.opening #landing {
+	display: none !important;
+}
+
+html.opening #browser {
+	display: flex !important;
+}
+
 .frames {
 	flex: 1 1 auto;
 	position: relative;
@@ -2163,6 +2173,13 @@ input:focus-visible {
 	transform: translateX(0);
 	visibility: visible;
 	transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* a bookmark opened: the sidebar and its scrim are gone at once, never
+   sliding and fading over the page that opens (closeBookmarks, instant) */
+.bookmarks.shut,
+.bookmarksScrim.shut {
+	transition: none;
 }
 
 .bookmarks * {
