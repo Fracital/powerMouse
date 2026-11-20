@@ -57,6 +57,14 @@ function heldSet(this: Held, value: unknown) {
 	settle(this, value, true);
 }
 
+// The window's own keys as the run's first hold found them: each hold read
+// them all (some thousand) for the one name before its own, six times a
+// frame. Kept for the inject's run, which holds every name before any page
+// script, and let go in a microtask after it (by the native taken when the
+// bundle loads)
+let firstKeys: { client: Client; keys: PropertyKey[] } | null = null;
+const microtask = queueMicrotask;
+
 /**
  * Hold the realm's global interface `name` behind an accessor until it is
  * first read, for a hook whose interface a page reaches only through the
@@ -87,7 +95,11 @@ export function lazyInterface(
 	const held: Held = { client, name, make };
 	held.get = heldGet.bind(held);
 	client.lazyGlobals.set(name, resolve.bind(held));
-	const keys = Reflect.ownKeys(global);
+	if (firstKeys?.client !== client) {
+		firstKeys = { client, keys: Reflect.ownKeys(global) };
+		microtask(() => (firstKeys = null));
+	}
+	const keys = firstKeys.keys;
 	const after = keys[keys.indexOf(name) - 1];
 	if (after !== undefined) client.globalKeyAfter.set(name, after);
 	Reflect.deleteProperty(global, name);

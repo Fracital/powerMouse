@@ -251,7 +251,8 @@ export class Blocker implements BlockerLike {
 	readonly #restored: Promise<void>;
 	#tried: () => void = () => {};
 	#key = '';
-	#resources = '';
+	/** (as the store gave them: the bytes the engine takes, not decoded and encoded again) */
+	#resources: Uint8Array<ArrayBuffer> | string = '';
 	#building: Promise<void> | null = null;
 	#replacing: Promise<void> | null = null;
 	/**
@@ -394,17 +395,24 @@ export class Blocker implements BlockerLike {
 	/** the stored engine and resources under this key, when both are there */
 	async #stored(): Promise<{
 		engine: Uint8Array<ArrayBuffer>;
-		resources: string;
+		resources: Uint8Array<ArrayBuffer>;
 		at: number;
 	} | null> {
 		try {
 			const cache = await caches.open(STORE);
-			const engine = await cache.match(this.#url('engine'));
-			const resources = await cache.match(this.#url('resources'));
+			// (both at once: a restarted worker's first navigation waits for them)
+			const [engine, resources] = await Promise.all([
+				cache.match(this.#url('engine')),
+				cache.match(this.#url('resources')),
+			]);
 			if (!engine || !resources) return null;
+			const [engineBytes, resourceBytes] = await Promise.all([
+				engine.arrayBuffer(),
+				resources.arrayBuffer(),
+			]);
 			return {
-				engine: new Uint8Array(await engine.arrayBuffer()),
-				resources: await resources.text(),
+				engine: new Uint8Array(engineBytes),
+				resources: new Uint8Array(resourceBytes),
 				at: Number(engine.headers.get(STORED_AT)) || 0,
 			};
 		} catch (error) {
@@ -440,7 +448,10 @@ export class Blocker implements BlockerLike {
 	}
 
 	/** a fresh instance holding `engine` and `resources`; false when the bytes are not an engine of this format */
-	#load(engine: Uint8Array<ArrayBuffer>, resources: string): boolean {
+	#load(
+		engine: Uint8Array<ArrayBuffer>,
+		resources: Uint8Array<ArrayBuffer> | string,
+	): boolean {
 		let instance: BlockerInstance;
 		try {
 			instance = new BlockerInstance(this.#module!);
@@ -864,7 +875,10 @@ export class Blocker implements BlockerLike {
 	}
 	/** the resources JSON the engine holds (tests) */
 	get resourcesText(): string {
-		return this.#resources;
+		const resources = this.#resources;
+		return typeof resources === 'string'
+			? resources
+			: new TextDecoder().decode(resources);
 	}
 }
 
