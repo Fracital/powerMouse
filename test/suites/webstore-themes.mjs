@@ -33,7 +33,21 @@
 //    content script, no background, no rules, no toolbar button, no
 //    permissions, its pages not served;
 //  - resetTheme() uninstalls every theme.
-/* global chrome -- the store page's, in the functions evaluated there */
+// And the demo's default theme (docs/themes.md "The default theme"), with
+// Omni as the default its config names (the run turns the default off for
+// every suite, and Shooting Star's package is not the suite's to keep):
+//  - a fresh profile has it installed and off after boot: the worker's
+//    theme disabled, none shown, the Themes submenu and the picker list it
+//    with Default chosen, and the page has Default's look;
+//  - a reload neither downloads it again nor shows it;
+//  - removed in the picker and reloaded, it does not come back;
+//  - Reset to default is off while Default is shown; from Light it shows
+//    Default and leaves the theme installed; with the theme applied it
+//    shows Default and uninstalls it, and a reload does not bring it back;
+//  - with no list in the config the page asks the update service for
+//    Shooting Star (pink), and a failed download leaves the profile as it
+//    was and nothing marked offered.
+/* global chrome, PMTheme -- the store page's and the demo's, in the functions evaluated there */
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -357,6 +371,8 @@ button.onclick = () => {
 </script>`;
 
 const downloads = new Map();
+/** every id the update service was asked for */
+const asked = [];
 let backgroundRan = 0;
 const server = createServer((request, response) => {
 	const url = new URL(request.url, 'http://store.test');
@@ -372,6 +388,7 @@ const server = createServer((request, response) => {
 	}
 	if (url.pathname === '/service/update2/crx') {
 		const id = /id=([a-p]{32})/.exec(url.searchParams.get('x') ?? '')?.[1];
+		asked.push(id);
 		if (THEMES.has(id)) {
 			downloads.set(id, (downloads.get(id) ?? 0) + 1);
 			response.writeHead(200, {
@@ -470,17 +487,17 @@ const imageWidths = (page, images) =>
 		return out;
 	}, images);
 
-async function run(mode, base) {
-	const before = (page) =>
-		page.context().route('**/test/mixed-transport.mjs', (route) =>
-			route.fulfill({
-				status: 200,
-				headers: {
-					'content-type': 'text/javascript',
-					'access-control-allow-origin': '*',
-					'cross-origin-resource-policy': 'cross-origin',
-				},
-				body: `import Epoxy from '../epoxy/index.mjs';
+/** the store's hosts are the suite's server, for every page of `page`'s context */
+const storeTransport = (page) =>
+	page.context().route('**/test/mixed-transport.mjs', (route) =>
+		route.fulfill({
+			status: 200,
+			headers: {
+				'content-type': 'text/javascript',
+				'access-control-allow-origin': '*',
+				'cross-origin-resource-policy': 'cross-origin',
+			},
+			body: `import Epoxy from '../epoxy/index.mjs';
 		export default class extends Epoxy {
 			request(remote, ...rest) {
 				const url = new URL(remote);
@@ -490,9 +507,11 @@ async function run(mode, base) {
 				return super.request(url, ...rest);
 			}
 		}`,
-			}),
-		);
-	const page = await openDemo(browser, base, {}, before);
+		}),
+	);
+
+async function run(mode, base) {
+	const page = await openDemo(browser, base, {}, storeTransport);
 	page.on('pageerror', (error) => errors.push(`${mode}: ${error.message}`));
 	await hearThemes(page);
 	ok(
@@ -828,7 +847,359 @@ async function run(mode, base) {
 	await page.context().close();
 }
 
+// ---- the demo's default theme ---------------------------------------------
+
+const SHOOTING_STAR = 'joaodcepoceejhgkojhmnjknhaikcgoi';
+const OMNI_THEME = `chrome-theme:${OMNI.id}`;
+
+/** the demo with `defaults` as its config's `defaultThemes` (undefined: the key left out, the page's own list) */
+const withDefaults = (defaults) => async (page) => {
+	await storeTransport(page);
+	await page.route('**/config.js', async (route) => {
+		const answer = await route.fetch();
+		const config = JSON.parse(
+			(await answer.text())
+				.replace(/^window\.STOMP_CONFIG = /, '')
+				.replace(/;\s*$/, ''),
+		);
+		delete config.defaultThemes;
+		if (defaults) config.defaultThemes = defaults;
+		await route.fulfill({
+			response: answer,
+			body: `window.STOMP_CONFIG = ${JSON.stringify(config)};\n`,
+		});
+	});
+};
+
+/** what the page has of the themes: the theme system's, the worker's, the seed's marker, Default's backgrounds */
+const themeState = (page) =>
+	page.evaluate(async (id) => {
+		const root = document.documentElement;
+		const look = (element) => {
+			const style = element && getComputedStyle(element);
+			return style && [style.backgroundColor, style.backgroundImage];
+		};
+		return {
+			listed: PMTheme.list()
+				.filter((theme) => theme.source !== 'builtin')
+				.map((theme) => [theme.id, theme.name, theme.source]),
+			shown: PMTheme.current().id,
+			theme: root.getAttribute('data-pm-theme'),
+			custom: root.hasAttribute('data-pm-custom'),
+			choice: localStorage.getItem('stomp-demo:theme'),
+			seeded: localStorage.getItem('stomp-demo:themes-seeded'),
+			worker: (await window.controller.extensions.themes()).map((theme) => [
+				theme.extensionId,
+				theme.enabled,
+			]),
+			chromeTheme: await window.controller.extensions.theme(),
+			info: await window.controller.extensions.get(id),
+			// the page, the home page's title bar and its card
+			look: [
+				look(document.body),
+				look(document.querySelector('#landing .head')),
+				look(document.querySelector('#landing .listing')),
+			],
+		};
+	}, OMNI.id);
+
+const booted = (page) =>
+	page.waitForFunction(
+		() => /^(Ready|Error)/.test(document.getElementById('logMsg').textContent),
+		null,
+		{ timeout: 45000 },
+	);
+
+/** a tab on a fixture page, so the bar and its menu are up */
+async function browsing(page) {
+	await submitLanding(page, OTHER);
+	await page.waitForFunction(
+		() =>
+			!document.getElementById('browser').classList.contains('hidden') &&
+			!document.getElementById('toolMenu').hidden,
+		null,
+		{ timeout: 30000 },
+	);
+}
+
+/** the menu's Settings page, its theme picker drawn */
+async function openPicker(page) {
+	await page.click('#toolMenu');
+	await sleep(300);
+	await page.click('#menuSettings');
+	await page.waitForSelector('#spThemes .spThemePick');
+}
+
+/** the Themes submenu's rows and the picker's, each [id, checked] */
+async function themeLists(page) {
+	await page.click('#toolMenu');
+	await sleep(300);
+	await page.hover('#menuThemes');
+	await page.waitForSelector('.extSubmenu [data-theme]');
+	const menu = await page.$$eval('.extSubmenu [data-theme]', (rows) =>
+		rows.map((row) => [row.dataset.theme, row.getAttribute('aria-checked')]),
+	);
+	await page.keyboard.press('Escape');
+	await page.keyboard.press('Escape');
+	await sleep(300);
+	await openPicker(page);
+	const picker = await page.$$eval('#spThemes .spThemePick', (picks) =>
+		picks.map((pick) => [
+			pick.dataset.theme,
+			pick.getAttribute('aria-checked'),
+		]),
+	);
+	return { menu, picker };
+}
+
+/** the Themes submenu's Reset to default: whether it is off, and a click on it when it is on */
+async function resetFromMenu(page) {
+	await page.click('#toolMenu');
+	await sleep(300);
+	await page.hover('#menuThemes');
+	const reset = '.extSubmenu [data-command="resetTheme"]';
+	await page.waitForSelector(reset);
+	const disabled = await page.$eval(reset, (row) => row.disabled);
+	if (disabled) {
+		await page.keyboard.press('Escape');
+		await page.keyboard.press('Escape');
+	} else await page.click(reset);
+	await sleep(300);
+	return disabled;
+}
+
+/** the theme shown, once the worker and the theme system are past a Reset */
+const afterReset = (page) =>
+	until(
+		page,
+		async (id) => ({
+			shown: PMTheme.current().id,
+			listed: PMTheme.list()
+				.filter((theme) => theme.source !== 'builtin')
+				.map((theme) => theme.id),
+			worker: (await window.controller.extensions.themes()).map((theme) => [
+				theme.extensionId,
+				theme.enabled,
+			]),
+			info: !!(await window.controller.extensions.get(id)),
+		}),
+		(value) => value?.shown === 'default',
+		30000,
+		OMNI.id,
+	);
+
+async function defaults() {
+	// Default's look in a profile no default theme reaches (the run's config)
+	const plain = await openDemo(browser, HOST);
+	const defaultLook = (await themeState(plain)).look;
+	await plain.context().close();
+
+	const page = await openDemo(browser, HOST, {}, withDefaults([OMNI.id]));
+	page.on('pageerror', (error) => errors.push(`defaults: ${error.message}`));
+	const omniDownloads = downloads.get(OMNI.id) ?? 0;
+	const downloaded = () => (downloads.get(OMNI.id) ?? 0) - omniDownloads;
+	await until(
+		page,
+		() =>
+			!!localStorage.getItem('stomp-demo:themes-seeded') &&
+			PMTheme.list().some((theme) => theme.source === 'webstore'),
+		Boolean,
+	);
+	let now = await themeState(page);
+	ok(
+		'defaults: a fresh profile has the default theme installed after boot, off, with Default shown',
+		JSON.stringify(now.listed) ===
+			JSON.stringify([[OMNI_THEME, OMNI.manifest.name, 'webstore']]) &&
+			now.shown === 'default' &&
+			now.theme === null &&
+			!now.custom &&
+			now.choice === null &&
+			now.seeded === JSON.stringify([OMNI.id]) &&
+			JSON.stringify(now.worker) === JSON.stringify([[OMNI.id, false]]) &&
+			now.chromeTheme === null &&
+			now.info?.type === 'theme' &&
+			now.info.enabled === false &&
+			downloaded() === 1,
+		JSON.stringify({ ...now, look: undefined, info: now.info?.enabled }),
+	);
+	ok(
+		"defaults: the page keeps Default's backgrounds, those of a profile with no default theme",
+		JSON.stringify(now.look) === JSON.stringify(defaultLook),
+		JSON.stringify({ now: now.look, defaultLook }),
+	);
+	await browsing(page);
+	const lists = await themeLists(page);
+	const builtins = [
+		['default', 'true'],
+		['light', 'false'],
+		['dark', 'false'],
+		['system', 'false'],
+	];
+	ok(
+		'defaults: the Themes submenu and the picker list it unchecked, Default checked',
+		JSON.stringify(lists.menu) ===
+			JSON.stringify([...builtins, [OMNI_THEME, 'false']]) &&
+			JSON.stringify(lists.picker) ===
+				JSON.stringify([...builtins, [OMNI_THEME, 'false']]),
+		JSON.stringify(lists),
+	);
+
+	await page.goto(HOST);
+	await booted(page);
+	await sleep(4000); // past the seed's idle callback
+	now = await themeState(page);
+	ok(
+		'defaults: after a reload it is still installed and off, and not downloaded again',
+		JSON.stringify(now.listed.map(([id]) => id)) ===
+			JSON.stringify([OMNI_THEME]) &&
+			now.shown === 'default' &&
+			!now.custom &&
+			JSON.stringify(now.worker) === JSON.stringify([[OMNI.id, false]]) &&
+			JSON.stringify(now.look) === JSON.stringify(defaultLook) &&
+			downloaded() === 1,
+		JSON.stringify({ ...now, look: undefined, info: undefined }),
+	);
+
+	// Remove in the picker, then a reload: it stays removed
+	await browsing(page);
+	await openPicker(page);
+	await page.click(`.spThemeRemove[data-theme="${OMNI_THEME}"]`);
+	await until(
+		page,
+		async (id) =>
+			!PMTheme.list().some((theme) => theme.source !== 'builtin') &&
+			!(await window.controller.extensions.get(id)),
+		Boolean,
+		30000,
+		OMNI.id,
+	);
+	await page.goto(HOST);
+	await booted(page);
+	await sleep(4000);
+	now = await themeState(page);
+	ok(
+		'defaults: removed and reloaded, it does not come back',
+		now.listed.length === 0 &&
+			now.worker.length === 0 &&
+			now.info === null &&
+			now.shown === 'default' &&
+			now.seeded === JSON.stringify([OMNI.id]) &&
+			JSON.stringify(now.look) === JSON.stringify(defaultLook) &&
+			downloaded() === 1,
+		JSON.stringify({ ...now, look: undefined }),
+	);
+	await page.context().close();
+
+	// Reset to default: off while Default is shown, though a theme is
+	// installed; on another theme it shows Default, and uninstalls the theme
+	// shown when it is the Web Store one, never one that is not shown
+	const fresh = await openDemo(browser, HOST, {}, withDefaults([OMNI.id]));
+	fresh.on('pageerror', (error) => errors.push(`defaults: ${error.message}`));
+	await until(
+		fresh,
+		() => !!localStorage.getItem('stomp-demo:themes-seeded'),
+		Boolean,
+	);
+	await browsing(fresh);
+	const offAtDefault = await resetFromMenu(fresh);
+	ok(
+		'defaults: on a fresh profile Reset to default is off',
+		offAtDefault === true &&
+			(await fresh.evaluate(() => PMTheme.current().id)) === 'default',
+		String(offAtDefault),
+	);
+	await fresh.evaluate(() => PMTheme.apply('light'));
+	const onAtLight = await resetFromMenu(fresh);
+	const fromLight = await afterReset(fresh);
+	ok(
+		'defaults: Reset from Light shows Default and leaves the installed theme that is not shown',
+		onAtLight === false &&
+			fromLight?.shown === 'default' &&
+			JSON.stringify(fromLight.listed) === JSON.stringify([OMNI_THEME]) &&
+			JSON.stringify(fromLight.worker) === JSON.stringify([[OMNI.id, false]]),
+		JSON.stringify({ onAtLight, fromLight }),
+	);
+	await fresh.evaluate((id) => PMTheme.apply(id), OMNI_THEME);
+	const shownBefore = await fresh.evaluate(() => ({
+		shown: PMTheme.current().id,
+		custom: document.documentElement.hasAttribute('data-pm-custom'),
+	}));
+	const onAtTheme = await resetFromMenu(fresh);
+	const fromTheme = await until(
+		fresh,
+		async (id) => ({
+			shown: PMTheme.current().id,
+			custom: document.documentElement.hasAttribute('data-pm-custom'),
+			body: getComputedStyle(document.body).backgroundColor,
+			listed: PMTheme.list().filter((theme) => theme.source !== 'builtin')
+				.length,
+			info: !!(await window.controller.extensions.get(id)),
+		}),
+		(value) => value?.shown === 'default' && !value.listed && !value.info,
+		30000,
+		OMNI.id,
+	);
+	ok(
+		'defaults: after the default theme is applied, Reset shows Default and uninstalls it',
+		shownBefore.shown === OMNI_THEME &&
+			shownBefore.custom &&
+			onAtTheme === false &&
+			fromTheme?.shown === 'default' &&
+			!fromTheme.custom &&
+			fromTheme.body === defaultLook[0][0] &&
+			fromTheme.listed === 0 &&
+			!fromTheme.info,
+		JSON.stringify({ shownBefore, onAtTheme, fromTheme }),
+	);
+	await fresh.goto(HOST);
+	await booted(fresh);
+	await sleep(4000);
+	now = await themeState(fresh);
+	ok(
+		'defaults: reset away and reloaded, it does not come back',
+		now.listed.length === 0 &&
+			now.worker.length === 0 &&
+			now.shown === 'default' &&
+			JSON.stringify(now.look) === JSON.stringify(defaultLook),
+		JSON.stringify({ ...now, look: undefined }),
+	);
+	await fresh.context().close();
+
+	// the page's own list: Shooting Star (pink), asked of the update service
+	// (the suite's store has no such package, so the download fails, as it
+	// would offline)
+	const before = asked.length;
+	const own = await openDemo(browser, HOST, {}, withDefaults(undefined));
+	own.on('pageerror', (error) => errors.push(`defaults: ${error.message}`));
+	const start = Date.now();
+	while (Date.now() - start < 20000 && asked.length === before)
+		await sleep(200);
+	await sleep(1500);
+	now = await themeState(own);
+	const status = await own.evaluate(
+		() => document.getElementById('logMsg').textContent,
+	);
+	ok(
+		'defaults: with no list in the config the page asks for Shooting Star (pink); a failed download changes nothing and is not marked offered',
+		JSON.stringify(asked.slice(before)) === JSON.stringify([SHOOTING_STAR]) &&
+			now.listed.length === 0 &&
+			now.worker.length === 0 &&
+			now.shown === 'default' &&
+			now.seeded === null &&
+			JSON.stringify(now.look) === JSON.stringify(defaultLook) &&
+			/^Ready/.test(status),
+		JSON.stringify({
+			asked: asked.slice(before),
+			status,
+			...now,
+			look: undefined,
+		}),
+	);
+	await own.context().close();
+}
+
 await run('isolated', HOST);
 await run('same-origin', PROXY);
+await defaults();
 server.close();
 await done(browser, errors);

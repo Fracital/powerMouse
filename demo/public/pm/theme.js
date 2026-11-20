@@ -940,9 +940,11 @@
 	 * (blob: URLs or Blobs) are copied into IndexedDB, so they outlive the
 	 * URLs. The same version of an installed theme again (the Web Store side
 	 * hands the theme over on every load) changes nothing, and the choice
-	 * stays. Resolves the installed theme.
+	 * stays. With `show: false` it is kept and the theme shown stays (the
+	 * default theme the demo installs on a first visit). Resolves the
+	 * installed theme.
 	 */
-	async function install(theme) {
+	async function install(theme, { show = true } = {}) {
 		const clean = cleanTheme(theme);
 		const had = installed.find((t) => t.id === clean.id);
 		if (had && sameRelease(had, clean))
@@ -981,6 +983,10 @@
 		await dropPictures(clean.id, kept);
 		installed = [...installed.filter((t) => t.id !== clean.id), clean];
 		saveInstalled();
+		if (!show && choice !== clean.id) {
+			changed('install');
+			return list().find((t) => t.id === clean.id);
+		}
 		storage.set(CHOICE_KEY, clean.id);
 		choice = clean.id;
 		paintTheme(clean);

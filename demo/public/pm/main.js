@@ -6114,9 +6114,10 @@ menuExtensions.innerHTML = `${shieldIcon('puzzle')}<span>Extensions</span>`;
 // click as its button's, as the puzzle piece's list would have them.
 // Themes is powerMouse's (Chrome keeps its theme in Settings), over
 // globalThis.PMTheme (docs/themes.md): the themes with a check on the one
-// shown, Get themes (the Web Store's themes) and Reset to default (Chrome's:
-// the Web Store theme uninstalled, the default theme back). Without PMTheme
-// the menu has no Themes. (THEME_STORE is Settings' own, below.)
+// shown, Get themes (the Web Store's themes) and Reset to default (Chrome's,
+// on while a theme other than Default is shown: Default back, and the theme
+// shown uninstalled when it is a Web Store one). Without PMTheme the menu
+// has no Themes. (THEME_STORE is Settings' own, below.)
 const EXT_STORE = 'https://chromewebstore.google.com/category/extensions';
 const menuThemes = element('button', 'pmMenuItem');
 menuThemes.id = 'menuThemes';
@@ -6233,8 +6234,9 @@ function appThemesMenu() {
 		icon: 'reset',
 		command: 'resetTheme',
 	});
-	reset.disabled =
-		shown === 'default' && all.every((theme) => theme.source === 'builtin');
+	// (only the theme shown counts: an installed theme that is not shown,
+	// such as the default theme a new profile has, is no reason to reset)
+	reset.disabled = shown === 'default';
 	rows.push(
 		element('div', 'extMenuRule'),
 		appMenuRow('Get themes', () => navigate(THEME_STORE, { newTab: true }), {
@@ -6246,15 +6248,26 @@ function appThemesMenu() {
 	return rows;
 }
 
-/** Chrome's Reset to default: the Web Store theme uninstalled, the default theme shown */
+/**
+ * Chrome's Reset to default: Default shown, and the theme shown uninstalled
+ * when it is a Web Store theme, as Chrome removes its theme. A Web Store
+ * theme that is installed and not shown stays.
+ */
 async function resetAppTheme() {
-	const api = extApi();
-	try {
-		if (api?.resetTheme) await api.resetTheme();
-	} catch (error) {
-		extFailed(error);
+	const themes = globalThis.PMTheme;
+	const shown = themes?.current();
+	if (shown?.source === 'webstore') {
+		const api = extApi();
+		try {
+			if (shown.extensionId && (await api?.get(shown.extensionId)))
+				await api.remove(shown.extensionId);
+		} catch (error) {
+			extFailed(error);
+		}
+		// (the worker's removal takes it out of the theme system as well)
+		await themes.remove(shown.id).catch(() => {});
 	}
-	globalThis.PMTheme?.apply('default');
+	themes?.apply('default');
 }
 
 // Themes shows while the theme system is there (it is read as the menu
@@ -7033,10 +7046,35 @@ function watchExtensions() {
 			change.tabId !== controller.tabIdOf(activeTab.frame)
 		)
 			return;
+		// a Web Store theme the worker uninstalled (the store's Remove from
+		// Chrome, a new theme that replaced it, Reset to default) leaves the
+		// theme system too, shown or not
+		if (change.type === 'removed' && change.id) forgetChromeTheme(change.id);
 		scheduleExtSync();
 	});
 	api.onTheme(showChromeTheme);
 	syncExtensions();
+}
+
+/** a Chrome theme (extensions.onTheme, themes()) as the theme system keeps it */
+const pmThemeOf = (themes, theme) => ({
+	...themes.fromChrome(theme.theme, theme),
+	id: theme.id,
+	name: theme.name,
+	source: 'webstore',
+	extensionId: theme.extensionId,
+});
+
+/** the theme system forgets the Web Store theme of an extension the worker removed */
+function forgetChromeTheme(extensionId) {
+	const themes = globalThis.PMTheme;
+	const kept = themes
+		?.list()
+		.find(
+			(theme) =>
+				theme.source === 'webstore' && theme.extensionId === extensionId,
+		);
+	if (kept) themes.remove(kept.id).catch(() => {});
 }
 
 /** the Chrome theme shown (extensions.onTheme), as PMTheme last installed it */
@@ -7051,14 +7089,78 @@ function showChromeTheme(theme) {
 		themes.uninstall?.(chromeThemeId);
 	chromeThemeId = null;
 	if (!theme) return;
-	themes.install({
-		...themes.fromChrome(theme.theme, theme),
-		id: theme.id,
-		name: theme.name,
-		source: 'webstore',
-		extensionId: theme.extensionId,
-	});
+	themes.install(pmThemeOf(themes, theme));
 	chromeThemeId = theme.id;
+}
+
+// The default theme. A new profile has the Chrome Web Store theme Shooting
+// Star (pink) installed and not shown, the way Chrome installs its default
+// apps: an external extension named by its update URL, downloaded from the
+// store's update service on the first run and recorded as offered, so one
+// the user removes stays removed. It is seeded after boot, when the page is
+// idle, through the controller's own Web Store install (the transport, the
+// store's signature checked), and nothing waits for it: a download that
+// fails is tried again on the next visit. A profile seeded before a default
+// was added gets that one on its next visit. The package is not part of the
+// demo: it is the author's, under the store's terms, and its pictures
+// are under Flaticon's and Freepik's licences, none of which let it be
+// redistributed. The deployment's config can name other ids
+// (`defaultThemes`, the server's STOMP_DEFAULT_THEMES; the test suites turn
+// it off, as Playwright starts Chrome with --disable-default-apps).
+const DEFAULT_THEMES = Array.isArray(CFG.defaultThemes)
+	? CFG.defaultThemes.filter((id) => /^[a-p]{32}$/.test(id))
+	: ['joaodcepoceejhgkojhmnjknhaikcgoi'];
+const THEMES_SEEDED_KEY = 'stomp-demo:themes-seeded';
+
+function seededThemes() {
+	try {
+		const seeded = JSON.parse(localStorage.getItem(THEMES_SEEDED_KEY) || '[]');
+		return Array.isArray(seeded) ? seeded : [];
+	} catch {
+		return [];
+	}
+}
+
+/** install each default theme not offered yet, off; one at a time across the demo's windows */
+async function seedDefaultThemes() {
+	const api = extApi();
+	const themes = globalThis.PMTheme;
+	if (!api?.themes || !themes?.install) return;
+	if (!DEFAULT_THEMES.some((id) => !seededThemes().includes(id))) return;
+	const seed = async () => {
+		for (const id of DEFAULT_THEMES) {
+			if (seededThemes().includes(id)) continue;
+			try {
+				const find = async () =>
+					(await api.themes()).find((theme) => theme.extensionId === id);
+				// (already there: the user installed it, or a seed the page
+				// closed under kept the worker's half)
+				let theme = await find();
+				if (!theme) {
+					await api.install(id, { enabled: false });
+					theme = await find();
+				}
+				if (!theme) continue;
+				if (!themes.list().some((kept) => kept.id === theme.id))
+					await themes.install(pmThemeOf(themes, theme), {
+						show: theme.enabled,
+					});
+				localStorage.setItem(
+					THEMES_SEEDED_KEY,
+					JSON.stringify([...seededThemes(), id]),
+				);
+			} catch (error) {
+				console.warn(`The default theme ${id} was not installed:`, error);
+			}
+		}
+	};
+	if (navigator.locks)
+		await navigator.locks.request(
+			THEMES_SEEDED_KEY,
+			{ ifAvailable: true },
+			(lock) => lock && seed(),
+		);
+	else await seed();
 }
 
 /** About: the proxy's build and what the console badges said */
@@ -7338,6 +7440,11 @@ booted
 		// is up (a fresh visit loads the defaults with no extra engine build)
 		applyAdblockConfigOnBoot();
 		watchExtensions(); // the bar's extension buttons
+		// the default theme, once the page is idle (never before its first paint)
+		(globalThis.requestIdleCallback ?? setTimeout)(
+			() => seedDefaultThemes().catch(() => {}),
+			{ timeout: 3000 },
+		);
 		// restore a proxied URL from the fragment after a refresh (unless a
 		// page was asked for while the controller came up, or the user went
 		// home, which leaves no fragment)

@@ -86,6 +86,11 @@
 //                       test run off the list servers). `?noadblock` on the
 //                       page turns it off for one visit, `?adblock` on, and
 //                       the page's Block ads toggle is remembered
+//   STOMP_DEFAULT_THEMES the Chrome Web Store themes a new profile has
+//                       installed and not shown, Web Store ids separated by
+//                       commas (`0` or empty: none; unset: the page's own
+//                       default, Shooting Star (pink), docs/themes.md); the
+//                       test suites run with `0`
 //   STOMP_TEST_TRANSPORT `1` swaps epoxy for /test/mixed-transport.mjs, which
 //                       reaches the suites' fixture hosts (mixed-content's,
 //                       visited's, and test/private-sites.mjs's names under
@@ -311,6 +316,13 @@ const pageConfig = {
 	// entry host stays shields-neutral and their proxied requests match native
 	// (upgrade and third-party cookies untouched); unset in production.
 	shieldsDefaults: process.env.STOMP_SHIELDS_DEFAULTS !== '0',
+	// the default themes (docs/themes.md "The default theme"): unset, the
+	// page's own list
+	...(process.env.STOMP_DEFAULT_THEMES !== undefined && {
+		defaultThemes: process.env.STOMP_DEFAULT_THEMES.split(',')
+			.map((id) => id.trim())
+			.filter((id) => /^[a-p]{32}$/.test(id)),
+	}),
 	...(process.env.STOMP_ADBLOCK === '0'
 		? { adblock: false }
 		: process.env.STOMP_ADBLOCK?.startsWith('{') && {

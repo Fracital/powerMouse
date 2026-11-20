@@ -100,6 +100,7 @@ PMTheme.current(); // the theme shown
 PMTheme.apply('dark'); // choose a theme by id, and keep the choice
 PMTheme.apply(theme); // show a theme object that is not installed, for this visit only
 await PMTheme.install(theme); // keep a theme and switch to it
+await PMTheme.install(theme, { show: false }); // keep it, the theme shown stays
 await PMTheme.remove(id); // forget an installed theme (uninstall is the same method)
 PMTheme.fromChrome(manifest.theme, { id, name, extensionId, version }); // a Chrome theme as a theme
 PMTheme.addEventListener('change', (event) => event.detail); // { reason, id, theme }
@@ -127,11 +128,12 @@ A theme:
   `apply(object)` with a theme that is not installed shows it for this visit
   only and does not save it, which is how a preview works. An unknown id
   throws a `TypeError`.
-- `install(theme)` validates the theme. It copies the pictures (blob: or
-  data: URLs, or Blobs) into IndexedDB, so they outlive the URLs. Then it
-  saves the theme and switches to it, as Chrome does when a theme is
-  installed, and resolves the theme. A theme with the id of an installed one
-  replaces it (an update). The same version of an installed theme again
+- `install(theme, { show })` validates the theme. It copies the pictures
+  (blob: or data: URLs, or Blobs) into IndexedDB, so they outlive the URLs.
+  Then it saves the theme and switches to it, as Chrome does when a theme is
+  installed, and resolves the theme. With `show: false` it keeps the theme
+  and the theme shown stays, which is how the default theme is installed. A
+  theme with the id of an installed one replaces it (an update). The same version of an installed theme again
   (same id, version, name, tokens and picture names) changes nothing and
   leaves the choice alone: the Web Store side hands the shown theme over on
   every load, and a user who went back to Light stays in Light.
@@ -139,9 +141,10 @@ A theme:
   the page goes back to Default, as Chrome resets to its default theme. It
   fires `remove` and then `change`, and resolves `false` for an id that is
   not installed. `uninstall` is the same method.
-- `change` fires on every change of the theme shown. `reason` is `apply`,
-  `preview`, `install`, `remove`, `system` (Follow system's scheme changed)
-  or `storage` (another window changed it).
+- `change` fires on every change of the theme shown, and on an install
+  with `show: false` (its `id` is then the shown theme's). `reason` is
+  `apply`, `preview`, `install`, `remove`, `system` (Follow system's scheme
+  changed) or `storage` (another window changed it).
 - `tokens` values are single CSS values. A value with `;`, `{`, `}`, `<`,
   `>`, `\` or `url(` is dropped, and so is a name that is not a token or is
   an image token: pictures come only through `images`. A built-in theme's id
@@ -235,6 +238,53 @@ controller (docs/extensions.md). The demo hands the manifest's `theme` to
 `fromChrome`, and the result to `install` with the extension's id and name.
 When the theme changes or is reset, it removes the one it installed.
 
+## The default theme
+
+A new profile has one Chrome Web Store theme installed and not shown:
+Shooting Star (pink), `joaodcepoceejhgkojhmnjknhaikcgoi`, a Manifest V3
+theme of about 44 KB. It is installed the way Chrome installs its default
+apps: each is an external extension named by its update URL, downloaded from the
+store on the first run and recorded as offered, so one the user removes
+stays removed.
+
+After boot, when the page is idle, `seedDefaultThemes` in `pm/main.js`
+installs each default not offered yet with
+`controller.extensions.install(id, { enabled: false })`. That is the
+controller's own Web Store install, downloaded through the transport with
+the store's signature checked, and the worker keeps the theme turned off.
+The page then hands the theme to `PMTheme.install(theme, { show: false })`,
+which keeps it without switching to it, and adds the id to
+`localStorage['stomp-demo:themes-seeded']`. Boot never waits for any of
+this. A download that fails is tried again on the next visit, and a
+profile that had loaded the demo before a default was added gets that
+default on its next visit. A lock (`navigator.locks`) keeps two windows of
+the demo from seeding at once.
+
+The theme shown stays Default. The Themes submenu and the picker list the
+seeded theme unchecked, and choosing it shows it the way any installed
+theme is shown. The picker's Remove uninstalls it, and so does the store's
+Remove from Chrome on its listing: a Web Store theme the worker uninstalls
+leaves the theme system as well. Either way the marker keeps it from
+coming back.
+
+The menu's Reset to default goes by the theme shown alone. It is off while
+Default is shown, so a new profile cannot reset its default theme away. On
+any other theme it shows Default, and when the theme shown is a Web Store
+theme it uninstalls that theme, as Chrome's Reset to default removes its
+theme. A Web Store theme that is installed and not shown stays.
+
+The package is fetched, not shipped with the demo. The theme belongs to
+its author (Browservery on the store) and comes under the Chrome Web Store's
+terms. It states no licence of its own, and its pictures are Flaticon's and
+Freepik's, whose licences do not allow redistribution. A first visit
+costs one request to the store's update service. A visit with no network
+reaches no proxied page either, so it loses nothing it could have used.
+
+`window.STOMP_CONFIG.defaultThemes`, a list of Web Store ids, replaces the
+list; the demo server sets it from `STOMP_DEFAULT_THEMES` (`0` for none).
+`test/run.mjs` runs every demo server with `0`, as Playwright starts Chrome
+with `--disable-default-apps`. Without the key the page uses its own list.
+
 ## Tests
 
 `test/suites/demo-themes.mjs` checks:
@@ -253,3 +303,14 @@ When the theme changes or is reset, it removes the one it installed.
 - install, the reload with the pictures read back from IndexedDB, the
   picker's Remove and the `remove` event, a reinstall of the same version,
   and the values install refuses.
+
+`test/suites/webstore-themes.mjs` checks the default theme, with the
+suite's store serving Omni as the default: a fresh profile has it installed
+and off with Default shown and Default's backgrounds, the Themes submenu
+and the picker list it unchecked, a reload does not download it again,
+and after Remove and a reload it stays gone. Reset to default is off on
+a fresh profile; from Light it shows Default and keeps the theme; with the
+theme applied it shows Default and uninstalls it, and it stays gone after a
+reload. With no list in the config
+the page asks the update service for Shooting Star (pink), and the failed
+download leaves the profile as it was.

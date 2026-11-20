@@ -535,7 +535,8 @@ the extensions, in the worker's store, across reloads.
 
 The demo hands the theme to its theme system: `showChromeTheme` in
 `demo/public/pm/main.js` calls `PMTheme.fromChrome(theme.theme, theme)` and
-`PMTheme.install` when the page has them.
+`PMTheme.install` when the page has them. It also installs a default theme,
+off, in a new profile (docs/themes.md, The default theme).
 
 ### Managing extensions
 

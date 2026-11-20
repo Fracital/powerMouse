@@ -37,6 +37,12 @@ import { sleep, waitForServer } from './lib.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const suitesDir = `${root}test/suites/`;
+// no default theme (docs/themes.md "The default theme") in any demo server
+// of the run, the runner's or one a suite starts, as Playwright starts Chrome
+// with --disable-default-apps: a fresh profile would download one from the
+// Web Store; webstore-themes names its own for the page it checks it in
+process.env.STOMP_DEFAULT_THEMES ??= '0';
+
 const PARALLEL = Math.max(
 	1,
 	Number(process.env.PARALLEL) || Math.min(8, availableParallelism()),
