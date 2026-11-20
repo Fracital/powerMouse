@@ -1184,6 +1184,18 @@ export default class DocumentClient extends Client {
 	 * of an earlier worker, which leaves the document to ask (`whoami`)
 	 */
 	declare servedClient?: string;
+	/**
+	 * The origin a client its parent or opener made was made for (an
+	 * initial about:blank's: its maker's, null for an opaque one), none for
+	 * one a document's own shell made. The browser keeps such a window for
+	 * the frame's first document when that is of the proxy's origin, which
+	 * every proxied site is, so the shell asks before it takes the client
+	 * (src/htmlShell.ts): a document of another origin never does
+	 * (leaveKept), as natively it gets a window of its own.
+	 */
+	declare keptFor?: string | null;
+	/** @internal this document, of another origin than keptFor, leaves for a fresh browsing context (IFrame) */
+	declare leaveKept?: () => void;
 	/** the mark its shell gave, and the document it was given for */
 	#cacheMark: { document: Document; mark: string } | null = null;
 	/**

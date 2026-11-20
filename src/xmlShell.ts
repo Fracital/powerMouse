@@ -9,6 +9,7 @@ import type { PolicyText, ScriptFacts } from './csp';
 import { helperNames } from './helperNames';
 import {
 	keptFacts,
+	leftKept,
 	libraryScripts,
 	marked,
 	policyTexts,
@@ -101,7 +102,7 @@ export function modifyXML(
 	const names = helperNames(config);
 	const inject = `if (!(${JSON.stringify(names.client)} in globalThis) && typeof globalThis.createClient !== 'function') {
 	document.documentElement.textContent = "Stomp bundle did not load. See devtools output for more information.";
-} else {
+${leftKept(names.client, url)}} else {
 	${scriptFacts(facts)}if (!(${JSON.stringify(names.client)} in globalThis))
 		createClient(${JSON.stringify(config)}, ${JSON.stringify(url.codec.key)});
 	else {

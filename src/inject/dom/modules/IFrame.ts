@@ -53,6 +53,9 @@ export default class IFrameModule extends Module<DocumentClient> {
 				parseConfig(moduleClient.config, moduleClient.codec.key),
 				context,
 			);
+			// (the about:blank is this document's origin, and the browser keeps
+			// its window for a document of the proxy's: DocumentClient keptFor)
+			client.keptFor = moduleClient.originKey;
 
 			addClientModules(client);
 
@@ -78,6 +81,21 @@ export default class IFrameModule extends Module<DocumentClient> {
 				moduleClient.names.client
 			] as DocumentClient | undefined;
 			if (client && !client.applied) client.apply();
+		};
+		// This document, which the browser put in the window of an initial
+		// about:blank a client of another origin was made for (its parent or
+		// opener reached it while it waited for this document): it never
+		// runs there. Natively it would have a window of its own, so it goes
+		// to a fresh browsing context (freshContext.ts), as a redirect to
+		// another origin does (src/freshFrame.ts), else (a popup) is loaded
+		// again, which the browser gives a window of its own. The shell asks
+		// before anything of the document runs (src/htmlShell.ts); a
+		// Location's members are its own, which no page replaces
+		moduleClient.leaveKept = () => {
+			const href = realm.location.href;
+			const container = containerOf(realm, moduleClient.names.client);
+			if (container?.parent.freshFrame?.(container.element, href)) return;
+			realm.location.replace(href);
 		};
 		moduleClient.injectChild = (context) => {
 			const self = realm as unknown;
@@ -160,17 +178,27 @@ export default class IFrameModule extends Module<DocumentClient> {
 			// a window this page opened it may navigate, sandboxed or not (whether
 			// it is held as itself is decided where it is handed out)
 			moduleClient.openedWindows.add(opened);
+			// (one on its way to another origin: left as the browser made it,
+			// the page gets its stand-in, ContextModule pendingForeign)
+			let away: unknown = null;
 			try {
 				if (opened.location.href === 'about:blank') {
-					injectContext(opened);
-					if (
-						!(opened as Record<string, any>)[moduleClient.names.client]!.applied
-					)
-						(opened as Record<string, any>)[moduleClient.names.client]!.apply();
+					away = windowModule.pendingForeign(opened, page);
+					if (!away) {
+						injectContext(opened);
+						if (
+							!(opened as Record<string, any>)[moduleClient.names.client]!
+								.applied
+						)
+							(opened as Record<string, any>)[
+								moduleClient.names.client
+							]!.apply();
+					}
 				}
 			} catch (error) {
 				// cross-origin: not ours to inject
 			}
+			if (away) return away;
 			// the window as the page may hold it: one of its own origin as
 			// itself, wherever it navigates later (its messages' source is
 			// this object), one of another site (an existing frame by name,
@@ -586,15 +614,23 @@ export default class IFrameModule extends Module<DocumentClient> {
 
 				if (context) {
 					moduleClient.heldBlank?.(element, context);
+					// still on its initial about:blank while the document its src
+					// names is on the way: that document decides, and one of
+					// another origin finds the window as the browser made it
+					// (ContextModule pendingForeign)
+					const blank = initialBlank(context);
+					const destination = blank
+						? frameDestination(moduleClient, element)
+						: undefined;
+					const away =
+						blank &&
+						!(moduleClient.names.client in context) &&
+						windowModule.pendingForeign(context, destination);
+					if (away) return away;
 					injectContext(context);
 
-					// still on its initial about:blank while the document its src
-					// names is on the way: that document decides
-					const restricted = initialBlank(context)
-						? windowModule.pending(
-								context,
-								frameDestination(moduleClient, element),
-							)
+					const restricted = blank
+						? windowModule.pending(context, destination)
 						: windowModule.newRestricted(context);
 					if (
 						!(context as Record<string, any>)[moduleClient.names.client]!

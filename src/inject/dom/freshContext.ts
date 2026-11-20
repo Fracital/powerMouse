@@ -31,7 +31,13 @@ import { hiddenMutation } from './modules/MutationObserver';
  * page's `src` setter (DOMAttributes), its location setters (Location),
  * `window.open` by name (DOMHooks) and links and forms aimed at it
  * (IFrame); a redirect to another origin is answered by the worker with a
- * document that asks for the swap (src/freshFrame.ts).
+ * document that asks for the swap (src/freshFrame.ts). A frame or popup
+ * whose first document (its src, window.open's URL) is of another origin
+ * needs none: the page reads its about:blank as a stand-in from the start
+ * and nothing injects it (ContextModule pendingForeign), so the window the
+ * browser keeps for that document is as fresh as a new one. A document
+ * that still finds a client of another origin in its window leaves it
+ * here before any of it runs (DocumentClient keptFor, leaveKept).
  *
  * The element keeps every attribute the page sees: the page's `src` and
  * `srcdoc` stay what it wrote (their markers), the browser's `src` is the
