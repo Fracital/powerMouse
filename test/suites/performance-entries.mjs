@@ -53,12 +53,8 @@ const GROUPS = [
 // what the architecture cannot make read as natively (docs/performance.md)
 const EXPECTED = [
 	[
-		/^frames\.[\w-]+\.frame\.(scripts\.\d+\.sourceCharPosition|jsonPositions): /,
-		"a function's position in a long animation frame's script is its place in the rewritten script, as an error stack's columns are",
-	],
-	[
-		/^frames\.promise\.frame\.(scripts\.0\.(sourceURL|jsonSourceURL)|jsonScripts): /,
-		'a callback run from a promise the inject made (fetch) is named without its source: the browser has only where the reaction started, in the inject',
+		/^frames\.promise\.frame\.(scripts\.0\.(sourceURL|jsonSourceURL|sourceCharPosition)|jsonScripts|jsonPositions): /,
+		'a callback run from a promise the inject made (fetch) is named without its source or position: the browser has only where the reaction started, in the inject',
 	],
 	[
 		/^frames\.image-detached\.frame\.(scripts\.0\.(invoker|jsonInvoker)|jsonScripts): /,
@@ -72,13 +68,12 @@ const EXPECTED = [
 // only where the page shares the host's process and frame tree, which with
 // the site pool (docs/site-pool.md) it does not: the pool shows it from a
 // slot, another origin than the host's, so the page is a local root of its
-// own as in isolated mode. The first pattern leaves out the script
-// positions EXPECTED explains, so that it holds only by what it names.
+// own as in isolated mode.
 const EXPECTED_SAME_ORIGIN = SLOT_PORTS.length
 	? []
 	: [
 			[
-				/^frames\.(animation|click|keydown)\.(?!frame\.(scripts\.\d+\.sourceCharPosition|jsonPositions): )/,
+				/^frames\.(animation|click|keydown)\./,
 				"Chrome reports a long frame's rendering part (animation callbacks, input handlers) to the local root's window, which in same-origin mode is the host's",
 			],
 			[

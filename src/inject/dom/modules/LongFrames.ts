@@ -1,4 +1,5 @@
 import { scopePrefix } from '../../modules/Unroute';
+import { placeOf } from '../../positionParts';
 import type DocumentClient from '../Client';
 import { nativeGetAttribute, nativeQuery } from '../longEntryNatives';
 import type EntryTimingModule from './EntryTiming';
@@ -36,8 +37,10 @@ const BY_SOURCE = /^([^[\]]*\[src=")(.*)("\]\.[^[\]."]*)$/s;
  * page (the host's, another tab's), is left out, as the browser leaves
  * another origin's out.
  *
- * Not mapped: `sourceCharPosition` is the function's place in the script
- * as the rewriter printed it, as the columns of an error's stack are.
+ * A script's `sourceCharPosition` is its function's place in the page's
+ * text where the script is a file the service worker rewrote (the map its
+ * rewrite carries), as the columns of an error's stack are; in a script of
+ * the page's markup, which the inject rewrites, it is the rewrite's.
  *
  * Made when a document's first long animation frame reaches its page
  * (EntryTiming): the handler of every such entry from then on.
@@ -136,6 +139,19 @@ export function longFrames(
 		views.set(script, known);
 		return known;
 	};
+	/**
+	 * a script's sourceCharPosition, `position` the browser's: none for one
+	 * the page does not hear the source of, and in a script file the
+	 * service worker rewrote, where the map its rewrite carries puts it in
+	 * the page's text (../../positionParts.ts)
+	 */
+	const charPosition = (script: object, position: unknown): unknown => {
+		const shown = view(script);
+		if (shown.anonymous) return -1;
+		return typeof position === 'number' && position >= 0
+			? (placeOf(shown.sourceURL, position)?.[0] ?? position)
+			: position;
+	};
 	const installScript = (prototype: object) => {
 		for (const name of ['invokerType', 'sourceURL', 'invoker', 'window'])
 			natives[name] = Reflect.getOwnPropertyDescriptor(prototype, name)?.get;
@@ -151,18 +167,17 @@ export function longFrames(
 			const name = native();
 			return view(that).anonymous ? '' : name;
 		});
-		timing.hookGetter(prototype, 'sourceCharPosition', (that, native) => {
-			const position = native();
-			return view(that).anonymous ? -1 : position;
-		});
+		timing.hookGetter(prototype, 'sourceCharPosition', (that, native) =>
+			charPosition(that, native()),
+		);
 		scriptJSON = timing.hookJSON(prototype, (json, that) => {
 			const shown = view(that);
 			if ('sourceURL' in json) json.sourceURL = shown.sourceURL;
 			if ('invoker' in json) json.invoker = shown.invoker;
-			if (shown.anonymous) {
-				if ('sourceFunctionName' in json) json.sourceFunctionName = '';
-				if ('sourceCharPosition' in json) json.sourceCharPosition = -1;
-			}
+			if (shown.anonymous && 'sourceFunctionName' in json)
+				json.sourceFunctionName = '';
+			if ('sourceCharPosition' in json)
+				json.sourceCharPosition = charPosition(that, json.sourceCharPosition);
 		});
 	};
 	let installed = false;
