@@ -317,6 +317,13 @@ export const CORS_MARKER = 'stomp-cors';
  */
 export const SIZE_MARKER = 'stomp-size';
 /**
+ * A Server-Timing metric whose description is the protocol the origin's
+ * answer came over, as Chrome names it (`h3`, `h2`, `http/1.1`): the
+ * browser has a service worker's answer as of no protocol, and the inject
+ * shows the page this one as the entry's `nextHopProtocol`
+ */
+export const PROTOCOL_MARKER = 'stomp-protocol';
+/**
  * A Server-Timing metric the worker adds to a load a style sheet of
  * another origin made, when the page loaded that sheet without cors: the
  * browser reports no resource timing entry for it (the sheet's content is
@@ -379,6 +386,7 @@ export const PROXY_METRICS: readonly string[] = [
 	TIMING_DENIED_MARKER,
 	CORS_MARKER,
 	SIZE_MARKER,
+	PROTOCOL_MARKER,
 	UNREPORTED_MARKER,
 	ENCODING_MARKER,
 	WORKER_SCRIPT_MARKER,
