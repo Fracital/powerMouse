@@ -210,6 +210,15 @@ on every save (use a `git worktree`).
   network waits out the spin limit. A descriptor (the default) runs the
   transport in the transport worker (`src/transport/worker.ts`), off that
   thread, and the request completes. Don't add new synchronous paths.
+  Firefox shows a spinning page no cookie set after its spin began, and
+  holds the worker's `clients.get` of that page until the spin ends, so a
+  document there also asks for its answer with a synchronous request of its
+  own (`src/inject/dom/syncAnswer.ts`, `?a=` in `src/server/Sync.ts`),
+  which Firefox's worker answers in the body. One ask waits at most
+  `SYNC_ASK_MS`, under `SYNC_KICK_MS`, so the kick still goes out. Chrome
+  and WebKit send that request to the network: the first document that
+  finds so tells the worker (`?n`), which keeps it and serves
+  `config.syncAnswers: false` to the documents after it.
   A worker the browser stopped starts again knowing no controller, and the
   controller on the spinning thread cannot hear it ask: after
   `SYNC_KICK_MS` the bridge dispatches `SW_KICK` + the address on the

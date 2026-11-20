@@ -1,0 +1,76 @@
+<!doctype html>
+<title>sync-engines</title>
+<body>
+	<script>
+		// What the page asks of the browser synchronously (test/suites/sync-engines.mjs):
+		// a synchronous XMLHttpRequest, localStorage and document.cookie, and
+		// classic external scripts in an about:blank frame the page writes and
+		// in an about:srcdoc frame. Each case says what it read and whether it
+		// came within BOUND ms (natively, a few ms each).
+		const BOUND = 2500;
+		const report = {};
+		const timed = (name, run) => {
+			const start = performance.now();
+			let value;
+			try {
+				value = run();
+			} catch (error) {
+				value = error.name;
+			}
+			report[name] = [value, performance.now() - start < BOUND];
+		};
+		/** run `make()` and wait for its two scripts: what ran, in order */
+		const scripted = async (name, make) => {
+			const start = performance.now();
+			const ran = [];
+			let resolve;
+			const all = new Promise((r) => (resolve = r));
+			window.__seRan = (label) => {
+				ran.push(label);
+				if (ran.length === 2) resolve();
+			};
+			make();
+			await Promise.race([all, new Promise((r) => setTimeout(r, 15e3))]);
+			// both scripts (each an external classic one) within BOUND each
+			report[name] = [ran, performance.now() - start < 2 * BOUND];
+		};
+		const end = '</' + 'script>';
+		const scripts = (label) =>
+			`<script src="/pages/sync-engines.js" data-label="${label} 1">${end}<script src="/pages/sync-engines.js?2" data-label="${label} 2">${end}`;
+		(async () => {
+			timed('syncXhr', () => {
+				const request = new XMLHttpRequest();
+				request.open('GET', '/pages/um-data.json', false);
+				request.send();
+				return [request.status, request.responseText];
+			});
+			timed('localStorage', () => {
+				localStorage.setItem('sync-engines', 'kept');
+				const value = localStorage.getItem('sync-engines');
+				localStorage.removeItem('sync-engines');
+				return [value, localStorage.getItem('sync-engines')];
+			});
+			timed('cookie', () => {
+				document.cookie = 'syncEngines=1; path=/';
+				const set = /(?:^|; )syncEngines=1(?:;|$)/.test(document.cookie);
+				document.cookie = 'syncEngines=; max-age=0; path=/';
+				return [set, /(?:^|; )syncEngines=/.test(document.cookie)];
+			});
+			await scripted('written', () => {
+				const frame = document.createElement('iframe');
+				document.body.append(frame);
+				frame.contentDocument.open();
+				frame.contentDocument.write(
+					`<!doctype html><body>${scripts('written')}`,
+				);
+				frame.contentDocument.close();
+			});
+			await scripted('srcdoc', () => {
+				const frame = document.createElement('iframe');
+				frame.srcdoc = `<!doctype html><body>${scripts('srcdoc')}`;
+				document.body.append(frame);
+			});
+			window.__seReport = report;
+		})();
+	</script>
+</body>

@@ -1762,6 +1762,30 @@ coi-engines suite starts a classic and a module blob: worker, runs a blob:
 script, a blob: module's static import of another blob: module and a frame
 of a blob: document in every engine and mode.
 
+What a page asks for synchronously (a synchronous XMLHttpRequest,
+localStorage, document.cookie, a script written into a document no service
+worker controls) goes through the synchronous bridge, whose answer the
+service worker sets in cookies while the page spins on document.cookie.
+The browsers differ in what a spinning page lets through (measured natively
+in Firefox 160, Chrome 157 and WebKitGTK 2.52.4):
+
+| While the page spins                              | Chrome | Firefox            | WebKit                                    |
+| ------------------------------------------------- | ------ | ------------------ | ----------------------------------------- |
+| A cookie the worker sets reaches document.cookie  | yes    | not before the end | no (the worker's `cookieStore.set` waits) |
+| The worker's `clients.get` of the page            | yes    | not before the end | not before the end                        |
+| The page's synchronous request reaches its worker | no     | yes                | no                                        |
+
+In Firefox a document therefore also asks for each answer with a
+synchronous request of its own (src/inject/dom/syncAnswer.ts), which the
+worker answers in the body; before, a request there took 30 s and came
+back with status 0, localStorage 10 s, and a written script 5 s. An
+about:srcdoc frame under a sandboxed frame has no service worker in
+Firefox, even with `allow-same-origin`, nor does one whose `srcdoc` was set
+after the frame was in the document, so a proxied srcdoc document there
+(the host's frame is sandboxed) is one no worker controls, as natively, and
+its scripts go through the bridge. In WebKit no answer reaches a waiting
+page yet (sync-engines: on the known list).
+
 ## Left
 
 Ranked by what a page could learn or do. Measured ones are listed in the

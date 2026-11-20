@@ -1,13 +1,13 @@
-// Browsers beside Chrome for a suite (coi-engines, uncontrolled-modules):
-// WebKitGTK's MiniBrowser driven by WebKitWebDriver, in a headless weston of
-// the suite's own, where those are installed (WEBKIT_MINIBROWSER names
-// another MiniBrowser), and Firefox, headless over WebDriver BiDi, where it
-// is installed and not on CI (FIREFOX names another binary). A session
-// opens a fresh browser tab: `{ go(url), evaluate(expression), report(),
-// close() }`, where `report()` waits for the first document of the tab (the
-// page or a frame below it) whose `expression` reads as a JSON string, and
-// gives it parsed (null when none came). An engine that cannot run says
-// SKIP.
+// Browsers beside Chrome for a suite (coi-engines, uncontrolled-modules,
+// sync-engines): WebKitGTK's MiniBrowser driven by WebKitWebDriver, in a
+// headless weston of the suite's own, where those are installed
+// (WEBKIT_MINIBROWSER names another MiniBrowser), and Firefox, headless
+// over WebDriver BiDi, where it is installed and not on CI (FIREFOX names
+// another binary). A session opens a fresh browser tab: `{ go(url),
+// evaluate(expression), report(), close() }`, where `report()` waits for
+// the first document of the tab (the page or a frame below it) whose
+// `expression` reads as a JSON string, and gives it parsed (null when none
+// came). An engine that cannot run says SKIP.
 import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';

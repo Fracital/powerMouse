@@ -2,6 +2,7 @@ import { decodeBase64, encodeBase64 } from '../base64';
 import type GenericCodec from '../Codecs';
 import { encodeCookie, splitAnswer, SYNC_CHUNK } from '../encodeCookie';
 import { ProcessData, ProcessResult, SyncBody } from '../sync';
+import { SYNC_ANSWER_HEADER } from '../syncAsk';
 import { RouteContext } from '../transport/messages';
 import Router from './Router';
 
@@ -35,6 +36,55 @@ const PART_COST = (ANSWER_COOKIES - 2) * SYNC_CHUNK;
 /** how long a body waits for the page to read its parts */
 const KEEP_MS = 30e3;
 const kept = new Map<string, string>();
+
+/**
+ * The answers of the last half minute, by request id, as the cookies they
+ * were set in, for a page that asks for its answer with a synchronous
+ * XMLHttpRequest (`?a=<id>`, src/inject/dom/syncAnswer.ts). While a page
+ * spins on document.cookie, Firefox shows it no cookie set after the spin
+ * began, and holds the worker's clients.get of its window, and so every
+ * route that reads its client, until the spin ends: every answer reached
+ * the page only once it had given up. A synchronous request of the page's
+ * own Firefox lets the worker answer, and runs the rest meanwhile
+ * (measured in Firefox 160; Chrome 157 and WebKitGTK 2.52.4 send a page's
+ * synchronous request past its worker, to the network).
+ */
+const answers = new Map<string, [string, string][]>();
+/** a page's ask for an answer that is not made yet, by request id */
+const askers = new Map<string, Set<() => void>>();
+/**
+ * Whether a page's synchronous request reaches this worker: true once an
+ * ask came, false once a page said its ask went past (`?n`), undefined
+ * until either (Config syncAnswers, which the documents are served with)
+ */
+let reached: boolean | undefined;
+/** what is known of the browser's synchronous requests (reached) */
+export const syncAnswers = (): boolean | undefined => reached;
+
+/**
+ * The answer to `?a=<id>&w=<ms>`, as the string its cookies would read in
+ * document.cookie, once it is made (empty when it is not made in `ms`)
+ */
+async function askedAnswer(id: string, wait: number): Promise<Response> {
+	if (!answers.has(id))
+		await new Promise<void>((resolve) => {
+			let set = askers.get(id);
+			if (!set) askers.set(id, (set = new Set()));
+			const wake = () => {
+				clearTimeout(timer);
+				set.delete(wake);
+				if (!set.size && askers.get(id) === set) askers.delete(id);
+				resolve();
+			};
+			const timer = setTimeout(wake, wait);
+			set.add(wake);
+		});
+	const answer = answers.get(id);
+	return new Response(
+		answer?.map(([name, value]) => `${name}=${value}`).join('; ') ?? '',
+		{ headers: { [SYNC_ANSWER_HEADER]: '1' } },
+	);
+}
 
 /** what `text` costs as an answer's body, in its cookies */
 const answerCost = (text: string) => encodeCookie(JSON.stringify(text)).length;
@@ -103,7 +153,19 @@ async function process(
 	}
 }
 
-export function registerXhr(router: Router, codec: GenericCodec) {
+export function registerXhr(
+	router: Router,
+	codec: GenericCodec,
+	/** what an earlier worker learned (reached), and how to keep it */
+	known?: boolean,
+	remember?: (reached: boolean) => void,
+) {
+	reached ??= known;
+	const learn = (value: boolean) => {
+		if (reached === value || reached === true) return;
+		reached = value;
+		remember?.(value);
+	};
 	// a part of a body kept for a page (see ANSWER_COOKIES), from `at`: as
 	// much as one answer carries, never a surrogate pair split (a part
 	// travels as UTF-8)
@@ -130,10 +192,22 @@ export function registerXhr(router: Router, codec: GenericCodec) {
 	});
 
 	router.routes.set(/\/xhr/, async (request, _url, context) => {
+		const query = new URL(request.url).searchParams;
+		// a page asks for the answer to a request it sent (answers)
+		const asked = query.get('a');
+		if (asked !== null) {
+			learn(true);
+			return askedAnswer(asked, Math.min(Number(query.get('w')) || 0, KEEP_MS));
+		}
+		// a page's ask went past this worker, to the network
+		if (query.has('n')) {
+			learn(false);
+			return new Response(null, { status: 204 });
+		}
 		// the request rides in the beacon's URL, which takes none of the
 		// page's beacon quota, unless it is too long for one; sealed with the
 		// codec, as a route is (a seal it cannot open is no request)
-		const inURL = new URL(request.url).searchParams.get('r');
+		const inURL = query.get('r');
 		const { id, data } =
 			inURL === null ? await request.json() : JSON.parse(codec.decode(inURL));
 
@@ -162,6 +236,13 @@ export function registerXhr(router: Router, codec: GenericCodec) {
 				),
 			);
 		}
+		answers.set(id, answer);
+		setTimeout(() => answers.delete(id), KEEP_MS);
+		// a page that waits in an ask takes it there, and needs no cookies
+		const waiting = [...(askers.get(id) ?? [])];
+		askers.delete(id);
+		for (const wake of waiting) wake();
+		if (waiting.length) return new Response();
 		for (const [name, value] of answer)
 			await cookieStore.set({
 				name,

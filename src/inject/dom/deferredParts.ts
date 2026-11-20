@@ -85,6 +85,9 @@
 // (and the font faces of a sheet copied for a document no service worker
 // controls, ./lazyFonts.ts, at the first such face)
 //
+// (and the ask for a synchronous request's answer, ./syncAnswer.ts, at a
+// document's first wait on the bridge)
+//
 // (and the handlers of long tasks and long animation frames,
 // ./modules/LongTasks.ts and ./modules/LongFrames.ts, at a document's first
 // such entry)
@@ -228,6 +231,7 @@ import {
 } from './siteEvents';
 import { sourcePolicy } from './sourcePolicy';
 import { storageAccessHandle } from './storageAccess';
+import { syncAnswer } from './syncAnswer';
 import {
 	exportRefusal,
 	textureRefusal,
@@ -375,6 +379,10 @@ export const parts = {
 	// and the module graphs of such a document, at its first module
 	// (./moduleGraph.ts; Client.ts importIn, moduleText)
 	moduleGraph,
+	// a synchronous request's answer, asked for with one of the page's own
+	// where the browser lets the worker answer it, at a document's first wait
+	// on the bridge (./syncAnswer.ts; modules/Sync.ts)
+	syncAnswer,
 	// the violations and errors of the page's own policy the inject makes
 	// itself, the first time it refuses something (./violations.ts; Client.ts)
 	dispatchViolation,
