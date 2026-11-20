@@ -518,11 +518,12 @@ refuses fires a violation, natively either.
   script of another document is judged as its src is set there, so a nonce
   it is given later does not count when it is adopted (csp-scripts lists
   these as expected differences).
-- Under 'strict-dynamic' the inject bundle's script carries the document's
-  nonce (nothing else lets it through), and V8 keys a script's compiled
-  code by its nonce too: each such document compiles its own copy of the
-  bundle (about 770 KB of heap a frame, measured). Elsewhere the bundle
-  loads by its URL, which the browser's policy names.
+- A frame under a script policy the inject enforces (nonces,
+  'strict-dynamic') costs about 15 KB of heap more than under none: its
+  checks' deferred part, evaluated in each such frame (frame-cost gates a
+  'strict-dynamic' frame). The bundle loads by its URL there as anywhere
+  (the browser gets no script policy of the page's), so its compiled code
+  is shared.
 - A sandbox's console messages name the proxy's URLs (a refused form's,
   a refused popup's), and a meta's or a report-only policy's `sandbox`
   is ignored without Chrome's console error for it. An external script of

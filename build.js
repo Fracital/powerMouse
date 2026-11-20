@@ -700,6 +700,19 @@ const DEFERRED_FILES = new Set(
 		// followed)
 	].map((file) => realpathSync(resolve(file))),
 );
+
+/**
+ * Deferred files whose state no two groups need to share (sha.ts: its
+ * tables, made on first use): a group that reaches one carries its own
+ * copy, and two groups that reach it are not one for it (partGroups). The
+ * hashes joined the page's policy checks, the integrity checks and the
+ * position maps with long animation frames into one group of 21 KB, which
+ * a frame under a script policy evaluated whole (about 2 to 3 KB of heap a
+ * frame more than its checks alone, measured, Chrome 157).
+ */
+const COPIED_FILES = new Set(
+	['src/sha.ts'].map((file) => realpathSync(resolve(file))),
+);
 const DEFERRED_ENTRY = 'src/inject/dom/deferredParts.ts';
 /** what the parts read of the bundle: by file (from the root), the names */
 const deferredShared = new Map();
@@ -1050,7 +1063,7 @@ function reachedFiles(metafile) {
 		// is in a namespace of its own)
 		if (input.includes(':') || !existsSync(resolve(input))) continue;
 		const file = realpathSync(resolve(input));
-		if (DEFERRED_FILES.has(file)) reached.add(file);
+		if (DEFERRED_FILES.has(file) && !COPIED_FILES.has(file)) reached.add(file);
 	}
 	return reached;
 }
