@@ -166,8 +166,9 @@ export default class StorageModule extends Module<DocumentClient> {
 			let version: string;
 			try {
 				// on the stamp's list before the copy is filled: a write by
-				// another realm from now on stamps
-				if (stampStore) hold(stampStore, stampOf(cache));
+				// another realm from now on stamps (none while it is off the
+				// lists: no copy)
+				if (stampStore && !hold(stampStore, stampOf(cache))) return null;
 				version = Reflect.apply(nativeGetItem, stamps, [stampOf(cache)]) ?? '';
 			} catch (error) {
 				return null;
@@ -607,15 +608,27 @@ export default class StorageModule extends Module<DocumentClient> {
 				if (shadow !== undefined) return shadow;
 
 				const cache = current(this.#directory);
-				if (cache && !cache.whole && !cache.values.size) {
-					// the first read of the store takes every key and small value
+				if (cache && !cache.whole) {
+					// The first read of the store takes every key and small value,
+					// with what the copy has already (this document's writes, which
+					// are current while the stamp is): a store written before it
+					// was read (YouTube's availability check, a setItem and a
+					// removeItem of one key) was never whole, and every read of
+					// another key was a round trip of its own
 					const [keys, small]: [string[], [string, string][]] =
 						syncModule.jsonAPI(
 							`${dirOf(this.#directory)}getSmall`,
 							keyOf(this.#directory),
 						);
+					const known = cache.values;
+					for (const [item, value] of known) {
+						const index = keys.indexOf(item);
+						if (value === null && index !== -1) keys.splice(index, 1);
+						else if (value !== null && index === -1) keys.push(item);
+					}
+					for (const [item, value] of small)
+						if (!known.has(item)) known.set(item, value);
 					cache.keys = keys;
-					for (const [item, value] of small) cache.values.set(item, value);
 					cache.whole = true;
 				}
 				if (cache?.values.has(key)) return cache.values.get(key)!;

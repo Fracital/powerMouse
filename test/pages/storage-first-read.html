@@ -7,7 +7,8 @@
 		// the store's length and keys; and two frames that read each other's
 		// writes and removals at once. What every read shows, compared with
 		// native Chrome by the suite; through the proxy the suite also counts
-		// the synchronous round trips the reads took.
+		// the synchronous round trips the reads took, and those of a document
+		// that writes before it reads.
 		const out = { steps: [] };
 		window.__sfr = out;
 		if (location.search.includes('child')) {
@@ -40,6 +41,18 @@
 				record('the length', store.length);
 				record('the keys', Object.keys(store).sort());
 				record('a property read', [store.id3, store.missing1]);
+				// a new document that writes before it reads (an availability
+				// check, as YouTube's): its reads take the store whole all the same
+				const c = await frame();
+				console.log('STEP written');
+				const written = c.localStorage;
+				written.setItem('__sak', '__sak');
+				written.removeItem('__sak');
+				const after = [];
+				for (let i = 0; i < 40; i++) after.push(written.getItem(`id${i}`));
+				for (let i = 0; i < 20; i++) after.push(written.getItem(`missing${i}`));
+				after.push(written.getItem('__sak'), written.length);
+				record('present and missing keys after a write', after);
 				console.log('STEP writes');
 				b.localStorage.setItem('id3', 'changed');
 				record("a frame reads the other frame's write", store.getItem('id3'));
