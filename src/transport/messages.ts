@@ -324,6 +324,18 @@ export const SIZE_MARKER = 'stomp-size';
  */
 export const PROTOCOL_MARKER = 'stomp-protocol';
 /**
+ * A Server-Timing metric whose description is when the steps of the
+ * connection the origin's answer came on happened, in ms after the request
+ * reached the transport (its own times, responseFacts.ts): `r_REQUEST` for
+ * a connection that had carried a request before, else the lookup's start
+ * and end, the connection's start, its TLS start, its end and the request's
+ * start, joined by `_`, a step the transport did not see as `x`. The
+ * browser has a service worker's answer as made on no connection, and the
+ * inject shows the page these as the entry's connection times, from where
+ * the page's fetch started
+ */
+export const CONNECTION_MARKER = 'stomp-connection';
+/**
  * A Server-Timing metric the worker adds to a load a style sheet of
  * another origin made, when the page loaded that sheet without cors: the
  * browser reports no resource timing entry for it (the sheet's content is
@@ -387,6 +399,7 @@ export const PROXY_METRICS: readonly string[] = [
 	CORS_MARKER,
 	SIZE_MARKER,
 	PROTOCOL_MARKER,
+	CONNECTION_MARKER,
 	UNREPORTED_MARKER,
 	ENCODING_MARKER,
 	WORKER_SCRIPT_MARKER,
