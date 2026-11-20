@@ -648,8 +648,8 @@ export default class UnrouteModule extends Module<Client> {
 	 * (applyReports), oldest first.
 	 */
 	#reportSites: ErrorLocation[] = [];
-	/** the first of the page's frames on the stack now (applyErrorStacks) */
-	#callerLocation?: () => ErrorLocation | undefined;
+	/** the first of the page's frames on the stack now, or the one `skip` frames of the page's under it where there is one (applyErrorStacks) */
+	#callerLocation?: (skip?: number) => ErrorLocation | undefined;
 	/** where the page first opened a synchronous request (noteSynchronousRequest) */
 	#synchronousSite?: ErrorLocation;
 	/**
@@ -666,9 +666,14 @@ export default class UnrouteModule extends Module<Client> {
 		this.#synchronousSite = this.#callerLocation?.() ?? NO_LOCATION;
 		return true;
 	}
-	/** the page's call site, from inside a hook (none: no script of the page's called it) */
-	callerSite(): ErrorLocation {
-		return this.#callerLocation?.() ?? NO_LOCATION;
+	/**
+	 * the page's call site, from inside a hook (none: no script of the
+	 * page's called it); with `skip`, the call `skip` frames of the page's
+	 * under it, where there is one (a handler's caller: the code that
+	 * dispatched its event)
+	 */
+	callerSite(skip?: number): ErrorLocation {
+		return this.#callerLocation?.(skip) ?? NO_LOCATION;
 	}
 	/** note the page's call site, from inside a hook (#reportSites) */
 	noteReportSite() {
@@ -1492,16 +1497,17 @@ export default class UnrouteModule extends Module<Client> {
 		// The page's frame that called into the inject, for a hook that has to
 		// say where it was called from (noteReportSite): the stack of an error
 		// made here, formatted without the page's formatter.
-		let locating = false;
-		this.#callerLocation = () => {
+		// (while it does, the frames of the page's it skips, plus one)
+		let locating = 0;
+		this.#callerLocation = (skip = 0) => {
 			const error = new ErrorCtor();
-			locating = true;
+			locating = skip + 1;
 			try {
 				Reflect.get(error, 'stack');
 			} catch (failure) {
 				// no stack to read
 			} finally {
-				locating = false;
+				locating = 0;
 			}
 			return this.#pageSites.get(error);
 		};
@@ -1551,20 +1557,21 @@ export default class UnrouteModule extends Module<Client> {
 				shown = sites;
 			}
 			// where the page's code threw it, for the error's report
+			const first = shown[locating - 1] ?? shown[0];
 			if (
 				fromV8 &&
 				((typeof error === 'object' && error !== null) ||
 					typeof error === 'function') &&
-				shown.length
+				first
 			)
 				try {
-					const routed = scriptName(shown[0]);
-					const place = placed(shown[0]);
+					const routed = scriptName(first);
+					const place = placed(first);
 					this.#pageSites.set(error, {
 						routed: typeof routed === 'string' ? routed : null,
-						filename: fileName(shown[0]) ?? '',
-						lineno: place ? place[1] : (shown[0].getLineNumber() ?? 0),
-						colno: place ? place[2] : (shown[0].getColumnNumber() ?? 0),
+						filename: fileName(first) ?? '',
+						lineno: place ? place[1] : (first.getLineNumber() ?? 0),
+						colno: place ? place[2] : (first.getColumnNumber() ?? 0),
 					});
 				} catch (failure) {
 					// a frame that cannot say

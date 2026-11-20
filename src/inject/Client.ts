@@ -791,10 +791,10 @@ export default class Client {
 	/**
 	 * Whether the page's policy refuses a handler or a javascript: URL's
 	 * code as it runs (the access API's `csp`, which the rewrite of each
-	 * calls first). Overridden by the document client; the base never
-	 * enforces.
+	 * calls first; `inner`, the URL a javascript: URL of statements runs
+	 * through). Overridden by the document client; the base never enforces.
 	 */
-	codeRuns(_that: unknown, _code: string): boolean {
+	codeRuns(_that: unknown, _code: string, _inner?: string): boolean {
 		return false;
 	}
 	/**

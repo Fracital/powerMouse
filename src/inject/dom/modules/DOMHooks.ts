@@ -969,6 +969,7 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				// first, see prepareScriptText)
 				moduleClient.sweepFrames?.();
 				moduleClient.writtenLoads?.(document as Document);
+				moduleClient.writtenHandlers(document as Document);
 			});
 
 		// on the prototype, where the browser has them: an own property of the
