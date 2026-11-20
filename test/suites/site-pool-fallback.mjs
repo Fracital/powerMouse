@@ -167,6 +167,53 @@ const routed = (origin) => (url) =>
 const asPage = (frame, code) =>
 	frame.evaluate((code) => Function(code)(), code);
 
+/**
+ * Click `selector` in `frame` once its document sees it in view, and once
+ * more when the document saw no mousedown. The hub's page grows with every
+ * frame it shows, so the frame is below the fold: Playwright scrolls it in
+ * and clicks at once, and when the hub has not yet drawn the out-of-process
+ * frame at its new place, Chrome hit-tests the click to the hub's iframe
+ * element and the frame's document gets nothing, so no navigation starts
+ * (measured 2026-11-20: the hub got pointerdown and click on the linker's
+ * iframe, the linker's document nothing, in 2 of 16 runs four at a time on
+ * master; the site-pool suite's click).
+ */
+async function click(frame, selector) {
+	await frame.evaluate(
+		(selector) =>
+			new Promise((resolve) => {
+				const element = document.querySelector(selector);
+				const observer = new IntersectionObserver((entries) => {
+					if (!entries.some((entry) => entry.isIntersecting)) return;
+					observer.disconnect();
+					requestAnimationFrame(() => requestAnimationFrame(resolve));
+				});
+				observer.observe(element);
+				element.scrollIntoView({ block: 'center' });
+				setTimeout(resolve, 5000);
+			}),
+		selector,
+	);
+	for (let attempt = 0; attempt < 2; attempt++) {
+		await frame.evaluate(() => {
+			window.__spfPressed = false;
+			addEventListener('mousedown', () => (window.__spfPressed = true), {
+				capture: true,
+				once: true,
+			});
+		});
+		await frame.click(selector);
+		for (let i = 0; i < 10; i++) {
+			const pressed = await frame
+				.evaluate(() => window.__spfPressed !== false)
+				.catch(() => true); // the document went: it navigated
+			if (pressed) return;
+			await sleep(100);
+		}
+		console.log(`a click on ${selector} missed its frame (try ${attempt + 1})`);
+	}
+}
+
 // --- natively: the page of A with its frame of B ---
 const native = await context.newPage();
 const nativeStart = Date.now();
@@ -479,7 +526,7 @@ ok(
 console.log(`go() to a site of a stopped slot took ${gone.ms} ms`);
 
 started = Date.now();
-await linker.frame.click('#to');
+await click(linker.frame, '#to');
 const linked = await frameOf(
 	linker.element,
 	(url) => originOf(url) === HOST && url.includes('/stomp/'),
