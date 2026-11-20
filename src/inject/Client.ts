@@ -1376,8 +1376,8 @@ export default class Client {
 	 * no-referrer policy its requests carry no Referer either, so the worker
 	 * would judge them as an opaque origin's. The nearest routed ancestor,
 	 * whose route names its real origin and partition, vouches for a token
-	 * this document makes, and this document's own client claims it
-	 * (SRCDOC_VOUCH, SRCDOC_CLAIM): each load binds itself, so a frame that
+	 * this document makes, and this document's own client claims it with a
+	 * request (SRCDOC_VOUCH, SRCDOC_CLAIM): each load binds itself, so a frame that
 	 * loads again is bound again. A document with no such ancestor, or an
 	 * opaque one (sandboxed without allow-same-origin), claims nothing, which
 	 * tells the worker not to wait for it.
@@ -1404,9 +1404,11 @@ export default class Client {
 		} catch (error) {
 			// an ancestor that cannot vouch: claims nothing
 		}
-		this.postToWorker({
-			[SRCDOC_CLAIM]: { directory: this.directory, token },
-		});
+		// a request of its own: the worker reads its client from it (WebKit
+		// reports a srcdoc document's message as its parent's client's)
+		this.nativeFetch(`${this.directory}${SRCDOC_CLAIM}/${token}`, {
+			mode: 'no-cors',
+		}).catch(() => {});
 	}
 
 	/**

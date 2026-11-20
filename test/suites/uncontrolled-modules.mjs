@@ -3,7 +3,8 @@
 // into, an about:blank it navigates the child of another origin's frame to
 // (the page's in Chrome and Firefox; WebKit keeps it the frame's, which the
 // page cannot reach), an about:blank popup it opens, and an about:blank
-// frame whose markup it writes with document.write
+// frame whose markup it writes with document.write, and about:srcdoc
+// frames under the page and under an about:blank frame
 // (test/pages/uncontrolled-modules.html). In each, inline and external
 // module scripts with static imports (relative, path-absolute, absolute, a
 // directory up, two cycles, one of three modules and what each sees of the
