@@ -508,6 +508,8 @@ const slice = String.prototype.slice;
  */
 export async function readMarkup(
 	url: string,
+	/** what the first piece waits for (the store's first read, Client.primeStore) */
+	before: Promise<void> | undefined,
 	feed: (
 		markup: string,
 		table: unknown,
@@ -536,6 +538,7 @@ export async function readMarkup(
 			[],
 		) as ReadableStreamDefaultReader<Uint8Array>;
 		const decoder = new NativeTextDecoder();
+		await before;
 		let text = '';
 		// the record in hand's `<length>\n` once read: until the record is
 		// all there only the text's length is looked at (searching a text
