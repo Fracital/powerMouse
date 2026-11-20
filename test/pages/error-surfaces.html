@@ -30,6 +30,7 @@
 	__inline.module = new Error('inline module').stack;
 </script>
 <script src="error-surfaces-lib.js"></script>
+<script src="error-surfaces-columns.js"></script>
 <script src="error-surfaces-timing.js"></script>
 <script>
 	// Every error surface a page can read that the browser fills with a URL,
@@ -157,6 +158,7 @@
 			surfaces.builtinThroughCallLater(),
 		);
 		await run('deepThroughHooks', () => surfaces.deepThroughHooks());
+		await run('columns', () => surfaces.columns());
 		await run('stackLimits', () => surfaces.stackLimits());
 		await run('timerString', () => {
 			setTimeout('throw new Error("from timer string")');

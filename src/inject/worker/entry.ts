@@ -21,6 +21,8 @@ import { legacyFileSystemParts } from '../legacyFileSystemParts';
 import { mixedContentParts } from '../mixedContentParts';
 import { originFrom } from '../originFrom';
 import { originFromParts } from '../originFromParts';
+import { placeIn } from '../positionMaps';
+import { positionParts } from '../positionParts';
 import { reportParts } from '../reportParts';
 import { reportsSeen } from '../reportsSeen';
 import { handModules } from '../rewriter';
@@ -56,6 +58,8 @@ mixedContentParts.noticeText = () => noticeText;
 cacheCallParts.calls = () => cacheCalls;
 // and what Origin.from() answers (../originFromParts.ts)
 originFromParts.answer = () => originFrom;
+// and the reader of the maps of script files' rewrites (../positionParts.ts)
+positionParts.read = () => placeIn;
 // and the wording of the access API's errors (../accessFailureParts.ts)
 accessFailureParts.failures = () => accessFailures;
 // and the un-routing of ReportingObserver's reports (../reportParts.ts)

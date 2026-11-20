@@ -10,6 +10,7 @@ import { mixedContentParts } from '../mixedContentParts';
 import Module from '../Module';
 import baseModules from '../modules';
 import { originFromParts } from '../originFromParts';
+import { positionParts } from '../positionParts';
 import { reportParts } from '../reportParts';
 import { socketParts } from '../socketParts';
 import { storageBucketParts } from '../storageBucketParts';
@@ -101,6 +102,9 @@ codecParts.bytes = () => heldPart('codecBytes')?.();
 cacheCallParts.calls = () => deferred('cacheCalls');
 // and what Origin.from() answers, with a realm's first call
 originFromParts.answer = () => deferred('originFrom');
+// and the reader of the maps of script files' rewrites, with the first
+// position of one a page reads
+positionParts.read = () => deferred('placeIn');
 // and what reads a window as an array method or a list of arguments does,
 // with a document's first such call
 windowArrayParts.make = () => deferred('windowArrays');

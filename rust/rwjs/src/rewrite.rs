@@ -1,7 +1,7 @@
 //! The parse and the driver: what a rewrite is given, what it answers, and
 //! what goes around the walk (the text ahead of the script's own code, the
 //! holder of its text, the routed source map). The walk itself is `walk`.
-use edits::{Edit, Piece, Span as EditSpan, apply, apply_filling};
+use edits::{Edit, Piece, Span as EditSpan, apply, apply_filling, apply_mapped};
 use oxc::allocator::Allocator;
 use oxc::ast_visit::Visit;
 use oxc::ast::ast::{Expression, Statement};
@@ -10,6 +10,7 @@ use oxc::span::SourceType;
 
 use crate::config::Config;
 use crate::early::{self, Mode, Verdict};
+use crate::positions;
 use crate::source::{Utf16Offsets, holder_room, holder_statement_into, source_key};
 use crate::walk::{Patterns, Walker};
 
@@ -69,6 +70,9 @@ pub struct Options<'c> {
 	/// write the statement that hands the script's text to the access API
 	/// when a function of it is marked (the rewriter runs where no page does)
 	pub holder: bool,
+	/// write the map of the output to the source for the positions a page
+	/// reads (src/positions.rs): a script file the service worker serves
+	pub positions: bool,
 	pub config: &'c Config,
 	pub params: &'c Params,
 }
@@ -89,7 +93,7 @@ pub struct Output {
 /// an older module's text and the glue never drives a module it was not
 /// written for (src/wasm/rewriter.ts holds the same number).
 /// rust/host/parity.mjs --cases holds it to the outputs (cases.revision).
-pub const REVISION: &str = "18";
+pub const REVISION: &str = "19";
 
 /// Why the rewriter hands a script back to the JavaScript one
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -499,7 +503,10 @@ pub fn rewrite(source: &str, options: &Options, route: &mut Route) -> Result<Out
 	let pre = &options.params.pre;
 	let key = key.or_else(|| options.params.key.clone());
 	let held = options.holder && marks > 0;
-	if !pre.is_empty() || held {
+	// the map of the output to the source goes last in that text, where
+	// the output is not the source (src/positions.rs)
+	let mapped = options.positions && (!edits.is_empty() || !pre.is_empty());
+	if !pre.is_empty() || held || mapped {
 		let directive = if options.module { None } else { program.directives.last() };
 		let at = match directive {
 			Some(directive) => {
@@ -526,8 +533,9 @@ pub fn rewrite(source: &str, options: &Options, route: &mut Route) -> Result<Out
 		};
 		lead.push_str(pre);
 		// (the lead goes with the holder: a text the holder cannot carry,
-		// which holds every stand-in, has neither when there is no preamble)
-		let pieces = vec![if held { Piece::Fill } else { Piece::Text(std::mem::take(&mut lead)) }];
+		// which holds every stand-in, has neither when there is no preamble
+		// or map)
+		let pieces = vec![if held || mapped { Piece::Fill } else { Piece::Text(std::mem::take(&mut lead)) }];
 		edits.push(match directive {
 			Some(directive) => Edit::wrap(EditSpan::new(directive.span.start, directive.span.end), Vec::new(), pieces),
 			None => Edit::insert(at.unwrap_or(0), pieces, -1),
@@ -540,6 +548,32 @@ pub fn rewrite(source: &str, options: &Options, route: &mut Route) -> Result<Out
 	drop(allocator);
 	let key = if held { Some(key.unwrap_or_else(|| source_key(source))) } else { key };
 	let text = match &key {
+		_ if mapped => {
+			let api = &options.config.api;
+			let url = &options.params.url;
+			let held_key = if held { key.as_deref() } else { None };
+			// the source's lines, where no holder carries its text (one that
+			// cannot be carried writes them then)
+			let lines = if held_key.is_none() { positions::line_lengths(source) } else { String::new() };
+			let room = |map: &edits::Positions| {
+				lead.len()
+					+ held_key.map_or(0, |key| holder_room(api, key, source))
+					+ positions::statement_room(api, url, held_key.unwrap_or(""), lines.len(), map)
+			};
+			apply_mapped(source, edits, &room, &|byte| offsets.convert(byte), &mut |out, map| {
+				let start = out.len();
+				out.push_str(&lead);
+				let kept = held_key.is_some_and(|key| holder_statement_into(out, api, key, source));
+				match (kept, held_key) {
+					(true, Some(key)) => positions::write_statement(out, start, api, url, key, "", map),
+					(_, None) => positions::write_statement(out, start, api, url, "", &lines, map),
+					(false, Some(_)) => {
+						positions::write_statement(out, start, api, url, "", &positions::line_lengths(source), map)
+					}
+				}
+			})
+			.map(|(text, _)| text)
+		}
 		Some(key) if held => {
 			let api = &options.config.api;
 			apply_filling(source, edits, lead.len() + holder_room(api, key, source), &mut |out| {
@@ -609,6 +643,7 @@ pub(crate) mod tests {
 		let options = Options {
 			module,
 			holder: false,
+			positions: false,
 			config: &config,
 			params: &params,
 		};
@@ -1142,6 +1177,7 @@ pub(crate) mod tests {
 		let options = Options {
 			module: false,
 			holder: false,
+			positions: false,
 			config: &config,
 			params: &params,
 		};

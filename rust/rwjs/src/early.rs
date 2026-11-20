@@ -1907,6 +1907,7 @@ mod tests {
 		let options = Options {
 			module,
 			holder: false,
+			positions: false,
 			config: &config,
 			params: &params,
 		};

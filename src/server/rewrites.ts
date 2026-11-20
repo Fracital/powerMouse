@@ -101,7 +101,13 @@ import {
 	routeHTML,
 	setDocumentShells,
 } from '../rewriteHTML';
-import { modifyJS, RewrittenBy, routeJS, ScriptType } from '../rewriteJS';
+import {
+	modifyJS,
+	RewrittenBy,
+	routeJS,
+	SCRIPT_FILE,
+	ScriptType,
+} from '../rewriteJS';
 import {
 	formQuery,
 	linkRouteURL,
@@ -6116,7 +6122,7 @@ export function registerRewrites(
 		note.rewriteIn = pooled === null ? 'service-worker' : 'pool';
 		const output =
 			pooled ??
-			modifyJS(text, url, rewriter.config, type, preamble, undefined, told);
+			modifyJS(text, url, rewriter.config, type, preamble, SCRIPT_FILE, told);
 		// the wasm module made it (the only rewriter), or it was handed back
 		// where no shipped syntax could be rewritten
 		note.rewriteBy = told.by ?? 'wasm';
@@ -6157,6 +6163,7 @@ export function registerRewrites(
 				rewriter.config,
 				type,
 				preamble,
+				SCRIPT_FILE,
 			)
 		);
 	};

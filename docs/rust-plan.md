@@ -318,7 +318,9 @@ tests assert:
 4. **Line and column positions improve.** An unedited line keeps its line
    number; a column shifts only by the edits earlier on that line. Today
    escodegen reprinted everything, so a stack position was only near the
-   page's own. Tests that assert "near" are tightened, not loosened.
+   page's own. Tests that assert "near" are tightened, not loosened. A
+   script file's rewrite also carries the map of itself to the input
+   (below), so a position the page reads there is the input's own.
 5. **`//# sourceURL` and `//# sourceMappingURL` keep their place**, and the
    mapping URL is still routed (a replace edit over the URL in the comment).
 6. **`compact` stops meaning anything.** Splicing never reformats, so
@@ -344,6 +346,54 @@ tests assert:
     validated UTF-8. The host side never calls `from_utf8_unchecked` on
     network bytes: the ABI takes bytes and validates once, and a script that
     is not UTF-8 falls back to the JavaScript rewriter.
+
+### Position maps
+
+V8 and Blink name positions in the text they ran: an error's stack, a long
+animation frame script's `sourceCharPosition`, the inserting call a CSP
+violation names. Natively that is the page's text. With flag 512 (the
+service worker's rewrites of script files: `SCRIPT_FILE` in
+`src/rewriteJS.ts`, `rewriteBytes`) the module writes, last in the lead,
+a statement that hands the inject the map from the output's positions to
+the input's:
+
+```js
+(0).$s$j?.pos('url', 'key', function () {
+	/*MAP*/
+});
+```
+
+The edits crate knows every splice: `apply_mapped` (`rust/edits`) runs a
+mapper over the same pieces the writer writes, before it, so the lead's
+length (which holds the map) is known when the writer starts. MAP is base64
+VLQ (the source map alphabet, which has no `*`): where the map's own
+function ends (`past`), where the lead starts in the output and the input
+position it stands at, the input's line lengths when there is no holder
+(otherwise the inject counts the holder's text), then runs. Each run is a
+length and the input position it starts at, as a zigzag delta from the
+previous run's end, with a bit for text an edit wrote (which stands at its
+anchor: an edit's start, a wrap's end) against a stretch copied from the
+input. Offsets are UTF-16 units, as V8's `CallSite.getPosition()` counts.
+A rewrite with no edits writes no map: its positions are the input's.
+
+The inject keeps the function in a WeakRef by URL (`src/inject/positionParts.ts`,
+in both bundles) and decodes it only when a position in that file is asked
+for, through its native `toString` (`src/inject/positionMaps.ts`, a
+deferred part of the document bundle, in the worker bundle itself), once
+per function. The stack formatter (`Unroute` `applyErrorStacks`: a frame,
+an eval's origin, `getLineNumber` and `getColumnNumber` of a structured
+stack, an error event's place), `LongFrames` and the CSP violations
+(`policyChecks.ts` `callerSite`) read it.
+
+Measured on the corpus (`all.json`, 4,018 scripts): 3,429 get a map; the
+output without the map statement equals the plain rewrite in every one;
+all 8,686,543 runs copy their input stretch exactly, and no line or column
+read through a map is wrong. The maps are 19.69 MB, 2.72% of the output.
+Rewrite time with the map, against the same module without it (minimum of
+runs): 1,265 to 1,316 ms warm over the twelve biggest scripts (+4.0%),
+2,192 to 2,318 ms over `big.json` (+5.7%), 1,703 to 1,774 ms cold (+4.2%),
+peak memory unchanged (13.8x the input). Without the flag the module writes
+and times as before. `core.wasm` is 4,070 bytes bigger (726,782).
 
 ## 6. The boundary and loading
 
@@ -389,6 +439,7 @@ The flags of `r`, and what each call takes and answers:
 | 32   | nothing                        | the revision of what the module writes    |
 | 64   | a classic script               | `1` when it parses, `0` when not          |
 | 128  | a classic script               | `1` when it is one expression statement   |
+| 512  | (with 0 or 2)                  | the position map statement is written too |
 
 `lead` is what runs before the script's own code (the worker bootstrap, a
 module's `import.meta` lines, the caller's preamble), built by `scriptLead`

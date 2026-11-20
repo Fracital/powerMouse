@@ -10,6 +10,7 @@ pub mod args;
 pub mod config;
 pub mod early;
 pub mod pattern;
+pub mod positions;
 pub mod printer;
 pub mod rewrite;
 pub mod shape;

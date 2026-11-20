@@ -25,6 +25,7 @@ import {
 	FLAG_HOLDER,
 	FLAG_MODULE,
 	FLAG_PARAMS,
+	FLAG_POSITIONS,
 	REWRITER,
 	rewriterConfig,
 	rewriterRoute,
@@ -66,7 +67,7 @@ export function rewriteBytesInWasm(
 			if (!('output' in instance.call(params, FLAG_PARAMS))) return null;
 			const result = instance.callBytes(
 				text,
-				(isModuleType(type) ? FLAG_MODULE : 0) | FLAG_HOLDER,
+				(isModuleType(type) ? FLAG_MODULE : 0) | FLAG_HOLDER | FLAG_POSITIONS,
 			);
 			if (!('bytes' in result)) return null;
 			// an output that starts with a byte order mark (a script with two)

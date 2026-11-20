@@ -16,6 +16,7 @@ import type DocumentClient from '../dom/Client';
 import Module from '../Module';
 import { skippedFrames } from '../nativeErrors';
 import { LazyWeakMap, LazyWeakSet } from '../ownCollections';
+import { placeOf } from '../positionParts';
 import { reportParts } from '../reportParts';
 import type { ReportView } from '../reportsSeen';
 import ProxyModule from './Proxy';
@@ -273,8 +274,14 @@ interface CallSite {
 	isEval(): boolean;
 	getLineNumber(): number | null | undefined;
 	getColumnNumber(): number | null | undefined;
+	getPosition?(): number;
 	toString(): string;
 }
+
+/** a frame's own `:line:column`, at the end of its text */
+const FRAME_PLACE = /:\d+:\d+(\)?)$/;
+/** a CallSite's getters of its place, in placeOf's order */
+const PLACES = ['getPosition', 'getLineNumber', 'getColumnNumber'];
 
 type PrepareStackTrace = (error: unknown, sites: CallSite[]) => unknown;
 
@@ -1206,6 +1213,31 @@ export default class UnrouteModule extends Module<Client> {
 				? (unrouteURL(moduleClient, name) ?? name)
 				: name;
 		};
+		// where a frame stands in the page's text, where the map its script's
+		// rewrite carries says (../positionParts.ts): offset, line, column
+		const placed = (site: CallSite) =>
+			placeOf(fileName(site), site.getPosition?.());
+		// a frame's text with its own line and column the page's; for code
+		// the page's eval runs, the eval's place too, where the frame below
+		// is the call (V8 names the call's place, which is the frame's)
+		const placedFrame = (
+			site: CallSite,
+			text: string,
+			index: number,
+			sites: CallSite[],
+		) => {
+			const place = placed(site);
+			if (place) return text.replace(FRAME_PLACE, `:${place[1]}:${place[2]}$1`);
+			const below = sites[index + 1];
+			const caller = below && site.isEval() ? placed(below) : null;
+			if (!caller) return text;
+			const name = fileName(below!);
+			const origin = `(${name}:${below!.getLineNumber()}:${below!.getColumnNumber()})`;
+			const at = text.indexOf(origin);
+			return at < 0
+				? text
+				: `${text.slice(0, at)}(${name}:${caller[1]}:${caller[2]})${text.slice(at + origin.length)}`;
+		};
 		// a frame inside the inject bundle: no page URL corresponds to it
 		// (or a function the inject made with a realm's Function: its code has
 		// no URL, only the source URL the Client gives it, under the scope)
@@ -1245,8 +1277,9 @@ export default class UnrouteModule extends Module<Client> {
 			for (let i = index + 1; i < sites.length; i++) {
 				const name = fileName(sites[i]);
 				if (typeof name !== 'string' || isInternal(sites[i])) continue;
-				const line = sites[i].getLineNumber();
-				const column = sites[i].getColumnNumber();
+				const place = placed(sites[i]);
+				const line = place ? place[1] : sites[i].getLineNumber();
+				const column = place ? place[2] : sites[i].getColumnNumber();
 				const caller = sites[i].getFunctionName();
 				return {
 					location:
@@ -1302,16 +1335,23 @@ export default class UnrouteModule extends Module<Client> {
 							const name = target.getFunctionName();
 							return helperName(name) ? null : name;
 						};
+					const which = PLACES.indexOf(key as string);
+					if (which >= 0) {
+						const place = placed(target);
+						if (place) return () => place[which];
+					}
 					if (key === 'getEvalOrigin' || key === 'toString')
 						return () => {
 							const value = Reflect.apply((target as any)[key], target, []);
-							return typeof value === 'string'
-								? cleanFrame(
-										key === 'toString' ? unnamed(value) : value,
+							if (typeof value !== 'string') return value;
+							return key === 'toString'
+								? placedFrame(
+										target,
+										cleanFrame(unnamed(value), index, sites),
 										index,
 										sites,
 									)
-								: value;
+								: cleanFrame(value, index, sites);
 						};
 					const value = Reflect.get(target, key, target);
 					return typeof value === 'function' ? value.bind(target) : value;
@@ -1493,11 +1533,12 @@ export default class UnrouteModule extends Module<Client> {
 			)
 				try {
 					const routed = scriptName(shown[0]);
+					const place = placed(shown[0]);
 					this.#pageSites.set(error, {
 						routed: typeof routed === 'string' ? routed : null,
 						filename: fileName(shown[0]) ?? '',
-						lineno: shown[0].getLineNumber() ?? 0,
-						colno: shown[0].getColumnNumber() ?? 0,
+						lineno: place ? place[1] : (shown[0].getLineNumber() ?? 0),
+						colno: place ? place[2] : (shown[0].getColumnNumber() ?? 0),
 					});
 				} catch (failure) {
 					// a frame that cannot say
@@ -1534,7 +1575,7 @@ export default class UnrouteModule extends Module<Client> {
 				shown
 					.map(
 						(site, index) =>
-							`\n    at ${cleanFrame(unnamed(String(site)), index, shown)}`,
+							`\n    at ${placedFrame(site, cleanFrame(unnamed(String(site)), index, shown), index, shown)}`,
 					)
 					.join('')
 			);
