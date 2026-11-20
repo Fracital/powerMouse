@@ -21,7 +21,7 @@ import {
 } from './messages';
 import { connectionLost } from './RevivingTransport';
 import { RpcHelper } from './rpc';
-import serveTransport, { warmTransport } from './serveTransport';
+import serveTransport, { goodbyeAll, warmTransport } from './serveTransport';
 import { SHARD_WORKER_NAME } from './shards';
 import { serveShard } from './shardWorker';
 import { transportLog, watchTransportNotes } from './transportLog';
@@ -113,6 +113,7 @@ function transportWorker() {
 			jarChanged: async (domain) => jarChanged(domain),
 			connectionLost: async () => connectionLost(transport),
 			carrierHost: async (port) => useCarrierHost(port),
+			goodbye: async () => goodbyeAll(),
 		},
 		TRANSPORT_WORKER_RPC,
 		(data, transfer) => self.postMessage(data, transfer),

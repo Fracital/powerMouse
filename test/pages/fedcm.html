@@ -424,11 +424,13 @@
 	// that it had not in 10 s), and whether a timer the page set just before
 	// it ran first (natively it does: the browser's refusal is a task)
 	let child = null;
+	let childFrame = null;
 	window.addChild = () =>
 		new Promise((resolve) => {
 			const frame = document.createElement('iframe');
 			frame.src = location.href;
 			frame.addEventListener('load', () => {
+				childFrame = frame;
 				child = frame.contentWindow;
 				resolve(child.__fedcm?.ready === true);
 			});
@@ -447,6 +449,15 @@
 			result: result.kind === 'error' ? result.error : result.kind,
 			afterTimer: timer,
 		};
+	};
+
+	// a request of the frame addChild made, left open; then that frame's
+	// document goes (`how`: the frame is removed, or it navigates away)
+	window.startInChild = (params) => child.startScenario('flow', params);
+	window.childGoes = (how) => {
+		if (how === 'remove') childFrame.remove();
+		else child.location.href = `${location.pathname}?gone`;
+		return true;
 	};
 
 	// a flow started with a signal of an AbortController the page then

@@ -20,8 +20,10 @@ import {
  *
  * Resolves with the index of the account picked, IDENTITY_CLOSED when the
  * user closed it (Chrome's close button, which starts the site's cooldown)
- * or IDENTITY_GONE when `port` closed first (the document went away) or
- * said the request ended (an abort of its signal).
+ * or IDENTITY_GONE when a message on `port` said the request ended (an
+ * abort of its signal, or the document went: it says so on its pagehide,
+ * src/inject/dom/credentialFlows.ts) or `port` closed first (heard only
+ * where Chrome fires MessagePort close events: 157 does not by default).
  */
 export function drawAccountChooser(
 	frame: HTMLIFrameElement | null,

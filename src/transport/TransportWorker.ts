@@ -144,6 +144,15 @@ export default class TransportWorker {
 	connectionLost() {
 		this.#rpc.call('connectionLost', undefined).catch(() => {});
 	}
+	/**
+	 * the controller's page is going for good: every port the worker serves
+	 * says so to its RemoteTransport (a document of another tab, the
+	 * service worker), whose calls then fail at once and whose sockets end.
+	 * The worker goes with the page a moment later
+	 */
+	goodbye() {
+		this.#rpc.call('goodbye', undefined).catch(() => {});
+	}
 	/** the carrier host's port (carrierClient.ts); before init() for the first transport to ride it */
 	carrierHost(port: MessagePort) {
 		this.#rpc.call('carrierHost', port, [port]).catch(() => {});

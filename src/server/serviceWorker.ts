@@ -73,6 +73,7 @@ import {
 	SW_REVIVE,
 	SWbound,
 	SYNC_RELAY_ROUTE,
+	TRANSPORT_GONE,
 	type SrcdocMessage,
 } from '../transport/messages';
 import RemoteTransport from '../transport/RemoteTransport';
@@ -1417,9 +1418,10 @@ function handleMessage(event: ExtendableMessageEvent) {
 				if (message.op === 'identityDone')
 					return identityDone(site, rp, message);
 				// the host's page draws the chooser over the document's frame;
-				// the port tells it the document went away, or a message on
-				// it that the request ended (its signal aborted: Chrome fires
-				// no close event for a port closed)
+				// a message on the port tells it the request ended: its signal
+				// aborted, or the document went (it says so on its pagehide:
+				// Chrome 157 fires no close event for a port closed, nor for
+				// one whose document went)
 				const gone = new MessageChannel();
 				reply.addEventListener('close', () => gone.port1.close());
 				reply.addEventListener('message', () => gone.port1.postMessage(null));
@@ -1715,12 +1717,17 @@ function handleMessage(event: ExtendableMessageEvent) {
 		if (sender && typeof worker === 'string' && worker.startsWith('blob:'))
 			noteBlobWorker(worker, sender);
 
+		const [port] = event.ports;
 		if (!ref) {
 			console.error(`Stomp: no controller registered for ${directory}`);
+			// nothing will serve it: the page's sockets fail at once rather
+			// than wait for good (Chrome 157 fires no close event for a port
+			// let go of)
+			port?.postMessage({ [TRANSPORT_GONE]: true });
+			port?.close();
 			return;
 		}
 
-		const [port] = event.ports;
 		ref.rpc.call('initRemoteTransport', port, [port]);
 	} else if (INIT_PAGE_MODULES in data) {
 		// a proxied top's library realm (src/inject/rewriter.ts): its
