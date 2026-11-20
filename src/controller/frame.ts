@@ -33,7 +33,10 @@ import {
 import { StompController, type PermissionRequest } from './index';
 import {
 	ControllerFrameInit,
+	FRAME_HELLO,
+	FRAME_REFUSED,
 	FrameBound,
+	FrameRefusal,
 	HostBound,
 	REMOTE_RPC,
 	StaleInfo,
@@ -62,35 +65,68 @@ function hostTabs(
 	};
 }
 
-function allowedOrigins(): string[] {
+/** the origins the frame's meta lists; none: it trusts whichever page embeds it */
+function listedOrigins(): string[] {
 	const meta = document.querySelector<HTMLMetaElement>(
 		'meta[name="stomp-allowed-origins"]',
 	);
-	const listed = (meta?.content || '').split(/\s+/).filter(Boolean);
-	if (listed.length) return listed;
-	// trust the page that embedded us, decided once at load
+	return (meta?.content || '').split(/\s+/).filter(Boolean);
+}
+
+/**
+ * The embedding page's origin as this document can read it at load: the
+ * parent's own (`location.ancestorOrigins`, which a referrer policy does not
+ * hide in Chrome), else, in a browser without it, the referrer's. Null when
+ * neither says (a host page whose Referrer-Policy is `no-referrer` or
+ * `same-origin`): the page is asked (FRAME_HELLO), and the browser's origin
+ * of its answer is the embedder's.
+ */
+function embedderOrigin(): string | null {
+	const ancestors = location.ancestorOrigins;
+	if (ancestors) {
+		// 'null': an opaque parent, or one a referrer policy hides; its
+		// answer to the hello says which
+		const parent = ancestors[0];
+		return parent && parent !== 'null' ? parent : null;
+	}
 	try {
-		return [new URL(document.referrer).origin];
+		const origin = new URL(document.referrer).origin;
+		return origin === 'null' ? null : origin;
 	} catch (error) {
-		return [];
+		return null;
 	}
 }
 
-const origins = allowedOrigins();
+const listed = listedOrigins();
+
+/** whether the frame serves a page of `origin`: one the meta lists, any page when it lists none, never an opaque one */
+const allowed = (origin: string) =>
+	origin !== 'null' && (!listed.length || listed.includes(origin));
+
+/** refuse the embedding page: this frame says so, and so does the page's `wait()` */
+function refuse(origin: string) {
+	document.body.textContent = 'Embedding origin is not allowed.';
+	const refusal: FrameRefusal = {
+		reason: origin === 'null' ? 'opaque' : 'listed',
+		origin,
+	};
+	window.parent.postMessage({ [FRAME_REFUSED]: refusal }, '*');
+}
 
 // the agent of the documents a Document-Isolation-Policy isolates, which
 // runs this script too (./apart.ts)
 if (isApartAgent()) runApartAgent();
-else if (window === window.parent || !origins.length) {
+else if (window === window.parent) {
 	document.body.textContent =
 		'This page is the Stomp controller frame; it only works embedded by a host application.';
 } else {
-	const hostOrigin = origins.includes(new URL(document.referrer).origin)
-		? new URL(document.referrer).origin
-		: null;
+	// the embedder's origin once it is known and allowed; until then the
+	// frame says nothing to the page and hears nothing from it
+	let hostOrigin = '';
+	const atLoad = embedderOrigin();
 
-	if (!hostOrigin) {
-		document.body.textContent = 'Embedding origin is not allowed.';
+	if (atLoad !== null && !allowed(atLoad)) {
+		refuse(atLoad);
 	} else {
 		let controller: StompController | undefined;
 
@@ -613,11 +649,29 @@ else if (window === window.parent || !origins.length) {
 			(data, transfer) => window.parent.postMessage(data, hostOrigin, transfer),
 		);
 
+		let answered = false;
+		/** the embedder's origin is known: serve the page, or refuse it */
+		const meet = (origin: string) => {
+			if (!allowed(origin)) return refuse(origin);
+			hostOrigin = origin;
+			rpc.call('ready', undefined);
+		};
 		window.addEventListener('message', (event) => {
-			if (event.origin !== hostOrigin || event.source !== window.parent) return;
+			if (event.source !== window.parent) return;
+			// the page's answer to the hello: the browser says its origin
+			if (!hostOrigin && atLoad === null) {
+				const data = event.data as Record<string, unknown> | null;
+				if (!answered && data?.[FRAME_HELLO] === true) {
+					answered = true;
+					meet(event.origin);
+				}
+				return;
+			}
+			if (!hostOrigin || event.origin !== hostOrigin) return;
 			rpc.receive(event.data);
 		});
 
-		rpc.call('ready', undefined);
+		if (atLoad !== null) meet(atLoad);
+		else window.parent.postMessage({ [FRAME_HELLO]: true }, '*');
 	}
 }

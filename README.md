@@ -278,14 +278,6 @@ page believe it is top-level: `top`, `parent`, `frameElement`, `window.name`,
 `location.ancestorOrigins` all answer as they would for a real top window,
 and `message` events from outside the proxied world never reach the page.
 
-The controller frame serves whichever page embeds it, taken from its
-`document.referrer` when it loads. To serve only your host, list its
-origins (separated by spaces) in the `stomp-allowed-origins` meta of the
-`controllerFrame.html` you serve. Either way the host page must send its
-origin as the referrer: under `Referrer-Policy: no-referrer` or
-`same-origin` the frame cannot tell who embeds it and does not start, and
-`wait()` does not settle.
-
 Keep the two origins on one site where you can (`app.example.com` and
 `proxy.example.com` are one site; `localhost` and `127.0.0.1` are two). A
 browser that blocks third-party cookies (Brave and incognito windows by
@@ -294,6 +286,13 @@ service worker and no storage, so a proxy origin on another site cannot run
 there: `wait()` rejects with an error named `StorageBlockedError` that says
 so, and the host decides what to do (the demo falls back to the same-origin
 controller when the isolation was its own local default).
+
+The controller frame serves the page that embeds it, whose origin it gets
+from the browser (the host page's `Referrer-Policy` makes no difference).
+Its `<meta name="stomp-allowed-origins">` in `controllerFrame.html` can list
+the host origins it accepts, space separated. A page of another origin, or
+of an opaque one (a sandboxed document, a `data:` URL), gets an error named
+`EmbedderRefusedError` from `wait()` that says which.
 
 ## Cross-origin isolation
 
