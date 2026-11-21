@@ -103,6 +103,8 @@ function storageAccessMember(
 	args: unknown[],
 ): unknown {
 	const key = client.url.url.origin;
+	// what the handle's native stores are named by (src/profile.ts)
+	const native = client.firstPartyNativeKey;
 	const global = client.global;
 	switch (name) {
 		case 'localStorage':
@@ -121,7 +123,7 @@ function storageAccessMember(
 						name === 'locks' ? taken.navigator : global,
 						[],
 					),
-					key,
+					native,
 				]);
 			return own;
 		}
@@ -132,7 +134,7 @@ function storageAccessMember(
 				let manager = managers.get(that);
 				if (!manager) {
 					managers.set(that, (manager = {}));
-					storageRedirects.set(manager, [taken.storage!, key]);
+					storageRedirects.set(manager, [taken.storage!, native]);
 				}
 				return Reflect.apply(taken[name]!, manager, []);
 			})();

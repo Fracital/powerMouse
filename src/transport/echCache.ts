@@ -14,6 +14,8 @@
 // store (`online`, a `navigator.connection` change). A transport whose
 // module takes no `ech_cache` (another build, another transport) ignores it.
 
+import { closeOnDelete, storeName } from '../profile';
+
 /** what epoxy-transport's EchCache keeps (its EchCacheEntry) */
 export interface EchCacheEntry {
 	key: string;
@@ -38,9 +40,12 @@ let opened: Promise<IDBDatabase | null> | null = null;
 function db(): Promise<IDBDatabase | null> {
 	return (opened ??= new Promise<IDBDatabase | null>((resolve) => {
 		try {
-			const request = indexedDB.open(DB, 1);
+			const request = indexedDB.open(storeName(DB), 1);
 			request.onupgradeneeded = () => request.result.createObjectStore(STORE);
-			request.onsuccess = () => resolve(request.result);
+			request.onsuccess = () => {
+				closeOnDelete(request.result, () => (opened = null));
+				resolve(request.result);
+			};
 			request.onerror = () => resolve(null);
 			request.onblocked = () => resolve(null);
 		} catch {

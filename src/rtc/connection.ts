@@ -4,6 +4,7 @@
 // travels on, and the page's RTCPeerConnection stand-in answered over a
 // port per connection. Nothing here opens a socket: the only network is
 // the opener the worker hands in, which carries wisp streams.
+import { storeName } from '../profile';
 import { WEBRTC_CHANNEL } from '../transport/messages';
 import { compileModule, type ModuleSource } from '../wasm/module';
 import { peerAbort } from './abort';
@@ -1568,7 +1569,7 @@ export class Connection {
 
 	#openBridge(): BroadcastChannel {
 		if (this.#bridge) return this.#bridge;
-		const bridge = new BroadcastChannel(WEBRTC_CHANNEL);
+		const bridge = new BroadcastChannel(storeName(WEBRTC_CHANNEL));
 		bridge.onmessage = ({ data }: MessageEvent<BridgeMessage>) => {
 			if (!data || data.to !== this.#name) return;
 			const address = this.#bridgeAddress(data.from);

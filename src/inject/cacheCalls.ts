@@ -60,7 +60,7 @@ export function cacheCalls({
 			receiver: unknown,
 			args: unknown[],
 		): Promise<Response | undefined> {
-			const [that, key] = redirected(receiver, client.storageKey);
+			const [that, key] = redirected(receiver, client.nativeKey);
 			if (args.length && args[0] !== undefined) args[0] = asRequest(args[0]);
 			const options = args[1] as MultiCacheQueryOptions | undefined;
 			const names =

@@ -3,6 +3,7 @@
 // database, the one the host's service worker opened and keeps (so the
 // host's cookies API reads and clears what the slots wrote). Runs in the
 // transport worker, or in the host's page when the transport lives there.
+import { storeName as profileName } from '../profile';
 import {
 	DEVICE_GRANTS_DATABASE,
 	DEVICE_GRANTS_STORE,
@@ -28,7 +29,7 @@ let opened: Promise<IDBDatabase> | undefined;
  */
 function database(): Promise<IDBDatabase> {
 	opened ??= new Promise<IDBDatabase>((resolve, reject) => {
-		const request = indexedDB.open(JAR_DATABASE);
+		const request = indexedDB.open(profileName(JAR_DATABASE));
 		request.onerror = () => reject(request.error);
 		request.onsuccess = () => {
 			const db = request.result;
@@ -61,7 +62,7 @@ function keptDatabase(name: string, storeName: string): Promise<IDBDatabase> {
 	let opened = keptOpen.get(name);
 	if (opened) return opened;
 	opened = new Promise<IDBDatabase>((resolve, reject) => {
-		const request = indexedDB.open(name, 1);
+		const request = indexedDB.open(profileName(name), 1);
 		request.onupgradeneeded = () => {
 			if (request.result.objectStoreNames.contains(storeName)) return;
 			if (storeName === PASSKEYS_STORE)
@@ -144,7 +145,7 @@ function wrote({ op, args }: JarCall) {
 	if (op !== 'put' && op !== 'delete' && op !== 'clear') return;
 	if (Object.hasOwn(KEPT, String(args[0]))) return;
 	try {
-		writes ??= new BroadcastChannel(JAR_WRITES);
+		writes ??= new BroadcastChannel(profileName(JAR_WRITES));
 		writes.postMessage(null);
 	} catch (error) {
 		writes = null;

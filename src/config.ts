@@ -44,6 +44,12 @@ export interface Config {
 	 */
 	scope: string;
 	/**
+	 * the profile whose stores the controller's pages use (src/profile.ts):
+	 * '' or absent for the default profile; the service worker refuses a
+	 * controller of another profile than its own
+	 */
+	profile?: string;
+	/**
 	 * Origins allowed to embed proxied documents, emitted as a
 	 * `Content-Security-Policy: frame-ancestors` header. Set by the controller
 	 * frame in origin-isolation mode so only the host application can frame

@@ -52,8 +52,16 @@ interface State {
 }
 let state: State | undefined;
 
-/** the site's directory name: the storage key, in letters a name never escapes */
-function siteDirectory(key: string): string {
+/**
+ * the site's directory name: the storage key, in letters a name never
+ * escapes, and its profile's id after a `-` (src/profile.ts; no name of the
+ * default profile has one after `site-`), which a profile's wipe finds
+ */
+function siteDirectory(key: string, profile = ''): string {
+	const name = siteName(key);
+	return profile ? `${name}-${profile}` : name;
+}
+function siteName(key: string): string {
 	let name = '';
 	for (let i = 0; i < key.length; i++) {
 		const code = key.charCodeAt(i);
@@ -265,6 +273,7 @@ export function dropLegacyFileSystem(
 	global: object,
 	request: Native,
 	key: string,
+	profile: string,
 	done: () => void,
 ) {
 	state ??= {
@@ -273,7 +282,7 @@ export function dropLegacyFileSystem(
 		sync: new WeakSet(),
 		sites: new WeakMap(),
 	};
-	const name = `/${siteDirectory(key)}`;
+	const name = `/${siteDirectory(key, profile)}`;
 	let left = 2;
 	const one = () => {
 		if (--left === 0) done();
@@ -322,7 +331,7 @@ export function partitionLegacyFileSystem(
 		sites: new WeakMap(),
 	};
 	const { sites } = state;
-	const prefix = `/${siteDirectory(client.storageKey)}`;
+	const prefix = `/${siteDirectory(client.storageKey, client.profile)}`;
 	const page = client.url.url;
 	const id = `${page.protocol.slice(0, -1)}_${page.hostname}_${page.port || '0'}`;
 

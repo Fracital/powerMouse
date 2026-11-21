@@ -7,7 +7,9 @@
 // origin private file system) is the slot origin's, so a site that moved
 // would leave its data behind.
 
-import { openDB, type IDBPDatabase } from 'idb';
+import type { IDBPDatabase } from 'idb';
+import { storeName } from '../profile';
+import { openStoreDB } from '../storeDB';
 
 /** what a host gives for the site pool */
 export interface SitePoolInit {
@@ -224,8 +226,11 @@ export class SiteSlots {
 		this.#used[index] = ++this.#clock;
 		const origin = this.origins[index];
 		try {
-			if (this.#storage && this.#storage.getItem(LAST_KEY) !== origin)
-				this.#storage.setItem(LAST_KEY, origin);
+			if (
+				this.#storage &&
+				this.#storage.getItem(storeName(LAST_KEY)) !== origin
+			)
+				this.#storage.setItem(storeName(LAST_KEY), origin);
 		} catch (error) {
 			// no room: the next page warms the next new site's slot instead
 		}
@@ -239,7 +244,7 @@ export class SiteSlots {
 	last(dead?: Set<string>): string | null {
 		let origin: string | null = null;
 		try {
-			origin = this.#storage?.getItem(LAST_KEY) ?? null;
+			origin = this.#storage?.getItem(storeName(LAST_KEY)) ?? null;
 		} catch (error) {
 			// storage is blocked for this page
 		}
@@ -320,7 +325,7 @@ export async function keptDatabase(
 ): Promise<IDBPDatabase | null> {
 	let db: IDBPDatabase;
 	try {
-		db = await openDB(DATABASE, 1, {
+		db = await openStoreDB(DATABASE, 1, {
 			upgrade(db) {
 				db.createObjectStore(SITES);
 				db.createObjectStore(COUNTS);
@@ -350,7 +355,7 @@ export async function keptDatabase(
 async function keepLegacy(db: IDBPDatabase, storage: Storage | null) {
 	let raw: string | null = null;
 	try {
-		raw = storage?.getItem(LEGACY_KEY) ?? null;
+		raw = storage?.getItem(storeName(LEGACY_KEY)) ?? null;
 	} catch (error) {
 		// storage is blocked for this page
 	}
@@ -404,7 +409,7 @@ async function keepLegacy(db: IDBPDatabase, storage: Storage | null) {
 			),
 		);
 		await tx.done;
-		storage?.removeItem(LEGACY_KEY);
+		storage?.removeItem(storeName(LEGACY_KEY));
 	} catch (error) {
 		// the database refused: the text stays for the next page
 	}

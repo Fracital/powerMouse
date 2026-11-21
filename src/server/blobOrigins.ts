@@ -17,7 +17,8 @@
 // live on. Their requests would then come from a client of no known origin,
 // which the same-origin policy has to judge as an opaque one (every CORS
 // request of a blob: worker to its own site refused).
-import { IDBPDatabase, openDB } from 'idb';
+import type { IDBPDatabase } from 'idb';
+import { openStoreDB } from '../storeDB';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -42,7 +43,7 @@ let pruned = 0;
 
 let database: Promise<IDBPDatabase> | null = null;
 function store(): Promise<IDBPDatabase> {
-	database ??= openDB('stompClientOrigins', 1, {
+	database ??= openStoreDB('stompClientOrigins', 1, {
 		upgrade(db) {
 			db.createObjectStore('origins');
 		},

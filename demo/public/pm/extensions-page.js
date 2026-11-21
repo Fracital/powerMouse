@@ -13,8 +13,9 @@
 // themselves fire from main.js (setExtShortcuts), from what
 // extensions.commands() says.
 //
-// Left out, as this browser has no such thing: Allow in Incognito (no
-// incognito window), Allow access to file URLs (STomp loads no file: URL),
+// Left out, as this browser has no such thing: Allow in Incognito (Tor
+// mode, the one private profile, keeps extensions of its own and none of
+// the normal profile's: docs/tor.md "Profiles"), Allow access to file URLs (STomp loads no file: URL),
 // Site settings (no per-origin settings page for an extension), View in
 // DevTools and the errors' code view (no developer tools; the host page
 // cannot read the extension's files), the Safety Check panel.
@@ -50,7 +51,8 @@ const XP_STORE_LINK = 'https://chromewebstore.google.com/category/extensions';
 const xpExecute = (name) => /^_execute_(page_|browser_)?action$/.test(name);
 
 try {
-	XP.dev = localStorage.getItem(XP_DEV_KEY) === '1';
+	XP.dev =
+		(globalThis.PMProfile?.storage ?? localStorage).getItem(XP_DEV_KEY) === '1';
 } catch {
 	// no storage: Developer mode starts off
 }
@@ -286,7 +288,10 @@ function xpGo(view, id = XP.id, focus = true) {
 function xpSetDev(on) {
 	XP.dev = on;
 	try {
-		localStorage.setItem(XP_DEV_KEY, on ? '1' : '0');
+		(globalThis.PMProfile?.storage ?? localStorage).setItem(
+			XP_DEV_KEY,
+			on ? '1' : '0',
+		);
 	} catch {
 		// kept for this page only
 	}

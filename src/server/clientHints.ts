@@ -1,5 +1,6 @@
-import { openDB, type IDBPDatabase } from 'idb';
+import type { IDBPDatabase } from 'idb';
 import { potentiallyTrustworthy } from '../mixedContent';
+import { openStoreDB } from '../storeDB';
 import type { ClientHintsReport } from '../transport/messages';
 import {
 	ENABLED_FOR_ALL,
@@ -664,7 +665,7 @@ const accepted = new Map<string, string[]>();
 let loaded: Promise<void> | null = null;
 
 function openStore(): Promise<IDBPDatabase | null> {
-	store ??= openDB('stompClientHints', 1, {
+	store ??= openStoreDB('stompClientHints', 1, {
 		upgrade: (db) => {
 			db.createObjectStore('accepted');
 		},

@@ -32,6 +32,7 @@ import {
 	type AdblockList,
 	type AdblockPage,
 } from '../blocker/types';
+import { storeName } from '../profile';
 import type { RewritePool } from './rewritePool';
 import type Router from './Router';
 
@@ -492,7 +493,7 @@ export class Blocker implements BlockerLike {
 		at: number;
 	} | null> {
 		try {
-			const cache = await caches.open(STORE);
+			const cache = await caches.open(storeName(STORE));
 			// (both at once: a restarted worker's first navigation waits for them)
 			const [engine, resources] = await Promise.all([
 				cache.match(this.#url('engine')),
@@ -521,7 +522,7 @@ export class Blocker implements BlockerLike {
 	): Promise<void> {
 		if (!this.#key) return;
 		try {
-			const cache = await caches.open(STORE);
+			const cache = await caches.open(storeName(STORE));
 			// everything under other keys is an engine of other lists or an
 			// older format: dropped, so the store holds one engine
 			for (const request of await cache.keys())

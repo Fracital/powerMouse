@@ -1,3 +1,4 @@
+import { nativeStoreKey } from '../../../profile';
 import {
 	LEGACY_FS_CLEAR,
 	LEGACY_FS_CLEARED,
@@ -164,8 +165,10 @@ export default class StorageModule extends Module<DocumentClient> {
 		} catch (error) {
 			// no storage of its own (an opaque origin): every read goes out
 		}
+		// a stamp is a key of the proxy origin's own localStorage: named in
+		// the profile (src/profile.ts)
 		const stampOf = (cache: ReadCache) =>
-			`$stomp$${cache.store}:${cache.key ?? client.storageKey}`;
+			`$stomp$${cache.store}:${nativeStoreKey(cache.key ?? client.storageKey, client.profile)}`;
 		/** the document's copy of a store, emptied when another document wrote */
 		const current = (directory: string): ReadCache | null => {
 			const cache = caches.get(directory);

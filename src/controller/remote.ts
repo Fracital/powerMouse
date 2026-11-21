@@ -28,6 +28,7 @@ import type {
 	PasskeyRequest,
 	PasskeysInit,
 } from '../passkeys/types';
+import { checkProfile, useProfile } from '../profile';
 import type { DnrCommand } from '../server/dnr';
 import type {
 	NavigateInfo,
@@ -90,6 +91,7 @@ import {
 	TransportDescriptor,
 	type ReloadOptions,
 } from './messages';
+import { forgetProfile, type ForgottenProfile } from './profiles';
 import { createShields, type Shields } from './shields';
 import type { SitePoolInit } from './sitePool';
 import { SiteRuns } from './siteRuns';
@@ -101,6 +103,17 @@ export interface RemoteControllerInit {
 	proxyOrigin: string;
 	/** pathname of dist/ on that origin, default `/stomp/` */
 	directory?: string;
+	/**
+	 * the profile whose stores the controller uses (ControllerInit.profile):
+	 * its stores on the proxy origin, and its kept id on this one
+	 */
+	profile?: string;
+	/**
+	 * forget the profile's stores on the proxy origin before its service
+	 * worker is registered (forgetProfile), so the controller starts with
+	 * none: a profile that lasts a session (docs/tor.md "Profiles")
+	 */
+	freshProfile?: boolean;
 	/**
 	 * the controller's id (see ControllerInit.id): minted here when omitted and
 	 * handed to the controller frame, so the host knows the address its frames
@@ -258,6 +271,8 @@ export class RemoteController extends EventTarget {
 	proxyOrigin: string;
 	/** the scope on the proxy origin; the controller's address is `config.directory` */
 	directory: string;
+	/** the profile whose stores the controller uses (RemoteControllerInit.profile) */
+	readonly profile: string;
 	/**
 	 * the controller's id (ControllerInit.id): the host's own at once, else
 	 * the one kept here, on the host's origin, which the controller frame is
@@ -362,6 +377,8 @@ export class RemoteController extends EventTarget {
 		validateNames(init.names, Object.getOwnPropertyNames(globalThis));
 		validateHooks(init.hooks);
 		this.#init = init;
+		// before the id is claimed: this page's kept id is the profile's
+		this.profile = useProfile(init.profile);
 		this.proxyOrigin = new URL(init.proxyOrigin).origin;
 		this.directory = init.directory ?? '/stomp/';
 		// kept on the host's origin, where no proxied page reads it, and
@@ -792,6 +809,8 @@ export class RemoteController extends EventTarget {
 					codec: init.codec,
 					directory: this.directory,
 					id: this.id,
+					...(this.profile ? { profile: this.profile } : {}),
+					...(this.profile && init.freshProfile ? { freshProfile: true } : {}),
 					transport: init.transport,
 					openTab: !!init.onOpen,
 					...(init.cache === false ? { cache: false } : {}),
@@ -1029,6 +1048,27 @@ export class RemoteController extends EventTarget {
 	async forgetStorage(origin: string): Promise<void> {
 		await this.#ready;
 		await this.#rpc.call('forgetStorage', origin);
+	}
+	/**
+	 * Delete every store of another profile on the proxy origin
+	 * (src/controller/profiles.ts forgetProfile, run by the controller
+	 * frame), and its kept ids on this one
+	 */
+	async forgetProfile(profile: string): Promise<ForgottenProfile> {
+		const id = checkProfile(profile);
+		if (id === this.profile)
+			throw new Error('A controller cannot forget its own profile');
+		await this.#ready;
+		const forgotten = await this.#rpc.call('forgetProfile', id);
+		const own = await forgetProfile(id);
+		return {
+			registrations: forgotten.registrations + own.registrations,
+			databases: forgotten.databases + own.databases,
+			caches: forgotten.caches + own.caches,
+			keys: forgotten.keys + own.keys,
+			directories: forgotten.directories + own.directories,
+			left: [...forgotten.left, ...own.left],
+		};
 	}
 	async setTransport(transport: TransportDescriptor): Promise<void> {
 		await this.#ready;

@@ -11,7 +11,8 @@
 // chain, before their answer goes out: what is not here did not cross. They
 // are kept in IndexedDB too, since Chrome stops an idle service worker while
 // the element plays on from what it has.
-import { IDBPDatabase, openDB } from 'idb';
+import type { IDBPDatabase } from 'idb';
+import { openStoreDB } from '../storeDB';
 import type Router from './Router';
 import { jsonAPI } from './Router';
 
@@ -24,7 +25,7 @@ let pruned = Date.now();
 
 let database: Promise<IDBPDatabase> | null = null;
 function store(): Promise<IDBPDatabase> {
-	database ??= openDB('stompMediaLoads', 1, {
+	database ??= openStoreDB('stompMediaLoads', 1, {
 		upgrade(db) {
 			db.createObjectStore('crossed');
 		},

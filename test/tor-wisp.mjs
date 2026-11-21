@@ -21,9 +21,11 @@ import { WebSocket } from 'ws';
 import {
 	blockedTorName,
 	createTorMonitor,
+	openTorControl,
 	openValidationDns,
 	parseBootstrapPhase,
 	parseTorControl,
+	parseTorEvent,
 	parseTorProbe,
 	parseTorSocks5,
 	probeTorCircuit,
@@ -390,23 +392,97 @@ test('monitor through the control port: down, bootstrapping, ready, down, ready 
 	assert.equal(state.via, 'control');
 	assert.equal(monitor.accepting(), true);
 
-	// Tor's SOCKS listener goes away: down at once, and back again
+	// what it knows comes from Tor's events on one connection: nothing is
+	// asked again while it is open, however often the page asks
+	assert.ok(control.tor.seen.includes('SETEVENTS'));
+	const connections = control.tor.connections;
+	const seen = control.tor.seen.length;
+	for (let i = 0; i < 50; i++) monitor.refresh();
+	await pause(400);
+	assert.equal(control.tor.connections, connections, 'one connection');
+	assert.equal(control.tor.seen.length, seen, 'no command while it is open');
+	// an event says the circuit is gone, and another that it is back
+	control.tor.circuit = false;
+	await waitUntil(monitor.snapshot, (s) => s.state === 'bootstrapping');
+	control.tor.circuit = true;
+	await waitUntil(monitor.snapshot, (s) => s.state === 'ready');
+	// the SOCKS listener goes while the control port still speaks: its
+	// greeting (local, no circuit) says so
 	await socks.close();
-	await waitUntil(monitor.snapshot, (s) => s.state === 'down');
+	await waitUntil(monitor.snapshot, (s) => s.state === 'down', 1000);
+	assert.equal(monitor.accepting(), false);
 	await socks.listen(socksPort);
+	await waitUntil(monitor.snapshot, (s) => s.state === 'ready');
+	assert.equal(control.tor.connections, connections, 'the same connection');
+	// Tor stops (its control connection closes with it): down at once, and
+	// back again when it starts
+	await socks.close();
+	await control.close();
+	await waitUntil(monitor.snapshot, (s) => s.state === 'down', 1000);
+	await socks.listen(socksPort);
+	await control.listen(controlPort);
 	await waitUntil(monitor.snapshot, (s) => s.state === 'ready');
 	assert.deepEqual(
 		changes.filter((s, i) => s !== changes[i - 1]),
-		['down', 'bootstrapping', 'ready', 'down', 'ready'],
+		[
+			'down',
+			'bootstrapping',
+			'ready',
+			'bootstrapping',
+			'ready',
+			'down',
+			'ready',
+			'down',
+			'ready',
+		],
 	);
-	// polling cannot make it check more than once per check
-	const seen = control.tor.seen.length;
-	for (let i = 0; i < 50; i++) monitor.refresh();
-	await pause(20);
-	assert.ok(
-		control.tor.seen.length - seen <= 12,
-		'one check in flight at a time',
+});
+
+test('control events: bootstrap, circuit and network liveness parse', () => {
+	assert.deepEqual(
+		parseTorEvent(
+			'650 STATUS_CLIENT NOTICE BOOTSTRAP PROGRESS=85 TAG=ap_conn SUMMARY="Connecting to a relay to build circuits"',
+		),
+		{ progress: 85, summary: 'Connecting to a relay to build circuits' },
 	);
+	assert.deepEqual(
+		parseTorEvent('650 STATUS_CLIENT NOTICE CIRCUIT_ESTABLISHED'),
+		{ circuit: true },
+	);
+	assert.deepEqual(
+		parseTorEvent(
+			'650 STATUS_CLIENT NOTICE CIRCUIT_NOT_ESTABLISHED REASON=CLOCK_JUMPED',
+		),
+		{ circuit: false },
+	);
+	assert.deepEqual(parseTorEvent('650 NETWORK_LIVENESS DOWN'), {
+		live: false,
+	});
+	assert.equal(parseTorEvent('650 STATUS_GENERAL NOTICE CLOCK_SKEW'), null);
+});
+
+test('control connection: the network going away and coming back', async () => {
+	const control = fakeControl();
+	const port = await control.listen();
+	cleanups.push(() => control.close());
+	control.tor.progress = 100;
+	control.tor.circuit = true;
+	const session = await openTorControl({ host: '127.0.0.1', port });
+	cleanups.push(() => session.close());
+	assert.equal(session.phase.circuit, true);
+	control.tor.live = false;
+	await waitUntil(
+		() => session.phase,
+		(phase) => phase.circuit === false && phase.live === false,
+	);
+	control.tor.live = true;
+	await waitUntil(
+		() => session.phase,
+		(phase) => phase.circuit === true && phase.live === true,
+	);
+	const closed = new Promise((resolve) => session.once('close', resolve));
+	await control.close();
+	await closed;
 });
 
 test('monitor without a control port: a CONNECT through SOCKS proves a circuit', async () => {
@@ -458,6 +534,62 @@ test('monitor without a control port: a CONNECT through SOCKS proves a circuit',
 	blind.stop();
 	assert.equal(blind.snapshot().state, 'unknown');
 	assert.equal(blind.accepting(), true);
+});
+
+test('monitor without a control port: traffic is the signal, the probe runs when idle or after failures', async () => {
+	let circuits = true;
+	const socks = fakeSocks({ refuse: () => !circuits });
+	const port = await socks.listen();
+	cleanups.push(() => socks.close());
+	const counters = { out: 0, streams: 0 };
+	let flowing = false;
+	let stalling = false;
+	const monitor = createTorMonitor({
+		socks: { host: '127.0.0.1', port },
+		probe: parseTorProbe('probe.torproject.org:443'),
+		traffic: async () => {
+			if (flowing) counters.out += 100;
+			if (flowing || stalling) counters.streams++;
+			return { ...counters };
+		},
+		fastMs: 30,
+		slowMs: 30,
+		probeFastMs: 60,
+		probeSlowMs: 600,
+		stallMs: 200,
+		minMs: 0,
+		log: () => {},
+	});
+	cleanups.push(() => monitor.stop());
+	await monitor.check();
+	// nothing known: probed at once
+	await waitUntil(monitor.snapshot, (s) => s.state === 'ready');
+	assert.equal(monitor.probes(), 1);
+	// traffic flows: no probe, however long
+	flowing = true;
+	await waitUntil(monitor.snapshot, (s) => s.via === 'traffic');
+	const probes = monitor.probes();
+	await pause(900);
+	assert.equal(monitor.probes(), probes, 'no probe while traffic flows');
+	assert.equal(monitor.snapshot().state, 'ready');
+	// idle: one probe after probeSlowMs
+	flowing = false;
+	await waitUntil(
+		() => monitor.probes(),
+		(count) => count > probes,
+		2000,
+	);
+	// streams that get nothing back while circuits fail: probed, and two
+	// failures are an outage
+	circuits = false;
+	stalling = true;
+	await waitUntil(monitor.snapshot, (s) => s.state === 'bootstrapping', 3000);
+	// traffic again is Tor working again
+	stalling = false;
+	circuits = true;
+	flowing = true;
+	await waitUntil(monitor.snapshot, (s) => s.state === 'ready', 3000);
+	assert.ok(socks.requests.every((r) => r.hostname === 'probe.torproject.org'));
 });
 
 test('real holyWisp uses fake SOCKS for .onion TCP; rejects UDP and IP literals', async () => {
@@ -797,14 +929,17 @@ test('demo relay refuses until Tor is ready, drops its connections when Tor goes
 		(r) => r.some((q) => q.hostname === 'up.onion'),
 	);
 
-	// Tor goes away: its connections close at once, new ones are refused
+	// Tor goes away (its SOCKS and control ports with it): its connections
+	// close at once, new ones are refused
 	await socks.close();
+	await control.close();
 	await until((s) => s.state === 'down');
 	await closed;
 	await assert.rejects(openWisp(wispURL), /503/);
 
 	// and comes back: no restart of the server, a new connection works
 	await socks.listen(socksPort);
+	await control.listen(controlPort);
 	await until((s) => s.state === 'ready');
 	const again = await openWisp(wispURL);
 	again.ws.send(

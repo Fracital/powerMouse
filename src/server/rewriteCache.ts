@@ -28,6 +28,8 @@
 // its text for its functions' sources (src/functionSource.ts), none of a
 // script of 4 MB or more; and there could be 300, which Discord's 450 to
 // 700 scripts pushed out of each other on every visit.
+import { storeName } from '../profile';
+
 const STORE = 'stomp-rewrite-cache';
 const LIMIT = 3000;
 const ENTRY_LIMIT = 48 * 1024 * 1024;
@@ -52,7 +54,7 @@ export type RewriteCacheOutcome = 'hit' | 'miss' | 'skip';
 export class RewriteCache {
 	#store?: Promise<Cache>;
 	#open(): Promise<Cache> {
-		return (this.#store ??= caches.open(STORE));
+		return (this.#store ??= caches.open(storeName(STORE)));
 	}
 	#request(key: string) {
 		return new Request(`https://rewrite-cache.invalid/${key}`);
@@ -287,6 +289,6 @@ export class RewriteCache {
 		this.#store = undefined;
 		this.#loading = undefined;
 		this.#total = 0;
-		await caches.delete(STORE);
+		await caches.delete(storeName(STORE));
 	}
 }

@@ -17,6 +17,7 @@ import {
 	passkeyCommand,
 	runCeremony,
 } from '../passkeys/authenticator';
+import { storeName } from '../profile';
 import { nestedMarkOfKind, nestedTopOf } from '../rewriteHTML';
 import { addRouteScope, proxyOrigins, unwrapRoute } from '../routeURL';
 import { SW_ROUTE, type ApiReply } from '../serviceWorkerTypes';
@@ -2748,7 +2749,7 @@ const keptBundles = new Set<string>();
 let keptBundlesRead: Promise<void> | undefined;
 function readKeptBundles() {
 	keptBundlesRead ??= (async () => {
-		for (const request of await (await caches.open(BUNDLES)).keys())
+		for (const request of await (await caches.open(storeName(BUNDLES))).keys())
 			keptBundles.add(request.url);
 	})().catch(() => {
 		// no store: every request goes to the browser's fetch
@@ -2778,7 +2779,7 @@ function keepBundle(url: string, hash: string): Promise<void> {
 			if ((await fileHash(await response.arrayBuffer())) !== hash) return;
 			// a Response the browser fetched, which has its URL: Chrome keeps
 			// a code cache only for such an entry
-			await (await caches.open(BUNDLES)).put(url, copy);
+			await (await caches.open(storeName(BUNDLES))).put(url, copy);
 			keptBundles.add(url);
 		})()
 			.catch(() => {
@@ -2837,7 +2838,9 @@ function documentBundle(
 		event.respondWith(
 			(async () => {
 				try {
-					const kept = await (await caches.open(BUNDLES)).match(request);
+					const kept = await (
+						await caches.open(storeName(BUNDLES))
+					).match(request);
 					if (kept) return kept;
 				} catch (error) {
 					// the store went (storage cleared): the network's answer
@@ -2859,7 +2862,7 @@ function documentBundle(
  * file): every other build's goes
  */
 async function sweepBundles() {
-	const store = await caches.open(BUNDLES);
+	const store = await caches.open(storeName(BUNDLES));
 	const own = new Set(
 		OWN_BUNDLES.map(([, hash]) => (hash ? `?${encodeURIComponent(hash)}` : '')),
 	);

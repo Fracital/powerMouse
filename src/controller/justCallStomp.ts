@@ -55,6 +55,7 @@
 
 import { assetName } from '../config';
 import { navigationAnswer } from '../navigationAnswer';
+import { storeName } from '../profile';
 import {
 	CALL_MESSAGE,
 	CALL_WAIT_MS,
@@ -428,7 +429,8 @@ export class CalledFrame {
 		public readonly frame: Frame,
 		key: string,
 	) {
-		this.#key = KEPT_PREFIX + key;
+		// this tab's, in the controller's profile (src/profile.ts)
+		this.#key = storeName(KEPT_PREFIX + key);
 		frame.addEventListener('navigate', (event) => {
 			const entry = this.entries[this.index];
 			const title = (event as CustomEvent<{ title?: string }>).detail?.title;

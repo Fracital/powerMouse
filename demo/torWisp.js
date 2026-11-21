@@ -7,8 +7,10 @@
 //
 // A SOCKS greeting only proves that something listens on the port. Whether
 // Tor has bootstrapped and builds circuits is watched by createTorMonitor:
-// Tor's control port (`GETINFO status/bootstrap-phase`) when one is
-// configured, else a bounded CONNECT through SOCKS to a probe host. The relay
+// Tor's control port's events over one connection kept open (STATUS_CLIENT's
+// BOOTSTRAP and CIRCUIT_ESTABLISHED, as Brave's Tor launcher follows them)
+// when one is configured, else the relay's own traffic, and a bounded
+// CONNECT through SOCKS to a probe host only when there is none. The relay
 // takes new Wisp connections only while that says ready (demo/server.js).
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createSocket } from 'node:dgram';
@@ -270,8 +272,12 @@ const CONTROL_SERVER_KEY =
 const CONTROL_CLIENT_KEY =
 	'Tor safe cookie authentication controller-to-server hash';
 
-/** A Tor control-protocol reply's lines, as `{ code, lines }`. */
-function controlReader(socket, finish) {
+/**
+ * A Tor control-protocol reader: each reply's lines as `{ code, lines }` to
+ * the command that waits for it, and each asynchronous event (650) to
+ * `onEvent` as its lines
+ */
+function controlReader(socket, finish, onEvent = () => {}) {
 	let buffer = '';
 	let lines = [];
 	const waiting = [];
@@ -289,7 +295,8 @@ function controlReader(socket, finish) {
 			if (/^\d{3} /.test(line) || /^\d{3}$/.test(line)) {
 				const reply = { code: Number(line.slice(0, 3)), lines };
 				lines = [];
-				waiting.shift()?.(reply);
+				if (reply.code === 650) onEvent(reply.lines);
+				else waiting.shift()?.(reply);
 			}
 		}
 	});
@@ -322,12 +329,73 @@ export function parseBootstrapPhase(value) {
 }
 
 /**
- * Ask Tor's control port how far it bootstrapped. Authenticates with what
- * PROTOCOLINFO offers: NULL, SAFECOOKIE (the cookie file is read, never
- * sent: only an HMAC of it is, after the port proved it knows the cookie
- * too) or HASHEDPASSWORD with `password`. The plain COOKIE method is not
- * used, since it would send the file's bytes to whoever listens there.
+ * Authenticate on a control connection with what PROTOCOLINFO offers: NULL,
+ * SAFECOOKIE (the cookie file is read, never sent: only an HMAC of it is,
+ * after the port proved it knows the cookie too) or HASHEDPASSWORD with
+ * `password`. The plain COOKIE method is not used, since it would send the
+ * file's bytes to whoever listens there.
  */
+async function authenticate(ask, { password, cookieFile }) {
+	const info = await ask('PROTOCOLINFO 1');
+	if (info.code !== 250) throw new Error('PROTOCOLINFO refused');
+	const auth = info.lines.find((line) => /^250-AUTH /.test(line)) ?? '';
+	const methods = (/METHODS=([A-Z,]+)/.exec(auth)?.[1] ?? '').split(',');
+	const offeredFile = /COOKIEFILE="((?:[^"\\]|\\.)*)"/.exec(auth)?.[1];
+	let command;
+	if (methods.includes('NULL')) command = 'AUTHENTICATE';
+	else if (methods.includes('HASHEDPASSWORD') && password)
+		command = `AUTHENTICATE ${quoted(password)}`;
+	else if (methods.includes('SAFECOOKIE')) {
+		const path = cookieFile || offeredFile?.replace(/\\(.)/g, '$1');
+		if (!path || !isAbsolute(path)) throw new Error('no control cookie file');
+		const cookie = await readFile(path);
+		if (cookie.length !== 32) throw new Error('not a Tor cookie file');
+		const clientNonce = randomBytes(32);
+		const challenge = await ask(
+			`AUTHCHALLENGE SAFECOOKIE ${clientNonce.toString('hex')}`,
+		);
+		const hash = /SERVERHASH=([0-9A-F]{64})/i.exec(challenge.lines[0])?.[1];
+		const nonce = /SERVERNONCE=([0-9A-F]{64})/i.exec(challenge.lines[0])?.[1];
+		if (challenge.code !== 250 || !hash || !nonce)
+			throw new Error('AUTHCHALLENGE refused');
+		const message = Buffer.concat([
+			cookie,
+			clientNonce,
+			Buffer.from(nonce, 'hex'),
+		]);
+		const expected = createHmac('sha256', CONTROL_SERVER_KEY)
+			.update(message)
+			.digest();
+		if (!timingSafeEqual(expected, Buffer.from(hash, 'hex')))
+			throw new Error('control port does not know the cookie');
+		command = `AUTHENTICATE ${createHmac('sha256', CONTROL_CLIENT_KEY)
+			.update(message)
+			.digest('hex')}`;
+	} else throw new Error('no usable control authentication');
+	if ((await ask(command)).code !== 250)
+		throw new Error('control authentication failed');
+}
+
+/** `GETINFO status/bootstrap-phase` and `status/circuit-established` */
+async function askBootstrap(ask) {
+	const phase = await ask('GETINFO status/bootstrap-phase');
+	const value = phase.lines
+		.find((line) => line.startsWith('250-status/bootstrap-phase='))
+		?.slice('250-status/bootstrap-phase='.length);
+	const bootstrap = phase.code === 250 && value && parseBootstrapPhase(value);
+	if (!bootstrap) throw new Error('no bootstrap phase');
+	// older Tor may not know it: then the phase alone says
+	const circuit = await ask('GETINFO status/circuit-established');
+	const established = circuit.lines
+		.find((line) => line.startsWith('250-status/circuit-established='))
+		?.slice(-1);
+	return {
+		...bootstrap,
+		circuit: circuit.code === 250 && established ? established === '1' : null,
+	};
+}
+
+/** Ask Tor's control port once how far it bootstrapped (a fresh connection, bounded). */
 export async function queryTorControl(
 	control,
 	{ password = '', cookieFile = '', timeoutMs = 3000 } = {},
@@ -336,69 +404,116 @@ export async function queryTorControl(
 		const ask = controlReader(socket, finish);
 		socket.once('connect', async () => {
 			try {
-				const info = await ask('PROTOCOLINFO 1');
-				if (info.code !== 250) throw new Error('PROTOCOLINFO refused');
-				const auth = info.lines.find((line) => /^250-AUTH /.test(line)) ?? '';
-				const methods = (/METHODS=([A-Z,]+)/.exec(auth)?.[1] ?? '').split(',');
-				const offeredFile = /COOKIEFILE="((?:[^"\\]|\\.)*)"/.exec(auth)?.[1];
-				let command;
-				if (methods.includes('NULL')) command = 'AUTHENTICATE';
-				else if (methods.includes('HASHEDPASSWORD') && password)
-					command = `AUTHENTICATE ${quoted(password)}`;
-				else if (methods.includes('SAFECOOKIE')) {
-					const path = cookieFile || offeredFile?.replace(/\\(.)/g, '$1');
-					if (!path || !isAbsolute(path))
-						throw new Error('no control cookie file');
-					const cookie = await readFile(path);
-					if (cookie.length !== 32) throw new Error('not a Tor cookie file');
-					const clientNonce = randomBytes(32);
-					const challenge = await ask(
-						`AUTHCHALLENGE SAFECOOKIE ${clientNonce.toString('hex')}`,
-					);
-					const hash = /SERVERHASH=([0-9A-F]{64})/i.exec(
-						challenge.lines[0],
-					)?.[1];
-					const nonce = /SERVERNONCE=([0-9A-F]{64})/i.exec(
-						challenge.lines[0],
-					)?.[1];
-					if (challenge.code !== 250 || !hash || !nonce)
-						throw new Error('AUTHCHALLENGE refused');
-					const message = Buffer.concat([
-						cookie,
-						clientNonce,
-						Buffer.from(nonce, 'hex'),
-					]);
-					const expected = createHmac('sha256', CONTROL_SERVER_KEY)
-						.update(message)
-						.digest();
-					if (!timingSafeEqual(expected, Buffer.from(hash, 'hex')))
-						throw new Error('control port does not know the cookie');
-					command = `AUTHENTICATE ${createHmac('sha256', CONTROL_CLIENT_KEY)
-						.update(message)
-						.digest('hex')}`;
-				} else throw new Error('no usable control authentication');
-				if ((await ask(command)).code !== 250)
-					throw new Error('control authentication failed');
-				const phase = await ask('GETINFO status/bootstrap-phase');
-				const value = phase.lines
-					.find((line) => line.startsWith('250-status/bootstrap-phase='))
-					?.slice('250-status/bootstrap-phase='.length);
-				const bootstrap =
-					phase.code === 250 && value && parseBootstrapPhase(value);
-				if (!bootstrap) throw new Error('no bootstrap phase');
-				// older Tor may not know it: then the phase alone says
-				const circuit = await ask('GETINFO status/circuit-established');
-				const established = circuit.lines
-					.find((line) => line.startsWith('250-status/circuit-established='))
-					?.slice(-1);
+				await authenticate(ask, { password, cookieFile });
+				const phase = await askBootstrap(ask);
 				socket.write('QUIT\r\n');
-				finish(null, {
-					...bootstrap,
-					circuit:
-						circuit.code === 250 && established ? established === '1' : null,
-				});
+				finish(null, phase);
 			} catch (error) {
 				finish(error);
+			}
+		});
+	}).catch((error) => {
+		throw new Error(`Tor control port: ${error.message}`);
+	});
+}
+
+/**
+ * What one Tor control event changes of `{ progress, summary, circuit,
+ * live }`, or null for an event that says nothing of readiness. The events
+ * Brave's Tor launcher reads (STATUS_CLIENT's BOOTSTRAP,
+ * CIRCUIT_ESTABLISHED and CIRCUIT_NOT_ESTABLISHED) and NETWORK_LIVENESS.
+ */
+export function parseTorEvent(line) {
+	const text = String(line).replace(/^650[ -]/, '');
+	if (/^STATUS_CLIENT \S+ BOOTSTRAP\b/.test(text)) {
+		const phase = parseBootstrapPhase(text.replace(/^STATUS_CLIENT /, ''));
+		return phase && { progress: phase.progress, summary: phase.summary };
+	}
+	if (/^STATUS_CLIENT \S+ CIRCUIT_ESTABLISHED\b/.test(text))
+		return { circuit: true };
+	if (/^STATUS_CLIENT \S+ CIRCUIT_NOT_ESTABLISHED\b/.test(text))
+		return { circuit: false };
+	if (/^NETWORK_LIVENESS DOWN\b/.test(text)) return { live: false };
+	if (/^NETWORK_LIVENESS UP\b/.test(text)) return { live: true };
+	return null;
+}
+
+/**
+ * One control connection, kept open, as Brave's Tor launcher keeps its own
+ * (components/tor/tor_control.cc): authenticated, asked the bootstrap
+ * phase and whether a circuit is established once, then told of every
+ * change (`SETEVENTS STATUS_CLIENT NETWORK_LIVENESS`). Its `phase` is
+ * `{ progress, tag, summary, circuit, live }`; it emits `change` with it,
+ * and `close` once when the connection goes (Tor stopped). Setting up is
+ * bounded at `timeoutMs`; nothing is polled after.
+ */
+export function openTorControl(
+	control,
+	{ password = '', cookieFile = '', timeoutMs = 3000 } = {},
+) {
+	return new Promise((resolve, reject) => {
+		const session = new EventEmitter();
+		const socket = connect(control);
+		let open = false;
+		let closed = false;
+		const end = (error) => {
+			if (closed) return;
+			closed = true;
+			clearTimeout(timer);
+			socket.destroy();
+			if (open) session.emit('close');
+			else reject(error ?? new Error('closed'));
+		};
+		const timer = setTimeout(() => end(new Error('timed out')), timeoutMs);
+		timer.unref?.();
+		socket.once('error', (error) => end(error));
+		socket.once('close', () => end());
+		const pending = [];
+		const apply = (lines) => {
+			const change = parseTorEvent(lines[0] ?? '');
+			if (!change) return;
+			if (!open) return pending.push(change);
+			// a circuit's word after the network came back is asked again
+			if (change.live === true && session.phase.circuit === false)
+				ask('GETINFO status/circuit-established')
+					.then((reply) => {
+						const value = reply.lines
+							.find((line) =>
+								line.startsWith('250-status/circuit-established='),
+							)
+							?.slice(-1);
+						if (value) update({ circuit: value === '1' });
+					})
+					.catch(() => {});
+			update(change.live === false ? { circuit: false, live: false } : change);
+		};
+		const update = (change) => {
+			const next = { ...session.phase, ...change };
+			if (JSON.stringify(next) === JSON.stringify(session.phase)) return;
+			session.phase = next;
+			session.emit('change', next);
+		};
+		const ask = controlReader(socket, end, apply);
+		session.close = () => {
+			if (!closed) socket.write('QUIT\r\n');
+			end();
+		};
+		socket.once('connect', async () => {
+			try {
+				await authenticate(ask, { password, cookieFile });
+				// subscribed first: a change between the answer and the
+				// subscription is not lost (Brave asks circuit-established
+				// after it for the same reason)
+				const events = await ask('SETEVENTS STATUS_CLIENT NETWORK_LIVENESS');
+				if (events.code !== 250) throw new Error('SETEVENTS refused');
+				session.phase = { ...(await askBootstrap(ask)), live: true };
+				open = true;
+				clearTimeout(timer);
+				socket.setKeepAlive(true, 30000);
+				for (const change of pending.splice(0)) update(change);
+				resolve(session);
+			} catch (error) {
+				end(error);
 			}
 		});
 	}).catch((error) => {
@@ -411,13 +526,28 @@ export async function queryTorControl(
  * `down` (no SOCKS listener, or the relay is not running), `bootstrapping`
  * (Tor answers but has no working circuit yet; `progress` is Tor's when the
  * control port says), `ready`, or `unknown` (Tor answers and nothing more
- * can be learnt: no control port and the probe turned off). Checks are
- * bounded: one at a time, every `fastMs` until ready and `slowMs` after
- * (a SOCKS greeting and, if set, the control port: both on this machine),
- * the circuit probe through Tor at most every `probeFastMs` until ready and
- * `probeSlowMs` after. `refresh()` asks for a check now, at most once per
- * `minMs`, so a page that polls cannot make it probe more. It emits
- * `change` with the new snapshot.
+ * can be learnt: no control port and the probe turned off).
+ *
+ * With a control port it follows Tor's events over one connection kept
+ * open (openTorControl), as Brave does, and asks it nothing while it is
+ * open: only the SOCKS listener on this machine is greeted every `slowMs`
+ * (no circuit, no traffic through Tor), since a Tor whose control port
+ * speaks can still have lost it. When the control connection closes, Tor
+ * is checked again at once and the connection opened again every `fastMs`
+ * until it is back.
+ *
+ * Without one, the relay's own traffic is the signal (`traffic`, the
+ * relay's counters: bytes that came back from a destination went through a
+ * Tor circuit), read every `slowMs` from the relay on this machine. The
+ * circuit probe through Tor runs only when that says nothing: until the
+ * first evidence (every `probeFastMs`), when streams were opened and no
+ * byte came back for `stallMs` (failures), and when nothing went through
+ * for `probeSlowMs` (idle). A SOCKS greeting every `fastMs` until ready and
+ * `slowMs` after says whether Tor answers at all.
+ *
+ * Checks are bounded and one at a time; `refresh()` asks for one now, at
+ * most once per `minMs`, so a page that polls cannot make it probe more.
+ * It emits `change` with the new snapshot.
  */
 export function createTorMonitor({
 	socks,
@@ -425,12 +555,14 @@ export function createTorMonitor({
 	password = '',
 	cookieFile = '',
 	probe = null,
+	traffic = null,
 	relayRunning = () => true,
 	fastMs = 2000,
 	slowMs = 5000,
 	probeFastMs = 10000,
 	probeSlowMs = 300000,
 	probeTimeoutMs = 30000,
+	stallMs = 20000,
 	minMs = 1000,
 	log = (line) => console.log(line),
 } = {}) {
@@ -449,6 +581,14 @@ export function createTorMonitor({
 	let lastProbe = { at: 0, ok: false };
 	let probeFailures = 0;
 	let controlWarned = false;
+	// the control connection, while it is open
+	let session = null;
+	let opening = null;
+	// the relay's counters as last read, and what they said
+	let counted = null;
+	let workedAt = 0;
+	let stalledSince = 0;
+	let probes = 0;
 
 	const set = (next) => {
 		const changed =
@@ -466,13 +606,62 @@ export function createTorMonitor({
 		monitor.emit('change', monitor.snapshot());
 	};
 
+	const fromControl = (phase) => {
+		const ready = phase.progress === 100 && phase.circuit !== false;
+		set({
+			state: ready ? 'ready' : 'bootstrapping',
+			progress: phase.progress,
+			summary:
+				phase.live === false
+					? 'Tor lost the network'
+					: phase.progress === 100 && phase.circuit === false
+						? 'No Tor circuit established'
+						: phase.summary,
+			via: 'control',
+		});
+	};
+
+	/** open the control connection if it is not, and follow it */
+	async function openControl() {
+		if (session) return session;
+		opening ??= openTorControl(control, { password, cookieFile })
+			.then((opened) => {
+				controlWarned = false;
+				if (stopped) {
+					opened.close();
+					return null;
+				}
+				session = opened;
+				opened.on('change', (phase) => {
+					if (session === opened && !stopped) fromControl(phase);
+				});
+				opened.once('close', () => {
+					if (session !== opened) return;
+					session = null;
+					// Tor stopped, or restarts: what is left is asked now
+					if (!stopped) check();
+				});
+				return opened;
+			})
+			.catch((error) => {
+				// a broken control port setting is the operator's to fix: say
+				// so once (the message names no secret), and fall back to the
+				// probe, or to not knowing
+				if (!controlWarned) console.warn(error.message);
+				controlWarned = true;
+				return null;
+			})
+			.finally(() => {
+				opening = null;
+			});
+		return opening;
+	}
+
 	// the probe runs beside the checks: it can take as long as a circuit
 	// does, and a check must not wait for it
 	const circuitProbe = () => {
-		const due =
-			Date.now() - lastProbe.at >=
-			(lastProbe.ok && state.state === 'ready' ? probeSlowMs : probeFastMs);
-		if (probing || !due) return;
+		if (probing) return;
+		probes++;
 		probing = probeTorCircuit(socks, probe, probeTimeoutMs).then(
 			() => true,
 			() => false,
@@ -481,9 +670,43 @@ export function createTorMonitor({
 			probing = null;
 			lastProbe = { at: Date.now(), ok };
 			probeFailures = ok ? 0 : probeFailures + 1;
+			if (ok) stalledSince = 0;
 			if (!stopped) check();
 		});
 	};
+
+	/** what the relay's counters say since the last read */
+	async function readTraffic() {
+		if (!traffic) return;
+		let now;
+		try {
+			now = await traffic();
+		} catch {
+			return;
+		}
+		if (!now) return;
+		if (counted && now.out > counted.out) {
+			// bytes came back from a destination: a circuit carried them
+			workedAt = Date.now();
+			probeFailures = 0;
+			stalledSince = 0;
+		} else if (counted && now.streams > counted.streams && !stalledSince)
+			stalledSince = Date.now();
+		counted = now;
+	}
+
+	/** whether the circuit probe is due (see createTorMonitor) */
+	function probeDue() {
+		const now = Date.now();
+		const evidence = Math.max(workedAt, lastProbe.ok ? lastProbe.at : 0);
+		// nothing known yet, or the last probe failed: every probeFastMs
+		if (!evidence || probeFailures) return now - lastProbe.at >= probeFastMs;
+		// streams that got nothing back: a probe says whether Tor is why
+		if (stalledSince && now - stalledSince >= stallMs)
+			return now - lastProbe.at >= probeFastMs;
+		// idle: nothing went through for a while
+		return now - evidence >= probeSlowMs;
+	}
 
 	async function once() {
 		if (!relayRunning())
@@ -493,12 +716,16 @@ export function createTorMonitor({
 				summary: 'Tor relay is not running',
 				via: 'relay',
 			});
+		// the SOCKS listener answers a greeting (local, no circuit): a Tor
+		// whose control port still speaks may have lost it
 		try {
 			await probeTorSocks5(socks);
 		} catch {
 			// a Tor that comes back proves its circuits again
 			lastProbe = { at: 0, ok: false };
 			probeFailures = 0;
+			workedAt = 0;
+			stalledSince = 0;
 			return set({
 				state: 'down',
 				progress: null,
@@ -506,42 +733,33 @@ export function createTorMonitor({
 				via: 'socks',
 			});
 		}
+		// Tor's own word on its bootstrap and circuits, while it speaks:
+		// nothing to ask
+		if (session) return fromControl(session.phase);
 		if (control) {
-			try {
-				const phase = await queryTorControl(control, { password, cookieFile });
-				controlWarned = false;
-				const ready = phase.progress === 100 && phase.circuit !== false;
-				return set({
-					state: ready ? 'ready' : 'bootstrapping',
-					progress: phase.progress,
-					summary:
-						phase.progress === 100 && phase.circuit === false
-							? 'No Tor circuit established'
-							: phase.summary,
-					via: 'control',
-				});
-			} catch (error) {
-				// a broken control port setting is the operator's to fix: say
-				// so once (the message names no secret), and fall back to the
-				// probe, or to not knowing
-				if (!controlWarned) console.warn(error.message);
-				controlWarned = true;
-			}
+			const opened = await openControl();
+			if (opened) return fromControl(opened.phase);
 		}
 		if (probe) {
-			circuitProbe();
+			await readTraffic();
+			if (probeDue()) circuitProbe();
+			const worked = workedAt > 0 || lastProbe.ok;
 			// one failed probe of a working Tor is not yet an outage
-			const ok = lastProbe.ok || (state.state === 'ready' && probeFailures < 2);
+			const ok =
+				(worked && probeFailures === 0) ||
+				(state.state === 'ready' && probeFailures < 2);
+			const byTraffic = workedAt > 0 && workedAt >= lastProbe.at;
 			return set({
-				state: lastProbe.at && ok ? 'ready' : 'bootstrapping',
+				state: ok ? 'ready' : 'bootstrapping',
 				progress: null,
-				summary:
-					lastProbe.at && ok
-						? 'Tor circuit works'
-						: lastProbe.at
-							? 'Waiting for a Tor circuit'
-							: 'Checking for a Tor circuit',
-				via: 'probe',
+				summary: ok
+					? byTraffic
+						? 'Tor carries traffic'
+						: 'Tor circuit works'
+					: lastProbe.at
+						? 'Waiting for a Tor circuit'
+						: 'Checking for a Tor circuit',
+				via: ok && byTraffic ? 'traffic' : 'probe',
 			});
 		}
 		set({
@@ -563,7 +781,7 @@ export function createTorMonitor({
 				if (stopped) return;
 				timer = setTimeout(
 					check,
-					state.state === 'ready' || state.state === 'unknown'
+					state.state === 'ready' || state.state === 'unknown' || session
 						? slowMs
 						: fastMs,
 				);
@@ -574,19 +792,23 @@ export function createTorMonitor({
 
 	monitor.snapshot = () => ({
 		...state,
-		checked: checkedAt ? Date.now() - checkedAt : null,
+		checked: session ? 0 : checkedAt ? Date.now() - checkedAt : null,
 	});
 	monitor.refresh = () => {
-		if (!running && Date.now() - checkedAt >= minMs) check();
+		if (!running && !session && Date.now() - checkedAt >= minMs) check();
 		return monitor.snapshot();
 	};
 	monitor.check = check;
+	/** how many circuit probes were sent (for the tests) */
+	monitor.probes = () => probes;
 	/** New Wisp connections are taken only in these states. */
 	monitor.accepting = () =>
 		state.state === 'ready' || state.state === 'unknown';
 	monitor.stop = () => {
 		stopped = true;
 		clearTimeout(timer);
+		session?.close();
+		session = null;
 	};
 	return monitor;
 }
@@ -710,6 +932,14 @@ export async function startTorWisp({
 		password: controlPassword,
 		cookieFile: controlCookie,
 		probe: probeTarget,
+		// what came back through the relay's streams (holyWisp's counters,
+		// on this machine): real traffic is the readiness signal without a
+		// control port
+		traffic: async () => {
+			if (!relay.isRunning) return null;
+			const stats = await relay.stats();
+			return { out: stats.bytes.out, streams: stats.streams.total };
+		},
 		relayRunning: () => relay.isRunning,
 		...monitorOptions,
 	});

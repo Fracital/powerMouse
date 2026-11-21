@@ -6880,6 +6880,8 @@ export function registerRewrites(
 			return {
 				directory: this.directory,
 				scope: init.scope,
+				// whose stores the pages' native ones are (src/profile.ts)
+				...(init.profile ? { profile: init.profile } : {}),
 				codec: codecType(this.codec),
 				frameAncestors: init.frameAncestors,
 				...(init.openTab ? { openTab: true } : {}),

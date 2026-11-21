@@ -155,18 +155,16 @@ if (DIAL && !ASSETS.callPage) ASSETS.callPage = DIAL.page;
 let ISOLATED = !JUST_CALL && REMOTE_ISOLATION;
 // The Tor choice is for STomp's proxied traffic, not the host page. A
 // separate Wisp relay must route TCP through Tor; with no relay, a saved Tor
-// choice is an error rather than a silent direct connection.
-const TOR_KEY = 'stomp-demo:tor';
-const TOR_REQUESTED = (() => {
-	let requested = false;
-	try {
-		requested = localStorage.getItem(TOR_KEY) === '1';
-	} catch {}
-	const query = new URLSearchParams(location.search);
-	if (query.has('tor')) return query.get('tor') !== '0';
-	if (query.has('notor')) return false;
-	return requested;
-})();
+// choice is an error rather than a silent direct connection. Tor mode is a
+// profile of its own (pm/profile.js, docs/tor.md "Profiles"): STomp's
+// stores and the page's own data apart from the normal mode's, and gone
+// once no tab is in Tor mode.
+const TOR_KEY = PMProfile.TOR_KEY;
+const TOR_REQUESTED = PMProfile.tor;
+const PROFILE = PMProfile.id;
+// what the page keeps of its own (settings, bookmarks, history): in Tor
+// mode this page's, read through to the normal mode's (pm/profile.js)
+const UI_STORAGE = PMProfile.storage;
 const TOR_WISP = (() => {
 	if (typeof CFG.torWisp !== 'string' || !CFG.torWisp) return null;
 	try {
@@ -186,9 +184,10 @@ const TOR_WISP = (() => {
 	}
 })();
 // A separate service worker scope prevents an old controller from taking a
-// new Tor-mode route. The origin's persistent stores are still shared, so
-// the mode does not promise Tor Browser's cookie or storage isolation. A
-// change reloads the host rather than leaving direct requests in flight.
+// new Tor-mode route, and its worker keeps the Tor profile's stores (the
+// cookie jar, storage, caches, extensions: src/profile.ts) apart from the
+// normal mode's. A change reloads the host rather than leaving direct
+// requests in flight.
 const DIRECTORY = DIAL
 	? TOR_REQUESTED
 		? DIAL.torDirectory
@@ -196,10 +195,9 @@ const DIRECTORY = DIAL
 	: TOR_REQUESTED
 		? '/stomp-tor/'
 		: '/stomp/';
-// HTTP cache in the service worker, on by default; ?nocache turns it off for a
-// visit
-const CACHE =
-	!TOR_REQUESTED && !new URLSearchParams(location.search).has('nocache');
+// HTTP cache in the service worker, on by default (Tor mode's is its
+// profile's, gone with it); ?nocache turns it off for a visit
+const CACHE = !new URLSearchParams(location.search).has('nocache');
 // emulated service workers for the proxied pages (docs/service-workers.md),
 // on by default; ?nosw turns them off for a visit (?sw=<ms> sets how long a
 // worker may take to answer, for the suites)
@@ -231,7 +229,9 @@ const SITE_POOL = (() => {
 	const ports = JUST_CALL ? CFG.contentSlots : CFG.sitePool;
 	if (!Array.isArray(ports) || !ports.length) return null;
 	const query = new URLSearchParams(location.search);
-	if (query.has('nopool')) return null;
+	// Tor mode has none: a slot is another origin, whose stores the Tor
+	// profile's wipe on this one cannot reach
+	if (query.has('nopool') || TOR_REQUESTED) return null;
 	const proxy = ISOLATED ? new URL(PROXY_ORIGIN) : location;
 	return ports.map((port) => `${proxy.protocol}//${proxy.hostname}:${port}`);
 })();
@@ -244,7 +244,7 @@ const ADBLOCK = (() => {
 	const query = new URLSearchParams(location.search);
 	let on = CFG.adblock !== false;
 	try {
-		const saved = localStorage.getItem('stomp-demo:adblock');
+		const saved = UI_STORAGE.getItem('stomp-demo:adblock');
 		if (saved !== null) on = saved === '1';
 	} catch {}
 	if (query.has('adblock')) on = true;
@@ -261,7 +261,7 @@ const ADBLOCK = (() => {
 const SHIELDS_KEY = 'stomp-demo:shields';
 function loadShields() {
 	try {
-		const raw = JSON.parse(localStorage.getItem(SHIELDS_KEY));
+		const raw = JSON.parse(UI_STORAGE.getItem(SHIELDS_KEY));
 		return Array.isArray(raw) ? raw : [];
 	} catch {
 		return [];
@@ -269,7 +269,7 @@ function loadShields() {
 }
 function persistShields() {
 	try {
-		localStorage.setItem(
+		UI_STORAGE.setItem(
 			SHIELDS_KEY,
 			JSON.stringify(controller.shields.all().map(keptShields)),
 		);
@@ -476,7 +476,7 @@ new ResizeObserver(() => {
 
 function preferredTransport() {
 	try {
-		const saved = localStorage.getItem('stomp-demo:transport');
+		const saved = UI_STORAGE.getItem('stomp-demo:transport');
 		if (saved in transports) return saved;
 	} catch {}
 	return 'epoxy';
@@ -484,7 +484,7 @@ function preferredTransport() {
 
 function rememberTransport(name) {
 	try {
-		localStorage.setItem('stomp-demo:transport', name);
+		UI_STORAGE.setItem('stomp-demo:transport', name);
 	} catch {}
 	transportSelect.value = name;
 }
@@ -653,7 +653,7 @@ const verifiedIn = (authData) => (new Uint8Array(authData)[32] & 0x04) !== 0;
  */
 async function verifyUser() {
 	try {
-		const kept = localStorage.getItem(UNLOCK_KEY);
+		const kept = UI_STORAGE.getItem(UNLOCK_KEY);
 		if (kept) {
 			try {
 				const assertion = await navigator.credentials.get({
@@ -670,7 +670,7 @@ async function verifyUser() {
 				// a declined verification is no verification. The platform may
 				// no longer hold the credential (the user removed it), which reads
 				// the same: the next verification makes one again
-				localStorage.removeItem(UNLOCK_KEY);
+				UI_STORAGE.removeItem(UNLOCK_KEY);
 				return false;
 			}
 		}
@@ -696,7 +696,7 @@ async function verifyUser() {
 				timeout: 120000,
 			},
 		});
-		localStorage.setItem(UNLOCK_KEY, toB64URL(made.rawId));
+		UI_STORAGE.setItem(UNLOCK_KEY, toB64URL(made.rawId));
 		return verifiedIn(made.response.getAuthenticatorData());
 	} catch (error) {
 		return false;
@@ -1538,6 +1538,7 @@ async function startController(name) {
 		controller = new StompRemoteController({
 			proxyOrigin: PROXY_ORIGIN,
 			directory: DIRECTORY,
+			...(PROFILE && { profile: PROFILE, freshProfile: torSession.fresh }),
 			assets: ASSETS,
 			transport: transports[name](),
 			codec: 'xor',
@@ -1560,7 +1561,7 @@ async function startController(name) {
 		const registration = OFFLINE
 			? await OFFLINE.ready
 			: await navigator.serviceWorker.register(
-					`${DIRECTORY}${assetName('serviceWorker')}`,
+					`${DIRECTORY}${assetName('serviceWorker')}${StompController.profileWorker(PROFILE)}`,
 					{ scope: DIRECTORY, updateViaCache: 'none' },
 				);
 		setStatus(`Loading ${name} transport…`);
@@ -1568,6 +1569,7 @@ async function startController(name) {
 			serviceworker: registration,
 			transport: transports[name](),
 			directory: DIRECTORY,
+			...(PROFILE && { profile: PROFILE }),
 			assets: ASSETS,
 			codec: 'xor',
 			// the dialing mode's call page and calls exist for this
@@ -1607,6 +1609,7 @@ async function boot() {
 
 	const name = preferredTransport();
 	rememberTransport(name);
+	await beginTorSession();
 
 	try {
 		await startController(name);
@@ -2866,7 +2869,8 @@ const hostState = () => (OFFLINE ? history.state : null);
 const ADDRESS_FRAGMENT =
 	(CFG.addressFragment ?? (window.parent !== window ? 'sealed' : 'token')) ===
 	'sealed';
-const SESSION_KEY = 'stomp-demo:session';
+// (in Tor mode the profile's key, pm/profile.js: forgotten with it)
+const SESSION_KEY = PMProfile.sessionKey('stomp-demo:session');
 const TOKENS_KEPT = 256;
 
 /** the query's parts that are no token: the page's flags (nopool, mode=...) */
@@ -3177,10 +3181,10 @@ if (openedToken && !openedRecord)
 // bar from the first paint (index.html), before the controller is up. Kept
 // in sessionStorage with the tokens, the newest BAR_KEPT only; it was once
 // in localStorage, which a page's address never goes to now.
-const BAR_KEY = 'stomp-demo:bar';
+const BAR_KEY = PMProfile.sessionKey('stomp-demo:bar');
 const BAR_KEPT = 32;
 try {
-	localStorage.removeItem(BAR_KEY);
+	UI_STORAGE.removeItem('stomp-demo:bar');
 } catch {}
 let barKept = { key: '', text: '' };
 function keepBarText(key, text) {
@@ -3320,7 +3324,7 @@ function loadOmnibox() {
 }
 
 function attachOmniboxes(Omnibox) {
-	visitHistory = Omnibox.visitHistory();
+	visitHistory = Omnibox.visitHistory({ store: UI_STORAGE });
 	const tabIds = new WeakMap();
 	let lastTabId = 0;
 	const tabId = (tab) => {
@@ -3785,7 +3789,111 @@ async function watchTor() {
 // scope: setTransport() lets old in-flight direct requests finish. A saved
 // Tor choice never silently falls back to normal Wisp if its relay is gone.
 const TOR_SCOPE_NOTE =
-	'Proxied TCP only: the host page, shared cookies, storage and extensions stay outside Tor.';
+	'Proxied TCP only, the host page stays outside Tor. Tor mode has its own cookies, storage, history and no extensions, gone when no tab is in Tor mode.';
+
+// ---- Tor mode's session (docs/tor.md "Profiles") ----------------------------
+// Brave keeps a Tor window's profile off the record and drops it with the
+// last Tor window. Here each Tor-mode page holds a Web Lock of its own
+// (TOR_TAB_LOCK and a random name) while it is open, and the Tor profile
+// (STomp's stores of it, StompController.forgetProfile, and the page's own
+// under its keys) is forgotten when none holds one: by the first Tor-mode
+// page of a new session before its controller starts, by every page of
+// this origin when it starts (a browser closed with a Tor tab open), and
+// by the open pages TOR_GRACE_MS after the last Tor-mode page is gone (a
+// reload, which continues its session, takes its lock again before that).
+// One page at a time decides, under TOR_FORGET_LOCK.
+const TOR_TAB_LOCK = 'pm-tor-tab:';
+const TOR_FORGET_LOCK = 'pm-tor-forget';
+const TOR_CHANNEL = 'pm-tor-tabs';
+const TOR_GRACE_MS = 10000;
+const torSession = { fresh: false, lock: '' };
+/** the Tor-mode pages open (their locks), but `except` */
+async function torTabsOpen(except = '') {
+	const { held = [] } = (await navigator.locks?.query()) ?? {};
+	return held
+		.map((lock) => lock.name ?? '')
+		.filter((name) => name.startsWith(TOR_TAB_LOCK) && name !== except);
+}
+/** forget the Tor profile on this origin and, in the isolated mode, the proxy's */
+async function forgetTorProfile() {
+	const own = await StompController.forgetProfile('tor');
+	const proxy =
+		ISOLATED && !TOR_REQUESTED && controller?.forgetProfile
+			? await controller.forgetProfile('tor')
+			: null;
+	const left = [...own.left, ...(proxy?.left ?? [])];
+	if (left.length)
+		badge('Tor', `could not forget ${left.join(', ')}`, 'orange');
+	window.__pmTorForgotten = { at: Date.now(), own, proxy };
+}
+/** forget the Tor profile unless a Tor-mode page is open */
+function forgetTorIfOver() {
+	if (!navigator.locks) return Promise.resolve();
+	return navigator.locks.request(TOR_FORGET_LOCK, async () => {
+		if ((await torTabsOpen()).length) return;
+		await forgetTorProfile().catch((error) =>
+			badge('Tor', `could not forget its profile: ${error.message}`, 'orange'),
+		);
+	});
+}
+/** a Tor-mode page's start: a new session forgets the last one's profile first */
+async function beginTorSession() {
+	if (!TOR_REQUESTED || !navigator.locks) return;
+	const name = `${TOR_TAB_LOCK}${crypto.randomUUID()}`;
+	await navigator.locks.request(TOR_FORGET_LOCK, async () => {
+		torSession.fresh = !PMProfile.continuing && !(await torTabsOpen()).length;
+		if (torSession.fresh) {
+			await StompController.forgetProfile('tor').catch(() => {});
+			// this tab's own session, written again after its keys went
+			sessionKept = '';
+			keepSession();
+		}
+		// held until the page goes
+		await new Promise((held) =>
+			navigator.locks.request(name, () => {
+				held();
+				return new Promise(() => {});
+			}),
+		);
+	});
+	torSession.lock = name;
+	try {
+		new BroadcastChannel(TOR_CHANNEL).postMessage('open');
+	} catch {}
+}
+/** a normal page's watch: the Tor profile goes once the last Tor-mode page has */
+function watchTorTabs() {
+	if (TOR_REQUESTED || !navigator.locks) return;
+	// this tab was in Tor mode a moment ago (the toggle): its old page's
+	// lock goes with no reload to wait for
+	let left = false;
+	try {
+		left = sessionStorage.getItem('stomp-demo:left|tor') !== null;
+		sessionStorage.removeItem('stomp-demo:left|tor');
+	} catch {}
+	const waiting = new Set();
+	const look = async () => {
+		for (const name of await torTabsOpen()) {
+			if (waiting.has(name)) continue;
+			waiting.add(name);
+			navigator.locks
+				.request(name, () => {})
+				.then(async () => {
+					waiting.delete(name);
+					await new Promise((wait) =>
+						setTimeout(wait, left ? 0 : TOR_GRACE_MS),
+					);
+					left = false;
+					await forgetTorIfOver();
+				});
+		}
+	};
+	try {
+		new BroadcastChannel(TOR_CHANNEL).onmessage = look;
+	} catch {}
+	look();
+	forgetTorIfOver();
+}
 torToggle.checked = TOR_REQUESTED;
 torToggle.disabled = !TOR_WISP && !TOR_REQUESTED;
 const torLabel = $('torLabel');
@@ -3815,10 +3923,7 @@ torToggle.addEventListener('change', () => {
 adblockToggle.checked = ADBLOCK.adblock !== false;
 adblockToggle.addEventListener('change', () => {
 	try {
-		localStorage.setItem(
-			'stomp-demo:adblock',
-			adblockToggle.checked ? '1' : '0',
-		);
+		UI_STORAGE.setItem('stomp-demo:adblock', adblockToggle.checked ? '1' : '0');
 	} catch {}
 	const url = new URL(location.href);
 	url.searchParams.delete('adblock');
@@ -4445,7 +4550,7 @@ const cleanDescription = (text) =>
 function loadBookmarks() {
 	let list = [];
 	try {
-		list = JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '[]');
+		list = JSON.parse(UI_STORAGE.getItem(BOOKMARKS_KEY) || '[]');
 	} catch {}
 	if (!Array.isArray(list)) return [];
 	const seen = new Set();
@@ -4491,7 +4596,7 @@ let bookmarks = loadBookmarks();
 
 function saveBookmarks() {
 	try {
-		localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
+		UI_STORAGE.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
 	} catch {}
 	renderBookmarks();
 }
@@ -5113,7 +5218,7 @@ const SEEDED_KEY = 'stomp-demo:bookmarks-seeded';
 {
 	let seeded = [];
 	try {
-		const marker = localStorage.getItem(SEEDED_KEY);
+		const marker = UI_STORAGE.getItem(SEEDED_KEY);
 		seeded =
 			marker === '1'
 				? DEFAULT_BOOKMARKS.slice(0, 4).map((entry) => entry.url)
@@ -5127,7 +5232,7 @@ const SEEDED_KEY = 'stomp-demo:bookmarks-seeded';
 		for (const entry of fresh)
 			if (!bookmarkOf(entry.url)) bookmarks.push({ ...entry });
 		try {
-			localStorage.setItem(
+			UI_STORAGE.setItem(
 				SEEDED_KEY,
 				JSON.stringify([...seeded, ...fresh.map((entry) => entry.url)]),
 			);
@@ -5773,7 +5878,7 @@ const SHIELDS_ADVANCED_KEY = 'stomp-demo:shields-advanced';
 
 function loadAdblockConfig() {
 	try {
-		const raw = JSON.parse(localStorage.getItem(ADBLOCK_CONFIG_KEY));
+		const raw = JSON.parse(UI_STORAGE.getItem(ADBLOCK_CONFIG_KEY));
 		if (raw && typeof raw === 'object')
 			return {
 				off: Array.isArray(raw.off)
@@ -5796,7 +5901,7 @@ let adblockConfig = loadAdblockConfig();
 
 function persistAdblockConfig() {
 	try {
-		localStorage.setItem(ADBLOCK_CONFIG_KEY, JSON.stringify(adblockConfig));
+		UI_STORAGE.setItem(ADBLOCK_CONFIG_KEY, JSON.stringify(adblockConfig));
 	} catch {}
 }
 
@@ -5905,14 +6010,14 @@ function reloadActiveTab({ bypassCache = false } = {}) {
 
 function shieldsShowBadge() {
 	try {
-		return localStorage.getItem(SHIELDS_BADGE_KEY) !== '0';
+		return UI_STORAGE.getItem(SHIELDS_BADGE_KEY) !== '0';
 	} catch {
 		return true;
 	}
 }
 function setShieldsShowBadge(on) {
 	try {
-		localStorage.setItem(SHIELDS_BADGE_KEY, on ? '1' : '0');
+		UI_STORAGE.setItem(SHIELDS_BADGE_KEY, on ? '1' : '0');
 	} catch {}
 	syncShields();
 }
@@ -5921,14 +6026,14 @@ function setShieldsShowBadge(on) {
 // opens (and reloads) in this page's own localStorage. Defaults to open.
 function shieldsAdvancedOpen() {
 	try {
-		return localStorage.getItem(SHIELDS_ADVANCED_KEY) !== '0';
+		return UI_STORAGE.getItem(SHIELDS_ADVANCED_KEY) !== '0';
 	} catch {
 		return true;
 	}
 }
 function setShieldsAdvancedOpen(on) {
 	try {
-		localStorage.setItem(SHIELDS_ADVANCED_KEY, on ? '1' : '0');
+		UI_STORAGE.setItem(SHIELDS_ADVANCED_KEY, on ? '1' : '0');
 	} catch {}
 }
 
@@ -8481,7 +8586,7 @@ const THEMES_SEEDED_KEY = 'stomp-demo:themes-seeded';
 
 function seededThemes() {
 	try {
-		const seeded = JSON.parse(localStorage.getItem(THEMES_SEEDED_KEY) || '[]');
+		const seeded = JSON.parse(UI_STORAGE.getItem(THEMES_SEEDED_KEY) || '[]');
 		return Array.isArray(seeded) ? seeded : [];
 	} catch {
 		return [];
@@ -8512,7 +8617,7 @@ async function seedDefaultThemes() {
 					await themes.install(pmThemeOf(themes, theme), {
 						show: theme.enabled,
 					});
-				localStorage.setItem(
+				UI_STORAGE.setItem(
 					THEMES_SEEDED_KEY,
 					JSON.stringify([...seededThemes(), id]),
 				);
@@ -8897,6 +9002,7 @@ booted
 		// a kept, non-default filter-list config is applied once the controller
 		// is up (a fresh visit loads the defaults with no extra engine build)
 		applyAdblockConfigOnBoot();
+		watchTorTabs(); // a normal page forgets the Tor profile once it is over
 		watchExtensions(); // the bar's extension buttons
 		// the default theme, once the page is idle (never before its first paint)
 		(globalThis.requestIdleCallback ?? setTimeout)(

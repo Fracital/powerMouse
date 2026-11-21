@@ -25,7 +25,7 @@ export default class LegacyFileSystemModule extends Module<Client> {
 	drop(key: string, done: () => void) {
 		const drop = legacyFileSystemParts.drop;
 		if (!this.#request || !drop) return done();
-		drop()(this.client.global, this.#request, key, done);
+		drop()(this.client.global, this.#request, key, this.client.profile, done);
 	}
 	apply() {
 		const client = this.client;

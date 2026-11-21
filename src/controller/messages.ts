@@ -36,6 +36,7 @@ import type {
 	WispWebTransportOptions,
 } from '../transport/wispWebTransport';
 import type { SiteHistoryAnswer, SiteHistoryOp } from './history';
+import type { ForgottenProfile } from './profiles';
 import type { SitePoolInit } from './sitePool';
 
 /**
@@ -98,6 +99,10 @@ export interface ControllerFrameInit {
 	directory: string;
 	/** the controller's id, minted or checked by the host-side RemoteController */
 	id: string;
+	/** the profile whose stores the controller uses (RemoteControllerInit.profile) */
+	profile?: string;
+	/** forget the profile's stores before its worker is registered (RemoteControllerInit.freshProfile) */
+	freshProfile?: boolean;
 	transport: TransportDescriptor;
 	/** the host handles `window.open` / `_blank` (RemoteControllerInit.onOpen) */
 	openTab?: boolean;
@@ -298,6 +303,8 @@ export type FrameBound = {
 	cookies: [CookieCommand, CookieResult];
 	/** clear a site's virtualized storage (the "Forget me on close" shield) */
 	forgetStorage: [string];
+	/** delete every store of another profile on the proxy origin (RemoteController.forgetProfile) */
+	forgetProfile: [string, ForgottenProfile];
 	/** the service worker's passkeys, for the host (RemoteController.passkeys) */
 	passkeys: [PasskeyCommand, PasskeyInfo[] | boolean | null];
 	/** replace the request rules */

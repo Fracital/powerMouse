@@ -40,7 +40,7 @@ export function presentationIds(
 	store: PresentationStore,
 ): PresentationIds {
 	let idOf: (() => string) | undefined;
-	const listKey = () => `$stomp$presentations:${client.storageKey}`;
+	const listKey = () => `$stomp$presentations:${client.nativeKey}`;
 	const list = (): string[] => {
 		try {
 			return JSON.parse(

@@ -25,6 +25,8 @@
 		</script>
 		<link rel="stylesheet" href="/pm/main.css" />
 		<link rel="stylesheet" href="/pm/extensions-page.css" />
+		<!-- the profile: Tor mode's is apart and lasts its session (docs/tor.md) -->
+		<script src="/pm/profile.js"></script>
 		<!-- the chosen theme (docs/themes.md), on the root before the first paint -->
 		<script src="/pm/theme.js"></script>
 		<script>
@@ -46,7 +48,7 @@
 					: '';
 				try {
 					const session = JSON.parse(
-						sessionStorage.getItem('stomp-demo:session'),
+						sessionStorage.getItem(PMProfile.sessionKey('stomp-demo:session')),
 					);
 					if (token && session?.tokens?.[token]) return token;
 				} catch {}
@@ -283,7 +285,9 @@
 						if (document.documentElement.classList.contains('restoring'))
 							try {
 								const kept = JSON.parse(
-									sessionStorage.getItem('stomp-demo:bar'),
+									sessionStorage.getItem(
+										PMProfile.sessionKey('stomp-demo:bar'),
+									),
 								);
 								const page = kept.find(
 									(entry) => entry[0] === window.__pmOpened,

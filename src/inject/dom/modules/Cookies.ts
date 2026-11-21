@@ -1,5 +1,6 @@
 import { JAR_TURN_COOKIE } from '../../../encodeCookie';
 import { partitionSite } from '../../../partition';
+import { nativeStoreKey } from '../../../profile';
 import {
 	BrowserCookieArray,
 	compareCookies,
@@ -22,9 +23,13 @@ import SyncModule, { BEACON_QUOTA, WRITE_BUDGET } from './Sync';
 
 const publicSuffix = (host: string) => getPublicSuffix(host);
 
-/** the key the documents of `host`'s site bump when they change its cookies */
-const versionKeyOf = (host: string) =>
-	`$stomp$cookies:${getDomain(host) ?? host}`;
+/**
+ * the key the documents of `host`'s site bump when they change its cookies:
+ * one of the proxy origin's own localStorage, in the profile
+ * (src/profile.ts)
+ */
+const versionKeyOf = (host: string, profile: string) =>
+	nativeStoreKey(`$stomp$cookies:${getDomain(host) ?? host}`, profile);
 
 const expired = (cookie: JarCookie, now: number) =>
 	cookie.expires !== undefined && cookie.expires <= now;
@@ -250,7 +255,7 @@ export class CookiesModule extends Module<DocumentClient> {
 	}
 	/** the key other documents of this site bump when they write a cookie */
 	get #versionKey() {
-		return versionKeyOf(this.client.url.url.hostname);
+		return versionKeyOf(this.client.url.url.hostname, this.client.profile);
 	}
 	#version(): string {
 		try {
@@ -314,7 +319,7 @@ export class CookiesModule extends Module<DocumentClient> {
 	 * read without them (WPT cookies/samesite/fetch.https.html, under load)
 	 */
 	#jarChanged(host: string) {
-		this.#stamp(versionKeyOf(host));
+		this.#stamp(versionKeyOf(host, this.client.profile));
 	}
 	/**
 	 * Other documents read the jar again; this one keeps what it knows when

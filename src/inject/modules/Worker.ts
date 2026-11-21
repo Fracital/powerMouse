@@ -218,7 +218,7 @@ export default class WorkerModule extends Module<Client> {
 						setTimeout(() => global.URL.revokeObjectURL(own), PRIVATE_URL_MS);
 					// shared workers are found by name within an origin: keep
 					// proxied origins, and partitions of one, apart
-					const suffix = `@${moduleClient.storageKey}`;
+					const suffix = `@${moduleClient.nativeKey}`;
 					if (typeof args[1] === 'object' && args[1] !== null)
 						args[1] = { ...args[1], name: `${args[1].name ?? ''}${suffix}` };
 					// (null is the empty options dictionary, as undefined is)

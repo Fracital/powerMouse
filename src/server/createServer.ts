@@ -2,7 +2,7 @@ import {
 	BareCompatibleClient,
 	type ProxyTransport,
 } from '@mercuryworkshop/proxy-transports';
-import { IDBPDatabase, openDB } from 'idb';
+import { IDBPDatabase } from 'idb';
 import type { AdblockInit, SiteShields } from '../blocker/types';
 import type GenericCodec from '../Codecs';
 import {
@@ -17,8 +17,10 @@ import {
 import type { IsolationEngine } from '../isolation';
 import { workerKindPartition } from '../partition';
 import { usePasskeysRemote } from '../passkeys/authenticator';
+import { checkProfile, realmProfile } from '../profile';
 import { isDocumentKind, parseRoutedURL, proxyOrigins } from '../routeURL';
 import StompURL from '../StompURL';
+import { openStoreDB } from '../storeDB';
 import { getPublicSuffix } from '../suffix';
 import type {
 	HostReload,
@@ -263,7 +265,7 @@ let configDB: Promise<IDBPDatabase> | undefined;
  */
 export function openConfigDB(): Promise<IDBPDatabase> {
 	if (configDB) return configDB;
-	const opened = openDB('stompConfig', 1, {
+	const opened = openStoreDB('stompConfig', 1, {
 		upgrade: (db) => {
 			db.createObjectStore('consts');
 		},
@@ -406,6 +408,12 @@ export default async function createServer(
 	/** asks the controller's document whether a waiting page stops this worker (./syncFrozen.ts) */
 	askSyncFreezes?: () => Promise<boolean | null>,
 ): Promise<StompServer> {
+	// a worker keeps one profile's stores (src/profile.ts): a controller
+	// of another would read and write them as its own
+	if (checkProfile(config.profile) !== realmProfile())
+		throw new Error(
+			`This service worker keeps the stores of profile ${JSON.stringify(realmProfile())}, not of ${JSON.stringify(config.profile ?? '')}: register it as serviceWorker.js?profile=${config.profile ?? ''}`,
+		);
 	// the jar opens beside the codec's transaction (sharedStores takes it)
 	if (!jar) openJarDB().catch(() => {});
 	const db = await openConfigDB();

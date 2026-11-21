@@ -40,6 +40,20 @@ export default class StorageBucketsModule extends Module<Client> {
 			StorageBucketManager?: { new (): unknown; prototype: Manager };
 		};
 		if (typeof bucketGlobals.StorageBucketManager !== 'function') return;
+		// a profile apart from the default one (src/profile.ts, Tor mode) has
+		// no buckets, as a browser without the API (every one but
+		// Chromium's): a bucket's real name is a digest, which tells no
+		// profile, so a profile forgotten could not find its buckets
+		if (client.profile) {
+			for (const owner of [
+				(global as { Navigator?: { prototype: object } }).Navigator,
+				(global as { WorkerNavigator?: { prototype: object } }).WorkerNavigator,
+			])
+				if (owner) Reflect.deleteProperty(owner.prototype, 'storageBuckets');
+			Reflect.deleteProperty(global, 'StorageBucketManager');
+			Reflect.deleteProperty(global, 'StorageBucket');
+			return;
+		}
 		const proxyModule = client.getModule(ProxyModule)!;
 		const manager = bucketGlobals.StorageBucketManager.prototype;
 		// (the factory's natives, before the IndexedDB module suffixes them)
@@ -53,7 +67,7 @@ export default class StorageBucketsModule extends Module<Client> {
 		// page has the bucket
 		let named: WeakSet<object> | null = null;
 		const context: BucketContext = {
-			storageKey: () => client.storageKey,
+			storageKey: () => client.nativeKey,
 			opaque: () =>
 				(client as { sandboxedOpaque?: boolean }).sandboxedOpaque === true,
 			isManager: (that: unknown) =>

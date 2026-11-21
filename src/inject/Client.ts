@@ -23,6 +23,7 @@ import type {
 	ResolvedHooks,
 } from '../hooks';
 import type { PasskeysConfig } from '../passkeys/types';
+import { nativeStoreKey } from '../profile';
 import { routeHTML } from '../rewriteHTML';
 import {
 	addRouteScope,
@@ -232,6 +233,8 @@ export default class Client {
 	directory: string;
 	/** the scope the bundles are served from (config.scope) */
 	scope: string;
+	/** the profile whose stores this context's are (config.profile, src/profile.ts) */
+	profile: string;
 	/** the host handles window.open / target=_blank (config.openTab) */
 	openTab: boolean;
 	/** a synchronous request completes: the transport runs in the transport worker (config.workerTransport) */
@@ -946,6 +949,7 @@ export default class Client {
 		this.codec = init.codec;
 		this.directory = init.directory;
 		this.scope = init.scope || init.directory;
+		this.profile = init.profile ?? '';
 		// the realm's own origin is the proxy's (native at this point): a URL
 		// under its scope is already a route (routeURL unwraps it)
 		const origin = global.location?.origin;
@@ -1063,6 +1067,7 @@ export default class Client {
 		return {
 			directory: this.directory,
 			scope: this.scope,
+			...(this.profile ? { profile: this.profile } : {}),
 			codec: codecType(this.codec),
 			...(this.openTab ? { openTab: true } : {}),
 			...(this.workerTransport ? { workerTransport: true } : {}),
@@ -1634,6 +1639,19 @@ export default class Client {
 	 */
 	get storageKey(): string {
 		return `${this.url.url.origin}${this.partition}`;
+	}
+	/**
+	 * The storage key as the native stores of the proxy origin name it (the
+	 * `@<key>` suffix of the IndexedDB, Partition, Storage and Worker
+	 * modules' names): in this context's profile (src/profile.ts), so the
+	 * stores of one profile are never another's
+	 */
+	get nativeKey(): string {
+		return nativeStoreKey(this.storageKey, this.profile);
+	}
+	/** the same of the first-party key (its origin alone): what a Storage Access handle's stores are named by */
+	get firstPartyNativeKey(): string {
+		return nativeStoreKey(this.url.url.origin, this.profile);
 	}
 	/**
 	 * @internal a response reached this context; `jarHosts` are the hosts

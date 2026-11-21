@@ -242,6 +242,10 @@ await swap(
 	await css(join(demo, 'pm/extensions-page.css')),
 );
 await swap(
+	'<script src="/pm/profile.js"></script>',
+	inlineScript(await read(join(demo, 'pm/profile.js'))),
+);
+await swap(
 	'<script src="/pm/theme.js"></script>',
 	inlineScript(await read(join(demo, 'pm/theme.js'))),
 );

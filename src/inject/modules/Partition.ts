@@ -17,11 +17,11 @@ export default class PartitionModule extends Module<Client> {
 		const client = this.client;
 		const proxyModule = client.getModule(ProxyModule)!;
 		const global = client.global;
-		const scoped = (name: unknown, key = client.storageKey) =>
+		const scoped = (name: unknown, key = client.nativeKey) =>
 			`${String(name)}@${key}`;
 		// a name made through a Storage Access handle has the first-party key
 		const unscoped = (name: string) =>
-			unsuffixed(name, client.storageKey, client.url.url.origin);
+			unsuffixed(name, client.nativeKey, client.firstPartyNativeKey);
 
 		if (typeof global.BroadcastChannel === 'function') {
 			global.BroadcastChannel = proxyModule.wrapFunction(
@@ -55,7 +55,7 @@ export default class PartitionModule extends Module<Client> {
 			manager.request = proxyModule.wrapFunction(
 				manager.request,
 				(target, that, args) => {
-					const [locks, key] = redirected(that, client.storageKey);
+					const [locks, key] = redirected(that, client.nativeKey);
 					if (args.length) args[0] = scoped(args[0], key);
 					return Reflect.apply(target, locks, args);
 				},
@@ -71,7 +71,7 @@ export default class PartitionModule extends Module<Client> {
 			manager.query = proxyModule.wrapFunction(
 				manager.query,
 				async (target, that, args) => {
-					const [locks, key] = redirected(that, client.storageKey);
+					const [locks, key] = redirected(that, client.nativeKey);
 					const snapshot = (await Reflect.apply(target, locks, args)) as {
 						held?: Info[];
 						pending?: Info[];
@@ -105,7 +105,7 @@ export default class PartitionModule extends Module<Client> {
 				storage[method] = proxyModule.wrapFunction(
 					storage[method],
 					(target, that, args) => {
-						const [caches, key] = redirected(that, client.storageKey);
+						const [caches, key] = redirected(that, client.nativeKey);
 						if (args.length) args[0] = scoped(args[0], key);
 						return Reflect.apply(target, caches, args);
 					},
@@ -113,7 +113,7 @@ export default class PartitionModule extends Module<Client> {
 			storage.keys = proxyModule.wrapFunction(
 				storage.keys,
 				async (target, that, args) => {
-					const [caches, key] = redirected(that, client.storageKey);
+					const [caches, key] = redirected(that, client.nativeKey);
 					return ((await Reflect.apply(target, caches, args)) as string[])
 						.filter((name) => name.endsWith(`@${key}`))
 						.map((name) => name.slice(0, -key.length - 1));
@@ -237,7 +237,7 @@ export default class PartitionModule extends Module<Client> {
 				manager.getDirectory = proxyModule.wrapFunction(
 					manager.getDirectory,
 					async (target, receiver, args) => {
-						const [that, key] = redirected(receiver, client.storageKey);
+						const [that, key] = redirected(receiver, client.nativeKey);
 						const root: FileSystemDirectoryHandle = await Reflect.apply(
 							target,
 							that,

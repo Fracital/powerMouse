@@ -19,6 +19,8 @@
 // site takes for a session. Entries keep the upstream
 // (pre-rewrite) body and headers, so the rewriters run on hits as on fetches.
 
+import { storeName } from '../profile';
+
 const STORE = 'stomp-http-cache';
 const ENTRY_LIMIT = 5 * 1024 * 1024;
 const BUDGET = 50 * 1024 * 1024;
@@ -474,7 +476,7 @@ function listed(url: string, entry: Listed | null) {
 export class HttpCache {
 	private cache?: Promise<Cache>;
 	private open(): Promise<Cache> {
-		return (this.cache ??= caches.open(STORE));
+		return (this.cache ??= caches.open(storeName(STORE)));
 	}
 	/** open the store before a request asks it (createServer warmStores) */
 	warm(): Promise<unknown> {
@@ -792,7 +794,7 @@ export class HttpCache {
 	}
 	async clear(): Promise<void> {
 		this.cache = undefined;
-		await caches.delete(STORE);
+		await caches.delete(storeName(STORE));
 		// (the store is gone, and with it every entry)
 		if (listing.entries !== null) {
 			listing.entries.clear();

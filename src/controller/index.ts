@@ -54,6 +54,12 @@ import type {
 	PasskeysConfig,
 	PasskeysInit as PasskeysInitOf,
 } from '../passkeys/types';
+import {
+	checkProfile,
+	profileOfScript,
+	profileScriptURL,
+	useProfile,
+} from '../profile';
 import { coreFile, injectDocumentFile, libraryFile } from '../routeURL';
 import type { DnrCommand } from '../server/dnr';
 import { isUrlLike, urlLike } from '../StompURL';
@@ -180,6 +186,7 @@ import { probeIsolation } from './isolationProbe';
 import { justCallStomp, type CalledFrame } from './justCallStomp';
 import { mediaVerdict } from './mediaVerdict';
 import type { ReloadOptions, StaleInfo, TransportDescriptor } from './messages';
+import { forgetProfile, profileWorker, serviceWorkerScript } from './profiles';
 import { DEFAULT_SANDBOX } from './remote';
 import RewriteWorkers, {
 	DEFAULT_REWRITE_TIMEOUT_MS,
@@ -303,6 +310,19 @@ export interface ControllerInit {
 	 * when loaded as a module.
 	 */
 	directory?: urlLike;
+	/**
+	 * The profile whose stores this controller's pages use (src/profile.ts,
+	 * docs/tor.md "Profiles"): the cookie jar, storage partitions, caches,
+	 * extensions, permissions, passkeys, the transport's memories and every
+	 * store a proxied site makes natively, all apart from every other
+	 * profile's on the same origin. Absent or '' is the default profile
+	 * (the names STomp always used). A short lower-case name otherwise; its
+	 * service worker is `serviceWorker.js?profile=<id>` (StompController.register
+	 * with `profile`), and a worker of another profile refuses the
+	 * controller. One page opens one profile's stores. `forgetProfile()`
+	 * deletes a profile's stores.
+	 */
+	profile?: string;
 	/**
 	 * This controller's id, 1 to 32 characters of `[A-Za-z0-9_-]` (a TypeError
 	 * otherwise); 8 random characters by default. It names the controller's
@@ -1012,7 +1032,7 @@ function bootWorker(url: URL): Worker | undefined {
 	early.worker.terminate();
 }
 /** begin what a controller's start in `scope` waits for (see earlyFetches) */
-function bootEarly(scope: URL, assets: Assets | undefined) {
+function bootEarly(scope: URL, assets: Assets | undefined, profile = '') {
 	const fetches = [
 		coreFile(assets),
 		assetFile(assets, 'blocker'),
@@ -1024,7 +1044,10 @@ function bootEarly(scope: URL, assets: Assets | undefined) {
 		earlyFetches.set(url, early);
 		return [url, early] as const;
 	});
-	const url = new URL(assetFile(assets, 'transportWorker'), scope).href;
+	const url = profileScriptURL(
+		new URL(assetFile(assets, 'transportWorker'), scope),
+		profile,
+	).href;
 	let worker: { worker: Worker; failed: boolean } | undefined;
 	try {
 		worker = { worker: new Worker(url), failed: false };
@@ -1359,7 +1382,9 @@ export class StompController extends EventTarget {
 	 * and worker restarts (src/controller/id.ts fingerprintSeed). Sent to the
 	 * worker with the shields; the worker mixes it with each document's eTLD+1.
 	 */
-	readonly #fpSeed = fingerprintSeed();
+	readonly #fpSeed: number;
+	/** the profile whose stores this controller's pages use (ControllerInit.profile) */
+	readonly profile: string;
 	/** the hub of the extensions (docs/extensions.md): backgrounds, actions, tabs */
 	#extensionHub!: ExtensionHub;
 	/**
@@ -1396,6 +1421,20 @@ export class StompController extends EventTarget {
 	/** just call stomp (./justCallStomp.ts), for a classic-script host */
 	static readonly justCallStomp = justCallStomp;
 	/**
+	 * Delete every store of a profile on this origin (src/controller/profiles.ts):
+	 * its service worker, databases, caches, keys and directories. For a
+	 * profile no controller has open: the demo's Tor mode forgets its profile
+	 * when its last tab is gone, and before its first tab starts.
+	 */
+	static readonly forgetProfile = forgetProfile;
+	/**
+	 * The query of a profile's service worker script, for a host that
+	 * registers `serviceWorker.js` itself: `?profile=<id>&worker=<name>`, a
+	 * name that forgetProfile changes so the profile's next worker is a new
+	 * one ('' for the default profile)
+	 */
+	static readonly profileWorker = profileWorker;
+	/**
 	 * Register the STomp service worker served from `directory` (the
 	 * constructor's default when omitted: the directory of the current script)
 	 * and resolve once it is activated. The registration goes straight into
@@ -1408,18 +1447,18 @@ export class StompController extends EventTarget {
 			assets?: Assets;
 			/** passed to `navigator.serviceWorker.register`; `none` by default */
 			updateViaCache?: ServiceWorkerUpdateViaCache;
+			/** the profile whose stores the worker keeps (ControllerInit.profile) */
+			profile?: string;
 		} = {},
 	): Promise<ServiceWorkerRegistration> {
 		if (!('serviceWorker' in navigator)) throw noServiceWorkers();
 		const scope = isUrlLike(directory)
 			? new URL(directory, location.href)
 			: defaultDirectory();
-		bootEarly(scope, options.assets);
+		const profile = checkProfile(options.profile);
+		bootEarly(scope, options.assets, profile);
 		const registration = await navigator.serviceWorker.register(
-			new URL(
-				options.assets?.serviceWorker ?? DEFAULT_ASSETS.serviceWorker,
-				scope,
-			),
+			serviceWorkerScript(scope, options.assets, profile),
 			{ scope: scope.href, updateViaCache: options.updateViaCache ?? 'none' },
 		);
 		// a worker stuck in installing must not hang the host: the controller
@@ -1436,6 +1475,9 @@ export class StompController extends EventTarget {
 	constructor(init: ControllerInit) {
 		super();
 		this.#init = init;
+		// before any store is named: every one of this page's is the profile's
+		this.profile = useProfile(init.profile);
+		this.#fpSeed = fingerprintSeed();
 		// before anything async: a bad name is a programming error
 		validateNames(init.names, Object.getOwnPropertyNames(globalThis));
 		validateHooks(init.hooks);
@@ -1450,6 +1492,16 @@ export class StompController extends EventTarget {
 			this.#registration = init.serviceworker;
 			this.serviceworker = registrationWorker(init.serviceworker);
 		} else this.serviceworker = init.serviceworker;
+		// a worker of another profile would keep this one's pages in its
+		// stores (it refuses the handshake too)
+		if (
+			this.serviceworker?.scriptURL &&
+			profileOfScript(new URL(this.serviceworker.scriptURL).search) !==
+				this.profile
+		)
+			throw new Error(
+				`The service worker is not of profile ${JSON.stringify(this.profile)}: register serviceWorker.js${this.profile ? `?profile=${this.profile}` : ''}`,
+			);
 		const given = init.transport;
 		if (init.agent) {
 			// a slot's agent serves its transport through the hub's
@@ -1566,6 +1618,7 @@ export class StompController extends EventTarget {
 			// are told apart in the worker; the assets stay at the scope
 			directory: this.id ? `${this.directory.pathname}${this.id}/` : '',
 			scope: this.directory.pathname,
+			...(this.profile ? { profile: this.profile } : {}),
 			...(init.frameAncestors ? { frameAncestors: init.frameAncestors } : {}),
 			...(init.dialing === true ? { dialing: true } : {}),
 			...(init.onOpen || init.openTab ? { openTab: true } : {}),
@@ -2237,11 +2290,15 @@ export class StompController extends EventTarget {
 	 * that fails too, the controller holds a transport that fails every
 	 * request until `setTransport()` gives it one.
 	 */
-	async #startWorker(descriptor: TransportDescriptor): Promise<void> {
-		const url = new URL(
-			assetFile(this.config.assets, 'transportWorker'),
-			this.directory,
+	/** the transport worker's script, in this controller's profile (src/profile.ts) */
+	#transportScript(): URL {
+		return profileScriptURL(
+			new URL(assetFile(this.config.assets, 'transportWorker'), this.directory),
+			this.profile,
 		);
+	}
+	async #startWorker(descriptor: TransportDescriptor): Promise<void> {
+		const url = this.#transportScript();
 		let worker: TransportWorker | undefined;
 		try {
 			worker = new TransportWorker(
@@ -2285,10 +2342,7 @@ export class StompController extends EventTarget {
 	#startClock() {
 		const own = () => setInterval(this.#keepAlive, KEEPALIVE_MS);
 		try {
-			const url = new URL(
-				assetFile(this.config.assets, 'transportWorker'),
-				this.directory,
-			);
+			const url = this.#transportScript();
 			const clock = new TransportWorker(
 				url,
 				this.#handshakeHeaders,
@@ -2315,9 +2369,7 @@ export class StompController extends EventTarget {
 	#carrierHost(descriptor: TransportDescriptor): MessagePort | null {
 		const first = descriptor.options?.[0] as { wisp?: unknown } | undefined;
 		if (!this.#sharesCarrier || typeof first?.wisp !== 'string') return null;
-		return startCarrierHost(
-			new URL(assetFile(this.config.assets, 'transportWorker'), this.directory),
-		);
+		return startCarrierHost(this.#transportScript());
 	}
 	/** import a descriptor's module in this page (`host: 'page'`, or the worker fallback) */
 	async #importInPage(descriptor: TransportDescriptor): Promise<void> {

@@ -2,9 +2,10 @@
 
 The demo's **Tor** toggle sends the TCP connections of proxied sites through
 a Tor client on the demo's server. This page says what that protects and what
-it does not, how the server tells whether Tor works, what an operator has to
-do before offering it to the public, and what isolating Tor mode from normal
-mode would cost. `demo/README.md` ("Tor routing") has the settings.
+it does not, how Tor mode's profile is kept apart from normal mode's, how the
+server tells whether Tor works, what an operator has to do before offering it
+to the public, and what per-site circuits would need. `demo/README.md` ("Tor
+routing") has the settings.
 
 ## What it is, and what it is not
 
@@ -24,14 +25,18 @@ It is **not Tor Browser** and it is not browser-wide anonymity:
   operator cannot read it. For `http://` sites, `http://` onion services
   included, the relay (and, for a non-onion site, the Tor exit) sees the
   content in the clear.
-- **One profile for both modes.** Tor mode uses its own service worker
-  scope (`/stomp-tor/`) and turns off STomp's HTTP cache, but the proxy
-  origin's persistent databases are the same in both modes: the cookie jar,
-  site storage (localStorage, IndexedDB and the rest), permissions, client
-  hints, emulated service workers, passkeys and installed extensions. A site
-  that set a cookie in normal mode gets it back in Tor mode, and a login
-  carries over, which links the two. The host page's own state (history,
-  bookmarks, open tabs, settings) is one set for both modes too.
+- **A profile of its own, for the session.** Tor mode has its own cookie
+  jar, site storage, caches, permissions and extensions, apart from normal
+  mode's on the same origin, and they are wiped when Tor mode is turned off
+  and when its last tab closes ("Profiles" below). A site visited in both
+  modes cannot link them by what it stored. It is still one browser: the
+  host page's settings and bookmarks are read in both modes, and nothing
+  hides that the same browser and address use both.
+- **One circuit for many sites and visitors.** Tor picks circuits by what
+  the SOCKS client tells it, and the relay's streams all come from one
+  client with no SOCKS credentials, so sites (and visitors) share circuits
+  for as long as Tor reuses one (ten minutes by default). An exit sees
+  them together. "Per-site circuits" below has what would change it.
 - **The host page is not proxied.** The page itself, `/config.js`, `/api/*`
   (Tor's state, the uptime, the commit list), the commit list's avatars from
   GitHub, the installed-app worker and the fonts are the browser's own
@@ -60,28 +65,42 @@ holds each CONNECT for up to two minutes. So the server watches Tor
 | `unknown`       | Tor answers and nothing more is known: an external relay, or the circuit probe is turned off |
 
 The answer also has `summary` (Tor's own words for the phase, at most 80
-printable characters), `via` (`control`, `probe`, `socks`, `relay` or
-`external`) and `checked` (milliseconds since the last check). It names no
-address, port or setting.
+printable characters), `via` (`control`, `probe`, `traffic`, `socks`,
+`relay` or `external`) and `checked` (milliseconds since the last check; 0
+while the control port is followed). It names no address, port or setting.
 
 How the server knows, cheapest first:
 
 1. A SOCKS5 greeting every 2 s until ready and every 5 s after (on this
-   machine). No answer is `down` at once.
-2. With `STOMP_TOR_CONTROL`, Tor's control port:
-   `GETINFO status/bootstrap-phase` and `status/circuit-established` on the
-   same schedule, each check a fresh connection bounded at 3 s. 100% with a
-   circuit is `ready`; 100% without one (the network went away) is not.
+   machine, no circuit). No answer is `down` at once.
+2. With `STOMP_TOR_CONTROL`, Tor's control port, followed as Brave follows
+   its Tor (`components/tor/tor_control.cc` in brave-core): one connection
+   kept open, which authenticates, subscribes with
+   `SETEVENTS STATUS_CLIENT NETWORK_LIVENESS`, asks
+   `GETINFO status/bootstrap-phase` and `status/circuit-established` once,
+   and then only listens. Tor's `BOOTSTRAP PROGRESS=` events move the
+   percentage, `CIRCUIT_ESTABLISHED` and `CIRCUIT_NOT_ESTABLISHED` say
+   whether it has a circuit, and `NETWORK_LIVENESS DOWN` that it lost the
+   network. 100% with a circuit is `ready`; 100% without one is not. Nothing
+   is asked while it is open. When it closes (Tor stopped or restarts), Tor
+   is checked again at once and the connection opened again every 2 s.
    Authentication is whatever Tor offers of NULL, HASHEDPASSWORD
    (`STOMP_TOR_CONTROL_PASSWORD`) and SAFECOOKIE (the cookie file Tor names,
    or `STOMP_TOR_CONTROL_COOKIE`); the plain COOKIE method is never used,
    since it would hand the file's bytes to whatever listens on that port.
-3. Without a control port, a SOCKS5 CONNECT through Tor to
-   `STOMP_TOR_PROBE` (default `check.torproject.org:443`), closed as soon as
-   Tor answers, without sending a byte to the destination: every 10 s until
-   it works, every 5 minutes after, one at a time, bounded at 30 s. Two
-   failures in a row take a ready Tor back to `bootstrapping`.
-   `STOMP_TOR_PROBE=off` leaves only the greeting, and the state `unknown`.
+3. Without a control port, the relay's own traffic: bytes that came back to
+   a visitor from a destination went through a working circuit, so the
+   relay's counters (holyWisp's `stats()`, read every 5 s on this machine)
+   are the signal, and nothing goes through Tor to learn it. The circuit
+   probe, a SOCKS5 CONNECT through Tor to `STOMP_TOR_PROBE` (default
+   `check.torproject.org:443`) closed as soon as Tor answers without
+   sending a byte to the destination, bounded at 30 s and one at a time,
+   runs only when the traffic says nothing: every 10 s until the first
+   evidence and after a failed probe; when streams were opened and nothing
+   came back for 20 s (then two failed probes in a row take a ready Tor
+   back to `bootstrapping`); and when nothing went through for 5 minutes.
+   While visitors browse, it does not run. `STOMP_TOR_PROBE=off` leaves only
+   the greeting, and the state `unknown`.
 
 Polling `/api/tor` cannot make the server check more than once a second, and
 only one check runs at a time.
@@ -163,7 +182,8 @@ Before offering Tor mode to the public:
    `STOMP_TOR_CONTROL` (and `STOMP_TOR_CONTROL_COOKIE` if the server cannot
    read the path Tor names, or `STOMP_TOR_CONTROL_PASSWORD`). The server's
    user must be able to read the cookie file. Without one, the circuit probe
-   connects to `STOMP_TOR_PROBE` through Tor every 5 minutes.
+   connects to `STOMP_TOR_PROBE` through Tor when the relay has been idle
+   for 5 minutes or its streams get nothing back.
 3. **Configure one Tor route**: `STOMP_TOR_SOCKS5` (this relay) or
    `STOMP_TOR_WISP_URL` (an external one, whose Tor egress, DNS, UDP
    refusal and readiness are then yours to guarantee: the page shows its
@@ -183,61 +203,156 @@ Before offering Tor mode to the public:
    production, and keep the reverse proxy's access logs for `/wisp-tor/` as
    short as the abuse handling allows. The demo logs Tor's state changes
    (`Tor: ready (control)`) and nothing of Tor's settings or credentials.
-8. **Watch it.** Alert on `/api/tor` not `ready`, on the Tor process, and on
+8. **Isolate circuits by destination** until the relay can isolate them by
+   site ("Per-site circuits"): `SocksPort 127.0.0.1:9050 IsolateDestAddr`,
+   so streams to different hosts do not share a circuit.
+9. **Watch it.** Alert on `/api/tor` not `ready`, on the Tor process, and on
    the relay's restarts; watch bandwidth and stream counts.
-9. **Tell visitors what it is.** The toggle's tooltip says the host page,
-   shared cookies, storage and extensions stay outside Tor; the privacy
-   limits above belong on any public page that offers it.
-10. **Test** with the real Tor before each rollout: an onion page and a
+10. **Tell visitors what it is.** The toggle's tooltip says the host page
+    stays outside Tor and that Tor mode has its own cookies, storage,
+    history and no extensions, gone when no tab is in Tor mode; the privacy
+    limits above belong on any public page that offers it.
+11. **Test** with the real Tor before each rollout: an onion page and a
     clearnet page in Tor mode, Tor stopped (the page says "Tor is down" and
     the load fails at once) and started again (the page comes back by
     itself).
 
-## Isolating Tor mode from normal mode
+## Profiles
 
-Today both modes share one profile (above). The choices, for the user to
-make:
+Tor mode is a STomp profile of its own (`src/profile.ts`), on the same
+origin as normal mode, kept like Brave's Tor window: Brave opens it as an
+off-the-record profile (`Profile::OTRProfileID::TorID()`,
+`browser/tor/tor_profile_manager.cc`) whose data goes with its last window.
 
-1. **Keep one profile, say so** (now). No cost. Logins and site data carry
-   from one mode to the other, which defeats Tor's unlinkability for any
-   site visited in both.
-2. **A proxy origin of its own for Tor mode** (for example
-   `tor.proxy.example`, or another port of the demo's server, as the site
-   pool's slots are). The browser keeps every database, the Cache API, the
-   service worker registrations and cookies per origin, so all of STomp's
-   stores are separate with no change to the library, and stores added later
-   are separate too. The host runs the isolated `RemoteController` against
-   the mode's origin. Cost: a second origin to deploy (DNS, certificate,
-   CORS and isolation headers), extensions installed again per mode (no
-   sharing of their data either, which is the point), and the host page's
-   own state (history, bookmarks, tabs) keyed by mode in the host's
-   localStorage. This is the cleanest separation.
-3. **Database names per scope in the library** (each `openDB` name, the jar,
-   the transport worker's stores, passkeys, the Wisp carrier and ECH caches
-   prefixed by the scope or a profile id). One origin, but some 15 stores to
-   key, a migration for existing data, and a standing risk that a store added
-   later is not keyed and leaks between modes. More code, weaker guarantee
-   than 2.
-4. **Ephemeral Tor mode** on top of 2 or 3: Tor mode's stores are wiped when
-   it is turned off or the last Tor tab closes (with 2, a `Clear-Site-Data`
-   answer from the Tor origin does all of it). Closest to Tor Browser's
-   behaviour; costs logins that do not survive a session.
+**One place names every store.** A store of the default profile keeps the
+name STomp always gave it; a store of another profile ends with `|` and the
+profile's id (`stompCookies|tor`), so a name says which profile it is of
+(`profileOfName`). STomp's own stores take their names from `storeName` in
+the realm's profile: the service worker and the transport worker read it
+from their script's URL (`serviceWorker.js?profile=tor`), and a controller's
+page is told it (`ControllerInit.profile`, `RemoteControllerInit.profile`);
+one page opens one profile's stores, and a worker refuses a controller of
+another profile. The stores a proxied site makes natively (its IndexedDB
+databases, caches, storage partitions, Web Locks, BroadcastChannels,
+SharedWorkers, origin private file system and legacy file system
+directories) are suffixed with its storage key in the profile
+(`Client.nativeKey`). `test/store-names.mjs` reads the source and fails on
+a store opened by a name of no profile, so a store added later cannot be
+shared by accident.
 
-None of these gives Tor Browser's fingerprint uniformity or hides the
-visitor's address from the relay operator.
+What Tor mode has of its own, then: the cookie jar, the sites' storage and
+their native stores, the HTTP cache and the rewriter's cache (on in Tor
+mode, gone with it), the content blocker's lists, permissions and device
+grants, client hints, emulated service workers, passkeys, the transport's
+memories (ECH configs, the Wisp carrier), the anti-fingerprinting seed and
+the tab ids, and its installed extensions. Storage Buckets are not offered
+to Tor-mode pages (a bucket's name cannot carry the profile), and the site
+pool is off in Tor mode (its slots are other origins, which the host page
+cannot wipe).
+
+**Ephemeral.** `StompController.forgetProfile('tor')` unregisters the
+profile's service workers, then deletes its databases (a connection of
+STomp's closes when its database is deleted, so the deletion does not
+wait), caches, localStorage keys, this tab's sessionStorage keys and file
+system directories, and says what it could not delete. A forgotten
+profile's next worker is a new one (`StompController.profileWorker`: its
+script's URL carries a name the wipe changes), since Chrome gives a scope
+registered again soon after its unregistration the same running worker
+back, memory and all. The isolated mode's `RemoteController.forgetProfile`
+does the same on the proxy origin. The demo (`demo/public/pm/main.js`,
+"Tor mode's session") forgets the profile:
+
+- when Tor mode is turned off in its tab, once that page is gone;
+- when the last Tor-mode tab closes while a normal one is open, after 10 s
+  (a reload, which continues its session, takes its tab's Web Lock again
+  before that);
+- before the first Tor-mode tab of a new session starts (a browser closed
+  with a Tor tab open, a tab restored), and whenever a page of the origin
+  starts with no Tor-mode tab open.
+
+Each Tor-mode page holds a Web Lock of its own; the decision to forget is
+taken under one more, so two pages never wipe a session a third one opens.
+
+**The host page's own data.** In Tor mode the demo keeps nothing of its
+own (`demo/public/pm/profile.js`): what it writes of its settings,
+bookmarks, omnibox history and tabs lasts only the page. It reads the
+normal profile's settings and bookmarks, as Brave's Tor window inherits
+them, but not its history. The tab's session (open tabs, the address bar)
+is kept under the profile's sessionStorage keys, so a reload continues it,
+and a new session starts without them.
+
+**Extensions.** Tor mode starts with none: the normal profile's are not in
+its store. One installed in Tor mode is the profile's and goes with it.
+Brave runs an extension in its Tor window only when the user allowed it
+("Allow in Private"), and then the same extension with the same id spans
+both profiles. STomp has no such opt-in yet: it would take the extension's
+package, its id (a Web Store package's comes from its CRX key) and the
+choice from the normal profile's worker to the Tor profile's at the start
+of each session, and an answer for its state (Chrome's "split" mode, a
+copy per profile).
+
+What stays shared: the host page itself and its requests (outside Tor, as
+above), its theme, and the browser's own state for the origin that is not
+STomp's (the origin's permission prompts the browser shows, its HTTP cache
+of the demo's files). Tor mode gives no Tor Browser fingerprint
+uniformity, and does not hide the visitor's address from the relay
+operator.
+
+## Per-site circuits
+
+Brave gives each first-party site its own circuits: the SOCKS username of
+every connection is the top frame's site (`AnonymizationKeyToString` in
+`net/proxy_resolution/proxy_config_service_tor.cc`) and the password a
+random nonce per site, renewed after about ten minutes and on "New Tor
+connection for this site" (`TorProxyMap`), and Tor's default
+`IsolateSOCKSAuth` keeps streams with different credentials on different
+circuits.
+
+The relay cannot do that yet. holyWisp (0.5.3) dials one upstream SOCKS
+proxy with fixed credentials, and a Wisp stream says only its host and port,
+not the site whose page opened it, so every visitor's every stream reaches
+Tor as the same client. What it would take:
+
+1. **The transport keys connections by first-party site**: the page's top
+   site (the storage key's first part) for every stream a page opens, the
+   way it already names the Partition.
+2. **One Wisp connection per first-party site and profile** (or a Wisp
+   extension that carries an isolation key per stream), so the relay can
+   tell them apart.
+3. **holyWisp takes a SOCKS username per connection** from the server's
+   `route()` (the Node API decides the connection; a header or the route's
+   path carries the key), and sends it with a password the server draws per
+   visitor and site and forgets with the profile.
+
+Until then, `SocksPort 127.0.0.1:9050 IsolateDestAddr` (checklist above)
+keeps streams to different hosts off one circuit, at the cost of more
+circuits; streams of different visitors to the same host still share one.
 
 ## Tested
 
 - `node --test test/tor-wisp.mjs`: the DNS stub, SOCKS and control-port
   parsing, control-port authentication (NULL, password, SAFECOOKIE; plain
-  COOKIE and a port that does not know the cookie refused), the monitor
-  through down, bootstrapping, ready, down and ready again with a fake
-  control port, the circuit probe, the real holyWisp relay against a fake
+  COOKIE and a port that does not know the cookie refused), Tor's events,
+  the monitor through down, bootstrapping, ready, down and ready again with
+  a fake control port that sends them (one connection, no command asked
+  while it is open, SOCKS lost under an open control port), the network
+  going away and coming back, the circuit probe, the relay's traffic as the
+  signal (no probe while it flows, a probe when idle, a stall that probes
+  and fails, recovery), the real holyWisp relay against a fake
   SOCKS (onion by name; UDP, IP literals, blocked ports and local names
   refused), and the demo server refusing `/wisp-tor/` until Tor is ready,
   closing its connections when Tor goes and taking new ones when it comes
   back.
-- The `demo-tor` suite: the toggle and its separate scope, and a demo
+- `node --test test/store-names.mjs`: every store STomp opens is named in
+  its profile.
+- The `demo-tor` suite: the toggle and its separate scope; in the same
+  origin and the isolated mode, a site's cookie, localStorage, IndexedDB
+  and Cache Storage of one mode are not in the other, every store Tor mode
+  opened on the origin is its profile's and none is shared, the origin's
+  databases, caches, keys, directories and workers have nothing of Tor mode
+  left once it is turned off or its last tab closes, its history was never
+  kept, the normal profile's data outlives it, and a new session gets a new
+  worker; and a demo
   server of its own with the real relay in front of a fake Tor whose SOCKS
   connects every name to the fixture: Tor down (the page says so, a load
   fails at once with "Tor is down"), bootstrapping (its percentage),

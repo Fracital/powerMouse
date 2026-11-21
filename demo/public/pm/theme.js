@@ -220,18 +220,20 @@
 	);
 	const builtin = (id) => BUILTIN.find((theme) => theme.id === id) ?? null;
 
+	// in Tor mode what this page changes lasts this page (pm/profile.js)
+	const kept = globalThis.PMProfile?.storage ?? localStorage;
 	const storage = {
 		get(key) {
 			try {
-				return localStorage.getItem(key);
+				return kept.getItem(key);
 			} catch {
 				return null;
 			}
 		},
 		set(key, value) {
 			try {
-				if (value === null) localStorage.removeItem(key);
-				else localStorage.setItem(key, value);
+				if (value === null) kept.removeItem(key);
+				else kept.setItem(key, value);
 			} catch {
 				// private mode, or storage full: the theme lasts this visit
 			}
@@ -697,19 +699,34 @@
 		return all;
 	};
 
-	let dbOpen = null;
-	function db() {
-		dbOpen ??= new Promise((resolve, reject) => {
-			const request = indexedDB.open(DB_NAME, 1);
-			request.onupgradeneeded = () =>
-				request.result.createObjectStore(DB_STORE);
-			request.onsuccess = () => resolve(request.result);
-			request.onerror = () => reject(request.error);
-		});
-		return dbOpen;
+	// the pictures: in Tor mode the profile's own database (pm/profile.js,
+	// forgotten with the profile) first, and the normal one's to read
+	const OWN_DB = globalThis.PMProfile?.storeName(DB_NAME) ?? DB_NAME;
+	const dbOpen = new Map();
+	function db(name) {
+		if (!dbOpen.has(name))
+			dbOpen.set(
+				name,
+				new Promise((resolve, reject) => {
+					const request = indexedDB.open(name, 1);
+					request.onupgradeneeded = () =>
+						request.result.createObjectStore(DB_STORE);
+					request.onsuccess = () => {
+						const database = request.result;
+						// a profile forgotten deletes its database
+						database.onversionchange = () => {
+							database.close();
+							dbOpen.delete(name);
+						};
+						resolve(database);
+					};
+					request.onerror = () => reject(request.error);
+				}),
+			);
+		return dbOpen.get(name);
 	}
-	async function idb(mode, run) {
-		const database = await db();
+	async function idb(mode, run, name = OWN_DB) {
+		const database = await db(name);
 		return new Promise((resolve, reject) => {
 			const tx = database.transaction(DB_STORE, mode);
 			const result = run(tx.objectStore(DB_STORE));
@@ -731,6 +748,12 @@
 			try {
 				const key = imageKey(theme.id, name, scale);
 				blobs[key] = await idb('readonly', (store) => store.get(key));
+				if (!(blobs[key] instanceof Blob) && OWN_DB !== DB_NAME)
+					blobs[key] = await idb(
+						'readonly',
+						(store) => store.get(key),
+						DB_NAME,
+					);
 			} catch {
 				// no IndexedDB: the theme shows without this picture
 			}

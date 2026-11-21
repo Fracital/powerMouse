@@ -5,9 +5,11 @@
 // scripts) in one IndexedDB database. One store per scope: every
 // controller of it sees the same extensions, as every tab of a browser
 // does.
-import { openDB, type IDBPDatabase } from 'idb';
+import type { IDBPDatabase } from 'idb';
 import { extensionURL } from '../../extensions/origin';
 import type { Manifest } from '../../extensions/types';
+import { storeName } from '../../profile';
+import { openStoreDB } from '../../storeDB';
 
 export const EXTENSIONS_DATABASE = 'extension-store';
 export const FILE_CACHE = 'extension-files';
@@ -89,7 +91,7 @@ export function mimeOf(path: string): string {
 let database: Promise<IDBPDatabase> | null = null;
 
 function db(): Promise<IDBPDatabase> {
-	database ??= openDB(EXTENSIONS_DATABASE, 1, {
+	database ??= openStoreDB(EXTENSIONS_DATABASE, 1, {
 		upgrade(made) {
 			for (const name of ['extensions', 'storage', 'state'])
 				if (!made.objectStoreNames.contains(name)) made.createObjectStore(name);
@@ -183,10 +185,10 @@ export type PackedFile = [number, number, number, number];
 export type PackIndex = Record<string, PackedFile>;
 
 /** each extension's own Cache Storage cache: its package is one entry of it */
-const fileCache = (id: string) => `${FILE_CACHE}:${id}`;
+const fileCache = (id: string) => storeName(`${FILE_CACHE}:${id}`);
 /** each extension's rewritten content scripts (contentScripts.ts, api.ts) */
 export const scriptCache = (id: string) =>
-	`${SCRIPT_CACHE}:${SCRIPT_FORMAT}:${id}`;
+	storeName(`${SCRIPT_CACHE}:${SCRIPT_FORMAT}:${id}`);
 const packageURL = (id: string) => extensionURL(id, '.archive');
 
 async function inflated(data: Blob, length: number): Promise<Uint8Array> {
@@ -267,7 +269,7 @@ class PackageFiles {
 		await caches.delete(fileCache(id));
 		await caches.delete(scriptCache(id));
 		// (and what an earlier build kept)
-		await caches.delete(`${SCRIPT_CACHE}:${id}`);
+		await caches.delete(storeName(`${SCRIPT_CACHE}:${id}`));
 	}
 }
 

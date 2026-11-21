@@ -1,4 +1,5 @@
 import { DEFAULT_NAMES, type HelperNames } from '../helperNames';
+import { storeName } from '../profile';
 
 // A controller's id names its address under the scope (`/stomp/<id>/`), so
 // two host tabs on one scope do not replace each other in the service worker.
@@ -70,7 +71,7 @@ function storedIds(text: string | null): string[] {
 }
 /** the kept ids, oldest first */
 const keptIds = () =>
-	storedIds(localStorage.getItem(KEY)).filter((id) => id !== '');
+	storedIds(localStorage.getItem(storeName(KEY))).filter((id) => id !== '');
 
 /**
  * The id of a controller whose host gave none: one that stays the same from
@@ -130,7 +131,7 @@ const SEED_KEY = 'anti-fp-seed';
  */
 export function fingerprintSeed(): number {
 	try {
-		const stored = localStorage.getItem(SEED_KEY);
+		const stored = localStorage.getItem(storeName(SEED_KEY));
 		if (stored !== null) {
 			const value = Number(stored);
 			if (Number.isInteger(value) && value >= 0 && value <= 0xffffffff)
@@ -141,7 +142,7 @@ export function fingerprintSeed(): number {
 	}
 	const seed = crypto.getRandomValues(new Uint32Array(1))[0] >>> 0;
 	try {
-		localStorage.setItem(SEED_KEY, String(seed));
+		localStorage.setItem(storeName(SEED_KEY), String(seed));
 	} catch (error) {
 		// not kept: it still serves this page
 	}
@@ -201,7 +202,9 @@ export function keptHelperNames(taken: Iterable<string> = []): KeptNames {
 		);
 	};
 	try {
-		const kept: unknown = JSON.parse(localStorage.getItem(NAMES_KEY) ?? 'null');
+		const kept: unknown = JSON.parse(
+			localStorage.getItem(storeName(NAMES_KEY)) ?? 'null',
+		);
 		if (usable(kept))
 			return {
 				access: kept.access,
@@ -220,7 +223,7 @@ export function keptHelperNames(taken: Iterable<string> = []): KeptNames {
 		};
 	while (!usable(names));
 	try {
-		localStorage.setItem(NAMES_KEY, JSON.stringify(names));
+		localStorage.setItem(storeName(NAMES_KEY), JSON.stringify(names));
 	} catch (error) {
 		// not kept: they still serve this page
 	}
@@ -237,7 +240,7 @@ async function claimKeptId(place: number): Promise<string> {
 	if (!locks || typeof locks.request !== 'function') return mintId();
 	// storage that refuses throws here: nothing can be kept, a new id
 	const kept = keptIds();
-	const own = storedIds(sessionStorage.getItem(KEY))[place];
+	const own = storedIds(sessionStorage.getItem(storeName(KEY)))[place];
 
 	// this controller's own id from before a reload: the old document lets
 	// go of it a moment after it is gone. Only while it is still kept:
@@ -247,7 +250,7 @@ async function claimKeptId(place: number): Promise<string> {
 		if (await hold(locks, own, RELOAD_WAIT_MS)) return remember(place, own);
 
 	return locks.request(
-		KEY,
+		storeName(KEY),
 		{ signal: AbortSignal.timeout(CLAIM_WAIT_MS) },
 		async () => {
 			// read again: the list is only written under this lock
@@ -262,7 +265,7 @@ async function claimKeptId(place: number): Promise<string> {
 			try {
 				// the oldest dropped: the list never grows past KEPT_IDS
 				localStorage.setItem(
-					KEY,
+					storeName(KEY),
 					JSON.stringify([...kept, id].slice(-KEPT_IDS)),
 				);
 			} catch (error) {
@@ -289,7 +292,7 @@ function hold(locks: LockManager, id: string, wait = 0): Promise<boolean> {
 	return new Promise<boolean>((resolve) => {
 		locks
 			.request(
-				`${KEY}:${id}`,
+				`${storeName(KEY)}:${id}`,
 				wait ? { signal: AbortSignal.timeout(wait) } : { ifAvailable: true },
 				(lock) => {
 					if (lock === null) return resolve(false);
@@ -305,10 +308,13 @@ function hold(locks: LockManager, id: string, wait = 0): Promise<boolean> {
 /** this tab's ids, by the place of the controller that holds each */
 function remember(place: number, id: string): string {
 	try {
-		const own = storedIds(sessionStorage.getItem(KEY));
+		const own = storedIds(sessionStorage.getItem(storeName(KEY)));
 		for (let index = own.length; index < place; index++) own[index] = '';
 		own[place] = id;
-		sessionStorage.setItem(KEY, JSON.stringify(own.slice(0, KEPT_IDS)));
+		sessionStorage.setItem(
+			storeName(KEY),
+			JSON.stringify(own.slice(0, KEPT_IDS)),
+		);
 	} catch (error) {
 		// not remembered: after a reload the tab takes a free one
 	}
@@ -324,12 +330,12 @@ function remember(place: number, id: string): string {
 export async function forgetControllerIds(): Promise<void> {
 	const forget = () => {
 		try {
-			localStorage.removeItem(KEY);
-			sessionStorage.removeItem(KEY);
+			localStorage.removeItem(storeName(KEY));
+			sessionStorage.removeItem(storeName(KEY));
 			// the farbling seed goes with the site data too, so it re-seeds,
 			// and the helper names, which are kept as the ids are
-			localStorage.removeItem(SEED_KEY);
-			localStorage.removeItem(NAMES_KEY);
+			localStorage.removeItem(storeName(SEED_KEY));
+			localStorage.removeItem(storeName(NAMES_KEY));
 		} catch (error) {
 			// no storage: nothing was kept
 		}
@@ -338,7 +344,7 @@ export async function forgetControllerIds(): Promise<void> {
 	try {
 		if (locks && typeof locks.request === 'function')
 			return await locks.request(
-				KEY,
+				storeName(KEY),
 				{ signal: AbortSignal.timeout(CLAIM_WAIT_MS) },
 				forget,
 			);

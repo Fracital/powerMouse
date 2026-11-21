@@ -60,7 +60,7 @@ export default class StorageEstimateModule extends Module<Client> {
 				// (a Storage Access handle's is the first-party key's, and
 				// natively details nothing)
 				const handle = storageRedirects.has(receiver);
-				const [that, key] = redirected(receiver, client.storageKey);
+				const [that, key] = redirected(receiver, client.nativeKey);
 				// (a deferred part, ../storageUsage.ts, made before the browser is
 				// asked: without it the promise rejects)
 				const usageOf = idbSizeParts.storageUsage!();

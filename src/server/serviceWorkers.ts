@@ -4,7 +4,7 @@
 // dispatch of the requests they answer. Nothing here ever registers a real
 // service worker.
 
-import { IDBPDatabase, openDB } from 'idb';
+import type { IDBPDatabase } from 'idb';
 import type { WorkerPolicies } from '../csp';
 import { partitionSite } from '../partition';
 import type {
@@ -28,6 +28,7 @@ import type {
 	WorkerState,
 	WorkerType,
 } from '../serviceWorkerTypes';
+import { openStoreDB } from '../storeDB';
 import { receiveBody, sendBody } from '../transport/bodyPort';
 import {
 	postToPort,
@@ -301,7 +302,7 @@ export class ServiceWorkers {
 	}
 
 	#open(): Promise<IDBPDatabase> {
-		this.#db ??= openDB('stompServiceWorkers', 1, {
+		this.#db ??= openStoreDB('stompServiceWorkers', 1, {
 			upgrade: (db) => {
 				db.createObjectStore('registrations');
 				db.createObjectStore('scripts');

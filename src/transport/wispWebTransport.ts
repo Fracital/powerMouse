@@ -67,6 +67,7 @@ import type {
 	RawHeaders,
 	TransferrableResponse,
 } from '@mercuryworkshop/proxy-transports';
+import { closeOnDelete, storeName } from '../profile';
 import { askCarrierHost, type CarrierGiven } from './carrierClient';
 import { promptSink } from './promptSink';
 import type { Ride } from './riderPace';
@@ -292,9 +293,12 @@ export const memory = (() => {
 	const db = () =>
 		(opened ??= new Promise<IDBDatabase | null>((resolve) => {
 			try {
-				const request = indexedDB.open('stomp-wisp-carrier', 1);
+				const request = indexedDB.open(storeName('stomp-wisp-carrier'), 1);
 				request.onupgradeneeded = () => request.result.createObjectStore(STORE);
-				request.onsuccess = () => resolve(request.result);
+				request.onsuccess = () => {
+					closeOnDelete(request.result, () => (opened = null));
+					resolve(request.result);
+				};
 				request.onerror = () => resolve(null);
 				request.onblocked = () => resolve(null);
 			} catch {

@@ -503,9 +503,13 @@ export function libraryFile(assets?: Assets) {
 	return `${assetName(assets, 'rewriterLib')}?${encodeURIComponent(LIBRARY)}`;
 }
 
-/** the WebRTC worker's script, and the stack's wasm module it loads (docs/webrtc-over-wisp.md) */
+/**
+ * the WebRTC worker's script (with its profile, whose channel it opens:
+ * src/profile.ts), and the stack's wasm module it loads
+ * (docs/webrtc-over-wisp.md)
+ */
 export function rtcWorkerJS(url: StompURL, config?: Config) {
-	return `${assetBase(url, config)}${assetName(config?.assets, 'rtcWorker')}`;
+	return `${assetBase(url, config)}${assetName(config?.assets, 'rtcWorker')}${config?.profile ? `?profile=${config.profile}` : ''}`;
 }
 export function rtcModule(url: StompURL, config?: Config) {
 	return `${assetBase(url, config)}${assetName(config?.assets, 'rtc')}`;

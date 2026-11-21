@@ -1,4 +1,5 @@
-import { openDB, type IDBPDatabase } from 'idb';
+import type { IDBPDatabase } from 'idb';
+import { openStoreDB } from '../storeDB';
 import type {
 	DeviceGrant,
 	DeviceKind,
@@ -74,7 +75,7 @@ export function usePermissionsRemote(db: JarDB) {
 }
 
 function openStore(): Promise<IDBPDatabase | null> {
-	store ??= openDB(PERMISSIONS_DATABASE, 1, {
+	store ??= openStoreDB(PERMISSIONS_DATABASE, 1, {
 		upgrade: (db) => {
 			db.createObjectStore(PERMISSIONS_STORE);
 		},
@@ -273,7 +274,7 @@ let saltStore: Promise<IDBPDatabase | null> | null = null;
 const salts = new Map<string, Promise<string>>();
 
 function openSalts(): Promise<IDBPDatabase | null> {
-	saltStore ??= openDB('stompDeviceIds', 1, {
+	saltStore ??= openStoreDB('stompDeviceIds', 1, {
 		upgrade: (db) => {
 			db.createObjectStore('salts');
 		},
@@ -353,7 +354,7 @@ const grantKey = (site: string, kind: DeviceKind, key: string) =>
 	`${site} ${kind} ${key}`;
 
 function openGrants(): Promise<IDBPDatabase | null> {
-	grantStore ??= openDB(DEVICE_GRANTS_DATABASE, 1, {
+	grantStore ??= openStoreDB(DEVICE_GRANTS_DATABASE, 1, {
 		upgrade: (db) => {
 			db.createObjectStore(DEVICE_GRANTS_STORE);
 		},

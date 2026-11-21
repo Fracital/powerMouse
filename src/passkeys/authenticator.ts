@@ -21,6 +21,7 @@
 // as a software provider without a registered model has them; the
 // credentials are neither backup eligible nor backed up (BE and BS are 0),
 // which is true: they live in this browser's storage and nowhere else.
+import { closeOnDelete, storeName } from '../profile';
 import { PASSKEYS_DATABASE, PASSKEYS_STORE, type JarDB } from '../server/jarDB';
 import { concat, encodeCBOR, type CBORValue } from './cbor';
 import {
@@ -138,12 +139,15 @@ export function usePasskeysRemote(db: JarDB) {
 let database: Promise<IDBDatabase> | null = null;
 function open(): Promise<IDBDatabase> {
 	database ??= new Promise<IDBDatabase>((resolve, reject) => {
-		const request = indexedDB.open(DATABASE, 1);
+		const request = indexedDB.open(storeName(DATABASE), 1);
 		request.onupgradeneeded = () => {
 			const store = request.result.createObjectStore(STORE, { keyPath: 'id' });
 			store.createIndex('rpId', 'rpId');
 		};
-		request.onsuccess = () => resolve(request.result);
+		request.onsuccess = () => {
+			closeOnDelete(request.result, () => (database = null));
+			resolve(request.result);
+		};
 		request.onerror = () => reject(request.error);
 		request.onblocked = () => reject(new Error('passkey store blocked'));
 	});

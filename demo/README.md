@@ -52,11 +52,13 @@ when a Tor-backed Wisp relay is configured. The choice is kept in
 `localStorage['stomp-demo:tor']` (or set for one visit with `?tor` / `?notor`),
 independently of the content blocker. Changing it reloads the page, since
 `controller.setTransport()` allows requests already using the old transport
-to finish. Tor uses a separate `/stomp-tor/` service worker scope, and the
-STomp HTTP cache is disabled. The persistent cookie, storage and extension
-databases of the proxy origin are **still shared** with normal mode; this
-route is not an isolated browsing profile. HTTP/3, UDP, WebTransport and the external ECH
-DNS lookup are off. A missing Tor relay stops Tor-mode browsing rather than
+to finish. Tor uses a separate `/stomp-tor/` service worker scope and a
+STomp profile of its own on the same origin (docs/tor.md, "Profiles"): its
+own cookie jar, site storage, HTTP and rewrite caches, permissions and
+extensions (none until one is installed in Tor mode), and the page's
+history and tabs are not kept. The profile is wiped when Tor is turned off
+and when the last Tor-mode tab closes. HTTP/3, UDP, WebTransport and the
+external ECH DNS lookup are off. A missing Tor relay stops Tor-mode browsing rather than
 trying the normal Wisp endpoint.
 
 Run a Tor SOCKS5 listener on the demo server, then start the demo with:
@@ -83,16 +85,16 @@ says so ("Tor is down", "Tor is connecting") and loads again by itself once
 Tor is ready, without a reload of the host page. Tor that is down when the
 server starts, or that goes away and comes back, needs no restart.
 
-| Variable                     | Default                    | Meaning                                                                                                                                        |
-| ---------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `STOMP_TOR_SOCKS5`           | unset                      | Tor's SOCKS5 listener, `socks5h://127.0.0.1:PORT` or `socks5h://[::1]:PORT`, no credentials: turns on the `/wisp-tor/` relay                   |
-| `STOMP_TOR_CONTROL`          | unset                      | Tor's control port for readiness (`GETINFO status/bootstrap-phase`): `127.0.0.1:PORT`, `[::1]:PORT` or `unix:/path` of a `ControlSocket`       |
-| `STOMP_TOR_CONTROL_PASSWORD` | unset                      | the control port's password (`HashedControlPassword`); never logged                                                                            |
-| `STOMP_TOR_CONTROL_COOKIE`   | the file Tor names         | the control port's cookie file, for SAFECOOKIE authentication (the plain COOKIE method is not used)                                            |
-| `STOMP_TOR_PROBE`            | `check.torproject.org:443` | without a control port, the host a SOCKS CONNECT through Tor probes (closed at once, no byte sent; every 5 minutes once ready); `off` for none |
-| `STOMP_TOR_ORIGINS`          | unset                      | page origins the Tor relay takes WebSockets from, comma separated (unset: any)                                                                 |
-| `STOMP_TOR_TRUSTED_PROXIES`  | unset                      | reverse proxies (addresses or CIDRs) whose `X-Forwarded-For` the Tor relay's per-client limits believe                                         |
-| `STOMP_TOR_WISP_URL`         | unset                      | instead of all of the above, a separately operated Tor-backed Wisp relay                                                                       |
+| Variable                     | Default                    | Meaning                                                                                                                                                    |
+| ---------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `STOMP_TOR_SOCKS5`           | unset                      | Tor's SOCKS5 listener, `socks5h://127.0.0.1:PORT` or `socks5h://[::1]:PORT`, no credentials: turns on the `/wisp-tor/` relay                               |
+| `STOMP_TOR_CONTROL`          | unset                      | Tor's control port for readiness (its bootstrap and circuit events): `127.0.0.1:PORT`, `[::1]:PORT` or `unix:/path` of a `ControlSocket`                   |
+| `STOMP_TOR_CONTROL_PASSWORD` | unset                      | the control port's password (`HashedControlPassword`); never logged                                                                                        |
+| `STOMP_TOR_CONTROL_COOKIE`   | the file Tor names         | the control port's cookie file, for SAFECOOKIE authentication (the plain COOKIE method is not used)                                                        |
+| `STOMP_TOR_PROBE`            | `check.torproject.org:443` | without a control port, the host a SOCKS CONNECT through Tor probes (closed at once, no byte sent; only when the relay is idle or failing); `off` for none |
+| `STOMP_TOR_ORIGINS`          | unset                      | page origins the Tor relay takes WebSockets from, comma separated (unset: any)                                                                             |
+| `STOMP_TOR_TRUSTED_PROXIES`  | unset                      | reverse proxies (addresses or CIDRs) whose `X-Forwarded-For` the Tor relay's per-client limits believe                                                     |
+| `STOMP_TOR_WISP_URL`         | unset                      | instead of all of the above, a separately operated Tor-backed Wisp relay                                                                                   |
 
 Alternatively `STOMP_TOR_WISP_URL=wss://relay.example/wisp/` names a separately
 operated Tor-backed Wisp relay. Configure **one** of these on the server.

@@ -1,3 +1,4 @@
+import { nativeStoreKey } from '../../../profile';
 import { routeBinary } from '../../../routeURL';
 import StompURL from '../../../StompURL';
 import {
@@ -143,7 +144,10 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		// a copy of the site's states in the proxy origin's own localStorage
 		// (unhooked; the page's is its own), for what a page reads at once
 		// (Notification.permission); the worker's states replace it
-		const mirrorKey = `$stomp$permissions:${site}`;
+		const mirrorKey = nativeStoreKey(
+			`$stomp$permissions:${site}`,
+			client.profile,
+		);
 		let mirror: Storage | null = null;
 		try {
 			mirror =

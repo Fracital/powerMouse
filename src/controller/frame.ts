@@ -4,7 +4,6 @@
 // RemoteController. Proxied frames are same-origin siblings of this frame, so
 // it can read their location and drive their history on the host's behalf.
 import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
-import { assetName } from '../config';
 import type {
 	ExtensionPromptAnswer,
 	ExtensionPromptRequest,
@@ -13,6 +12,7 @@ import type {
 import { helperNames } from '../helperNames';
 import type { HookErrorInfo } from '../hooks';
 import type { PasskeyAnswer, PasskeyPrompt } from '../passkeys/types';
+import { checkProfile } from '../profile';
 import { constructTransport, resolveHttp3 } from '../transport/construct';
 import type {
 	IdentityChooserRequest,
@@ -50,6 +50,7 @@ import {
 	STORAGE_BLOCKED,
 	TransportDescriptor,
 } from './messages';
+import { forgetProfile, serviceWorkerScript } from './profiles';
 
 /** the host's frames as the extensions' tabs, asked over the frame's RPC */
 function hostTabs(
@@ -251,8 +252,16 @@ else if (window === window.parent) {
 				init: async (init: ControllerFrameInit) => {
 					let registration: ServiceWorkerRegistration;
 					try {
+						const profile = checkProfile(init.profile);
+						// a profile that starts empty (Tor mode's first tab) is
+						// forgotten before its worker is registered
+						if (profile && init.freshProfile) await forgetProfile(profile);
 						registration = await navigator.serviceWorker.register(
-							`${init.directory}${assetName(init.assets, 'serviceWorker')}`,
+							serviceWorkerScript(
+								new URL(init.directory, location.href),
+								init.assets,
+								profile,
+							),
 							{ scope: init.directory, updateViaCache: 'none' },
 						);
 					} catch (error) {
@@ -294,6 +303,7 @@ else if (window === window.parent) {
 						transport: onProxyOrigin(init.transport),
 						directory: init.directory,
 						id: init.id,
+						...(init.profile ? { profile: init.profile } : {}),
 						codec: init.codec,
 						frameAncestors: slots.length
 							? [hostOrigin, location.origin, ...slots]
@@ -575,6 +585,11 @@ else if (window === window.parent) {
 				forgetStorage: async (origin) => {
 					if (!controller) throw new Error('Controller is not initialised');
 					await controller.forgetStorage(origin);
+				},
+				forgetProfile: async (id) => {
+					if (controller && checkProfile(id) === controller.profile)
+						throw new Error('A controller cannot forget its own profile');
+					return [await forgetProfile(id), []];
 				},
 				passkeys: async (command) => {
 					if (!controller) throw new Error('Controller is not initialised');

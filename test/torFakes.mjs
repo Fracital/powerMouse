@@ -10,21 +10,73 @@ const close = (server) => new Promise((resolve) => server.close(resolve));
 
 // A Tor control port as far as the monitor uses it: PROTOCOLINFO, one of
 // NULL / HASHEDPASSWORD / SAFECOOKIE authentication, GETINFO of the
-// bootstrap phase and circuit state, QUIT. `tor.progress` and
-// `tor.circuit` are what it reports; `tor.seen` the commands it got.
+// bootstrap phase and circuit state, SETEVENTS (STATUS_CLIENT's BOOTSTRAP,
+// CIRCUIT_ESTABLISHED and CIRCUIT_NOT_ESTABLISHED events and
+// NETWORK_LIVENESS, sent as Tor sends them when `tor.progress`,
+// `tor.circuit` or `tor.live` change), QUIT. `tor.seen` is the commands it
+// got, `tor.connections` how many connections it took; `close()` drops
+// every connection (Tor stopped) and `listen(port)` takes them again.
 const SERVER_KEY = 'Tor safe cookie authentication server-to-controller hash';
 const CLIENT_KEY = 'Tor safe cookie authentication controller-to-server hash';
+
 export function fakeControl({
 	method = 'NULL',
 	password = '',
 	cookie = null,
 } = {}) {
-	const tor = { progress: 0, circuit: false, seen: [] };
+	const state = { progress: 0, circuit: false, live: true };
+	const subscribed = new Set();
+	const sockets = new Set();
+	const event = (text) => {
+		for (const socket of subscribed) socket.write(`650 ${text}\r\n`);
+	};
+	const bootstrapLine = () => {
+		const done = state.progress === 100;
+		return `NOTICE BOOTSTRAP PROGRESS=${state.progress} TAG=${done ? 'done' : 'loading_descriptors'} SUMMARY="${done ? 'Done' : 'Loading relay descriptors'}"`;
+	};
+	const tor = {
+		seen: [],
+		connections: 0,
+		get progress() {
+			return state.progress;
+		},
+		set progress(value) {
+			if (value === state.progress) return;
+			state.progress = value;
+			event(`STATUS_CLIENT ${bootstrapLine()}`);
+		},
+		get circuit() {
+			return state.circuit;
+		},
+		set circuit(value) {
+			if (value === state.circuit) return;
+			state.circuit = value;
+			event(
+				value
+					? 'STATUS_CLIENT NOTICE CIRCUIT_ESTABLISHED'
+					: 'STATUS_CLIENT NOTICE CIRCUIT_NOT_ESTABLISHED REASON=EXTERNAL_ADDRESS',
+			);
+		},
+		get live() {
+			return state.live;
+		},
+		set live(value) {
+			if (value === state.live) return;
+			state.live = value;
+			event(`NETWORK_LIVENESS ${value ? 'UP' : 'DOWN'}`);
+		},
+	};
 	const server = createNetServer((socket) => {
+		tor.connections++;
+		sockets.add(socket);
 		let authed = false;
 		let buffer = '';
 		let challenge = null;
 		socket.on('error', () => {});
+		socket.on('close', () => {
+			sockets.delete(socket);
+			subscribed.delete(socket);
+		});
 		socket.on('data', (chunk) => {
 			buffer += chunk.toString('latin1');
 			let newline;
@@ -68,13 +120,14 @@ export function fakeControl({
 					reply('514 Authentication required.');
 					socket.end();
 				} else if (line === 'GETINFO status/bootstrap-phase') {
-					const done = tor.progress === 100;
-					reply(
-						`250-status/bootstrap-phase=NOTICE BOOTSTRAP PROGRESS=${tor.progress} TAG=${done ? 'done' : 'loading_descriptors'} SUMMARY="${done ? 'Done' : 'Loading relay descriptors'}"`,
-					);
+					reply(`250-status/bootstrap-phase=${bootstrapLine()}`);
 					reply('250 OK');
 				} else if (line === 'GETINFO status/circuit-established') {
-					reply(`250-status/circuit-established=${tor.circuit ? 1 : 0}`);
+					reply(`250-status/circuit-established=${state.circuit ? 1 : 0}`);
+					reply('250 OK');
+				} else if (line.startsWith('SETEVENTS')) {
+					if (line.includes('STATUS_CLIENT')) subscribed.add(socket);
+					else subscribed.delete(socket);
 					reply('250 OK');
 				} else if (line === 'QUIT') {
 					reply('250 closing connection');
@@ -86,11 +139,20 @@ export function fakeControl({
 	return {
 		tor,
 		server,
-		listen: () =>
-			new Promise((resolve) =>
-				server.listen(0, '127.0.0.1', () => resolve(server.address().port)),
-			),
-		close: () => close(server),
+		/** the connections open now */
+		open: () => sockets.size,
+		listen: (port = 0) =>
+			new Promise((resolve, reject) => {
+				server.once('error', reject);
+				server.listen(port, '127.0.0.1', () => {
+					server.off('error', reject);
+					resolve(server.address().port);
+				});
+			}),
+		close: () => {
+			for (const socket of sockets) socket.destroy();
+			return server.listening ? close(server) : Promise.resolve();
+		},
 	};
 }
 

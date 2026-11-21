@@ -9,10 +9,12 @@
 // then earlier creations (a re-set with a new value is a new creation, as
 // in Chrome). The matching functions are exported on their own so they can
 // be checked in node (cookie-rules suite).
-import { openDB, type IDBPDatabase } from 'idb';
+import type { IDBPDatabase } from 'idb';
 import { pastASCII, utf8Bytes, utf8Text } from '../byteString';
 import { JAR_TURN_COOKIE } from '../encodeCookie';
 import { ephemeralKey, registrableDomain } from '../partition';
+import { storeName } from '../profile';
+import { openStoreDB } from '../storeDB';
 import {
 	CookieRecord,
 	COOKIES_CHANGED,
@@ -1113,7 +1115,7 @@ class KeptJar implements JarDB {
 	constructor(db: JarDB) {
 		this.#db = db;
 		try {
-			this.#channel = new BroadcastChannel(JAR_WRITES);
+			this.#channel = new BroadcastChannel(storeName(JAR_WRITES));
 			// a writer that names the domain (a KeptJar) or one that does not
 			this.#channel.onmessage = ({ data }) =>
 				this.#forget(
@@ -1231,7 +1233,7 @@ let jarDB: Promise<IDBPDatabase<unknown>> | undefined;
  * the handshake's start, while the codec's transaction runs: createServer)
  */
 export function openJarDB(): Promise<IDBPDatabase<unknown>> {
-	jarDB ??= openDB(JAR_DATABASE, 2, {
+	jarDB ??= openStoreDB(JAR_DATABASE, 2, {
 		upgrade: async (db, oldVersion, _newVersion, tx) => {
 			// nothing but the stores' own requests may be awaited in here (an
 			// IndexedDB transaction commits during any foreign await)

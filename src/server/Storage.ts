@@ -1,6 +1,8 @@
-import { IDBPDatabase, openDB } from 'idb';
+import type { IDBPDatabase } from 'idb';
 import type GenericCodec from '../Codecs';
 import { encodeCookie } from '../encodeCookie';
+import { nativeStoreKey, profileOfName, realmProfile } from '../profile';
+import { openStoreDB } from '../storeDB';
 import {
 	RouteContext,
 	STORAGE_EVENT,
@@ -558,7 +560,7 @@ let storageDB: Promise<IDBPDatabase> | undefined;
 
 /** the storage partitions' database, opened once for every scope (and from the worker's start: openDatabasesEarly) */
 export function openStorageDB(): Promise<IDBPDatabase> {
-	storageDB ??= openDB('stompStorage', 1, {
+	storageDB ??= openStoreDB('stompStorage', 1, {
 		upgrade: (db: IDBPDatabase) => {
 			for (const name of ['localStorage', 'sessionStorage']) {
 				const storage = db.createObjectStore(name, {
@@ -608,9 +610,13 @@ export async function forgetSiteStorage(
 	await hosts.localStorage.clear(origin).catch(() => {});
 	await hosts.sessionStorage.clear(origin).catch(() => {});
 	// a native name is this site's when its `@<storageKey>` suffix is the
-	// origin (first-party) or begins `origin^` (this site under another)
+	// origin (first-party) or begins `origin^` (this site under another),
+	// in this worker's profile (src/profile.ts: the key's end)
+	const profile = realmProfile();
 	const mine = (name: string): boolean =>
-		name.endsWith(`@${origin}`) || name.includes(`@${origin}^`);
+		profileOfName(name) === profile &&
+		(name.endsWith(`@${nativeStoreKey(origin, profile)}`) ||
+			name.includes(`@${origin}^`));
 	try {
 		const databases = (await indexedDB.databases?.()) ?? [];
 		await Promise.all(
@@ -651,9 +657,10 @@ export async function clearStorageKey(
 	await hosts.localStorage.drop(key).catch(() => {});
 	await hosts.sessionStorage.drop(key).catch(() => {});
 	// the native names of the key's stores end with `@<key>` (IndexedDB,
-	// Partition modules); a key of the same origin in a partition has more
-	// after it
-	const mine = (name: string) => name.endsWith(`@${key}`);
+	// Partition modules), the key in this worker's profile; a key of the
+	// same origin in a partition has more after it
+	const native = nativeStoreKey(key, realmProfile());
+	const mine = (name: string) => name.endsWith(`@${native}`);
 	try {
 		const databases = (await indexedDB.databases?.()) ?? [];
 		await Promise.all(
@@ -683,7 +690,7 @@ export async function clearStorageKey(
 	try {
 		// the key's directory under the real root (Partition module)
 		const root = await navigator.storage.getDirectory();
-		await root.removeEntry(encodeURIComponent(key), { recursive: true });
+		await root.removeEntry(encodeURIComponent(native), { recursive: true });
 	} catch (error) {
 		// none, or no file system here
 	}
