@@ -131,6 +131,7 @@ import {
 	type ApartFrameInfo,
 } from './apart';
 import { ClientFrames } from './clientFrames';
+import { frameColorScheme, schemeOf } from './colorScheme';
 import {
 	codedError,
 	ExtensionHub,
@@ -3202,9 +3203,13 @@ export class StompController extends EventTarget {
 	 * Tell the worker what the browser's client hints carry that a worker
 	 * cannot read (src/server/clientHints.ts): the pixel ratio and the media
 	 * preferences, every window's; a `viewport` is the size of a frame
-	 * about to navigate (its top-level navigation's viewport hints)
+	 * about to navigate (its top-level navigation's viewport hints), and
+	 * `colorScheme` the preference its document reads (frameColorScheme)
 	 */
-	#postClientHints(viewport?: [number, number]) {
+	#postClientHints(
+		viewport?: [number, number],
+		colorScheme?: 'light' | 'dark',
+	) {
 		const query = (text: string) => {
 			try {
 				return window.matchMedia(text).matches;
@@ -3215,7 +3220,7 @@ export class StompController extends EventTarget {
 		const report: ClientHintsReport = {
 			directory: this.config.directory,
 			dpr: window.devicePixelRatio,
-			colorScheme: query('(prefers-color-scheme: dark)') ? 'dark' : 'light',
+			colorScheme: colorScheme ?? this.#framesColorScheme(query),
 			reducedMotion: query('(prefers-reduced-motion: reduce)')
 				? 'reduce'
 				: 'no-preference',
@@ -3231,15 +3236,33 @@ export class StompController extends EventTarget {
 		}
 	}
 	/**
+	 * the preference this controller's documents read: its active frame's
+	 * (a host sets a page's mode on the frame element, as Chrome's mode is
+	 * every tab's), else this window's own
+	 */
+	#framesColorScheme(query: (text: string) => boolean): 'light' | 'dark' {
+		const element = (this.activeTab ?? this.frames[0])?.element;
+		if (element?.ownerDocument === document) return frameColorScheme(element);
+		return query('(prefers-color-scheme: dark)') ? 'dark' : 'light';
+	}
+	/**
 	 * @internal The size of a frame about to navigate (Frame.go, and the
 	 * host's frames in isolation mode): what its navigation's viewport
-	 * client hints name until its document reports its own
+	 * client hints name until its document reports its own, and the
+	 * preference its document will read (its color scheme hint)
 	 */
-	reportViewport(width: number, height: number) {
+	reportViewport(
+		width: number,
+		height: number,
+		colorScheme?: 'light' | 'dark',
+	) {
 		// once the controller has its address: a report names it
 		if (width > 0 && height > 0)
 			this.#hostReady.then(() =>
-				this.#postClientHints([Math.round(width), Math.round(height)]),
+				this.#postClientHints(
+					[Math.round(width), Math.round(height)],
+					colorScheme,
+				),
 			);
 	}
 	/**
@@ -3757,11 +3780,17 @@ export class StompController extends EventTarget {
 	 * the slot `origin` (reportViewport), told to that slot's worker before
 	 * the frame goes there: its top-level navigation's viewport hints
 	 */
-	async siteViewport(origin: string, width: number, height: number) {
+	async siteViewport(
+		origin: string,
+		width: number,
+		height: number,
+		colorScheme?: 'light' | 'dark',
+	) {
 		if (this.#sites && width > 0 && height > 0)
 			await this.#sites.applyTo(origin, 'viewport', [
 				Math.round(width),
 				Math.round(height),
+				colorScheme,
 			]);
 	}
 	/** @internal the site pool: its slots' origins (none without a pool) */
@@ -3876,8 +3905,12 @@ export class StompController extends EventTarget {
 					typeof args === 'string' ? args : undefined,
 				);
 			case 'viewport': {
-				const [width, height] = args as [number, number];
-				this.reportViewport(Number(width), Number(height));
+				const [width, height, colorScheme] = args as [number, number, unknown];
+				this.reportViewport(
+					Number(width),
+					Number(height),
+					schemeOf(colorScheme),
+				);
 				return;
 			}
 		}
@@ -4684,9 +4717,11 @@ export class Frame extends EventTarget {
 	 * Listen for the frame's `load` before calling when you need that event.
 	 */
 	async go(url: string): Promise<void> {
+		const colorScheme = frameColorScheme(this.element);
 		this.controller.reportViewport(
 			this.element.clientWidth,
 			this.element.clientHeight,
+			colorScheme,
 		);
 		// the extensions' tab id for its main frame's request
 		this.controller.expectNavigation(this, url);
@@ -4701,6 +4736,7 @@ export class Frame extends EventTarget {
 				origin,
 				this.element.clientWidth,
 				this.element.clientHeight,
+				colorScheme,
 			);
 		}
 		// In a cross-origin isolated page a frame navigated as it is inserted

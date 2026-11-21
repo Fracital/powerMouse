@@ -240,9 +240,10 @@ export type FrameBound = {
 	/**
 	 * the size of a host frame about to navigate (StompController.reportViewport),
 	 * to the slot's worker when a third element names the slot it goes to
-	 * (StompController.siteViewport)
+	 * (StompController.siteViewport), with the preference its document
+	 * reads (frameColorScheme)
 	 */
-	viewport: [[number, number] | [number, number, string], null];
+	viewport: [[number, number, (string | null)?, ('light' | 'dark')?], null];
 	/** the real URL a routed one stands for, null for a non-route (see StompController.unroute) */
 	unroute: [string, string | null];
 	/** a search engine's completions (StompController.suggest), without the signal, which stays with the host */

@@ -39,6 +39,7 @@ import type { CarrierInfo } from '../transport/wispWebTransport';
 import { BUILD, CONTROLLER_FRAME_SCRIPT } from '../version';
 import { drawAccountChooser } from './accountChooser';
 import { ClientFrames } from './clientFrames';
+import { frameColorScheme } from './colorScheme';
 import {
 	Extensions,
 	framesAsTabs,
@@ -915,17 +916,28 @@ export class RemoteController extends EventTarget {
 		return Date.now() - opened.at > OPENED_TTL_MS ? null : opened.origin;
 	}
 	/** @internal see StompController.reportViewport */
-	reportViewport(width: number, height: number) {
+	reportViewport(
+		width: number,
+		height: number,
+		colorScheme?: 'light' | 'dark',
+	) {
 		if (!(width > 0 && height > 0)) return;
 		this.#ready
-			.then(() => this.#rpc.call('viewport', [width, height]))
+			.then(() =>
+				this.#rpc.call('viewport', [width, height, null, colorScheme]),
+			)
 			.catch(() => {});
 	}
 	/** @internal the site pool: see StompController.siteViewport */
-	async siteViewport(origin: string, width: number, height: number) {
+	async siteViewport(
+		origin: string,
+		width: number,
+		height: number,
+		colorScheme?: 'light' | 'dark',
+	) {
 		if (!(width > 0 && height > 0)) return;
 		await this.#ready;
-		await this.#rpc.call('viewport', [width, height, origin]);
+		await this.#rpc.call('viewport', [width, height, origin, colorScheme]);
 	}
 	/** the real URL a routed one stands for, null for a non-route (see StompController.unroute) */
 	async unroute(url: string): Promise<string | null> {
@@ -1212,9 +1224,11 @@ export class RemoteFrame extends EventTarget {
 		const reported = this.#nextReport();
 		// the extensions' tab id for its main frame's request
 		this.controller.expectNavigation(this, url);
+		const colorScheme = frameColorScheme(this.element);
 		this.controller.reportViewport(
 			this.element.clientWidth,
 			this.element.clientHeight,
+			colorScheme,
 		);
 		let routed = await this.controller.route(url);
 		// the site pool: the route on the origin of the URL's site, whose
@@ -1241,6 +1255,7 @@ export class RemoteFrame extends EventTarget {
 					origin,
 					this.element.clientWidth,
 					this.element.clientHeight,
+					colorScheme,
 				)
 				.catch(() => {});
 		}

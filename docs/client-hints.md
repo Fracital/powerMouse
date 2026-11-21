@@ -44,6 +44,20 @@ at the handshake, and a frame's size when `frame.go()` navigates it. A
 frame's `allow` attribute travels with the navigation hint its parent sends
 when it routes the frame's `src`.
 
+`Sec-CH-Prefers-Color-Scheme` is what the frame's document reads for
+`prefers-color-scheme`. Chrome 157 takes a frame's preference from the used
+`color-scheme` of its element (light or dark when it names only one of
+them, the parent document's otherwise), so a host sets its pages' mode
+with `color-scheme` on the frame elements, as the demo's Page appearance
+does (docs/themes.md). `frame.go()` sends that preference with the frame's
+size (`frameColorScheme` in src/controller/colorScheme.ts: the frame's own
+document when the host can read it, else the rule above), and an open
+page reports again when its media query changes, so the requests after a
+switch and the next navigation carry the new value (page-scheme suite).
+A host page under an emulated preference (DevTools, Playwright's
+`colorScheme`) whose frames are of another origin is the one case the
+navigation's hint follows the element and not the emulation.
+
 ## Left
 
 - `Sec-CH-Width` / `Width` (an image's rendered width with `sizes`) is never

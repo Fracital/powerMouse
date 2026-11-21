@@ -22,6 +22,7 @@ import { RpcHelper } from '../transport/rpc';
 import type { TransportNote } from '../transport/transportLog';
 import type { CarrierInfo } from '../transport/wispWebTransport';
 import { isApartAgent, outOfReach, runApartAgent } from './apart';
+import { schemeOf } from './colorScheme';
 import type { HubTabs } from './extensions';
 import { shareGeometry } from './geometry';
 import {
@@ -476,14 +477,20 @@ else if (window === window.parent) {
 					else shareGeometry(window, geometry);
 					return [null, []];
 				},
-				viewport: async ([width, height, origin]) => {
+				viewport: async ([width, height, origin, colorScheme]) => {
 					if (typeof origin === 'string' && controller?.siteOriginKnown(origin))
 						await controller.siteViewport(
 							origin,
 							Number(width),
 							Number(height),
+							schemeOf(colorScheme),
 						);
-					else controller?.reportViewport(Number(width), Number(height));
+					else
+						controller?.reportViewport(
+							Number(width),
+							Number(height),
+							schemeOf(colorScheme),
+						);
 					return [null, []];
 				},
 				setTransport: async (descriptor) => {
