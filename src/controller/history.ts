@@ -189,6 +189,12 @@ interface DocumentState {
 	carried: boolean;
 }
 let documentIds = 0;
+/**
+ * Whether this browser gives a document the user activation the document
+ * before it in its frame had, when they are of one origin (Chrome does,
+ * Firefox 160 does not): null until a navigation shows which (activated)
+ */
+let carries: boolean | null = null;
 
 /**
  * The frames of this realm in one joint session history, and a clock their
@@ -398,7 +404,21 @@ class FrameHistory {
 	 */
 	activated(before: DocumentState, after: DocumentState): boolean {
 		if (before.token && this.activations.has(before.token)) before.own = true;
-		if (!after.start) return false;
+		if (after.start) carries = true;
+		else {
+			// Firefox carries no activation over (a document starts without
+			// one whatever the one before had): a same-origin document after
+			// one that had an activation of its own says so, and from then on
+			// the document's own activation is the one read
+			if (
+				carries === null &&
+				(before.own || before.carried) &&
+				before.origin !== null &&
+				before.origin === after.origin
+			)
+				carries = false;
+			return carries === false && (before.own || before.carried);
+		}
 		return !before.start || before.own || before.carried;
 	}
 
