@@ -1793,6 +1793,21 @@ function recordUrl(tab) {
 		return;
 	}
 	if (url === tab.history[tab.index]) return;
+	// a step the browser took in the frame (its Back or Forward, the page's
+	// history.back()), to the entry beside this one: the frame can go
+	// forward after it, which a new entry never leaves it able to. Firefox
+	// leaves this page's address as it was over the frame's step, so its
+	// token does not say so there (one step forward to the last entry
+	// lands where a new entry would)
+	const back = url === tab.history[tab.index - 1];
+	if (
+		(back || url === tab.history[tab.index + 1]) &&
+		tab.frame.canGoForward === true
+	) {
+		tab.index += back ? -1 : 1;
+		keepTabs();
+		return;
+	}
 	tab.history.length = tab.index + 1;
 	tab.history.push(url);
 	tab.index = tab.history.length - 1;
