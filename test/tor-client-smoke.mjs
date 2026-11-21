@@ -4,7 +4,7 @@
 // runner should depend on. SKIP_NETWORK=1 skips it.
 //
 // A demo server of its own (holyWisp logging every stream it opens), the
-// demo in Tor mode with `?tor=client`, and a Chrome that resolves no name
+// demo in Tor mode (`?tor`: the client, the server's default), and a Chrome that resolves no name
 // but localhost (test/lib.mjs launch), so nothing reaches the network but the
 // Wisp connection. It loads https://check.torproject.org/api/ip, another
 // site and the first again, then a fresh host page (the client's state kept)
@@ -48,7 +48,6 @@ const env = {
 	...process.env,
 	PORT: port,
 	HOLYWISP_LOG_LEVEL: 'debug',
-	STOMP_DIALING: '0',
 	STOMP_SITE_POOL: '0',
 	STOMP_SLOT_PORTS: '0',
 };
@@ -78,9 +77,11 @@ await waitForServer(HOST, 600);
 const browser = await launch();
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 const logs = [];
+const refusals = [];
 const keep = (message) => {
 	const text = message.text();
 	if (/\[tor\]|bootstrap|Bootstrap/i.test(text)) logs.push(text);
+	if (/\[tor\] refused/.test(text)) refusals.push(text);
 };
 page.on('console', keep);
 // TOR_SMOKE_DEBUG=1: every console line of the page and its workers, timed
@@ -119,7 +120,7 @@ async function frameText(want) {
 
 async function openHost() {
 	const start = Date.now();
-	await page.goto(`${HOST}?tor=client`);
+	await page.goto(`${HOST}?tor=1`);
 	await page.waitForFunction(
 		() => /^(Ready|Error)/.test(document.getElementById('logMsg').textContent),
 		null,
@@ -146,6 +147,40 @@ try {
 		/^Ready/.test(status),
 		status,
 	);
+	const api = await (await fetch(`${HOST}api/tor`)).json();
+	const toggle = await page.evaluate(() => ({
+		checked: document.getElementById('tor').checked,
+		disabled: document.getElementById('tor').disabled,
+		config: globalThis.STOMP_CONFIG?.torClient,
+	}));
+	ok(
+		'with no relay the client is Tor mode: /api/tor, config and the toggle say so',
+		api.state === 'client' &&
+			toggle.config === true &&
+			toggle.checked &&
+			!toggle.disabled,
+		JSON.stringify({ api, toggle }),
+	);
+	// the worker's link check: a fallback directory passes, a site does not
+	const admits = await page.evaluate(async () => {
+		const { default: Transport } = await import('/tor-client/transport.mjs');
+		const transport = new Transport({ wisp: 'ws://127.0.0.1:9/' });
+		const verdict = (target) =>
+			transport.admit(target).then(
+				() => 'admitted',
+				(error) => `refused: ${error.message}`,
+			);
+		return {
+			fallback: await verdict('146.56.99.34:443'),
+			site: await verdict('93.184.215.14:443'),
+		};
+	});
+	ok(
+		'a link goes only to a Tor relay: a fallback directory yes, a site no',
+		admits.fallback === 'admitted' && admits.site.startsWith('refused'),
+		JSON.stringify(admits),
+	);
+	refusals.length = 0;
 	const started = Date.now();
 	await submitLanding(page, 'https://check.torproject.org/api/ip');
 	const first = await frameText(/IsTor/);
@@ -157,6 +192,17 @@ try {
 	);
 	console.log(
 		`first load (bootstrap and a circuit): ${Date.now() - started} ms; host page ${hostMs} ms`,
+	);
+	const progress = await page.evaluate(() => ({
+		client: window.__pmTorClient ?? null,
+		chip: document.getElementById('torState').textContent,
+	}));
+	ok(
+		'the page heard the bootstrap through to ready, and its Tor chip says on',
+		progress.client?.state === 'ready' &&
+			progress.client?.progress === 100 &&
+			progress.chip === 'on',
+		JSON.stringify(progress),
 	);
 
 	const otherStart = Date.now();
@@ -176,6 +222,25 @@ try {
 		`the first site again: ${Date.now() - againStart} ms, exit ${again?.IP} (same site, same circuit: ${again?.IP === answer?.IP})`,
 	);
 
+	// New circuit for this site: the same site again on another circuit
+	const blank = async () =>
+		(await activeFrame(page))
+			?.evaluate(() => {
+				document.body.textContent = '';
+			})
+			.catch(() => {});
+	await blank();
+	const circuitStart = Date.now();
+	await page.evaluate(() => document.getElementById('menuNewCircuit').click());
+	const renewed = isTor((await frameText(/IsTor/)).text);
+	ok(
+		'New circuit for this site loads it through Tor again',
+		renewed?.IsTor === true,
+	);
+	console.log(
+		`new circuit for the site: ${Date.now() - circuitStart} ms, exit ${renewed?.IP} (before: ${again?.IP})`,
+	);
+
 	// a fresh host page: a new transport worker and client, its directory
 	// and guards read back from IndexedDB
 	// arti writes its guards to storage on its own schedule (a minute or
@@ -189,6 +254,11 @@ try {
 	ok('a fresh client with the kept state reaches Tor', warm?.IsTor === true);
 	console.log(`fresh client, kept state: ${Date.now() - warmStart} ms`);
 
+	ok(
+		'the worker refused no link the client asked for',
+		refusals.length === 0,
+		refusals.join(' | '),
+	);
 	const names = streams.filter(
 		({ host }) => !/^[\d.]+$/.test(host) && !host.includes(':'),
 	);

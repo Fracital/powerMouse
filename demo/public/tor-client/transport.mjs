@@ -7,8 +7,10 @@
 //
 // A prototype: requests go through tor-js's own fetch (it has no stream API
 // yet, so epoxy cannot run on a Tor stream), and WebSockets are refused.
+import { FALLBACK_ADDRESSES } from './fallbacks.js';
 import {
 	ArtiSocket,
+	Log,
 	storage,
 	TorClient,
 } from './tor-js/entryPoints/wasm-file/index.js';
@@ -197,6 +199,45 @@ async function sendable(body) {
 	return new Uint8Array(await new Response(body).arrayBuffer());
 }
 
+/**
+ * The relays a consensus lists, as `ip:port` of their ORPorts (the microdesc
+ * flavour's `r` lines, and `a` lines for IPv6), the way arti names a link's
+ * address. A value kept as JSON has its newlines escaped.
+ */
+function consensusRelays(text) {
+	const relays = new Set();
+	const lines = (
+		text.includes('\n') ? text : text.replaceAll('\\n', '\n')
+	).split('\n');
+	for (const line of lines) {
+		const r = /^r \S+ \S+ \S+ \S+ ((?:\d{1,3}\.){3}\d{1,3}) (\d+) \d+/.exec(
+			line,
+		);
+		if (r) relays.add(`${r[1]}:${r[2]}`);
+		const a = /^a (\[[0-9a-fA-F:]+\]:\d+)/.exec(line);
+		if (a) relays.add(a[1].toLowerCase());
+	}
+	return relays;
+}
+
+const CONSENSUS_KEYS = 'dir:consensus:';
+// how long a request waits for its answer's head on one circuit before it is
+// tried on another (tor's stream attach timeouts are 10 and 15 s; this one
+// covers the site's TLS handshake and its answer too)
+const STREAM_ANSWER_MS = 30000;
+const IDEMPOTENT = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+// Tor Browser's bootstrap phases (tor's BOOTSTRAP_STATUS), from what arti
+// says as it goes; tor-js tells no progress of its own yet
+const PHASES = [
+	[/Looking for a consensus/, 10, 'Loading network status'],
+	[/Downloading certificates/, 40, 'Loading authority certificates'],
+	[/Downloading microdescriptors/, 50, 'Loading relay descriptors'],
+	[/Loaded a good directory from cache/, 75, 'Loaded relay descriptors'],
+	[/Marked consensus usable/, 75, 'Loaded relay descriptors'],
+	[/Bootstrap complete/, 90, 'Establishing a Tor circuit'],
+];
+
 export default class TorClientTransport {
 	ready = false;
 	// the service worker's top-level site for each request, the key of its
@@ -204,53 +245,144 @@ export default class TorClientTransport {
 	fieldSupport = { partition: NETWORK_PARTITION };
 	#wisp;
 	#client = null;
+	#starting = null;
 	#session = nonce();
 	#siteNonces = new Map();
 	#storageName;
+	#storage = null;
+	#channel = null;
+	// where the Wisp streams may go: the fallback directories arti has
+	// compiled in, and the relays of the newest consensus it kept
+	#relays = new Set(FALLBACK_ADDRESSES);
 	/** what bootstrap took and what it is doing, for the page and the smoke */
-	status = { state: 'starting', since: Date.now() };
+	status = { state: 'starting', progress: 0, summary: 'Starting' };
 
-	constructor({ wisp, storageName = 'stomp-tor-client' } = {}) {
+	constructor({ wisp, storageName = 'stomp-tor-client', channel } = {}) {
 		if (typeof wisp !== 'string') throw new TypeError('wisp: a URL');
 		this.#wisp = new WispConnection(wisp);
 		this.#storageName = storageName;
+		// the host page's channel to this transport (its status, New Identity,
+		// New circuit for this site); none where the page is of another origin
+		if (typeof channel === 'string' && typeof BroadcastChannel === 'function') {
+			this.#channel = new BroadcastChannel(channel);
+			this.#channel.onmessage = ({ data }) => this.#heard(data);
+		}
 	}
 
-	async init() {
-		if (this.#client) return;
+	#heard(data) {
+		if (data?.type === 'ask') this.#tell();
+		else if (data?.type === 'newIdentity') this.newIdentity();
+		else if (data?.type === 'newCircuit' && typeof data.url === 'string')
+			this.newCircuitFor(data.url);
+	}
+
+	#tell() {
+		this.#channel?.postMessage({ type: 'status', ...this.status });
+	}
+
+	#phase(state, progress, summary, extra = {}) {
+		if (state === 'bootstrapping' && progress <= (this.status.progress ?? 0))
+			return;
+		this.status = { state, progress, summary, ...extra };
+		this.#tell();
+	}
+
+	#log(...args) {
+		const text = args.map(String).join(' ');
+		for (const [pattern, progress, summary] of PHASES)
+			if (pattern.test(text)) this.#phase('bootstrapping', progress, summary);
+	}
+
+	/** the relays of the consensus the storage holds now */
+	async #readConsensus() {
+		const kept = await this.#storage.getAll(CONSENSUS_KEYS).catch(() => []);
+		for (const [, value] of kept) this.#keepRelays(value);
+	}
+
+	#keepRelays(value) {
+		if (typeof value !== 'string') return;
+		const relays = consensusRelays(value);
+		// a consensus lists thousands; anything less is not one
+		if (relays.size < 100) return;
+		this.#relays = new Set([...FALLBACK_ADDRESSES, ...relays]);
+	}
+
+	/**
+	 * Refuse a link to anything that is not a Tor relay. arti only dials
+	 * relays from its signed directory and its compiled-in fallbacks; this
+	 * keeps a bug or a tampered module from using the Wisp server to reach
+	 * anything else (a site directly, past Tor)
+	 */
+	async admit(target) {
+		const address = target.toLowerCase();
+		if (this.#relays.has(address)) return;
+		// a consensus kept since the last look
+		if (this.#storage) await this.#readConsensus();
+		if (this.#relays.has(address)) return;
+		this.status.refused = (this.status.refused ?? 0) + 1;
+		console.warn(`[tor] refused a link to ${target}: not a Tor relay`);
+		throw new Error(`${target} is not a Tor relay this client knows`);
+	}
+
+	init() {
+		this.#starting ??= this.#start();
+		return this.#starting;
+	}
+
+	async #start() {
 		const wisp = this.#wisp;
 		const started = performance.now();
+		const kept = storage.addLocking(
+			new storage.IndexedDBStorage(this.#storageName),
+			this.#storageName,
+		);
+		// every consensus arti keeps names the relays it may dial next
+		this.#storage = {
+			...kept,
+			get: (key) => kept.get(key),
+			getAll: (prefix) => kept.getAll(prefix),
+			keys: (prefix) => kept.keys(prefix),
+			delete: (key) => kept.delete(key),
+			tryLock: () => kept.tryLock(),
+			unlock: () => kept.unlock(),
+			set: async (key, value) => {
+				if (key.startsWith(CONSENSUS_KEYS)) this.#keepRelays(value);
+				return kept.set(key, value);
+			},
+		};
+		await this.#readConsensus();
+		this.#phase('bootstrapping', 5, 'Connecting to a relay');
 		this.#client = new TorClient({
 			socketProvider: {
-				connect: (target) => wisp.open(target),
+				connect: async (target) => {
+					await this.admit(target);
+					return wisp.open(target);
+				},
 				gateway: null,
 				close: () => wisp.close(),
 			},
 			// the client's guards and its directory cache, kept across
 			// sessions and New Identity as Tor Browser keeps them
-			storage: storage.addLocking(
-				new storage.IndexedDBStorage(this.#storageName),
-				this.#storageName,
-			),
+			storage: this.#storage,
+			log: new Log({ rawLog: (_level, ...args) => this.#log(...args) }),
 			logLevel: 'info',
 		});
 		try {
 			await this.#client.ready();
 		} catch (error) {
-			this.status = { state: 'failed', error: String(error) };
+			this.#phase('failed', 0, String(error?.message ?? error));
+			this.#starting = null;
+			this.#client = null;
 			throw error;
 		}
-		this.status = {
-			state: 'ready',
-			bootstrapMs: Math.round(performance.now() - started),
-		};
+		const bootstrapMs = Math.round(performance.now() - started);
+		this.#phase('ready', 100, 'Done', { bootstrapMs });
 		this.ready = true;
-		console.info(`[tor] bootstrapped in ${this.status.bootstrapMs} ms`);
+		console.info(`[tor] bootstrapped in ${bootstrapMs} ms`);
 	}
 
 	/** circuits apart for each first-party site, and for each new identity */
-	#isolationKey(partition) {
-		const site = partition?.split(' ')[0] || 'opaque';
+	#isolationKey(site) {
 		let siteNonce = this.#siteNonces.get(site);
 		if (!siteNonce) this.#siteNonces.set(site, (siteNonce = nonce()));
 		return `${this.#session} ${siteNonce} ${site}`;
@@ -261,10 +393,53 @@ export default class TorClientTransport {
 		this.#siteNonces.delete(site);
 	}
 
+	/**
+	 * New circuit for the site of `url` (the tab's address): every site key
+	 * whose host is the URL's host or a parent of it
+	 */
+	newCircuitFor(url) {
+		let host;
+		try {
+			host = new URL(url).hostname;
+		} catch {
+			return;
+		}
+		for (const site of [...this.#siteNonces.keys()]) {
+			let siteHost;
+			try {
+				siteHost = new URL(site).hostname;
+			} catch {
+				siteHost = site;
+			}
+			if (host === siteHost || host.endsWith(`.${siteHost}`))
+				this.newCircuit(site);
+		}
+	}
+
 	/** New Identity: no circuit of before is used again */
 	newIdentity() {
 		this.#session = nonce();
 		this.#siteNonces.clear();
+	}
+
+	/** one try on the site's circuit, given up when no answer comes in time */
+	async #fetchOnce(url, init, signal, site) {
+		const attempt = new AbortController();
+		const timer = setTimeout(
+			() => attempt.abort(new Error('no answer on this Tor circuit')),
+			STREAM_ANSWER_MS,
+		);
+		try {
+			return await this.#client.fetch(url, {
+				...init,
+				signal: signal
+					? AbortSignal.any([signal, attempt.signal])
+					: attempt.signal,
+				anonOptions: { isolationKey: this.#isolationKey(site) },
+			});
+		} finally {
+			clearTimeout(timer);
+		}
 	}
 
 	async request(remote, method, body, headers, signal) {
@@ -278,13 +453,20 @@ export default class TorClientTransport {
 				fields[lower] += `${lower === 'cookie' ? '; ' : ', '}${value}`;
 			else fields[lower] = value;
 		}
-		const response = await this.#client.fetch(String(remote), {
-			method,
-			headers: fields,
-			body: await sendable(body),
-			signal,
-			anonOptions: { isolationKey: this.#isolationKey(partition) },
-		});
+		const site = partition?.split(' ')[0] || 'opaque';
+		const init = { method, headers: fields, body: await sendable(body) };
+		let response;
+		try {
+			response = await this.#fetchOnce(String(remote), init, signal, site);
+		} catch (error) {
+			// An exit that fails a stream keeps failing it for minutes on that
+			// circuit (tor-js "Circuit isolation"); tor tries another circuit
+			// after a stream waits 10 to 15 s. Once more on a new circuit for
+			// the site, for a request that can be sent twice.
+			if (signal?.aborted || !IDEMPOTENT.has(method.toUpperCase())) throw error;
+			this.newCircuit(site);
+			response = await this.#fetchOnce(String(remote), init, signal, site);
+		}
 		const raw = [];
 		for (const [name, value] of response.headers)
 			if (name !== 'set-cookie') raw.push([name, value]);

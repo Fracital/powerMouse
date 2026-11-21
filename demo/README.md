@@ -54,8 +54,8 @@ the server reads it at startup. The page gets what it needs from `/config.js`.
 
 ## Tor routing
 
-The homepage has a **Tor** checkbox beside **Block ads**. It is enabled only
-when a Tor-backed Wisp relay is configured. The choice is kept in
+The homepage has a **Tor** checkbox beside **Block ads**. It is enabled
+unless the server turned the in-browser client off and configured no relay. The choice is kept in
 `localStorage['stomp-demo:tor']` (or set for one visit with `?tor` / `?notor`),
 independently of the content blocker. Changing it reloads the page, since
 `controller.setTransport()` allows requests already using the old transport
@@ -68,15 +68,20 @@ and when the last Tor-mode tab closes. HTTP/3, UDP, WebTransport and the
 external ECH DNS lookup are off. A missing Tor relay stops Tor-mode browsing rather than
 trying the normal Wisp endpoint.
 
-**The in-browser Tor client** (a prototype, docs/tor-over-wisp.md): with
-`?tor=client` on the page (Tor mode for that visit) or `STOMP_TOR_CLIENT=1`
-on the server, Tor mode needs no relay. The transport worker runs arti
-(tor-js) and builds the circuits itself; `/wisp/` carries only TCP to Tor
-relays, so the server never sees a destination. WebSockets are refused.
-`node test/tor-client-smoke.mjs` checks it against the real Tor network.
+**The in-browser Tor client** is Tor mode wherever the server runs no relay
+(docs/tor-over-wisp.md): the toggle is enabled, `config.js` says
+`torClient: true` and `/api/tor` answers `{"state":"client"}`. The transport
+worker runs arti (tor-js) and builds the circuits itself; `/wisp/` carries
+only TCP to Tor relays (the worker refuses a link to anything else), so the
+server never sees a destination. The Tor chip shows the bootstrap's
+progress, and the menu has **New Identity** and **New Tor circuit for this
+site**. WebSockets are refused. `STOMP_TOR_CLIENT=0` turns the client off
+(Tor mode then needs a relay); `?tor=client` asks for the client on one
+visit even where a relay is configured. `node test/tor-client-smoke.mjs`
+checks it against the real Tor network.
 
-The server-side relay below sees every destination of every visitor and is
-to be removed once the client is the default.
+**The server-side relay** below is used instead when the server configures
+one. It sees every destination of every visitor, and is to be removed.
 
 Run a Tor SOCKS5 listener on the demo server, then start the demo with:
 

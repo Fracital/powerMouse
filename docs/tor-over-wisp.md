@@ -1,8 +1,8 @@
 # Tor over Wisp: a Tor client in the browser
 
-Status: design, with an opt-in prototype (`?tor=client`, "Prototype" below)
-that reaches the real Tor network.
-Today's Tor mode (docs/tor.md) is server-side Tor egress: the demo's server
+Status: the client is Tor mode wherever the server runs no relay
+("Prototype" below has what it does and does not do yet). Before it, Tor mode
+(docs/tor.md) was server-side Tor egress only: the demo's server
 runs a Wisp relay (`/wisp-tor/`, `demo/torWisp.js`) that hands each TCP stream
 to a tor daemon's SOCKS port. That relay sees every destination host and port
 of every visitor, and it can tell visitors' streams apart only by connection.
@@ -117,6 +117,45 @@ change in its `crates/tor-js`, "Remaining work"):
 3. **New identity**: drop the circuits of a key (arti's
    `isolated_client()` / `retire_all_circs`), for "New circuit for this site".
 
+### Provenance of the wasm we serve
+
+What `node_modules/tor-js` is, and how it was checked (2026-11-21):
+
+- **The package**: `tor-js@0.4.4` from the npm registry, pinned exactly in
+  `package.json`, `package-lock.json` integrity
+  `sha512-0biVOvwZrar+kt+y4GIW4haGYITgspZs1Sv/iJriUIDq3Hs0mM/nkwyO5Ygk+oGjqf7gVuBQhV0uF0RMmTb1UA==`,
+  the same as the tarball's own hash computed here. `npm ci --ignore-scripts`
+  in a fresh clone installs it from the lock as written, and `npm run check`
+  and `node build.js` pass there. The package has no install scripts and no
+  dependencies (one optional peer, `@kpstreams/quic-client`, for Node, not
+  installed). It has no npm provenance attestation.
+- **The wasm**: `dist/tor_js_bg.wasm`, sha256
+  `071ffb356bdacbf37da1a5549f653ed23f6919a2a856335d082affabfc08fb3d`. tor-js
+  builds reproducibly (pinned rustc 1.97.1, binaryen 116, wasm-pack) and its
+  CI prints the hash of what it built. Its CI runs on the release commit
+  `d9d9612d10d3775ff100b70e96a291718191d856` ("Release 0.4.4", the
+  package's `gitHead`) build it from source on GitHub's runners, and the log
+  of run
+  [43154142421](https://github.com/ethereum/tor-js/actions/runs/43154142421)
+  (2026-11-12) says `WASM SHA256:
+071ffb356bdacbf37da1a5549f653ed23f6919a2a856335d082affabfc08fb3d`: **the binary on npm is the one the
+  release's source builds**, by a machine other than the publisher's. Its CDN
+  entry (`dist/entryPoints/wasm-cdn/index.js`) carries the same hash for
+  the binary it loads. We serve the `wasm-file` entry, which loads the binary
+  from our own server, never from a CDN.
+- **The fallback directories** the worker admits before a consensus
+  (`demo/public/tor-client/fallbacks.js`) are generated from the crate the
+  release was built with: tor-dircommon 0.47.0, crate sha256
+  `c16065e5166e529492d1be856e1e40316e2532053027c6b7ab5a4a53c14d8c51`, which
+  is the checksum in tor-js's `Cargo.lock` at the release commit
+  (`scripts/tor-fallbacks.mjs` says how to regenerate it).
+- **Not done**: a build of the release from source on this machine to
+  compare the hash ourselves. That is the first step of `deploy/tor-js/`
+  (Remaining work), which would then build our own binary.
+
+Updating tor-js means the same checks again: the integrity in the lock, the
+release commit's CI hash against the new binary, the fallback list.
+
 ## Bootstrap
 
 1. The transport worker loads the client and opens its storage:
@@ -205,6 +244,28 @@ all) with bridges ("Remaining work", WebTunnel).
   exits, it is in a better position than an ISP for end-to-end correlation
   of its own visitors: one more reason the visitor should be able to pick a
   bridge, and why Tor mode's UI says that the operator sees Tor use.
+
+### Which relays the worker may reach
+
+The worker checks every link arti asks for before it opens a Wisp stream
+(`admit` in `demo/public/tor-client/transport.mjs`): the address must be a
+fallback directory's ORPort (`fallbacks.js`, the list compiled into the same
+arti) or a relay's ORPort in the newest consensus the client kept (read from
+its storage at start, and from each consensus arti writes: the microdesc
+flavour's `r` and `a` lines). Anything else is refused before it reaches the
+Wisp server, and the transport counts it (`status.refused`) and warns on the
+console. arti never asks for anything else; the check is there so that a bug,
+or a tampered module, cannot use the Wisp server to reach a site directly,
+past Tor. The smoke checks a fallback passes, a site's address is refused, and
+no link the client asked for in a real session was refused.
+
+**Is a server-side check worth adding?** Not for the visitor: the client
+must never depend on the Wisp server for its safety, and the visitor's
+protection is the client's own check above. For the operator it buys little
+here, because the same server's `/wisp/` is an open TCP relay for normal
+mode anyway; a Tor-only allowlist on the endpoint Tor mode uses would only
+matter for a deployer who offers Tor and nothing else (then: `/wisp-or/`
+below). Not worth it now; listed in "Remaining work".
 
 ## HTTPS, DNS and what Tor mode refuses
 
@@ -298,8 +359,8 @@ opt-in.
 
 ## Prototype
 
-`?tor=client` on the demo (it turns Tor mode on for the visit), or
-`STOMP_TOR_CLIENT=1` on the server for every Tor-mode visit. Tor mode's
+Tor mode wherever the server configures no relay (`STOMP_TOR_CLIENT=0` turns
+it off; `?tor=client` asks for it on one visit even with a relay). Tor mode's
 transport is then `demo/public/tor-client/transport.mjs` instead of epoxy
 over `/wisp-tor/`: tor-js 0.4.4 (`node_modules/tor-js`, served at
 `/tor-client/tor-js/`), its socket provider a Wisp v1 client of its own over
@@ -307,8 +368,19 @@ the demo's ordinary `/wisp/`, its storage IndexedDB `stomp-tor-client` (the
 transport worker's origin; not the `tor` profile's, so it survives the
 profile), `request()` tor-js's `fetch` with an isolation key per top-level
 site (`$stomp$network`) and session nonce, `connect()` refused.
-`newCircuit(site)` and `newIdentity()` exist on the transport and are not
-wired to the UI yet.
+The transport tells the page its bootstrap on a BroadcastChannel the page
+names in the descriptor (Tor Browser's phases: "Connecting to a relay",
+"Loading network status", "Loading authority certificates", "Loading relay
+descriptors", "Establishing a Tor circuit", "Done", read from arti's log), and
+the Tor chip and status line show it as they showed the relay's. The menu
+(the three dots) has **New Identity** (a new Tor session: the page loads
+again with a new transport worker, so no circuit of before, and the `tor`
+profile is forgotten; with other Tor tabs open it asks to close them first,
+since they share the identity) and **New Tor circuit for this site** (a new
+isolation nonce for the tab's site, and the tab loads again). The channel is
+same-origin, so in the isolated mode (the controller in the proxy's frame)
+the page hears nothing and the two items are not offered; the dialing mode,
+which production uses, is same-origin.
 
 `node test/tor-client-smoke.mjs` (after `node build.js`; `SKIP_NETWORK=1`
 skips it, and it is not a suite: it needs the public Tor network) starts a
@@ -343,26 +415,51 @@ session had lasted 90 s, and picked new ones when it had lasted under 20 s
 keeps no guards. One earlier run ended with Chrome gone during the first load,
 not seen again.
 
-What the prototype does not do yet:
+A later run (2026-11-21, the default path: `?tor` with no relay, in the
+dialing mode production uses) also checked: `/api/tor` and `config.js` say
+`client` and the toggle is enabled; the page heard the bootstrap through to
+"Done" and the chip says on; the worker admits a fallback directory and
+refuses a site's address; New Tor circuit for this site loaded the site again
+through another exit (171.25.193.39, then 109.70.100.12); and no link arti
+asked for in the session was refused. Bootstrap 2.6 s cold, the first site
+2.6 s, another 3.1 s, the first again 2.1 s, its new circuit 4.6 s. An earlier
+run on the isolated mode had check.torproject.org's circuit stall (no answer
+for 240 s, then a 502): a request with no answer's head in 30 s is now tried
+once more on a new circuit for its site (GET, HEAD and OPTIONS only).
+
+What the client does not do yet:
 
 - **No connection reuse**: tor-js's `fetch` opens a new Tor stream and a new
   TLS handshake per request (its log shows a handshake for each), HTTP/1.1
   only. A real page's tens of requests each pay a round trip through the
   circuit. The stream API with epoxy on top (pools, HTTP/2) is the fix.
 - **No WebSocket** (refused), no HTTP/3, no WebTransport, as intended for now.
-- **No progress**: the status says "Tor route selected" while the client
-  bootstraps in the worker, and a load waits for it.
+- **Progress and the menu items need the same origin**: in the isolated
+  mode the page hears nothing from the proxy origin's worker; the status
+  says "Tor route selected" and the items are not offered.
+- **A long wait for an answer's head** (over 30 s, a long poll) is cut and
+  tried again once, for GET, HEAD and OPTIONS.
 - **One client per transport worker**: two tabs run two clients (the second
   without the storage's lock keeps its state in memory only).
-- **The ordinary `/wisp/`**: no Tor-only endpoint, so the server does not
-  refuse non-relay destinations for Tor mode.
-- Not covered: the isolated mode's other paths (the sync relay of WebKit's
-  frozen pages still goes to the server's `/stomp-tor/sync-relay`, which needs
-  the old relay), offline.html, Firefox.
+- **The ordinary `/wisp/`**: no Tor-only endpoint on the server (the worker's
+  own check refuses non-relays, "Which relays the worker may reach").
+- Not covered: the sync relay of WebKit's frozen pages (Tor mode's
+  `/stomp-tor/sync-relay` refuses without the old relay, so those pages'
+  synchronous requests fail rather than leave Tor), offline.html, Firefox.
 
-## Remaining work to make this the default Tor mode
+## Remaining work
 
-Rough sizes (S under a day, M a few days, L a week or more):
+The client is Tor mode where no relay is configured. What it still needs
+to be as good as Tor Browser's, with rough sizes (S under a day, M a few
+days, L a week or more). The stream API with epoxy on top (1 and 2) is
+about a day and a half: some 40 lines of Rust (`fetch_impl` in
+`crates/tor-js-wasm/src/lib.rs` already opens an isolated
+`client.connect((host, port))` and wraps streams with `wasm_streams`), a
+first reproducible container build of arti to wasm (30 to 60 minutes on
+this machine, more under load), the in-worker Wisp server (some 250 lines)
+and suites. One client for all tabs (3) needs a library hook: a dedicated
+worker cannot start a SharedWorker, so the controller starts it and hands
+its port to the transport worker, as it does the carrier host's.
 
 1. **Stream API in tor-js** (M): `connect(host, port, isolationKey)` and
    `resolve()` bindings in `crates/tor-js`, built from source in a container
@@ -373,16 +470,17 @@ Rough sizes (S under a day, M a few days, L a week or more):
    descriptor becomes epoxy with that function transport.
 3. **One client per profile** (M): the Tor client in a SharedWorker (the
    carrier host's pattern), the transport workers of every tab its clients.
-4. **Bootstrap UI** (S): progress events to the Tor chip, an error state with
-   the blocker ("cannot reach any relay", "clock skew").
+4. **Bootstrap UI** (done; S left): progress on the Tor chip from arti's log;
+   left: arti's own `bootstrap_events()` through tor-js, an error state with
+   the blocker ("cannot reach any relay", "clock skew"), the isolated mode.
 5. **Fast-bootstrap snapshot** (S): the server builds `bootstrap.zip.zst`
    hourly (tor-js's gateway crate or a fetch of the consensus over Tor) and
    serves it from the app origin; the client passes it as `bootstrap`.
 6. **Tor-only Wisp endpoint** (M): `/wisp-or/` with the consensus allowlist,
    refreshed hourly; `STOMP_CONFIG.torClient.wisp`.
-7. **Isolation UI** (S): New circuit for this site, New Identity wired to
-   the nonces and pools; the circuit display (Tor Browser's "Circuit for this
-   site") from arti's circuit info.
+7. **Isolation UI** (done; S left): New Identity and New Tor circuit for this
+   site in the menu; left: the circuit display (Tor Browser's "Circuit for
+   this site") from arti's circuit info, the isolated mode.
 8. **Guard state store** (S): the client's state outside the `tor` profile,
    its own "Forget Tor state", store-names coverage.
 9. **Bridges** (L): WebTunnel (HTTPS + WebSocket, over Wisp TCP with epoxy's

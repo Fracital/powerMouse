@@ -1,5 +1,16 @@
 # Tor mode
 
+Tor mode is the in-browser Tor client wherever the server runs no relay:
+the browser builds the circuits and the server's Wisp carries only TCP to
+Tor relays (docs/tor-over-wisp.md). **Our server still sees that you use
+Tor, and which Tor guard relay you use** (the addresses your Wisp streams
+go to), with the times and amounts of your traffic; it never sees
+the sites you visit or what you send them. Bridges, which would hide Tor
+use and the guard from it, are future work. This page is about the server-side
+relay a deployer can still configure instead (`STOMP_TOR_SOCKS5`,
+`STOMP_TOR_WISP_URL`), which is to be removed; its Profiles section holds for
+both.
+
 The demo's **Tor** toggle sends the TCP connections of proxied sites through
 a Tor client on the demo's server. This page says what that protects and what
 it does not, how Tor mode's profile is kept apart from normal mode's, how the
