@@ -240,7 +240,10 @@ holyWisp is started.
    WebTransport); `?transportdebug`, or
    `localStorage['stomp:debug-transport'] = '1'` on the demo's origin and a
    reload, adds a `[net]` line for each connection to a site
-   (`debugTransport`), as About's Transport log row says.
+   (`debugTransport`), as About's Transport log row says, and a `[wt]`
+   line for each WebTransport session (a page's, and the carrier's own)
+   naming the stage that failed (docs/webtransport.md, "Tracing a
+   session").
 4. **Suggestions.** Both address bars are the omnibox module
    (`dist/omnibox.js`, loaded by the name `STOMP_ASSETS.omnibox` gives, else
    the controller's `DEFAULT_ASSETS`): the open tabs to switch to (the top

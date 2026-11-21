@@ -432,8 +432,12 @@ on every save (use a `git worktree`).
   it in About's Transport row. The host's console gets a plain `[wisp]` line per
   carrier event and, in the verbose mode (`debugTransport`,
   `localStorage['stomp:debug-transport'] = '1'`), a `[net]` line per
-  connection (src/transport/transportLog.ts): made where the transport
-  runs, printed by the host's controller only. It rests on epoxy-tls 0075: a
+  connection (src/transport/transportLog.ts) and a `[wt]` stage trace per
+  WebTransport session, a page's or the carrier's
+  (src/transport/webTransportTrace.ts, `webtransport-trace`): made where
+  the transport runs, printed by the host's controller only. The page's
+  error stays Chrome's "Opening handshake failed." for every stage, as
+  natively; the stage is only on the host's console. It rests on epoxy-tls 0075: a
   function transport's sink that waited held wisp-mux's lock across a TLS
   handshake's flush and hung the whole connection.
   The carrier itself lives in the carrier host (`src/transport/carrierHost.ts`,

@@ -24,7 +24,7 @@ import { ownBuffer, PacketBatch, wispFeed } from './packetBatch';
 import { paceRider, type Ride } from './riderPace';
 import { RpcHelper } from './rpc';
 import type { Held, PoolFields, PoolLine, SocketPass } from './socketPool';
-import { relayNote, type TransportNote } from './transportLog';
+import { relayNote, transportLog, type TransportNote } from './transportLog';
 import type {
 	Carrier,
 	OpenCarrier,
@@ -71,6 +71,11 @@ export interface CarrierAsk {
 	credit?: boolean;
 	/** the client takes and sends a task's packets in one message */
 	batches?: boolean;
+	/**
+	 * the client's realm is in the verbose mode (transportLog.ts): the host
+	 * makes its lines too (the carrier's stage trace) and tells them to it
+	 */
+	verbose?: boolean;
 }
 
 /** what the host gives: a rider, or why there is none */
@@ -355,6 +360,7 @@ export async function askCarrierHost(
 			...ask,
 			batches: true,
 			credit: true,
+			...(transportLog.on && { verbose: true }),
 		});
 		const given = await Promise.race([
 			asked,

@@ -234,7 +234,11 @@ function makeLeaf() {
  * it the connection) instead of 64 KiB; `uplinkMbps` makes what the server
  * receives come over a link of that rate, a datagram dropped once it would
  * wait more than `uplinkQueueMs` behind the others, as a slow path's
- * bottleneck drops them.
+ * bottleneck drops them. `alpn` lists the ALPN ids the server takes in
+ * place of `h3` (a client that offers only h3 fails its TLS handshake), and
+ * `settings` the SETTINGS it sends in place of its own, as [id, value]
+ * pairs (a server without ENABLE_WEBTRANSPORT or H3_DATAGRAM, which a
+ * client sends no CONNECT to).
  */
 export async function startWebTransportServer({
 	host = '127.0.0.1',
@@ -242,6 +246,8 @@ export async function startWebTransportServer({
 	streamWindow,
 	uplinkMbps,
 	uplinkQueueMs = 40,
+	alpn,
+	settings,
 } = {}) {
 	compiled ??= WebAssembly.compile(
 		readFileSync(new URL('wtserver.wasm', here)),
@@ -277,6 +283,10 @@ export async function startWebTransportServer({
 			for (const w of waiters) w(event);
 		},
 		streamWindow,
+		alpn?.join(','),
+		settings
+			?.map(([id, value]) => `${id.toString(16)}=${value.toString(16)}`)
+			.join(','),
 	);
 	const receive = (message, from) =>
 		server.recv(message, from.address, from.port);

@@ -61,7 +61,12 @@ import {
 	type SocketPass,
 } from './socketPool';
 import { StreamCreditWatch } from './streamCredit';
-import { watchTransportNotes, wispNote } from './transportLog';
+import {
+	logTransport,
+	transportLog,
+	watchTransportNotes,
+	wispNote,
+} from './transportLog';
 import {
 	Chooser,
 	memory,
@@ -187,6 +192,8 @@ interface Client {
 	named: number;
 	/** it was let go (silent, or its page unloaded): what it is given now goes at once */
 	left: boolean;
+	/** its realm is in the verbose mode (CarrierAsk.verbose): it hears the verbose lines */
+	verbose: boolean;
 }
 
 /**
@@ -649,6 +656,13 @@ class Relay {
 				// the relay's limit: it waits for a stream to close, and goes again
 				opening.sent = false;
 				this.#held.unshift(opening);
+				// the verbose mode says so once a burst: what waits here
+				// is no failure its rider hears of (a page's session that
+				// waits past its handshake's time reads as a silent server)
+				if (transportLog.on && this.#held.length === 1)
+					logTransport(
+						`the relay refused a stream with 0x49 (throttled, past its stream limit): held in the carrier host and sent again as a stream closes`,
+					);
 				this.#armRetry();
 				return;
 			}
@@ -903,7 +917,9 @@ export function serveCarriers(scope: SharedWorkerGlobalScope): void {
 	let realms = 0;
 	// what the host's choices and carriers tell goes to every page's console
 	watchTransportNotes((note) => {
-		for (const rpc of clients.keys()) rpc.call('note', note).catch(() => {});
+		for (const [rpc, client] of clients)
+			if (!note.verbose || client.verbose)
+				rpc.call('note', note).catch(() => {});
 	});
 	// every page hears the host is alive; a page that stopped saying it is
 	// has its riders let go
@@ -938,12 +954,19 @@ export function serveCarriers(scope: SharedWorkerGlobalScope): void {
 			holding: new Set(),
 			named: 0,
 			left: false,
+			verbose: false,
 		};
 		/** the pool's id of the request the client's worker named `id` */
 		const poolId = (id: string) => id && `${client.realm} ${id}`;
 		const rpc = new RpcHelper<HostBound, ClientBound>(
 			{
 				open: async (ask) => {
+					// a realm in the verbose mode turns it on here too, for
+					// the carrier's trace; its lines go to such realms only
+					if (ask.verbose === true) {
+						client.verbose = true;
+						transportLog.on = true;
+					}
 					const key = keyOf(ask);
 					const kept = relays.get(key);
 					let relay = kept && (await kept.takes(ask)) ? kept : undefined;

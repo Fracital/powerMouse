@@ -383,6 +383,89 @@ Chrome's throttle would have started it, before the blocker is asked or a
 stream is opened, so nothing is sent. A wisp server that refuses UDP ends it
 the same way once it refuses the stream.
 
+## Tracing a session
+
+A session that fails reads, to the page, as Chrome's to a server it cannot
+reach: "Opening handshake failed.", source `'session'`, `streamErrorCode`
+null, whatever went wrong. That is what Chrome itself says for every one of
+the failures below (measured: the `webtransport-trace` suite loads the same
+page natively for each), so the page's error stays as it is, and the stage
+is told on the host's console instead. In the verbose mode
+(`ControllerInit.debugTransport`, or the host origin's
+`localStorage['stomp:debug-transport'] = '1'` and a reload; the demo's
+`?transportdebug`) every session a proxied page makes ends in one `[wt]`
+line (src/transport/webTransportTrace.ts), once it is up or has failed:
+
+```
+[wt] #3 page session to https://example.net failed at udp (the Wisp UDP stream closed during the handshake: the relay closed it with 0x48 (destination blocked by the relay (or the relay relays no UDP))) after 41 ms: carrier +0 ms: the Wisp connection on WebTransport (QUIC datagrams) | udp +2 ms: Wisp UDP stream to example.net:443 open | quic +2 ms: handshake: 1 pinned certificate hashes, 0 protocols offered, 0 page headers | ... | page +41 ms: WebTransportError "Opening handshake failed." (source session, streamErrorCode null), ...
+```
+
+`failed at <stage>` is the first stage that failed, and each step after it
+has its time since the session started:
+
+| Stage     | What it says                                                                                                                                                                                                                                                                                                                                                                                       |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `setup`   | the transport has no Wisp UDP streams, stomp-h3 did not load or has no WebTransport client, or the content blocker refused the session (nothing was sent)                                                                                                                                                                                                                                          |
+| `carrier` | what the transport's Wisp connection rides to the relay: WebTransport (the session's datagrams) or the WebSocket                                                                                                                                                                                                                                                                                   |
+| `udp`     | the Wisp UDP stream to the server: not opened (epoxy's error), or closed by the relay, with its close reason named (`0x48` blocked or no UDP, `0x41` a CONNECT it cannot use, `0x42` unreachable, `0x03` the edges' name gate, ...; docs/http3.md has who gives which)                                                                                                                             |
+| `quic`    | the QUIC and TLS handshake: no answer within 4 s, no QUIC version in common, ALPN (`no_application_protocol`: the server takes no h3), the certificate (`no hash matches` for a pinned hash, `UnknownIssuer` and the like for the Web PKI's), another TLS alert by name. Up, it says the handshake's time and RTT; stomp-h3 offers only QUIC v1, ALPN h3 and TLS 1.3, so those are what was agreed |
+| `h3`      | the server's SETTINGS (`lack ENABLE_WEBTRANSPORT`, `lack H3_DATAGRAM`: no CONNECT is sent, as Chrome sends none) and the extended CONNECT's `:status` (only 200 is a session), or the HTTP/3 stream that failed                                                                                                                                                                                    |
+| `page`    | what the page's session reads                                                                                                                                                                                                                                                                                                                                                                      |
+
+The transport's own session to the relay (Wisp over WebTransport, below)
+gets a line of its own in the same mode, `[wt] #<n> carrier session to the
+relay <origin>`: the discovery document (kept, fetched, none and why), each
+handshake with its URL's origin, how many hashes were pinned, its time and,
+when it failed, the browser's `WebTransportError` (message, `source`,
+`streamErrorCode`: Chrome tells a page no more than that), lane 0 and the
+relay's first Wisp packet. The carrier host (a SharedWorker) makes these
+lines when a realm in the verbose mode asks it for a carrier, and tells
+them only to such realms. A CONNECT the relay throttles (`0x49`) is held
+there and sent again as streams close, which its session never hears of:
+such a session waits out its handshake (`quic`, no answer) and the host's
+verbose line `the relay refused a stream with 0x49 ...` is beside it.
+
+A line names the server's origin and no more of the session's URL (no path,
+no query), counts the page's hashes, protocols and headers without their
+values, and carries the transport's own error text cut to printable ASCII:
+each step is at most 240 characters and a line 2000, and a realm makes at
+most 32 traces a minute (one line then says how many it left out). With the
+mode off nothing is made.
+
+### Collecting a trace from production
+
+For an operator to run in their own browser, against one session and with
+nothing else changed (no load, no relay setting):
+
+1. Open the host's page (https://stomp.fracit.al/ or the host that embeds
+   STomp) and its DevTools console, and run
+   `localStorage['stomp:debug-transport'] = '1'` there (on the host's own
+   origin, not in a proxied frame).
+2. For the carrier's own line too, close every other tab of the host's
+   origin and end its carrier host: chrome://inspect/#workers lists it as
+   a shared worker named `stomp-carrier` ("terminate"); a reload keeps it
+   and its session, so no new carrier line is made. Then reload the host's
+   page. With the console's filter at `[wt]`, the carrier's line comes
+   once the session to the relay is up or has failed (none when the relay
+   is remembered as failing: the `[wisp]` line `WebTransport skipped ...`
+   says so). Every page session's line says what the carrier is either
+   way.
+3. Load the proxied page whose session fails, once. Each of its sessions
+   adds one `[wt] #<n> page session to <origin> ...` line; `failed at` names
+   the stage.
+4. Copy the `[wt]`, `[wisp]` and `[net]` lines of that load (right click,
+   "Save as..." on the console, or select and copy), with the browser's
+   version (`chrome://version`) and the time.
+5. Turn the mode off again: `localStorage.removeItem('stomp:debug-transport')`
+   and reload.
+
+The lines carry the servers' origins the page connected to (the session's,
+the relay's) and nothing of the pages' content. To read the same session
+natively, load the page without the proxy and run
+`new WebTransport(url).ready.catch((e) => console.log(e.message, e.source, e.streamErrorCode))`
+in its console: natively the error is the same for each stage, so the stage
+is only on the `[wt]` line.
+
 ## Tests
 
 `webtransport` (no network): a UDP socket of the suite's hears what is sent
@@ -436,6 +519,19 @@ a worker, and one the content blocker's list refuses, which the server
 never hears of through the proxy. Natively Chrome takes the server's
 certificate with a pinned hash, or with `--ignore-certificate-errors-spki-list`
 and `--origin-to-force-quic-on`.
+
+`webtransport-trace` (no network): each stage a page's session can fail
+at, forced against the suite's servers (test/wtserver.mjs with an ALPN that
+is not h3, SETTINGS without ENABLE_WEBTRANSPORT or without H3_DATAGRAM, a
+404 and a 403, a hash that is not the certificate's, a certificate no root
+of the transport signed, a port that never answers) and a relay in front of
+the demo's holyWisp that refuses UDP streams with 0x48, 0x49 and 0x41 or
+closes one with 0x03 at its first datagram (test/wisp-gate.mjs): the page
+reads what it reads natively and the `[wt]` line names the stage and why.
+Also a session that is up, the carrier's own line (up through
+test/wisp-wt.mjs, and failed with its UDP dropped, the page's session then
+riding the WebSocket), no line with the mode off, the localStorage switch,
+and both demo modes through the demo.
 
 `webtransport-buffered` (no network): an upload over a slow path, the
 suite's server granting 16 MiB stream windows (`streamWindow`) and taking

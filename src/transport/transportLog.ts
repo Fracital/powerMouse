@@ -25,6 +25,8 @@ export const transportLog = { on: false };
 export interface TransportNote {
 	level: 'info' | 'warn';
 	text: string;
+	/** a line of the verbose mode: told only to a realm that turned it on */
+	verbose?: boolean;
 }
 
 const listeners = new Set<(note: TransportNote) => void>();
@@ -53,11 +55,16 @@ export const relayNote = (note: TransportNote) =>
 	tell({
 		level: note.level === 'warn' ? 'warn' : 'info',
 		text: String(note.text),
+		...(note.verbose === true && { verbose: true }),
 	});
 
 /** a `[net]` line of the verbose mode (call it only when `transportLog.on`) */
 export const logTransport = (text: string) =>
-	tell({ level: 'info', text: `[net] ${text}` });
+	tell({
+		level: 'info',
+		text: text.startsWith('[wt] ') ? text : `[net] ${text}`,
+		verbose: true,
+	});
 
 /** what the carrier of a transport's wisp connection is, under its wrappers */
 function carrierOf(transport: ProxyTransport): string | null {

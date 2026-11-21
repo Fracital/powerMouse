@@ -12,7 +12,7 @@ mod socket;
 mod tables;
 mod wt;
 
-use std::{cell::RefCell, net::SocketAddr, sync::Arc};
+use std::{cell::RefCell, net::SocketAddr, rc::Rc, sync::Arc};
 
 use js_sys::Function;
 use quinn::{crypto::rustls::QuicServerConfig, Endpoint, EndpointConfig, ServerConfig, TransportConfig, VarInt};
@@ -36,6 +36,18 @@ fn fail(e: impl ToString) -> JsError {
 	JsError::new(&e.to_string())
 }
 
+/// `id=value,...`, both in hex (`0x` optional)
+fn parse_settings(list: &str) -> Result<Vec<(u64, u64)>, JsError> {
+	let hex = |v: &str| u64::from_str_radix(v.trim().trim_start_matches("0x"), 16).map_err(fail);
+	list.split(',')
+		.filter(|pair| !pair.trim().is_empty())
+		.map(|pair| {
+			let (id, value) = pair.split_once('=').ok_or_else(|| fail("a setting is id=value"))?;
+			Ok((hex(id)?, hex(value)?))
+		})
+		.collect()
+}
+
 #[wasm_bindgen]
 pub struct Server {
 	inbox: socket::Inbox,
@@ -48,7 +60,11 @@ impl Server {
 	/// socket the host bound; `send(bytes, address, port)`; `emit(json)`;
 	/// `stream_window`: the flow control window of each stream instead of
 	/// the Go fixture's 64 KiB (and twice it for the connection), as a
-	/// server that grants a client a long path's worth.
+	/// server that grants a client a long path's worth; `alpn`: the ALPN
+	/// ids the server takes, comma-separated, instead of `h3` (none in
+	/// common with a client fails its handshake); `settings`: the SETTINGS
+	/// it sends, `id=value` pairs in hex, comma-separated, instead of
+	/// wt.rs SETTINGS (empty for none).
 	#[wasm_bindgen(constructor)]
 	pub fn new(
 		cert: Vec<u8>,
@@ -58,6 +74,8 @@ impl Server {
 		send: Function,
 		emit: Function,
 		stream_window: Option<u32>,
+		alpn: Option<String>,
+		settings: Option<String>,
 	) -> Result<Server, JsError> {
 		EMIT.with(|e| *e.borrow_mut() = Some(emit));
 		let local = SocketAddr::new(address.parse().map_err(fail)?, port);
@@ -73,7 +91,14 @@ impl Server {
 				PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key)),
 			)
 			.map_err(fail)?;
-		tls.alpn_protocols = vec![b"h3".to_vec()];
+		tls.alpn_protocols = match &alpn {
+			Some(ids) => ids.split(',').filter(|id| !id.is_empty()).map(|id| id.as_bytes().to_vec()).collect(),
+			None => vec![b"h3".to_vec()],
+		};
+		let settings = Rc::new(match settings {
+			Some(list) => parse_settings(&list)?,
+			None => wt::SETTINGS.to_vec(),
+		});
 
 		// the Go fixture's limits: 64 KiB per stream, 1 MiB per connection
 		// (fixed windows), datagrams on, quic-go's 100 streams each way
@@ -109,10 +134,11 @@ impl Server {
 		let accepting = endpoint.clone();
 		spawn_local(async move {
 			while let Some(incoming) = accepting.accept().await {
+				let settings = settings.clone();
 				spawn_local(async move {
 					if let Ok(connecting) = incoming.accept() {
 						if let Ok(conn) = connecting.await {
-							wt::serve(conn).await;
+							wt::serve(conn, settings).await;
 						}
 					}
 				});

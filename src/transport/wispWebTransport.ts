@@ -71,6 +71,12 @@ import { askCarrierHost, type CarrierGiven } from './carrierClient';
 import { promptSink } from './promptSink';
 import type { Ride } from './riderPace';
 import { wispNote } from './transportLog';
+import {
+	clean,
+	originOf,
+	startTrace,
+	type StageTrace,
+} from './webTransportTrace';
 
 /** TransportDescriptor.webTransport */
 export interface WispWebTransportOptions {
@@ -610,8 +616,13 @@ const short = (error: unknown) =>
 async function fetchDocument(
 	url: string,
 	ms: number,
+	trace?: StageTrace | null,
 ): Promise<KeptDocument['document']> {
 	const controller = new AbortController();
+	const none = (why: string) => {
+		trace?.step('carrier', `discovery ${originOf(url)}: no document (${why})`);
+		return null;
+	};
 	try {
 		const response = await timeout(
 			fetch(url, {
@@ -622,15 +633,15 @@ async function fetchDocument(
 			ms,
 			'the WebTransport discovery document',
 		);
-		if (!response.ok) return null;
+		if (!response.ok) return none(`status ${response.status}`);
 		// an app's page at that path (a 200 with HTML) is no document
 		const body = (await timeout(response.json(), ms, 'its body')) as unknown;
 		return body && typeof body === 'object'
 			? (body as { url?: unknown; hashes?: unknown })
-			: null;
-	} catch {
+			: none('not a JSON object');
+	} catch (error) {
 		controller.abort();
-		return null;
+		return none(short(error));
 	}
 }
 
@@ -675,18 +686,51 @@ async function discover(
 	url: string,
 	ms: number,
 	fresh = false,
+	trace?: StageTrace | null,
 ): Promise<{ found: Discovery | null; kept: boolean }> {
 	let body = fresh ? undefined : await memory.document(url);
 	const kept = body !== undefined;
 	if (body === undefined) {
-		body = await fetchDocument(url, ms);
+		body = await fetchDocument(url, ms, trace);
 		memory.keepDocument(url, body);
-	}
-	return { found: body ? readDocument(url, body) : null, kept };
+	} else if (!body)
+		trace?.step('carrier', `discovery ${originOf(url)}: none (kept)`);
+	const found = body ? readDocument(url, body) : null;
+	if (found)
+		trace?.step(
+			'carrier',
+			`discovery ${originOf(url)}${kept ? ' (kept)' : ''}: session ${originOf(found.url)}, ${found.hashes.length} hashes`,
+		);
+	return { found, kept };
+}
+
+/** a session's error as the trace tells it: Chrome's WebTransportError fields */
+function errorFields(error: unknown): string {
+	const e = error as {
+		name?: unknown;
+		message?: unknown;
+		source?: unknown;
+		streamErrorCode?: unknown;
+	} | null;
+	if (!e || typeof e !== 'object') return clean(error, 160);
+	const native =
+		typeof WebTransportError === 'function' &&
+		error instanceof WebTransportError;
+	return clean(
+		`${String(e.name ?? 'Error')}: ${String(e.message ?? '')}${native ? ` (source ${String(e.source)}, streamErrorCode ${String(e.streamErrorCode)})` : ''}`,
+		160,
+	);
 }
 
 /** one session's handshake, within `ms` */
-async function handshake(found: Discovery, ms: number): Promise<WebTransport> {
+async function handshake(
+	found: Discovery,
+	ms: number,
+	trace?: StageTrace | null,
+): Promise<WebTransport> {
+	const start = performance.now();
+	const took = () => Math.round(performance.now() - start);
+	const what = `handshake to ${originOf(found.url)} (${found.hashes.length ? `${found.hashes.length} pinned hashes` : 'Web PKI'})`;
 	const options: WebTransportOptions & { protocols?: string[] } = {};
 	if (found.hashes.length) options.serverCertificateHashes = found.hashes;
 	// on the wire the session is Wisp v2 whatever epoxy runs (pipeOf); a
@@ -702,6 +746,10 @@ async function handshake(found: Discovery, ms: number): Promise<WebTransport> {
 	try {
 		await timeout(session.ready, ms, 'the WebTransport handshake');
 	} catch (error) {
+		trace?.step(
+			'carrier',
+			`${what}: failed in ${took()} ms: ${errorFields(error)}`,
+		);
 		try {
 			session.close();
 		} catch {
@@ -709,6 +757,10 @@ async function handshake(found: Discovery, ms: number): Promise<WebTransport> {
 		}
 		throw error;
 	}
+	trace?.step(
+		'carrier',
+		`${what}: ready in ${took()} ms, protocol ${(session as { protocol?: string }).protocol || 'none'}`,
+	);
 	return session;
 }
 
@@ -729,9 +781,10 @@ async function openSession(
 	plan: RelayPlan,
 	ms: number,
 	prefer?: Via,
+	trace?: StageTrace | null,
 ): Promise<Opened> {
 	const direct = async (url: string): Promise<Opened> => ({
-		session: await handshake({ url, hashes: [], key: '' }, ms),
+		session: await handshake({ url, hashes: [], key: '' }, ms, trace),
 		url,
 		via: 'direct',
 	});
@@ -745,12 +798,12 @@ async function openSession(
 				first = error;
 			}
 	}
-	const { found } = await discover(plan.discovery!, ms);
+	const { found } = await discover(plan.discovery!, ms, false, trace);
 	if (!found) throw first ?? new Error(NO_SESSION);
 	// the document names the session that failed already
 	if (first && found.url === plan.direct && !found.hashes.length) throw first;
 	const by = async (found: Discovery): Promise<Opened> => ({
-		session: await handshake(found, ms),
+		session: await handshake(found, ms, trace),
 		url: found.url,
 		via: 'document',
 	});
@@ -758,7 +811,7 @@ async function openSession(
 		return await by(found);
 	} catch (error) {
 		// it may have rotated since it was fetched (or kept)
-		const again = (await discover(plan.discovery!, ms, true)).found;
+		const again = (await discover(plan.discovery!, ms, true, trace)).found;
 		if (!again || (again.key === found.key && again.url === found.url))
 			throw error;
 		return by(again);
@@ -1314,11 +1367,18 @@ async function sessionCarrier(
 	ms: number,
 	lanes: number,
 ): Promise<OpenCarrier & { via: Via }> {
-	const { session, url, via } = await openSession(
-		plan,
-		ms,
-		memory.via(plan.key),
+	const trace = startTrace(
+		`carrier session to the relay ${originOf(plan.direct ?? plan.discovery ?? '')}`,
 	);
+	let opened: Opened;
+	try {
+		opened = await openSession(plan, ms, memory.via(plan.key), trace);
+	} catch (error) {
+		trace?.fail('carrier', `no session: ${errorFields(error)}`);
+		trace?.tell();
+		throw error;
+	}
+	const { session, url, via } = opened;
 	const close = () => {
 		try {
 			session.close();
@@ -1328,6 +1388,10 @@ async function sessionCarrier(
 	};
 	try {
 		const zero = await laneZero(session, ms);
+		trace?.step(
+			'carrier',
+			`Wisp stream: lane 0 ${zero.server ? "the relay's" : "the client's"}`,
+		);
 		const { pipe, first, stats } = pipeOf(session, zero.stream, {
 			v2,
 			server: zero.server,
@@ -1343,10 +1407,16 @@ async function sessionCarrier(
 			},
 		});
 		await timeout(first, ms, 'the Wisp stream');
+		trace?.step('carrier', "the relay's first Wisp packet came");
+		trace?.tell(
+			`via ${via === 'document' ? 'the discovery document' : 'the wisp URL'}`,
+		);
 		const ended = session.closed.then(() => {});
 		ended.catch(() => {});
 		return { carrier: 'webtransport', url, via, pipe, close, ended, stats };
 	} catch (error) {
+		trace?.fail('carrier', `Wisp stream: ${errorFields(error)}`);
+		trace?.tell();
 		close();
 		throw error;
 	}

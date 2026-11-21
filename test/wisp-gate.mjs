@@ -13,6 +13,9 @@
 // - `udp = false`: a relay without UDP at all. Every UDP CONNECT is answered
 //   with CLOSE 0x48, which is what holyWisp with `allow-udp = off` sends a
 //   wisp v1 client (src/server/conn.c) and wisp-js with UDP streams off.
+// - `refuse`: names whose UDP CONNECT is answered at once with CLOSE and
+//   the reason given (`0x41`, `0x49`, ...), as a relay that refuses that
+//   one stream says why.
 // - `resolve`: names whose UDP goes to an address of the suite's choosing
 //   (`{ host, port }`), since the suites' names resolve nowhere.
 // - `cut()` drops every connection, as a restarted edge or a port forward
@@ -36,6 +39,7 @@ export async function startWispGate(upstream) {
 		url: '',
 		udp: true,
 		gated: new Set(),
+		refuse: new Map(),
 		resolve: new Map(),
 		seen: [],
 		tap: null,
@@ -96,6 +100,8 @@ export async function startWispGate(upstream) {
 				const entry = { host, port, refused: null };
 				gate.seen.push(entry);
 				if (!gate.udp) return close(id, entry, 0x48);
+				if (gate.refuse.has(host))
+					return close(id, entry, gate.refuse.get(host));
 				if (gate.gated.has(host)) return refused.set(id, entry);
 				const to = gate.resolve.get(host);
 				if (to) {

@@ -9,6 +9,13 @@
 import type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
 import { postToPort, TransportToHost, WebTransportMessage } from './messages';
 import { logTransport, rideOf, transportLog } from './transportLog';
+import {
+	handshakeStage,
+	originOf,
+	startTrace,
+	wispReason,
+	type StageTrace,
+} from './webTransportTrace';
 
 /** stomp-h3's session (deploy/epoxy/h3/src/webtransport.rs) */
 interface WtSession {
@@ -32,6 +39,8 @@ interface WtSession {
 	read_datagram(): Promise<Uint8Array | undefined>;
 	close(code: number, reason: string): void;
 	closed(): Promise<{ closeCode: number; reason: string }>;
+	/** diagnostics: RTT, handshake time, datagram and packet counters */
+	stats?(): { handshakeMs?: number; rttMs?: number } | undefined;
 }
 interface WtModule {
 	default(): Promise<unknown>;
@@ -54,6 +63,8 @@ interface WtModule {
 interface UdpStream {
 	read: ReadableStream<Uint8Array>;
 	write: WritableStream<Uint8Array>;
+	/** the wisp close reason, once `read` has ended (deploy/epoxy patch 0058) */
+	closeReason?: () => number | undefined;
 }
 
 /**
@@ -162,11 +173,35 @@ const codeOf = (error: unknown): number | undefined => {
 	return match ? Number(match[1]) : undefined;
 };
 
+/** what the page's session reads when the transport fails it (src/inject/webTransport.ts carry) */
+const PAGE_FAILURE =
+	'WebTransportError "Opening handshake failed." (source session, streamErrorCode null), as Chrome ends a session whose server cannot be reached';
+
 /**
  * Open a session for the page and serve it on `port`; answers the rpc once
- * it is up or has failed.
+ * it is up or has failed. In the verbose mode its stages are traced
+ * (webTransportTrace.ts): one `[wt]` line names the one that failed.
  */
 export async function serveWebTransport(
+	transport: ProxyTransport,
+	session: TransportToHost['webtransport'][0],
+	admit?: AdmitSession,
+): Promise<[TransportToHost['webtransport'][1], []]> {
+	const trace = startTrace(`page session to ${originOf(session.url)}`);
+	const answer = await openWebTransport(transport, session, admit, trace);
+	if (trace) {
+		if (answer[0].result === 'success') trace.step('page', 'ready');
+		else if (trace.failed !== 'page') trace.step('page', PAGE_FAILURE);
+		trace.tell(
+			answer[0].result === 'success'
+				? `protocol ${answer[0].protocol ? 'chosen' : 'none'}, max datagram ${answer[0].maxDatagramSize} bytes`
+				: undefined,
+		);
+	}
+	return answer;
+}
+
+async function openWebTransport(
 	transport: ProxyTransport,
 	{
 		url,
@@ -176,15 +211,18 @@ export async function serveWebTransport(
 		hashes,
 		port,
 	}: TransportToHost['webtransport'][0],
-	admit?: AdmitSession,
+	admit: AdmitSession | undefined,
+	trace: StageTrace | null,
 ): Promise<[TransportToHost['webtransport'][1], []]> {
 	let target: URL;
 	try {
 		target = new URL(url);
 	} catch (error) {
 		port.close();
+		trace?.fail('setup', 'invalid URL');
 		return failure('invalid URL');
 	}
+	trace?.step('carrier', `the Wisp connection ${rideOf(transport, true)}`);
 	const moduleURL = [...layers(transport)]
 		.map((layer) => modules.get(layer)?.url)
 		.find(Boolean);
@@ -202,27 +240,45 @@ export async function serveWebTransport(
 	const connect = module?.connect_webtransport;
 	if (!module || !connect || !client?.connect_udp) {
 		port.close();
+		trace?.fail(
+			'setup',
+			!client?.connect_udp
+				? 'the transport has no Wisp UDP streams'
+				: !module
+					? "stomp-h3 did not load (HTTP/3's module)"
+					: 'this stomp-h3 has no WebTransport client',
+		);
 		return failure('no WebTransport on this transport');
 	}
 	if (admit && !(await admit(target, origin).catch(() => true))) {
 		port.close();
+		trace?.fail('setup', "the content blocker's lists refuse the session");
 		return failure('refused');
 	}
+	const udpTarget = `${target.hostname}:${target.port || 443}`;
 	let session: WtSession;
 	let channel: UdpStream | undefined = undefined;
+	let stage: 'setup' | 'udp' | 'handshake' = 'setup';
 	try {
 		await instantiate(module);
+		stage = 'udp';
 		const host = target.hostname;
 		const opened = await client.connect_udp(
 			`udp://${host}:${target.port || 443}`,
 		);
 		channel = opened;
+		stage = 'handshake';
+		trace?.step('udp', `Wisp UDP stream to ${udpTarget} open`);
 		// the page may have closed the session while it connected: the port
 		// says so by closing, which a MessagePort tells in Chrome 152 on
 		let abandoned = false;
 		port.addEventListener('close', () => (abandoned = true));
 		port.start();
 		const pem = extraRoots(transport);
+		trace?.step(
+			'quic',
+			`handshake: ${hashes.length ? `${hashes.length} pinned certificate hashes` : `the Web PKI's roots${pem ? " and the host transport's" : ''}`}, ${protocols.length} protocols offered, ${(headers ?? []).length} page headers`,
+		);
 		session = await connect(url, opened.read, opened.write, {
 			origin,
 			protocols,
@@ -233,12 +289,26 @@ export async function serveWebTransport(
 		});
 		if (abandoned) {
 			session.close(0, '');
+			trace?.fail('page', 'the page closed the session while it connected');
 			return failure('closed while connecting');
 		}
 	} catch (error) {
 		port.close();
+		const message = String((error as Error)?.message ?? error);
+		if (trace) traceFailure(trace, stage, message, channel, udpTarget);
 		channel?.write.abort().catch(() => {});
-		return failure(String((error as Error)?.message ?? error));
+		return failure(message);
+	}
+	if (trace) {
+		const stats = statsOf(session);
+		trace.step(
+			'quic',
+			`up (QUIC v1, ALPN h3, TLS 1.3: all stomp-h3 offers)${stats ? `, handshake ${stats}` : ''}`,
+		);
+		trace.step(
+			'h3',
+			'SETTINGS with H3_DATAGRAM and ENABLE_WEBTRANSPORT, extended CONNECT :status 200',
+		);
 	}
 	if (transportLog.on)
 		logTransport(
@@ -253,6 +323,50 @@ export async function serveWebTransport(
 		},
 		[],
 	];
+}
+
+/** `12 ms, rtt 3 ms` from stomp-h3's session stats, when it has them */
+function statsOf(session: WtSession): string {
+	try {
+		const stats = session.stats?.();
+		if (!stats) return '';
+		const ms = (n: unknown) => (typeof n === 'number' ? Math.round(n) : '?');
+		return `${ms(stats.handshakeMs)} ms, rtt ${ms(stats.rttMs)} ms`;
+	} catch {
+		return '';
+	}
+}
+
+/** the stage a failure belongs to, and the relay's close reason when the stream ended */
+function traceFailure(
+	trace: StageTrace,
+	stage: 'setup' | 'udp' | 'handshake',
+	message: string,
+	channel: UdpStream | undefined,
+	udpTarget: string,
+) {
+	if (stage === 'setup') {
+		trace.fail('setup', `stomp-h3's wasm did not start: ${message}`);
+		return;
+	}
+	if (stage === 'udp') {
+		trace.fail('udp', `Wisp UDP stream to ${udpTarget} not opened: ${message}`);
+		return;
+	}
+	const { stage: failed, why } = handshakeStage(message);
+	if (failed === 'udp') {
+		let reason: number | undefined;
+		try {
+			reason = channel?.closeReason?.();
+		} catch {
+			reason = undefined;
+		}
+		trace.fail(
+			'udp',
+			`${why}: ${reason === undefined ? 'the relay gave no close reason (or this epoxy does not report one)' : `the relay closed it with ${wispReason(reason)}`}`,
+		);
+	} else trace.fail(failed, why);
+	trace.step(failed, `stomp-h3: ${message}`);
 }
 
 function serveSession(session: WtSession, port: MessagePort) {

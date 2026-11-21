@@ -312,7 +312,11 @@ export class Server {
 	 * socket the host bound; `send(bytes, address, port)`; `emit(json)`;
 	 * `stream_window`: the flow control window of each stream instead of
 	 * the Go fixture's 64 KiB (and twice it for the connection), as a
-	 * server that grants a client a long path's worth.
+	 * server that grants a client a long path's worth; `alpn`: the ALPN
+	 * ids the server takes, comma-separated, instead of `h3` (none in
+	 * common with a client fails its handshake); `settings`: the SETTINGS
+	 * it sends, `id=value` pairs in hex, comma-separated, instead of
+	 * wt.rs SETTINGS (empty for none).
 	 * @param {Uint8Array} cert
 	 * @param {Uint8Array} key
 	 * @param {string} address
@@ -320,8 +324,20 @@ export class Server {
 	 * @param {Function} send
 	 * @param {Function} emit
 	 * @param {number | null} [stream_window]
+	 * @param {string | null} [alpn]
+	 * @param {string | null} [settings]
 	 */
-	constructor(cert, key, address, port, send, emit, stream_window) {
+	constructor(
+		cert,
+		key,
+		address,
+		port,
+		send,
+		emit,
+		stream_window,
+		alpn,
+		settings,
+	) {
 		try {
 			const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
 			const ptr0 = passArray8ToWasm0(cert, wasm.__wbindgen_export_2);
@@ -334,6 +350,22 @@ export class Server {
 				wasm.__wbindgen_export_3,
 			);
 			const len2 = WASM_VECTOR_LEN;
+			var ptr3 = isLikeNone(alpn)
+				? 0
+				: passStringToWasm0(
+						alpn,
+						wasm.__wbindgen_export_2,
+						wasm.__wbindgen_export_3,
+					);
+			var len3 = WASM_VECTOR_LEN;
+			var ptr4 = isLikeNone(settings)
+				? 0
+				: passStringToWasm0(
+						settings,
+						wasm.__wbindgen_export_2,
+						wasm.__wbindgen_export_3,
+					);
+			var len4 = WASM_VECTOR_LEN;
 			wasm.server_new(
 				retptr,
 				ptr0,
@@ -346,6 +378,10 @@ export class Server {
 				addHeapObject(send),
 				addHeapObject(emit),
 				isLikeNone(stream_window) ? 0x100000001 : stream_window >>> 0,
+				ptr3,
+				len3,
+				ptr4,
+				len4,
 			);
 			var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
 			var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
@@ -572,11 +608,11 @@ function __wbg_get_imports() {
 		const ret = false;
 		return ret;
 	};
-	imports.wbg.__wbindgen_closure_wrapper274 = function (arg0, arg1, arg2) {
+	imports.wbg.__wbindgen_closure_wrapper278 = function (arg0, arg1, arg2) {
 		const ret = makeMutClosure(arg0, arg1, 9, __wbg_adapter_28);
 		return addHeapObject(ret);
 	};
-	imports.wbg.__wbindgen_closure_wrapper3114 = function (arg0, arg1, arg2) {
+	imports.wbg.__wbindgen_closure_wrapper3127 = function (arg0, arg1, arg2) {
 		const ret = makeMutClosure(arg0, arg1, 132, __wbg_adapter_31);
 		return addHeapObject(ret);
 	};

@@ -1,0 +1,68 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>WEBTRANSPORT TRACE</title>
+	</head>
+	<body>
+		<script>
+			// One session for the webtransport-trace suite: ?url (the
+			// session's), ?hash (the certificate's SHA-256 in hex to pin,
+			// `zero` for one that is no certificate's, absent for none),
+			// ?run. The answer is window.__wt: how `ready` and `closed`
+			// settled, in which order, and how long the session took.
+			const params = Object.fromEntries(new URLSearchParams(location.search));
+			const describe = (e) =>
+				e !== null && typeof e === 'object'
+					? [
+							e.constructor && e.constructor.name,
+							e.name,
+							e.message,
+							'source ' + e.source,
+							'streamErrorCode ' + e.streamErrorCode,
+							'WebTransportError ' + (e instanceof WebTransportError),
+						].join(' | ')
+					: typeof e + ' ' + String(e);
+			const bytes = (hex) =>
+				Uint8Array.from(hex.match(/../g), (pair) => parseInt(pair, 16));
+			(async () => {
+				const order = [];
+				const options = {};
+				if (params.hash)
+					options.serverCertificateHashes = [
+						{
+							algorithm: 'sha-256',
+							value:
+								params.hash === 'zero'
+									? new Uint8Array(32)
+									: bytes(params.hash),
+						},
+					];
+				const start = performance.now();
+				let result;
+				try {
+					const t = new WebTransport(params.url, options);
+					const settle = (name, promise) =>
+						promise.then(
+							() => {
+								order.push(name);
+								return 'fulfilled';
+							},
+							(e) => {
+								order.push(name);
+								return 'rejected ' + describe(e);
+							},
+						);
+					const closed = settle('closed', t.closed);
+					const ready = await settle('ready', t.ready);
+					const ms = Math.round(performance.now() - start);
+					if (ready === 'fulfilled') t.close();
+					result = { ready, closed: await closed, order, ms };
+				} catch (e) {
+					result = { probeError: describe(e) };
+				}
+				window.__wt = { run: params.run, result };
+			})();
+		</script>
+	</body>
+</html>

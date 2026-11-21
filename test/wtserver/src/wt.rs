@@ -47,8 +47,9 @@ const QPACK_DECOMPRESSION_FAILED: u64 = 0x200;
 
 /// The server's SETTINGS, the set the Go fixture sends: H3_DATAGRAM,
 /// ENABLE_CONNECT_PROTOCOL, ENABLE_WEBTRANSPORT (draft 02), the later
-/// drafts' WT_ENABLED and WT_MAX_SESSIONS. No QPACK dynamic table.
-const SETTINGS: [(u64, u64); 5] = [
+/// drafts' WT_ENABLED and WT_MAX_SESSIONS. No QPACK dynamic table. A server
+/// made with `settings` sends those instead (a server a client must refuse).
+pub const SETTINGS: [(u64, u64); 5] = [
 	(0x33, 1),
 	(0x08, 1),
 	(0x2b603742, 1),
@@ -232,7 +233,7 @@ impl Conn {
 	}
 }
 
-pub async fn serve(conn: Connection) {
+pub async fn serve(conn: Connection, settings: Rc<Vec<(u64, u64)>>) {
 	let c = Rc::new(Conn {
 		remote: conn.remote_address(),
 		conn: conn.clone(),
@@ -244,7 +245,7 @@ pub async fn serve(conn: Connection) {
 	});
 	if let Ok(mut s) = conn.open_uni().await {
 		let mut payload = Vec::new();
-		for (id, v) in SETTINGS {
+		for &(id, v) in settings.iter() {
 			put_varint(&mut payload, id);
 			put_varint(&mut payload, v);
 		}
