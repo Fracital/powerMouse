@@ -3,7 +3,7 @@
 // (./host.mjs) before the demo's main.js asks for the controller
 // (`STOMP_OFFLINE.ready`).
 /* global __PM_PRELUDE__, __PM_ADBLOCK__, __PM_BUILD__, __PM_COMMITS__ */
-import { createFrame, dialing, install, ORIGIN } from './host.mjs';
+import { createFrame, dialing, install, ORIGIN, torOptions } from './host.mjs';
 
 const WISP_KEY = 'stomp-demo:wisp';
 const query = new URLSearchParams(location.search);
@@ -31,8 +31,20 @@ globalThis.STOMP_CONFIG = {
 	shieldsDefaults: true,
 	webTransport: true,
 	transports: { epoxy: `${ORIGIN}/epoxy/`, libcurl: `${ORIGIN}/libcurl/` },
+	// Tor mode's client (demo/public/tor-client/) in a worker of this page
+	// (./host.mjs torOptions), not in a SharedWorker: no file: page starts one
+	torClient: {
+		module: `${ORIGIN}/tor-client/transport.mjs`,
+		sharedWorker: false,
+	},
 	...(__PM_ADBLOCK__ ? {} : { adblock: false }),
 };
+
+// Tor mode's worker has a scope of its own (pm/main.js DIRECTORY), whose
+// files are the payload's /stomp/ ones
+const SCOPE = globalThis.PMProfile?.tor ? '/stomp-tor/' : '/stomp/';
+const inScope = (path) =>
+	path.startsWith('/stomp/') ? `${SCOPE}${path.slice('/stomp/'.length)}` : path;
 
 /** each file of the payload, gunzipped (a file kept as it is when it says so) */
 async function decode() {
@@ -49,7 +61,7 @@ async function decode() {
 								.pipeThrough(new DecompressionStream('gzip')),
 						).blob()
 					: bytes;
-			decoded.set(path, new Blob([plain], { type }));
+			decoded.set(inScope(path), new Blob([plain], { type }));
 		}),
 	);
 	return decoded;
@@ -82,7 +94,13 @@ const answers = new Map([
 	],
 ]);
 
-const ready = install({ decoded: decode(), prelude: __PM_PRELUDE__, answers });
+const ready = install({
+	decoded: decode(),
+	prelude: __PM_PRELUDE__,
+	scope: SCOPE,
+	profile: globalThis.PMProfile?.id ?? '',
+	answers,
+});
 ready.catch((error) => console.error('STomp offline.html:', error));
 
 globalThis.STOMP_OFFLINE = {
@@ -102,6 +120,8 @@ globalThis.STOMP_OFFLINE = {
 	},
 	/** the transport runs in this page (its modules are mapped here only) */
 	transportHost: 'page',
+	/** what Tor mode's transport is given beside the demo's options (./host.mjs) */
+	torOptions,
 	wisp: {
 		current: wisp,
 		builtIn,

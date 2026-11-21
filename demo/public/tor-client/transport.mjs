@@ -57,12 +57,13 @@ export default class TorClientTransport {
 		storageName = 'stomp-tor-client',
 		channel,
 		sharedWorker,
+		wasm,
 	} = {}) {
 		if (typeof wisp !== 'string') throw new TypeError('wisp: a URL');
 		this.#service =
 			typeof MessagePort === 'function' && sharedWorker instanceof MessagePort
-				? RemoteService.for(sharedWorker, { wisp, storageName })
-				: new TorService({ wisp, storageName });
+				? RemoteService.for(sharedWorker, { wisp, storageName, wasm })
+				: new TorService({ wisp, storageName, wasm });
 		// the host page's channel to this transport (its status, New Identity,
 		// New circuit for this site); none where the page is of another origin
 		if (typeof channel === 'string' && typeof BroadcastChannel === 'function') {
@@ -70,6 +71,12 @@ export default class TorClientTransport {
 			this.#channel.onmessage = ({ data }) => this.#heard(data);
 		}
 		this.#service.onStatus(() => this.#tell());
+		// the shared client bootstraps at once, as Tor Browser does, not at
+		// the first request: a transport the page hosts (offline.html's) is
+		// asked nothing until a tab loads (a failure is the status's, and
+		// the next request's). A client of the transport's own starts when
+		// it is used (a transport made only to ask admit())
+		if (this.#service instanceof RemoteService) this.init().catch(() => {});
 	}
 
 	/** what bootstrap took and what it is doing, for the page and the smoke */

@@ -10,8 +10,11 @@
 // codec.wasm and blocker.wasm (rust/ is copied in, as build.sh does), and
 // deploy/epoxy's image of the epoxy build the tree pins for epoxy-simd.wasm
 // and stomp_h3_bg.wasm (deploy/epoxy/build.sh makes it; that build's
-// lockfile is in no checkout of this repository). ENGINE names the
-// container engine, as for those scripts.
+// lockfile is in no checkout of this repository), and deploy/tor-js's image
+// of the tor-js build package.json pins for tor_js_bg.wasm (Tor mode's
+// arti; deploy/tor-js/build.sh). ENGINE names the container engine, as for
+// those scripts. `--only tor-js` asks only tor-js's image and keeps the
+// other modules as crates.json has them.
 //
 // A module's crates are what `cargo metadata --filter-platform
 // wasm32-unknown-unknown` resolves from its crate by normal dependencies
@@ -223,6 +226,62 @@ function dumpEpoxy() {
 	return dump;
 }
 
+/** tor-js's workspace in deploy/tor-js's image of the installed build */
+function dumpTorJs() {
+	const here = join(root, 'deploy/tor-js');
+	// the tag build.sh gives it
+	const tag = execFileSync(
+		'bash',
+		[
+			'-c',
+			'source ./upstream.env && echo "tor-js-fracital:${TOR_JS_REV:0:12}-p1-$( (cat Dockerfile; find patches -name \'*.patch\' -print0 | sort -z | xargs -0r cat) | sha256sum | cut -c1-12)"',
+		],
+		{ cwd: here },
+	)
+		.toString()
+		.trim();
+	if (!hasImage(tag))
+		throw new Error(`${tag} is not built: deploy/tor-js/build.sh makes it`);
+	const upstream = readFileSync(
+		join(root, 'node_modules/tor-js/UPSTREAM'),
+		'utf8',
+	);
+	const built = run([
+		'run',
+		'--rm',
+		tag,
+		'bash',
+		'-c',
+		'cut -d" " -f1 /out/SHA256; cat /out/COMMIT',
+	])
+		.toString()
+		.trim()
+		.split('\n');
+	if (
+		!upstream.includes(`(this build)       ${built[0]}`) ||
+		!upstream.includes(`patched commit ${built[1]} `)
+	)
+		throw new Error(
+			`${tag} is not the build the installed tor-js is (its wasm or its commit is not node_modules/tor-js/UPSTREAM's)`,
+		);
+	const dump = parseDump(
+		run([
+			'run',
+			'--rm',
+			'--network',
+			'host',
+			tag,
+			'bash',
+			'-c',
+			DUMP,
+			'dump',
+			'/src',
+		]),
+	);
+	dump.upstream = upstream;
+	return dump;
+}
+
 /** the crates a module is compiled from: a normal-dependency walk of cargo's resolve */
 function moduleCrates(meta, rootName) {
 	const packages = new Map(meta.packages.map((p) => [p.id, p]));
@@ -294,9 +353,22 @@ function describe(dump, meta, pkg) {
 	return key;
 }
 
-const rust = dumpRust();
-const epoxy = dumpEpoxy();
-const modules = [];
+const only = process.argv.includes('--only')
+	? process.argv[process.argv.indexOf('--only') + 1]
+	: null;
+if (only !== null && only !== 'tor-js')
+	throw new Error(`--only ${only}: only tor-js can be asked alone`);
+const before = only ? JSON.parse(readFileSync(OUT, 'utf8')) : null;
+if (before) {
+	Object.assign(crates, before.crates);
+	Object.assign(texts, before.texts);
+}
+const rust = only ? null : dumpRust();
+const epoxy = only ? null : dumpEpoxy();
+const torJs = dumpTorJs();
+const modules = before
+	? before.modules.filter((module) => module.crate !== 'tor-js')
+	: [];
 const fromLock = (dump, ws, lock, name, files) => {
 	const meta = dump.metas.get(ws);
 	const own = new Set(meta.workspace_members);
@@ -327,17 +399,21 @@ const fromLock = (dump, ws, lock, name, files) => {
 		notInModule: others,
 	});
 };
-fromLock(rust, '/work/rust', 'rust/Cargo.lock', 'core-module', [
-	'/stomp/core.wasm',
-]);
-fromLock(rust, '/work/rust', 'rust/Cargo.lock', 'codec', ['/stomp/codec.wasm']);
-fromLock(rust, '/work/rust', 'rust/Cargo.lock', 'block', [
-	'/stomp/blocker.wasm',
-]);
-fromLock(epoxy, '/src/stomp-h3', 'deploy/epoxy/h3/Cargo.lock', 'stomp-h3', [
-	'/epoxy/h3/stomp_h3_bg.wasm',
-]);
-{
+if (!only) {
+	fromLock(rust, '/work/rust', 'rust/Cargo.lock', 'core-module', [
+		'/stomp/core.wasm',
+	]);
+	fromLock(rust, '/work/rust', 'rust/Cargo.lock', 'codec', [
+		'/stomp/codec.wasm',
+	]);
+	fromLock(rust, '/work/rust', 'rust/Cargo.lock', 'block', [
+		'/stomp/blocker.wasm',
+	]);
+	fromLock(epoxy, '/src/stomp-h3', 'deploy/epoxy/h3/Cargo.lock', 'stomp-h3', [
+		'/epoxy/h3/stomp_h3_bg.wasm',
+	]);
+}
+if (!only) {
 	// epoxy-simd.wasm: its lockfile is the build's, checked by the epoxy
 	// transport's UPSTREAM instead
 	const meta = epoxy.metas.get('/src/epoxy-tls');
@@ -350,16 +426,34 @@ fromLock(epoxy, '/src/stomp-h3', 'deploy/epoxy/h3/Cargo.lock', 'stomp-h3', [
 		workspace: [],
 	});
 }
-if (rust.rustc !== epoxy.rustc)
-	console.warn(
-		`crate-notices: the toolchains differ: ${rust.rustc} and ${epoxy.rustc}`,
-	);
-const std = {
+{
+	// tor_js_bg.wasm: its lockfile is the build's, checked by the installed
+	// tor-js's UPSTREAM instead
+	const meta = torJs.metas.get('/src');
+	const inModule = moduleCrates(meta, 'tor-js');
+	modules.push({
+		files: ['/tor-client/tor_js_bg.wasm'],
+		crate: 'tor-js',
+		upstream: torJs.upstream,
+		upstreamFile: 'node_modules/tor-js/UPSTREAM',
+		crates: inModule.map((p) => describe(torJs, meta, p)).sort(),
+		workspace: [],
+	});
+}
+for (const other of [epoxy, torJs])
+	if (rust && other && rust.rustc !== other.rustc)
+		console.warn(
+			`crate-notices: the toolchains differ: ${rust.rustc} and ${other.rustc}`,
+		);
+const std = before?.std ?? {
 	rustc: rust.rustc,
 	files: Object.fromEntries(
 		[...rust.std].map(([file, text]) => [file, keep(text)]),
 	),
 };
+for (const [file, text] of torJs.std)
+	if (!Object.values(std.files).includes(keep(text)))
+		console.warn(`crate-notices: tor-js's toolchain's ${file} is another text`);
 
 const sorted = (object) =>
 	Object.fromEntries(

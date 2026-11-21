@@ -13,7 +13,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-const LICENCE_FILE = /^(licen[cs]e|copying|ofl)(\.(md|txt))?$/i;
+const LICENCE_FILE = /^(licen[cs]e|copying|ofl)(-(mit|apache))?(\.(md|txt))?$/i;
 
 /** the packages a bundle's source map names, by name */
 function packagesOfMap(file) {
@@ -104,13 +104,13 @@ function crateSections({ root, held, adblock, shared, section, problems }) {
 					`${module.lock} resolves other crates for ${module.crate} than demo/offline/notices/crates.json lists: ${again}`,
 				);
 		} else {
-			const installed = readFileSync(
-				join(root, 'node_modules/@mercuryworkshop/epoxy-transport/UPSTREAM'),
-				'utf8',
-			);
+			const file =
+				module.upstreamFile ??
+				'node_modules/@mercuryworkshop/epoxy-transport/UPSTREAM';
+			const installed = readFileSync(join(root, file), 'utf8');
 			if (installed !== module.upstream)
 				problems.push(
-					`the installed epoxy transport is not the build demo/offline/notices/crates.json lists ${module.crate}'s crates of: ${again}`,
+					`the installed package (${file}) is not the build demo/offline/notices/crates.json lists ${module.crate}'s crates of: ${again}`,
 				);
 		}
 	}
@@ -275,13 +275,16 @@ scripts/build-offline.mjs of that source.`,
 			continue;
 		}
 		const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
-		const file = readdirSync(dir).find((entry) => LICENCE_FILE.test(entry));
+		// (each of them: a package under two licences has a file of each)
+		const files = readdirSync(dir)
+			.filter((entry) => LICENCE_FILE.test(entry))
+			.sort();
 		const heldName = `${name
 			.replace(/^@/, '')
 			.replace('/', '-')
 			.replace(/^mercuryworkshop-/, '')}.txt`;
 		const hasHeld = existsSync(join(held, heldName));
-		if (!file && !hasHeld) {
+		if (!files.length && !hasHeld) {
 			problems.push(
 				`${name}: no licence file in the package and none held in demo/offline/notices/${heldName}`,
 			);
@@ -293,8 +296,9 @@ scripts/build-offline.mjs of that source.`,
 			`${name} ${pkg.version}${pkg.license ? ` (${pkg.license})` : ''}, in this file as ${[...new Set(what)].join(', ')}.${commitOf ? `\nBuilt from commit ${commitOf}.` : ''}`,
 		];
 		if (hasHeld) body.push(heldText(heldName));
-		if (file) body.push(shared(readFileSync(join(dir, file), 'utf8'), name));
-		else if (/^AGPL-3\.0/.test(pkg.license ?? ''))
+		for (const file of files)
+			body.push(shared(readFileSync(join(dir, file), 'utf8'), name));
+		if (!files.length && /^AGPL-3\.0/.test(pkg.license ?? ''))
 			body.push(shared(heldText('AGPL-3.0.txt'), name));
 		// libcurl.js names the C libraries it is built from in its bundle
 		if (name === '@mercuryworkshop/libcurl-transport') {

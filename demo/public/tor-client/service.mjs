@@ -10,6 +10,7 @@ import { FALLBACK_ADDRESSES } from './fallbacks.js';
 import {
 	ArtiSocket,
 	Log,
+	setWasmUrl,
 	storage,
 	TorClient,
 } from './tor-js/entryPoints/wasm-file/index.js';
@@ -239,6 +240,20 @@ const PHASES = [
 	[/Bootstrap complete/, 90, 'Establishing a Tor circuit'],
 ];
 
+let wasmChosen = false;
+/**
+ * Where arti's wasm comes from, when not from beside tor-js's module
+ * (`../../tor_js_bg.wasm`): a URL (a host that serves it under a name of
+ * its own) or a compiled WebAssembly.Module (offline.html, whose worker
+ * can fetch none of the page's blob: URLs). The first one given is kept:
+ * the wasm is instantiated once per realm.
+ */
+export function useWasm(source) {
+	if (wasmChosen || source === undefined || source === null) return;
+	wasmChosen = true;
+	setWasmUrl(source);
+}
+
 /** an id for this client, so the page can tell its tabs share one */
 const instanceId = () => nonce();
 
@@ -265,12 +280,14 @@ export class TorService {
 
 	/**
 	 * `say(level, text)`: the client's own console lines (its bootstrap, a
-	 * refused link), the console's by default
+	 * refused link), the console's by default; `wasm`: where arti's wasm is
+	 * (useWasm), when not beside tor-js's module
 	 */
 	constructor({
 		wisp,
 		storageName = 'stomp-tor-client',
 		say = (level, text) => console[level](text),
+		wasm,
 	} = {}) {
 		if (typeof wisp !== 'string') throw new TypeError('wisp: a URL');
 		// the npm release has only fetch
@@ -278,6 +295,7 @@ export class TorService {
 			throw new Error(
 				'this tor-js has no stream API (TorClient.connect): Tor mode needs the Fracital build (deploy/tor-js)',
 			);
+		useWasm(wasm);
 		this.#wisp = new WispConnection(wisp);
 		this.#storageName = storageName;
 		this.#say = say;

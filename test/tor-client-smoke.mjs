@@ -10,9 +10,12 @@
 // site and the first again, then a fresh host page (the client's state kept)
 // and the first once more, and checks that every Wisp stream went to an IP
 // address (a relay, never a site's name) and that the site said IsTor.
+// OFFLINE=1 does the same with build/offline.html (npm run build:offline)
+// opened from file:, its wisp server the smoke's holyWisp: there each tab
+// runs a client of its own in a worker of its page.
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 if (process.env.SKIP_NETWORK) {
 	console.log('SKIP tor-client-smoke: SKIP_NETWORK is set');
@@ -70,6 +73,10 @@ server.stdout.on('data', (chunk) => {
 const stop = () => server.kill('SIGTERM');
 process.on('exit', stop);
 
+const OFFLINE = !!process.env.OFFLINE;
+const hostURL = OFFLINE
+	? `${pathToFileURL(`${root}build/offline.html`).href}?wisp=${encodeURIComponent(`ws://127.0.0.1:${port}/wisp/`)}&tor=1`
+	: `${HOST}?tor=1`;
 const PAGE_MS = 240000;
 // the demo server starts slowly on a loaded machine
 await waitForServer(HOST, 600);
@@ -124,7 +131,7 @@ async function frameText(want) {
 
 async function openHost() {
 	const start = Date.now();
-	await page.goto(`${HOST}?tor=1`);
+	await page.goto(hostURL);
 	await page.waitForFunction(
 		() => /^(Ready|Error)/.test(document.getElementById('logMsg').textContent),
 		null,
@@ -151,7 +158,9 @@ try {
 		/^Ready/.test(status),
 		status,
 	);
-	const api = await (await fetch(`${HOST}api/tor`)).json();
+	const api = OFFLINE
+		? { state: 'client' }
+		: await (await fetch(`${HOST}api/tor`)).json();
 	const toggle = await page.evaluate(() => ({
 		checked: document.getElementById('tor').checked,
 		disabled: document.getElementById('tor').disabled,
@@ -160,14 +169,18 @@ try {
 	ok(
 		'with no relay the client is Tor mode: /api/tor, config and the toggle say so',
 		api.state === 'client' &&
-			toggle.config === true &&
+			(OFFLINE ? typeof toggle.config === 'object' : toggle.config === true) &&
 			toggle.checked &&
 			!toggle.disabled,
 		JSON.stringify({ api, toggle }),
 	);
 	// the worker's link check: a fallback directory passes, a site does not
 	const admits = await page.evaluate(async () => {
-		const { default: Transport } = await import('/tor-client/transport.mjs');
+		const { default: Transport } = await import(
+			globalThis.STOMP_OFFLINE
+				? `${globalThis.STOMP_OFFLINE.origin}/tor-client/transport.mjs`
+				: '/tor-client/transport.mjs'
+		);
 		const transport = new Transport({ wisp: 'ws://127.0.0.1:9/' });
 		const verdict = (target) =>
 			transport.admit(target).then(
@@ -212,11 +225,12 @@ try {
 	);
 
 	// a second tab: the first tab's Tor client (the SharedWorker's,
-	// tor-client/shared.mjs), ready with no bootstrap of its own
+	// tor-client/shared.mjs), ready with no bootstrap of its own; in
+	// offline.html a client of its own, which reads the first one's state
 	const second = await context.newPage();
 	second.on('console', keep);
 	const secondStart = Date.now();
-	await second.goto(`${HOST}?tor=1`);
+	await second.goto(hostURL);
 	await second
 		.waitForFunction(() => window.__pmTorClient?.state === 'ready', null, {
 			timeout: PAGE_MS,
@@ -224,14 +238,19 @@ try {
 		.catch(() => {});
 	const shared = await second.evaluate(() => window.__pmTorClient ?? null);
 	ok(
-		"a second tab shares the first tab's Tor client",
+		OFFLINE
+			? 'a second tab of offline.html runs a Tor client of its own, ready'
+			: "a second tab shares the first tab's Tor client",
 		!!shared?.instance &&
-			shared.instance === progress.client?.instance &&
-			shared.bootstrapMs === progress.client?.bootstrapMs,
+			shared.state === 'ready' &&
+			(OFFLINE
+				? shared.instance !== progress.client?.instance
+				: shared.instance === progress.client?.instance &&
+					shared.bootstrapMs === progress.client?.bootstrapMs),
 		JSON.stringify({ first: progress.client, second: shared }),
 	);
 	console.log(
-		`second tab: the shared client ready to it in ${Date.now() - secondStart} ms`,
+		`second tab: ${OFFLINE ? 'its own client' : 'the shared client'} ready to it in ${Date.now() - secondStart} ms${OFFLINE ? ` (bootstrap ${shared?.bootstrapMs} ms)` : ''}`,
 	);
 	await second.close();
 

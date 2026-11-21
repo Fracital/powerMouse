@@ -21,6 +21,7 @@ const INPUTS = [
 	'scripts/build-offline.mjs',
 	'scripts/offline-notices.mjs',
 	'scripts/offline-key.mjs',
+	'test/offline-tor-stand-in.mjs',
 	'package-lock.json',
 	'LICENSE',
 	'assets/adblock-snapshot.UPSTREAM',
@@ -36,10 +37,12 @@ export function offlineKey(
 	{
 		wisp = process.env.STOMP_OFFLINE_WISP || OFFLINE_WISP,
 		adblock = true,
+		torStandIn = false,
 	} = {},
 ) {
 	const hash = createHash('sha256');
 	hash.update(`wisp ${wisp}\nadblock ${adblock}\n`);
+	if (torStandIn) hash.update('tor stand-in\n');
 	const add = (path) => {
 		const full = join(root, path);
 		if (!existsSync(full)) {

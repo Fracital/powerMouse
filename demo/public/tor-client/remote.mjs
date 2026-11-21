@@ -26,7 +26,7 @@ export class RemoteService {
 		return remote;
 	}
 
-	constructor(port, { wisp, storageName }) {
+	constructor(port, { wisp, storageName, wasm }) {
 		this.#port = port;
 		let heard;
 		const answered = new Promise((resolve) => (heard = resolve));
@@ -42,7 +42,13 @@ export class RemoteService {
 				else call?.reject(new Error(data.error));
 			}
 		};
-		port.postMessage({ type: 'hello', wisp, storageName });
+		// (a URL only: a compiled module does not reach a SharedWorker)
+		port.postMessage({
+			type: 'hello',
+			wisp,
+			storageName,
+			...(typeof wasm === 'string' && { wasm }),
+		});
 		let timer;
 		this.#settled = Promise.race([
 			answered.then(() => null),
@@ -51,7 +57,7 @@ export class RemoteService {
 					console.warn(
 						'[tor] the shared Tor client did not answer: this tab runs its own',
 					);
-					const own = new TorService({ wisp, storageName });
+					const own = new TorService({ wisp, storageName, wasm });
 					own.onStatus((status) => this.#status(status));
 					resolve(own);
 				}, SHARED_ANSWER_MS);

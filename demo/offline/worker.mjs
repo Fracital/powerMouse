@@ -9,7 +9,7 @@
 // its name.
 
 const KEY = '__pmOffline';
-const { origin, scope } = JSON.parse(self.name);
+const { origin, scope, query = '' } = JSON.parse(self.name);
 
 // A file: URL's origin is `file://` in Chrome and the opaque `null` in
 // Firefox, which the worker's location then shares, and the routes made on
@@ -31,7 +31,7 @@ if (
 		configurable: true,
 		enumerable: true,
 	});
-const workerURL = new URL(`${origin}${scope}serviceWorker.js`);
+const workerURL = new URL(`${origin}${scope}serviceWorker.js${query}`);
 const post = (message, transfer = []) =>
 	self.postMessage({ [KEY]: message }, transfer);
 

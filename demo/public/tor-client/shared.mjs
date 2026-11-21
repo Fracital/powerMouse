@@ -10,7 +10,7 @@ import { serveStream } from './streamPort.mjs';
 /** `${wisp} ${storageName}`: the client and the ports it tells */
 const services = new Map();
 
-function serviceFor({ wisp, storageName }) {
+function serviceFor({ wisp, storageName, wasm }) {
 	const key = `${wisp} ${storageName ?? ''}`;
 	let entry = services.get(key);
 	if (!entry) {
@@ -18,6 +18,7 @@ function serviceFor({ wisp, storageName }) {
 		const service = new TorService({
 			wisp,
 			storageName,
+			wasm,
 			// a tab's transport worker prints them too, where its page's
 			// console (and the smoke) sees them
 			say: (level, text) => {

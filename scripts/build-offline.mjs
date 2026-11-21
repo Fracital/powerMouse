@@ -5,7 +5,7 @@
 // worker's script runs unchanged in a dedicated worker, and proxied
 // documents are written into frames.
 //
-//   node scripts/build-offline.mjs [--out <file>] [--no-adblock]
+//   node scripts/build-offline.mjs [--out <file>] [--no-adblock] [--tor-stand-in]
 //
 // The demo's scripts and styles are inlined as they are, its images as
 // data: URLs; the bundles, wasm modules and transports the proxy needs go in
@@ -13,8 +13,13 @@
 // page). The wisp server defaults to STOMP_OFFLINE_WISP, else the public
 // holyWisp relay, in an element at the top of the file's head (WISP_SLOT), which
 // the demo's Download button rewrites; the page's Settings (or `?wisp=`)
-// changes it too. `npm run build` ends with this; builds dist/ first when it
-// is not there. Writes nothing into dist/.
+// changes it too. Tor mode's client (demo/public/tor-client/) is in it too:
+// the page's transport as one module, the client as a classic script its
+// worker runs (demo/offline/tor-worker.mjs) and arti's wasm;
+// `--tor-stand-in` puts test/offline-tor-stand-in.mjs in tor-js's place
+// (the offline-html suite's file, with no Tor network). `npm run build`
+// ends with this; builds dist/ first when it is not there. Writes nothing
+// into dist/.
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
@@ -34,6 +39,7 @@ const option = (name) => {
 };
 const out = resolve(root, option('--out') ?? 'build/offline.html');
 const adblock = !args.includes('--no-adblock');
+const torStandIn = args.includes('--tor-stand-in');
 const wisp = process.env.STOMP_OFFLINE_WISP || OFFLINE_WISP;
 /** the origin the page's worker and documents are on (demo/offline/host.mjs ORIGIN) */
 const ORIGIN = 'https://powermouse.invalid';
@@ -44,7 +50,7 @@ if (!existsSync(join(dist, 'serviceWorker.js'))) {
 	execFileSync(process.execPath, ['build.js'], { cwd: root, stdio: 'inherit' });
 }
 // what it is made from (scripts/offline-key.mjs), named in its first comment
-const key = offlineKey(root, { wisp, adblock });
+const key = offlineKey(root, { wisp, adblock, torStandIn });
 const require = createRequire(join(root, 'package.json'));
 const packageDir = (name) =>
 	dirname(require.resolve(`@mercuryworkshop/${name}`));
@@ -115,8 +121,82 @@ const FILES = [
 	['/error.html', join(demo, 'error.html')],
 ];
 
+// Tor mode's client (demo/public/tor-client/, docs/tor-over-wisp.md): the
+// transport the page imports, with tor-js for a client of its own (where
+// the worker does not answer), and what the worker runs, each bundled
+// whole (no module of either is named relatively from a blob: URL, and
+// the worker is a classic script: Chrome starts no module worker of a
+// blob: URL on file:); arti's wasm beside them, which the page compiles
+const torJs = join(root, 'node_modules/tor-js/dist');
+const torBundle = async (entry, format) => {
+	const result = await build({
+		entryPoints: [join(root, entry)],
+		bundle: true,
+		format,
+		target: 'es2022',
+		platform: 'browser',
+		write: false,
+		minify: true,
+		legalComments: 'none',
+		// tor-js's Node branch, which a browser never takes
+		external: ['fs', 'fs/promises', 'net', 'os', 'path', 'stream', 'url'],
+		// tor-js names its wasm beside itself: here it is handed over
+		define: {
+			'import.meta.url': JSON.stringify(
+				`${ORIGIN}/tor-client/tor-js/entryPoints/wasm-file/index.js`,
+			),
+		},
+		plugins: [
+			{
+				name: 'tor-client',
+				setup(on) {
+					// the server serves tor-js there (demo/server.js)
+					on.onResolve(
+						{ filter: /\/tor-js\/entryPoints\/wasm-file\/index\.js$/ },
+						() => ({
+							path: torStandIn
+								? join(root, 'test/offline-tor-stand-in.mjs')
+								: join(torJs, 'entryPoints/wasm-file/index.js'),
+						}),
+					);
+					// the page's copy of epoxy, by the import map
+					on.onResolve({ filter: /^\.\.\/epoxy\/index\.mjs$/ }, () => ({
+						path: `${ORIGIN}/epoxy/index.mjs`,
+						external: true,
+					}));
+				},
+			},
+		],
+	});
+	return Buffer.from(result.outputFiles[0].text);
+};
+const GENERATED = [
+	[
+		'/tor-client/transport.mjs',
+		'.mjs',
+		await torBundle('demo/public/tor-client/transport.mjs', 'esm'),
+	],
+	[
+		'/tor-client/worker.js',
+		'.js',
+		await torBundle('demo/offline/tor-worker.mjs', 'iife'),
+	],
+	[
+		'/tor-client/tor_js_bg.wasm',
+		'.wasm',
+		await readFile(join(torJs, 'tor_js_bg.wasm')),
+	],
+];
+
 const payload = {};
 let raw = 0;
+let torBytes = 0;
+for (const [path, extension, bytes] of GENERATED) {
+	raw += bytes.length;
+	const gzipped = gzipSync(bytes, { level: 9 }).toString('base64');
+	torBytes += gzipped.length;
+	payload[path] = [TYPES[extension], 'gzip', gzipped];
+}
 for (const [path, file, change] of FILES) {
 	let bytes = await readFile(file);
 	if (change) bytes = Buffer.from(change(bytes.toString('utf8')));
@@ -296,6 +376,10 @@ const notices = offlineNotices({
 		['@mercuryworkshop/libcurl-transport', '/libcurl/index.mjs'],
 		['libcurl.js', '/libcurl/index.mjs, inside the libcurl transport'],
 		['@fontsource/montserrat', "the Montserrat font in the page's style"],
+		[
+			'tor-js',
+			'/tor-client/tor_js_bg.wasm (arti) and its module, in /tor-client/transport.mjs and /tor-client/worker.js',
+		],
 	],
 	commit: builtFrom.commit,
 	adblock,
@@ -316,5 +400,5 @@ await rename(partial, out);
 const size = (await stat(out)).size;
 const mb = (bytes) => `${(bytes / 1024 / 1024).toFixed(2)} MiB`;
 console.log(
-	`build-offline: ${out} ${mb(size)} (${size} B; payload ${FILES.length} files, ${mb(raw)} before gzip; wisp ${wisp}${adblock ? '' : '; no adblock'})`,
+	`build-offline: ${out} ${mb(size)} (${size} B; payload ${FILES.length + GENERATED.length} files, ${mb(raw)} before gzip, Tor's ${mb(torBytes)} of it; wisp ${wisp}${adblock ? '' : '; no adblock'}${torStandIn ? '; Tor stand-in' : ''})`,
 );

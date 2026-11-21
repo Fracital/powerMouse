@@ -533,7 +533,7 @@ that fails the same way on both fails in STomp.
 ## offline.html
 
 `npm run build` ends with `scripts/build-offline.mjs`, which writes
-`build/offline.html`: this page and STomp in one HTML file of about 10 MB
+`build/offline.html`: this page and STomp in one HTML file of about 14 MB
 that runs from `file:` or any static host with no service worker
 (`npm run build:offline` makes only it; nothing goes into `dist/`).
 `dist/serviceWorker.js` runs unchanged in a dedicated worker the page starts
@@ -551,8 +551,10 @@ The wisp server it tunnels through is JSON in one element at the top of its
 head: `wss://holywisp.fracit.al/` as built (`STOMP_OFFLINE_WISP` names
 another), which the home page's Download replaces with the page's direct
 wisp server (`STOMP_CONFIG.wisp`, key path and all, else this server's
-`/wisp/`). Never the Tor relay: the file has no Tor mode, and with Tor on,
-Download's title says the copy is direct. In the file itself, `?wisp=` and
+`/wisp/`), with Tor on too. The file has Tor mode of its own: the Tor
+client runs in a worker of its page, over that wisp server, with its state
+in the file:// page's IndexedDB (docs/tor-over-wisp.md "Offline, and hosts
+that name the files"). In the file itself, `?wisp=` and
 Settings > Wisp server change the wisp server, and Download is not shown.
 Settings saves the choice and restarts without the `wisp` query. The
 current tab keeps the choice in its history entry, so a reload works even

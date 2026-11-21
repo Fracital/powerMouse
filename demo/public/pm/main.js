@@ -203,8 +203,17 @@ const UI_STORAGE = PMProfile.storage;
 // circuits are built in the transport worker and the Wisp server carries
 // only TCP to Tor relays, so neither it nor this server sees where a page
 // goes. config.js says whether the server offers it (STOMP_TOR_CLIENT=0
-// turns Tor mode off); there is no server-side relay.
-const TOR_CLIENT = CFG.torClient === true;
+// turns Tor mode off); there is no server-side relay. A host that serves
+// the client's files under names of its own gives them as an object:
+// `{ module, sharedWorker, wasm }`, the transport module, the SharedWorker's
+// script (false: none, the transport runs its client itself) and arti's
+// wasm, each a URL, any left out where the demo's server has it
+// (/tor-client/).
+const TOR_FILES =
+	typeof CFG.torClient === 'object' && CFG.torClient !== null
+		? CFG.torClient
+		: {};
+const TOR_CLIENT = CFG.torClient === true || TOR_FILES === CFG.torClient;
 const TOR_UNAVAILABLE = 'Tor is not available here. Turn Tor off to browse.';
 // this page's channel to its Tor client (its bootstrap progress, New
 // Identity, New circuit for this site): the transport worker is this
@@ -458,12 +467,26 @@ const transports = {
 		// reaches their fixture
 		module: CFG.torStandIn
 			? `${proxyBase()}/test/tor-stand-in.mjs`
-			: `${proxyBase()}/tor-client/transport.mjs`,
-		options: [{ wisp: wispURL(), channel: TOR_CLIENT_CHANNEL }],
+			: (TOR_FILES.module ?? `${proxyBase()}/tor-client/transport.mjs`),
+		options: [
+			{
+				wisp: wispURL(),
+				channel: TOR_CLIENT_CHANNEL,
+				// (resolved here: the transport worker's base is its script's)
+				...(typeof TOR_FILES.wasm === 'string' && {
+					wasm: new URL(TOR_FILES.wasm, location.href).href,
+				}),
+				// offline.html's: a port to the client's worker of its own
+				...OFFLINE?.torOptions?.(),
+			},
+		],
 		// one Tor client for every tab (tor-client/shared.mjs), so no
 		// shards of the transport either: each would run a client
 		...(!CFG.torStandIn && {
-			sharedWorker: `${proxyBase()}/tor-client/shared.mjs`,
+			...(TOR_FILES.sharedWorker !== false && {
+				sharedWorker:
+					TOR_FILES.sharedWorker ?? `${proxyBase()}/tor-client/shared.mjs`,
+			}),
 			shards: 1,
 		}),
 		...(OFFLINE && { host: OFFLINE.transportHost }),
@@ -7383,8 +7406,8 @@ shieldsButton.addEventListener('click', () => {
 // DIRECTORY's as the service worker's is. The wisp server the file was built
 // with is JSON in one element at the top of its head, and this page's
 // direct one (directWispURL()) takes its place there; nothing else of this
-// page or its profile goes in. The file has no Tor mode: nothing in it
-// keeps UDP, HTTP/3, WebTransport and its cache off, and no Tor client.
+// page or its profile goes in. The file has Tor mode of its own (its
+// client runs in a worker of the file's page), over that wisp server too.
 const OFFLINE_FILE = ASSETS.offline
 	? new URL(ASSETS.offline, new URL(DIRECTORY, location.href)).href
 	: '/offline.html';
@@ -7418,9 +7441,6 @@ async function offlineWithWisp() {
 		return;
 	}
 	link.href = OFFLINE_FILE;
-	if (TOR_REQUESTED)
-		link.title =
-			"Save powerMouse as one HTML file that runs from your computer through this site's direct wisp server: the file has no Tor mode";
 	const label = [...link.querySelector('.git').childNodes].find(
 		(node) => node.nodeType === Node.TEXT_NODE && node.data.trim(),
 	);

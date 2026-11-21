@@ -22,12 +22,15 @@
 // origin's, as STOMP_ASSETS.offline saves it with its own wisp server.
 // With Tor on, Download still writes the direct wisp server, and in a
 // sandboxed frame (a host's copy of the page) it saves only with
-// allow-downloads.
+// allow-downloads. The file has Tor mode of its own: a build with the
+// stand-in for the Tor network (test/offline-tor-stand-in.mjs) turns it on,
+// its client in a worker of the page bootstraps, a fixture page loads on
+// its streams, and the client's IndexedDB is kept across a reload.
 // Settings saves a relay without writing it into the URL; restart and reload
 // both use it even if the storage write was lost. The default theme is marked
 // offered in each file: page (it would come from the Web Store), and every
 // stream the wisp server opened (the runner's WISP_LOG) went to this host.
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
@@ -507,16 +510,16 @@ await custom.close();
 
 // Tor mode (the in-browser client's place taken by the suites' stand-in,
 // epoxy over the demo's /wisp/: STOMP_TOR_CLIENT=stand-in, test/run.mjs):
-// Download still writes the direct wisp server and says the file has no
-// Tor mode, since nothing in it keeps UDP, HTTP/3 and its cache off
+// Download still writes the direct wisp server (the file's Tor mode
+// tunnels through it too) and the file is the served one
 const tor = await openDemo(browser, `${HOST}?tor=1`);
 const torSaved = await download(tor);
 const torTitle = await tor.getAttribute('#offlineDownload', 'title');
 ok(
-	'with Tor on, Download writes the direct wisp server and says the file has no Tor mode',
+	'with Tor on, Download writes the direct wisp server',
 	(await tor.evaluate('TOR_REQUESTED && TOR_CLIENT')) &&
 		slotOf(torSaved.text) === DIRECT &&
-		/no Tor mode/.test(torTitle ?? '') &&
+		!/no Tor mode/.test(torTitle ?? '') &&
 		unslotted(torSaved.text) === unslotted(servedText),
 	JSON.stringify({ saved: slotOf(torSaved.text), title: torTitle }),
 );
@@ -713,6 +716,84 @@ ok(
 	(await page.evaluate(() => globalThis.STOMP_OFFLINE.wisp.current)) ===
 		savedWisp,
 );
+
+// Tor mode in the file: tor-js's place taken by the stand-in (a Tor stream
+// is the run's wisp server's TCP stream to 127.0.0.1), the rest as the file
+// runs it: the toggle, the client in a worker of the page, its port, its
+// Wisp streams and its refusal of anything not in a consensus, epoxy on
+// its streams in the page, its IndexedDB
+const torFile = `${OUT}offline-tor.html`;
+execFileSync(
+	process.execPath,
+	[
+		`${root}scripts/build-offline.mjs`,
+		'--tor-stand-in',
+		'--no-adblock',
+		'--out',
+		torFile,
+	],
+	{ stdio: 'ignore' },
+);
+const torPage = await browser.newPage({
+	viewport: { width: 1280, height: 800 },
+});
+await torPage.addInitScript(offeredAlready, defaults);
+torPage.on('pageerror', (error) => errors.push(String(error).slice(0, 300)));
+await torPage.goto(
+	`${pathToFileURL(torFile).href}?wisp=${encodeURIComponent(WISP)}&tor=1`,
+);
+const torReady = await ready(torPage);
+const torBox = await torPage.evaluate(() => ({
+	checked: document.getElementById('tor').checked,
+	disabled: document.getElementById('tor').disabled,
+	unavailable: document
+		.getElementById('torLabel')
+		.hasAttribute('data-unavailable'),
+}));
+ok(
+	'offline.html has Tor mode: the toggle is on and offered, and the client in its worker bootstraps',
+	torReady === 'Ready (Tor connected)' &&
+		torBox.checked &&
+		!torBox.disabled &&
+		!torBox.unavailable,
+	JSON.stringify({ torReady, torBox }),
+);
+const standIn = () =>
+	torPage.evaluate(
+		() =>
+			new Promise((resolve) => {
+				const open = indexedDB.open('stomp-tor-client-stand-in');
+				open.onerror = () => resolve(null);
+				open.onsuccess = () => {
+					const store = open.result
+						.transaction('kv', 'readonly')
+						.objectStore('kv');
+					const keys = store.getAllKeys();
+					const started = store.get('stand-in:started');
+					keys.onsuccess = () =>
+						(started.onsuccess = () =>
+							resolve({ keys: keys.result, started: started.result }));
+				};
+			}),
+	);
+await submitLanding(torPage, one);
+const torFrame = await documentTitled('Offline page one', 30000, torPage);
+const kept = await standIn();
+ok(
+	"a fixture page loads in Tor mode, on the client's streams",
+	!!torFrame &&
+		kept?.keys.includes(`dir:consensus:stand-in-${new URL(FIXTURE).port}`),
+	JSON.stringify({ title: !!torFrame, kept }),
+);
+await torPage.reload();
+await ready(torPage);
+const torAgain = await standIn();
+ok(
+	"the client's IndexedDB is kept across a reload",
+	kept?.started === '1' && torAgain?.started === '2',
+	JSON.stringify({ kept: kept?.started, again: torAgain?.started }),
+);
+await torPage.close();
 
 // every stream the wisp server opened went to this host (the fixture, the
 // demo server) or to the resolver the file asks for ECH configs (its

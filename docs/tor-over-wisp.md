@@ -148,7 +148,8 @@ What `node_modules/tor-js` is, and how it was checked (2026-11-21):
   release's source builds**, by a machine other than the publisher's. Its CDN
   entry (`dist/entryPoints/wasm-cdn/index.js`) carries the same hash for
   the binary it loads. We serve the `wasm-file` entry, which loads the binary
-  from our own server, never from a CDN.
+  from our own server, never from a CDN; our build's package keeps only that
+  entry (deploy/tor-js/publish.sh), so nothing can import the CDN one.
 - **The fallback directories** the worker admits before a consensus
   (`demo/public/tor-client/fallbacks.js`) are generated from the crate the
   release was built with: tor-dircommon 0.47.0, crate sha256
@@ -498,7 +499,42 @@ What the client does not do yet:
   own check refuses non-relays, "Which relays the worker may reach").
 - Not covered: the sync relay of WebKit's frozen pages (Tor mode's
   `/stomp-tor/sync-relay` refuses, so those pages' synchronous requests
-  fail rather than leave Tor) and offline.html (which has no Tor mode).
+  fail rather than leave Tor). offline.html has Tor mode of its own
+  ("Offline, and hosts that name the files").
+
+### Offline, and hosts that name the files
+
+offline.html (demo/README.md "offline.html") carries the client: the
+transport bundled into one module the page imports (tor-js inside, for a
+client of the page's own where the worker does not answer), the client
+bundled into a classic script (`demo/offline/tor-worker.mjs` around
+`shared.mjs`) and `tor_js_bg.wasm`, 2.6 MiB of the file's payload. On file:,
+Chrome 158 starts no SharedWorker (classic or module) and no module worker
+of a blob: URL, and a dedicated worker there fetches none of the page's
+blob: URLs, so the page starts one classic worker of its own at the first
+Tor transport (`demo/offline/host.mjs` torOptions), compiles the wasm and
+posts the module to it, and gives each transport a port to it, as the
+served demo's get one to their SharedWorker. Each tab of the file runs a
+client of its own. Its IndexedDB is the file:// page's (the worker's is
+the same store) and is kept across reloads and browser restarts, so a
+second visit bootstraps from the kept directory and guards: 4.1 s cold and
+2.0 s warm, the first page 14 s and 2.6 s (Chrome 158, the public holyWisp,
+2026-11-21). The file's Wisp server is its own (`wss://holywisp.fracit.al/`
+as built), which relays TCP to relays' ORPorts as the demo's `/wisp/`
+does. The transport bootstraps the shared client when it is made, not at
+the first request (a page-hosted transport is asked nothing until a tab
+loads). The offline-html suite builds a file with tor-js replaced by
+`test/offline-tor-stand-in.mjs` (`--tor-stand-in`), whose "Tor streams"
+are TCP to 127.0.0.1 through the run's wisp server, and `OFFLINE=1 node
+test/tor-client-smoke.mjs` runs the smoke on `build/offline.html`.
+
+A host that serves the client's files under names of its own (SystemYA's
+static deploy) gives them as `STOMP_CONFIG.torClient`, an object in place of
+`true`: `module` (the transport), `sharedWorker` (the SharedWorker's script,
+or `false` for none) and `wasm` (arti's binary), each a URL, any left out
+at the demo server's `/tor-client/` path. The transport passes `wasm` on to
+tor-js (`setWasmUrl`, `useWasm` in service.mjs; the first one given is
+kept), so the module and the wasm need not be side by side.
 
 Firefox (160) runs the client too: the Firefox smoke (`npm run
 test:firefox`, with the network) opens the demo with `?tor=1` and has

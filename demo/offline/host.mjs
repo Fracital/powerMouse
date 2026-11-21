@@ -50,6 +50,8 @@ const addListener = EventTarget.prototype.addEventListener;
 const getAttribute = Element.prototype.getAttribute;
 
 let scope = '/stomp/';
+/** the worker script's query: its profile's (src/controller/profiles.ts profileWorker) */
+let scriptQuery = '';
 /** the decoded files, by path (`/stomp/core.wasm`): { blob, url } */
 const files = new Map();
 let emulated = null;
@@ -239,7 +241,7 @@ class EmulatedWorker extends EventTarget {
 			new Blob([prelude, '\n', script], { type: 'text/javascript' }),
 		);
 		this.#worker = new NativeWorker(source, {
-			name: JSON.stringify({ origin: OWN, scope }),
+			name: JSON.stringify({ origin: OWN, scope, query: scriptQuery }),
 		});
 		this.#worker.addEventListener('message', (event) =>
 			this.#heard(event.data?.[KEY]),
@@ -323,9 +325,11 @@ export function install({
 	decoded,
 	prelude,
 	scope: given = '/stomp/',
+	profile = '',
 	answers: local = new Map(),
 }) {
 	scope = given;
+	scriptQuery = profile ? `?${new URLSearchParams({ profile })}` : '';
 	answers = local;
 	// at once: the demo asks its server before the files are decoded
 	globalThis.fetch = hostFetch;
@@ -347,12 +351,48 @@ export function install({
 		document.head.append(map);
 		const script = files.get(`${scope}serviceWorker.js`);
 		if (!script) throw new Error('offline.html has no serviceWorker.js');
-		const scriptURL = new URL(`${scope}serviceWorker.js`, location.href).href;
+		const scriptURL = new URL(
+			`${scope}serviceWorker.js${scriptQuery}`,
+			location.href,
+		).href;
 		return script.blob.text().then((text) => {
 			emulated = new EmulatedWorker(scriptURL, prelude, text);
 			return emulated;
 		});
 	});
+}
+
+// ---- the Tor client ---------------------------------------------------------
+//
+// Tor mode's client (demo/public/tor-client/, ./tor-worker.mjs) runs in one
+// dedicated worker of this page, started at the first transport that asks:
+// arti's wasm, compiled here, goes in its first message, and each transport
+// gets a port to it, as the served demo's get one to their SharedWorker.
+
+let torWorker = null;
+
+/** the options this page's Tor transport is given beside the demo's: a port to the worker, and the wasm for a client of the page's own */
+export function torOptions() {
+	const script = files.get('/tor-client/worker.js');
+	const wasm = files.get('/tor-client/tor_js_bg.wasm');
+	if (!script || !wasm) throw new Error('offline.html has no Tor client');
+	if (!torWorker) {
+		const worker = new NativeWorker(script.url, { name: 'tor' });
+		worker.addEventListener('error', (event) =>
+			console.error('offline.html: the Tor worker failed', event.message),
+		);
+		const compiled = WebAssembly.compileStreaming(fileResponse(wasm)).then(
+			(module) => worker.postMessage({ type: 'wasm', module }),
+		);
+		torWorker = { worker, compiled };
+	}
+	const { port1, port2 } = new MessageChannel();
+	torWorker.compiled.then(
+		() => torWorker.worker.postMessage({ type: 'connect' }, [port2]),
+		// (the transport's port never answers: it runs a client of its own)
+		(error) => console.error("offline.html: arti's wasm", error),
+	);
+	return { sharedWorker: port1, wasm: wasm.url };
 }
 
 // ---- called frames ---------------------------------------------------------
