@@ -481,24 +481,16 @@ ok(
 );
 await custom.close();
 
-// Tor mode (a config's Tor relay): the page browses through the relay, and
-// Download still writes the direct wisp server, since the file has no Tor
-// mode to keep UDP, HTTP/3 and its cache off with it
-const TOR = `${WISP}?tor=relay`;
-const tor = await openDemo(browser, `${HOST}?tor=1`, {}, (on) =>
-	on.route('**/config.js', async (route) => {
-		const response = await route.fetch();
-		await route.fulfill({
-			response,
-			body: `${await response.text()}window.STOMP_CONFIG.torWisp = ${JSON.stringify(TOR)};\n`,
-		});
-	}),
-);
+// Tor mode (the in-browser client's place taken by the suites' stand-in,
+// epoxy over the demo's /wisp/: STOMP_TOR_CLIENT=stand-in, test/run.mjs):
+// Download still writes the direct wisp server and says the file has no
+// Tor mode, since nothing in it keeps UDP, HTTP/3 and its cache off
+const tor = await openDemo(browser, `${HOST}?tor=1`);
 const torSaved = await download(tor);
 const torTitle = await tor.getAttribute('#offlineDownload', 'title');
 ok(
-	'with Tor on, Download writes the direct wisp server, never the Tor relay, and says so',
-	(await configuredWisp(tor)) === TOR &&
+	'with Tor on, Download writes the direct wisp server and says the file has no Tor mode',
+	(await tor.evaluate('TOR_REQUESTED && TOR_CLIENT')) &&
 		slotOf(torSaved.text) === DIRECT &&
 		/no Tor mode/.test(torTitle ?? '') &&
 		unslotted(torSaved.text) === unslotted(servedText),

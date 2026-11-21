@@ -16,12 +16,15 @@
 //  - themes and Page appearance (a proxied page's prefers-color-scheme);
 //  - Stop on a slow load;
 //  - the Extensions page opens;
-//  - the Tor box is unavailable with no relay;
+//  - the Tor box is available with no relay and Tor mode is the in-browser
+//    client; with the real network, check.torproject.org says IsTor
+//    through it (wasm in the transport worker, IndexedDB, Wisp streams);
 //  - offline.html's Download saves the file, which boots from file: and
 //    loads the fixture;
-//  - Tor mode (a second demo server whose Tor relay is the first one's
-//    wisp): the box offered, a page loads, the normal profile's site data
-//    is not in Tor's, and turned off the ordinary scope is back;
+//  - Tor mode (a second demo server whose Tor client is the suites'
+//    stand-in, epoxy over its wisp): the box offered, a page loads, the
+//    normal profile's site data is not in Tor's, and turned off the
+//    ordinary scope is back;
 //  - dialing (?mode=just-call-stomp) on content slots: the fixture page
 //    loads in a frame whose URL names nothing.
 // Each check prints PASS or FAIL as a suite's do; a difference Firefox
@@ -30,7 +33,7 @@
 // Not in CI (no Firefox there): it says SKIP and exits 0 where Firefox is
 // missing, and under CI unless FIREFOX names a binary. SHOTS=1 keeps
 // screenshots in test/out/firefox-*.png.
-/* global ISOLATED, PMTheme, openExtensionsPage, DIRECTORY, TOR_REQUESTED -- the demo page's, in the functions evaluated there */
+/* global ISOLATED, PMTheme, openExtensionsPage, DIRECTORY, TOR_REQUESTED, TOR_CLIENT -- the demo page's, in the functions evaluated there */
 import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { firefoxBinary, launchFirefox } from './bidi.mjs';
@@ -610,10 +613,11 @@ else {
 			.hasAttribute('data-unavailable'),
 		disabled: document.getElementById('tor').disabled,
 		title: document.getElementById('torLabel').title,
+		client: TOR_CLIENT,
 	}));
 	ok(
-		'Tor: the box is unavailable with no relay',
-		tor.unavailable && tor.disabled,
+		"Tor: with no relay the box is available and Tor mode is the browser's own client",
+		!tor.unavailable && !tor.disabled && tor.client === true,
 		short(tor),
 	);
 	const before = new Set(readdirSync(firefox.downloads));
@@ -769,16 +773,66 @@ else {
 	}
 }
 
+// ---- Tor mode through the client, on the real network ----
+// (arti's wasm in Firefox's transport worker, its IndexedDB state and its
+// Wisp streams to Tor relays: test/tor-client-smoke.mjs checks the rest in
+// Chrome)
+
+if (process.env.SKIP_NETWORK === '1')
+	console.log('SKIP Tor through the client (SKIP_NETWORK=1)');
+else {
+	const { tab, status } = await openDemo(`${servers.host}?tor=1`);
+	const from = firefox.logs.length;
+	ok(
+		'Tor client: the demo in Tor mode says Ready',
+		/^Ready/.test(status),
+		status,
+	);
+	await submitLanding(tab, 'https://check.torproject.org/api/ip');
+	const answer = await waitActive(
+		tab,
+		() => {
+			const text = document.body?.innerText ?? '';
+			return /IsTor/.test(text) ? text : null;
+		},
+		{ timeout: 180000 },
+	);
+	let parsed = null;
+	try {
+		parsed = JSON.parse(answer);
+	} catch {
+		// no answer, or not JSON
+	}
+	const chip = await tab.until(
+		() =>
+			ISOLATED || window.__pmTorClient?.state === 'ready'
+				? { isolated: ISOLATED, state: window.__pmTorClient?.state ?? null }
+				: null,
+		{ timeout: 20000, args: [] },
+	);
+	const refused = firefox.logs
+		.slice(from)
+		.filter((entry) => /\[tor\] refused/.test(entry.text))
+		.map((entry) => entry.text);
+	ok(
+		'Tor client: check.torproject.org says IsTor through the client in Firefox',
+		parsed?.IsTor === true && !!chip && !refused.length,
+		short({ answer, chip, refused }),
+	);
+	await tab.close();
+}
+
 // ---- Tor mode, its profile ----
-// (a demo server of its own whose Tor relay is the first server's ordinary
-// wisp: the client's selection and the profile, not Tor, as demo-tor does)
+// (a demo server of its own whose Tor client is the suites' stand-in, epoxy
+// over its wisp: the selection of Tor mode and the profile, not Tor, as
+// demo-tor does)
 
 {
 	const tor = await startServers({
-		env: { STOMP_TOR_WISP_URL: `ws://127.0.0.1:${servers.port}/wisp/` },
+		env: { STOMP_TOR_CLIENT: 'stand-in' },
 	});
 	const { tab, status } = await openDemo(tor.host);
-	ok('Tor: a demo with a relay says Ready', status === 'Ready', status);
+	ok('Tor: a demo with Tor says Ready', status === 'Ready', status);
 	await submitLanding(tab, SMOKE);
 	const normal = await fixtureReport(tab);
 	ok(
@@ -791,7 +845,7 @@ else {
 	const box = await tab.eval(() => ({
 		disabled: document.getElementById('tor').disabled,
 	}));
-	ok('Tor: the box is offered with a relay', !box.disabled, short(box));
+	ok('Tor: the box is offered', !box.disabled, short(box));
 	await tab.click('#tor');
 	await sleep(1500);
 	const torStatus = await tab.until(

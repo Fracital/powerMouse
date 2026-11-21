@@ -1,12 +1,12 @@
 # Tor over Wisp: a Tor client in the browser
 
-Status: the client is Tor mode wherever the server runs no relay
-("Prototype" below has what it does and does not do yet). Before it, Tor mode
-(docs/tor.md) was server-side Tor egress only: the demo's server
-runs a Wisp relay (`/wisp-tor/`, `demo/torWisp.js`) that hands each TCP stream
-to a tor daemon's SOCKS port. That relay sees every destination host and port
-of every visitor, and it can tell visitors' streams apart only by connection.
-This page is the design that replaces it: **the browser builds the Tor
+Status: the client is Tor mode ("Prototype" below has what it does and does
+not do yet). Before it, Tor mode (docs/tor.md) was server-side Tor egress
+only: the demo's server ran a Wisp relay (`/wisp-tor/`, `demo/torWisp.js`)
+that handed each TCP stream to a tor daemon's SOCKS port. That relay saw
+every destination host and port of every visitor, and it could tell
+visitors' streams apart only by connection; it is removed ("The old relay"
+below). This page is the design that replaced it: **the browser builds the Tor
 circuits itself, and Wisp carries nothing but TCP to Tor relays.**
 
 What the operator (the demo's server, the Wisp relay, anyone on that path)
@@ -22,8 +22,7 @@ sees in the new design:
 
 That is the position of a Tor user's ISP. It is not Tor Browser (the browser
 fingerprint is the visitor's own browser, the host page is not proxied: see
-docs/tor.md "What it is, and what it is not", which still holds apart from the
-relay paragraphs).
+docs/tor.md "What it is, and what it is not").
 
 ## How STomp's transports work today
 
@@ -54,7 +53,7 @@ same-site|cross-site`, or `opaque`. A transport that declares
   other never sees it (`fitHeaders` in `serveTransport.ts`). This is exactly
   the first-party key Tor Browser isolates circuits by.
 
-### Tor mode today
+### Tor mode before the client
 
 - **A profile of its own** (`src/profile.ts`, docs/tor.md "Profiles"): every
   store STomp opens in Tor mode carries `|tor` at the end of its name
@@ -326,16 +325,16 @@ after about ten minutes and on "New Tor connection for this site"
   does today. Guards and directory data stay, as in Tor Browser.
 - **Circuit lifetime**: arti's dirtiness (ten minutes) applies per key.
 
-## The existing relay
+## The old relay
 
-**Recommendation: remove it** once the client is the default, and do not offer
-it as "Tor" before then. A server that sees every destination of every visitor
-and links them by connection is the opposite of what Tor mode promises, and a
-deployer who wants server-side egress through Tor for their own reasons can
-point `STOMP_WISP_URL` at their own Wisp server with a SOCKS upstream: STomp
-needs no code for that. Until the client is default, `/wisp-tor/` stays behind
-the deployer's explicit `STOMP_TOR_SOCKS5`, and the in-browser client is the
-opt-in.
+**Removed** (`demo/torWisp.js`, `/wisp-tor/`, the `STOMP_TOR_*` settings
+but `STOMP_TOR_CLIENT`, test/tor-wisp.mjs). A server that sees every
+destination of every visitor and links them by connection is the opposite
+of what Tor mode promises. A deployer who still sets one of its settings
+gets one line at startup saying it is ignored, and Tor mode is the client.
+A deployer who wants server-side egress through Tor for their own reasons
+can point `STOMP_WISP_URL` at their own Wisp server with a SOCKS upstream:
+STomp needs no code for that.
 
 ## Risks
 
@@ -359,10 +358,10 @@ opt-in.
 
 ## Prototype
 
-Tor mode wherever the server configures no relay (`STOMP_TOR_CLIENT=0` turns
-it off; `?tor=client` asks for it on one visit even with a relay). Tor mode's
-transport is then `demo/public/tor-client/transport.mjs` instead of epoxy
-over `/wisp-tor/`: tor-js 0.4.4 (`node_modules/tor-js`, served at
+Tor mode (`STOMP_TOR_CLIENT=0` turns it off, and the Tor toggle with it;
+`STOMP_TOR_CLIENT=stand-in`, for the suites, which reach no Tor network,
+answers Tor mode with epoxy over `/wisp/`). Tor mode's transport is
+`demo/public/tor-client/transport.mjs`: tor-js 0.4.4 (`node_modules/tor-js`, served at
 `/tor-client/tor-js/`), its socket provider a Wisp v1 client of its own over
 the demo's ordinary `/wisp/`, its storage IndexedDB `stomp-tor-client` (the
 transport worker's origin; not the `tor` profile's, so it survives the
@@ -372,7 +371,7 @@ The transport tells the page its bootstrap on a BroadcastChannel the page
 names in the descriptor (Tor Browser's phases: "Connecting to a relay",
 "Loading network status", "Loading authority certificates", "Loading relay
 descriptors", "Establishing a Tor circuit", "Done", read from arti's log), and
-the Tor chip and status line show it as they showed the relay's. The menu
+the Tor chip and status line show it. The menu
 (the three dots) has **New Identity** (a new Tor session: the page loads
 again with a new transport worker, so no circuit of before, and the `tor`
 profile is forgotten; with other Tor tabs open it asks to close them first,
@@ -385,7 +384,7 @@ which production uses, is same-origin.
 `node test/tor-client-smoke.mjs` (after `node build.js`; `SKIP_NETWORK=1`
 skips it, and it is not a suite: it needs the public Tor network) starts a
 demo server of its own with holyWisp logging every stream, opens the demo
-with `?tor=client` in the suites' Chrome (`--host-resolver-rules` resolves no
+with `?tor=1` in the suites' Chrome (`--host-resolver-rules` resolves no
 name but localhost, so nothing but the Wisp connection leaves), loads
 `https://check.torproject.org/api/ip`, `https://api.ipify.org/?format=json`
 and the first again, keeps the session 90 s, opens a fresh host page (a new
@@ -415,7 +414,7 @@ session had lasted 90 s, and picked new ones when it had lasted under 20 s
 keeps no guards. One earlier run ended with Chrome gone during the first load,
 not seen again.
 
-A later run (2026-11-21, the default path: `?tor` with no relay, in the
+A later run (2026-11-21, the default path: `?tor`, in the
 dialing mode production uses) also checked: `/api/tor` and `config.js` say
 `client` and the toggle is enabled; the page heard the bootstrap through to
 "Done" and the chip says on; the worker admits a fallback directory and
@@ -444,12 +443,18 @@ What the client does not do yet:
 - **The ordinary `/wisp/`**: no Tor-only endpoint on the server (the worker's
   own check refuses non-relays, "Which relays the worker may reach").
 - Not covered: the sync relay of WebKit's frozen pages (Tor mode's
-  `/stomp-tor/sync-relay` refuses without the old relay, so those pages'
-  synchronous requests fail rather than leave Tor), offline.html, Firefox.
+  `/stomp-tor/sync-relay` refuses, so those pages' synchronous requests
+  fail rather than leave Tor) and offline.html (which has no Tor mode).
+
+Firefox (160) runs the client too: the Firefox smoke (`npm run
+test:firefox`, with the network) opens the demo with `?tor=1` and has
+check.torproject.org say `IsTor: true` through it, so the wasm in a
+dedicated worker, the client's IndexedDB and the Wisp socket provider work
+there as in Chrome (bootstrap 4.0 s cold, the first answer 6.2 s).
 
 ## Remaining work
 
-The client is Tor mode where no relay is configured. What it still needs
+The client is Tor mode. What it still needs
 to be as good as Tor Browser's, with rough sizes (S under a day, M a few
 days, L a week or more). The stream API with epoxy on top (1 and 2) is
 about a day and a half: some 40 lines of Rust (`fetch_impl` in
@@ -486,8 +491,12 @@ its port to the transport worker, as it does the carrier host's.
 9. **Bridges** (L): WebTunnel (HTTPS + WebSocket, over Wisp TCP with epoxy's
    TLS, or the browser's own WebSocket) and Snowflake (WebRTC) as arti
    pluggable transports, so the operator does not see Tor use or the guard.
-10. **Suites** (M): demo-tor and the Firefox smoke rewritten for the client:
-    a local test network (chutney) on CI is the deterministic one; the
-    real-network smoke (`test/tor-client-smoke.mjs`) stays out of CI.
-11. **Remove the relay** (S): `demo/torWisp.js`, `/wisp-tor/`, `/api/tor`'s
-    relay states, docs/tor.md's relay sections.
+10. **Suites** (M; partly done): demo-tor, offline-html and the Firefox
+    smoke's profile part run Tor mode on the stand-in, and the Firefox
+    smoke loads check.torproject.org through the real client when it has
+    the network; left: a local test network (chutney) on CI, the
+    deterministic one. The real-network smoke (`test/tor-client-smoke.mjs`)
+    stays out of CI.
+11. **Remove the relay** (done): `demo/torWisp.js`, `/wisp-tor/`, the
+    `STOMP_TOR_*` settings (now a warning at startup), docs/tor.md's relay
+    sections.

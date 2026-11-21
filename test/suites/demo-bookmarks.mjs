@@ -1739,8 +1739,6 @@ async function liveCommits() {
 				STOMP_REPO: '',
 				GITHUB_TOKEN: '',
 				STOMP_WISP_URL: '',
-				STOMP_TOR_SOCKS5: '',
-				STOMP_TOR_WISP_URL: '',
 				STOMP_WISP_WEBTRANSPORT: '0',
 				STOMP_SITE_POOL: '0',
 				STOMP_SLOT_PORTS: '0',

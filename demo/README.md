@@ -55,91 +55,43 @@ the server reads it at startup. The page gets what it needs from `/config.js`.
 ## Tor routing
 
 The homepage has a **Tor** checkbox beside **Block ads**. It is enabled
-unless the server turned the in-browser client off and configured no relay. The choice is kept in
-`localStorage['stomp-demo:tor']` (or set for one visit with `?tor` / `?notor`),
-independently of the content blocker. Changing it reloads the page, since
-`controller.setTransport()` allows requests already using the old transport
-to finish. Tor uses a separate `/stomp-tor/` service worker scope and a
-STomp profile of its own on the same origin (docs/tor.md, "Profiles"): its
-own cookie jar, site storage, HTTP and rewrite caches, permissions and
-extensions (none until one is installed in Tor mode), and the page's
-history and tabs are not kept. The profile is wiped when Tor is turned off
-and when the last Tor-mode tab closes. HTTP/3, UDP, WebTransport and the
-external ECH DNS lookup are off. A missing Tor relay stops Tor-mode browsing rather than
-trying the normal Wisp endpoint.
+unless the server turns Tor mode off (`STOMP_TOR_CLIENT=0`). The choice is
+kept in `localStorage['stomp-demo:tor']` (or set for one visit with `?tor` /
+`?notor`), independently of the content blocker. Changing it reloads the
+page, since `controller.setTransport()` allows requests already using the
+old transport to finish. Tor uses a separate `/stomp-tor/` service worker
+scope and a STomp profile of its own on the same origin (docs/tor.md,
+"Profiles"): its own cookie jar, site storage, HTTP and rewrite caches,
+permissions and extensions (none until one is installed in Tor mode), and
+the page's history and tabs are not kept. The profile is wiped when Tor is
+turned off and when the last Tor-mode tab closes. HTTP/3, UDP, WebTransport,
+WebSockets and the external ECH DNS lookup are off. Where the server offers
+no Tor, a saved Tor choice stops browsing rather than trying the normal Wisp
+endpoint.
 
-**The in-browser Tor client** is Tor mode wherever the server runs no relay
-(docs/tor-over-wisp.md): the toggle is enabled, `config.js` says
-`torClient: true` and `/api/tor` answers `{"state":"client"}`. The transport
-worker runs arti (tor-js) and builds the circuits itself; `/wisp/` carries
-only TCP to Tor relays (the worker refuses a link to anything else), so the
-server never sees a destination. The Tor chip shows the bootstrap's
+**Tor mode is a Tor client in the browser** (docs/tor-over-wisp.md):
+`config.js` says `torClient: true` and `/api/tor` answers
+`{"state":"client"}`. The transport worker runs arti (tor-js) and builds the
+circuits itself; `/wisp/` carries only TCP to Tor relays (the worker refuses
+a link to anything else), so the server never sees a destination. It does
+see that a visitor uses Tor and which Tor guard they use; bridges, which
+would hide that, are future work. The Tor chip shows the bootstrap's
 progress, and the menu has **New Identity** and **New Tor circuit for this
-site**. WebSockets are refused. `STOMP_TOR_CLIENT=0` turns the client off
-(Tor mode then needs a relay); `?tor=client` asks for the client on one
-visit even where a relay is configured. `node test/tor-client-smoke.mjs`
-checks it against the real Tor network.
+site**. `node test/tor-client-smoke.mjs` checks it against the real Tor
+network. The suites run with `STOMP_TOR_CLIENT=stand-in`, which answers Tor
+mode with epoxy over `/wisp/` (`demo/public/test/tor-stand-in.mjs`), since
+they reach no Tor network.
 
-**The server-side relay** below is used instead when the server configures
-one. It sees every destination of every visitor, and is to be removed.
+There is no server-side Tor relay any more: `STOMP_TOR_SOCKS5`,
+`STOMP_TOR_WISP_URL`, `STOMP_TOR_CONTROL` and the other `STOMP_TOR_*`
+settings of the old `/wisp-tor/` relay are ignored, with one line at
+startup saying so. That relay saw every destination of every visitor.
 
-Run a Tor SOCKS5 listener on the demo server, then start the demo with:
-
-```sh
-STOMP_TOR_SOCKS5=socks5h://127.0.0.1:9050 npm run demo
-```
-
-The server starts a second holyWisp endpoint at `/wisp-tor/`, upstream of
-which is Tor's SOCKS5 listener. Names are sent to SOCKS5 for Tor to resolve,
-including `.onion` names. The helper resolver gives holyWisp a public
-placeholder address for its initial address-class check, without asking the
-machine's usual resolver; the original hostname is sent in the SOCKS5
-CONNECT. UDP, IP literals, local names and the ports browsers block are
-refused, never sent directly. The Tor listener must be on loopback. A
-malformed value of any of the variables below turns Tor off with a warning
-(`Tor Wisp disabled: ...`), as a relay that cannot start does; the server
-starts all the same, without `/wisp-tor/`.
-
-A SOCKS listener is not a bootstrapped Tor, so the server watches Tor and
-says what it sees at `GET /api/tor` (`down`, `bootstrapping` with Tor's
-percentage, `ready`); `/wisp-tor/` takes connections only while Tor is
-ready and closes them when it stops being ready, so a load fails at once
-instead of hanging. In Tor mode the page shows the state beside the toggle
-and in the status line, and a page that failed because Tor was not ready
-says so ("Tor is down", "Tor is connecting") and loads again by itself once
-Tor is ready, without a reload of the host page. Tor that is down when the
-server starts, or that goes away and comes back, needs no restart.
-
-| Variable                     | Default                    | Meaning                                                                                                                                                    |
-| ---------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `STOMP_TOR_SOCKS5`           | unset                      | Tor's SOCKS5 listener, `socks5h://127.0.0.1:PORT` or `socks5h://[::1]:PORT`, no credentials: turns on the `/wisp-tor/` relay                               |
-| `STOMP_TOR_CONTROL`          | unset                      | Tor's control port for readiness (its bootstrap and circuit events): `127.0.0.1:PORT`, `[::1]:PORT` or `unix:/path` of a `ControlSocket`                   |
-| `STOMP_TOR_CONTROL_PASSWORD` | unset                      | the control port's password (`HashedControlPassword`); never logged                                                                                        |
-| `STOMP_TOR_CONTROL_COOKIE`   | the file Tor names         | the control port's cookie file, for SAFECOOKIE authentication (the plain COOKIE method is not used)                                                        |
-| `STOMP_TOR_PROBE`            | `check.torproject.org:443` | without a control port, the host a SOCKS CONNECT through Tor probes (closed at once, no byte sent; only when the relay is idle or failing); `off` for none |
-| `STOMP_TOR_ORIGINS`          | unset                      | page origins the Tor relay takes WebSockets from, comma separated (unset: any)                                                                             |
-| `STOMP_TOR_TRUSTED_PROXIES`  | unset                      | reverse proxies (addresses or CIDRs) whose `X-Forwarded-For` the Tor relay's per-client limits believe                                                     |
-| `STOMP_TOR_WISP_URL`         | unset                      | instead of all of the above, a separately operated Tor-backed Wisp relay                                                                                   |
-
-Alternatively `STOMP_TOR_WISP_URL=wss://relay.example/wisp/` names a separately
-operated Tor-backed Wisp relay. Configure **one** of these on the server.
-The external relay must resolve names inside Tor, route every outbound TCP
-connection through Tor and reject all UDP. A page cannot prove that an
-untrusted relay obeys these rules, and its readiness is not visible here
-(the page shows it as unknown). On HTTPS pages the Tor endpoint must use
-`wss://`; an unencrypted `ws://` endpoint is accepted only for local testing.
-
-**Scope:** this provides Tor egress for sites opened through STomp's TCP
-transport (HTTP(S), WebSockets and `.onion`), with no direct fallback in Tor
-mode. It does **not** turn the browser into Tor Browser. The application shell,
-GitHub commits/avatars and other requests the host makes directly do not
-pass through the Tor relay. The relay operator can see the user's network
-address and requested destinations; websites see the Tor exit, but shared
-cookies, logins and browser fingerprints can still link sessions. Tor supports
-TCP; features that require UDP cannot use this route. `docs/tor.md` has the
-privacy scope in full, the readiness checks, the relay's limits, the
-operator checklist to work through before offering it publicly, and the
-options (and costs) of isolating Tor mode's profile from normal mode's.
+**Scope:** Tor mode is for sites opened through STomp's transport. It does
+**not** turn the browser into Tor Browser: the application shell, GitHub
+commits and avatars and other requests the host makes directly do not pass
+through Tor, and shared logins and browser fingerprints can still link
+sessions. `docs/tor.md` has the privacy scope in full.
 
 The bundled `tor.app` example is an Anura-specific Tor WASM/Snowflake client,
 not a compatible STomp Wisp transport. `docs/tor-app-audit.md` records the

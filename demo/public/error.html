@@ -103,10 +103,11 @@
 			document.getElementById('retry').addEventListener('click', reload);
 			// Tor mode (the /stomp-tor/ scope, or a dialed tab of the host's
 			// Tor profile, pm/profile.js): a load that failed while the
-			// server's Tor was down or still connecting says so, and loads
-			// again by itself once Tor is ready (demo/server.js /api/tor).
-			// The question goes to the demo's server, not through Tor: this
-			// page runs no inject, its requests are the host's own.
+			// browser's Tor client was still connecting says so, and loads
+			// again by itself once Tor is ready. The client's state is the
+			// host page's (pm/main.js __pmTorClient, which its transport
+			// tells it); this page runs no inject and asks nothing of the
+			// network.
 			let torMode = location.pathname.startsWith('/stomp-tor/');
 			try {
 				torMode ||= top !== self && top.PMProfile?.tor === true;
@@ -115,35 +116,26 @@
 				const tell = (status) => {
 					const progress =
 						status.progress != null ? ` (${status.progress}%)` : '';
-					const why =
-						status.state === 'down'
-							? 'Tor is not running on the server.'
-							: `Tor is still connecting${progress}${status.summary ? `: ${status.summary}` : ''}.`;
+					const why = `Tor is still connecting${progress}${status.summary ? `: ${status.summary}` : ''}.`;
 					document.title = document.getElementById('title').textContent =
-						status.state === 'down' ? 'Tor is down' : 'Tor is connecting';
+						'Tor is connecting';
 					document.getElementById('detail').textContent =
 						`${why} This page loads again by itself once Tor is ready.`;
 				};
 				let waited = false;
 				const ask = async () => {
-					let status;
+					let client = null;
 					try {
-						const answer = await fetch('/api/tor', { cache: 'no-store' });
-						status = await answer.json();
-					} catch {
-						status = null;
-					}
-					const ready =
-						status?.state === 'ready' || status?.state === 'unknown';
+						client = top.__pmTorClient ?? null;
+					} catch {}
+					const ready = client?.state === 'ready';
 					// ready at once: the site itself failed, the page says so
 					if (ready && !waited) return;
 					if (ready) return reload();
-					// no Tor relay here at all: nothing to wait for
-					if (status?.state === 'off') return;
-					if (status) {
-						waited = true;
-						tell(status);
-					}
+					// no client to hear from, or one that gave up: nothing to wait for
+					if (!client || client.state === 'failed') return;
+					waited = true;
+					tell(client);
 					// at most every 2 s, and only while the page is shown
 					setTimeout(ask, 2000);
 				};

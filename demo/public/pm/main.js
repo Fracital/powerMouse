@@ -199,34 +199,13 @@ const PROFILE = PMProfile.id;
 // what the page keeps of its own (settings, bookmarks, history): in Tor
 // mode this page's, read through to the normal mode's (pm/profile.js)
 const UI_STORAGE = PMProfile.storage;
-const TOR_WISP = (() => {
-	if (typeof CFG.torWisp !== 'string' || !CFG.torWisp) return null;
-	try {
-		const host = ISOLATED ? PROXY_ORIGIN : location.origin;
-		const url = new URL(CFG.torWisp, `${host}/`);
-		if (url.protocol === 'http:') url.protocol = 'ws:';
-		if (url.protocol === 'https:') url.protocol = 'wss:';
-		const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
-		if (
-			url.protocol !== 'wss:' &&
-			(url.protocol !== 'ws:' || location.protocol === 'https:' || !local)
-		)
-			return null;
-		return url.href;
-	} catch {
-		return null;
-	}
-})();
-// The in-browser Tor client (docs/tor-over-wisp.md): Tor mode's
+// The in-browser Tor client (docs/tor-over-wisp.md) is Tor mode: its
 // circuits are built in the transport worker and the Wisp server carries
 // only TCP to Tor relays, so neither it nor this server sees where a page
-// goes. It is Tor mode wherever the server runs no relay (config.js
-// `torClient`); a relay the deployer configured wins. `?tor=client` asks for
-// it on one visit (and turns Tor mode on).
-const TOR_CLIENT =
-	new URLSearchParams(location.search).get('tor') === 'client' ||
-	(CFG.torClient === true && !TOR_WISP);
-const TOR_AVAILABLE = TOR_CLIENT || !!TOR_WISP;
+// goes. config.js says whether the server offers it (STOMP_TOR_CLIENT=0
+// turns Tor mode off); there is no server-side relay.
+const TOR_CLIENT = CFG.torClient === true;
+const TOR_UNAVAILABLE = 'Tor is not available here. Turn Tor off to browse.';
 // this page's channel to its Tor client (its bootstrap progress, New
 // Identity, New circuit for this site): the transport worker is this
 // origin's unless the controller runs in the proxy's frame
@@ -427,13 +406,8 @@ const directWispURL = () =>
 	CFG.wisp ||
 	`${(ISOLATED ? PROXY_ORIGIN : location.origin).replace(/^http/, 'ws')}/wisp/`;
 const wispURL = () => {
-	if (TOR_REQUESTED) {
-		// the client's own Wisp connection, to Tor relays only
-		if (TOR_CLIENT) return directWispURL();
-		if (!TOR_WISP)
-			throw new Error('Tor relay unavailable. Turn Tor off to browse.');
-		return TOR_WISP;
-	}
+	// in Tor mode, the client's own Wisp connection, to Tor relays only
+	if (TOR_REQUESTED && !TOR_CLIENT) throw new Error(TOR_UNAVAILABLE);
 	return directWispURL();
 };
 
@@ -480,14 +454,17 @@ const transports = {
 	// Tor mode's transport with the in-browser client, whichever of the
 	// others is chosen for normal mode
 	torClient: () => ({
-		module: `${proxyBase()}/tor-client/transport.mjs`,
+		// the suites' stand-in (STOMP_TOR_CLIENT=stand-in): epoxy, which
+		// reaches their fixture
+		module: CFG.torStandIn
+			? `${proxyBase()}/test/tor-stand-in.mjs`
+			: `${proxyBase()}/tor-client/transport.mjs`,
 		options: [{ wisp: wispURL(), channel: TOR_CLIENT_CHANNEL }],
 		...(OFFLINE && { host: OFFLINE.transportHost }),
 	}),
 };
 /** the descriptor of transport `name` in this page's mode */
-const transportFor = (name) =>
-	transports[TOR_REQUESTED && TOR_CLIENT ? 'torClient' : name]();
+const transportFor = (name) => transports[TOR_REQUESTED ? 'torClient' : name]();
 
 let controller;
 
@@ -1688,8 +1665,7 @@ async function startController(name) {
 async function boot() {
 	if (!OFFLINE && !('serviceWorker' in navigator))
 		throw new Error('This browser does not support service workers.');
-	if (TOR_REQUESTED && !TOR_AVAILABLE)
-		throw new Error('Tor relay unavailable. Turn Tor off to browse.');
+	if (TOR_REQUESTED && !TOR_CLIENT) throw new Error(TOR_UNAVAILABLE);
 
 	const name = preferredTransport();
 	rememberTransport(name);
@@ -3836,39 +3812,27 @@ transportSelect.addEventListener('change', () =>
 	switchTransport(transportSelect.value),
 );
 
-// Tor's state on the server (GET /api/tor, demo/server.js): a SOCKS
-// listener is not a bootstrapped Tor, so the server watches Tor's control
-// port or a circuit probe and its relay takes connections only while Tor is
-// ready. The page asks while Tor mode is on (every 2 s until ready, every
-// 15 s after, not while hidden) and says what it heard: on the Tor toggle,
-// in the status line, and on the error page of a load that failed
-// (error.html, which loads the page again once Tor is ready). A state that
-// changes needs no reload here: the transport's next connection is taken
-// as soon as the server takes it.
+// Tor's state is its client's, in this page's transport worker: the
+// transport tells it on TOR_CLIENT_CHANNEL (bootstrapping with Tor
+// Browser's phases, ready, failed) and the page shows it on the Tor toggle
+// and in the status line; error.html reads it from here to load a failed
+// page again once Tor is ready.
 let torStatus = TOR_REQUESTED
 	? TOR_CLIENT
 		? { state: 'unknown' }
-		: TOR_WISP
-			? { state: 'checking' }
-			: { state: 'off' }
+		: { state: 'off' }
 	: null;
 let torStatusShown = null; // boot()'s status line, once the controller is up
 function torStatusText(status = torStatus) {
 	switch (status?.state) {
 		case 'off':
-			return 'Tor relay unavailable. Turn Tor off to browse.';
-		case 'down':
-			return 'Tor is not running on the server. Proxied pages load once it is.';
+			return TOR_UNAVAILABLE;
 		case 'bootstrapping':
 			return `Tor is connecting${status.progress != null ? ` (${status.progress}%)` : ''}${status.summary ? `: ${status.summary}` : ''}`;
 		case 'ready':
 			return 'Tor connected';
 		case 'failed':
 			return `Tor could not connect${status.summary ? `: ${status.summary}` : ''}`;
-		case 'error':
-			return 'Tor status unavailable';
-		case 'checking':
-			return 'Checking Tor';
 		default:
 			return 'Tor route selected';
 	}
@@ -3876,7 +3840,7 @@ function torStatusText(status = torStatus) {
 const torReadyStatus = () =>
 	torStatus?.state === 'ready'
 		? 'Ready (Tor connected)'
-		: torStatus?.state === 'unknown' || torStatus?.state === 'checking'
+		: torStatus?.state === 'unknown'
 			? 'Ready (Tor route selected)'
 			: torStatusText();
 function showTorStatus() {
@@ -3884,70 +3848,19 @@ function showTorStatus() {
 	torLabel.dataset.torState = state;
 	$('torState').textContent =
 		{
-			down: 'down',
 			bootstrapping:
 				torStatus.progress != null ? `${torStatus.progress}%` : 'connecting',
 			ready: 'on',
 			failed: 'failed',
-			error: '?',
 			off: 'unavailable',
 		}[state] ?? '';
 	if (TOR_REQUESTED) torLabel.title = `${torStatusText()}. ${TOR_SCOPE_NOTE}`;
 	torStatusShown?.();
 }
-async function watchTor() {
-	let last = '';
-	for (;;) {
-		if (!document.hidden) {
-			let next;
-			try {
-				const answer = await fetch('/api/tor', { cache: 'no-store' });
-				next = answer.ok ? await answer.json() : { state: 'error' };
-			} catch {
-				next = { state: 'error' };
-			}
-			// an external relay's Tor is not visible from here (a server that
-			// runs none says `off`, or `client` when it offers the client)
-			if ((next.state === 'off' || next.state === 'client') && TOR_WISP)
-				next = { state: 'unknown' };
-			const key = `${next.state} ${next.progress} ${next.summary}`;
-			torStatus = next;
-			if (key !== last) {
-				last = key;
-				badge(
-					'Tor',
-					torStatusText(),
-					next.state === 'ready'
-						? 'green'
-						: next.state === 'unknown'
-							? 'blue'
-							: 'orange',
-				);
-				showTorStatus();
-			}
-		}
-		const ready = torStatus.state === 'ready' || torStatus.state === 'unknown';
-		await new Promise((resolve) => {
-			const wake = () => {
-				if (document.hidden) return;
-				document.removeEventListener('visibilitychange', wake);
-				clearTimeout(timer);
-				resolve();
-			};
-			const timer = setTimeout(wake, ready ? 15000 : 2000);
-			document.addEventListener('visibilitychange', wake);
-		});
-	}
-}
-
 // Switching Tor needs a fresh controller and a separate service worker
 // scope: setTransport() lets old in-flight direct requests finish. A saved
 // Tor choice never silently falls back to normal Wisp if its relay is gone.
-const TOR_SCOPE_NOTE = `${
-	TOR_CLIENT
-		? 'This browser builds the Tor circuits; this server sees that you use Tor and which Tor guard you use, never the sites you visit (bridges, which would hide that, are future work). '
-		: 'A relay on this server reaches Tor for you and sees every site you visit. '
-}Proxied TCP only, the host page stays outside Tor. Tor mode has its own cookies, storage, history and no extensions, gone when no tab is in Tor mode.`;
+const TOR_SCOPE_NOTE = `This browser builds the Tor circuits; this server sees that you use Tor and which Tor guard you use, never the sites you visit (bridges, which would hide that, are future work). Proxied TCP only, the host page stays outside Tor. Tor mode has its own cookies, storage, history and no extensions, gone when no tab is in Tor mode.`;
 
 // ---- Tor mode's session (docs/tor.md "Profiles") ----------------------------
 // Brave keeps a Tor window's profile off the record and drops it with the
@@ -4053,19 +3966,15 @@ function watchTorTabs() {
 	forgetTorIfOver();
 }
 torToggle.checked = TOR_REQUESTED;
-torToggle.disabled = !TOR_AVAILABLE && !TOR_REQUESTED;
+torToggle.disabled = !TOR_CLIENT && !TOR_REQUESTED;
 const torLabel = $('torLabel');
-torLabel.title = !TOR_AVAILABLE
-	? 'Tor relay unavailable. The server must configure a Tor-backed Wisp relay.'
+torLabel.title = !TOR_CLIENT
+	? 'Tor is not available on this server.'
 	: TOR_REQUESTED
 		? `Tor selected. ${TOR_SCOPE_NOTE}`
 		: `Route proxied TCP traffic through Tor. Applies after the page reloads. ${TOR_SCOPE_NOTE}`;
-torLabel.toggleAttribute('data-unavailable', !TOR_AVAILABLE);
-if (TOR_REQUESTED) {
-	showTorStatus();
-	// the client's state is the transport worker's, not the server's
-	if (TOR_WISP && !TOR_CLIENT) watchTor();
-}
+torLabel.toggleAttribute('data-unavailable', !TOR_CLIENT);
+if (TOR_REQUESTED) showTorStatus();
 torToggle.addEventListener('change', () => {
 	try {
 		localStorage.setItem(TOR_KEY, torToggle.checked ? '1' : '0');
@@ -7464,9 +7373,8 @@ shieldsButton.addEventListener('click', () => {
 // DIRECTORY's as the service worker's is. The wisp server the file was built
 // with is JSON in one element at the top of its head, and this page's
 // direct one (directWispURL()) takes its place there; nothing else of this
-// page or its profile goes in. Never the Tor relay: the file has no Tor
-// mode to keep UDP, HTTP/3, WebTransport and its cache off with it, and the
-// relay is this server's own route.
+// page or its profile goes in. The file has no Tor mode: nothing in it
+// keeps UDP, HTTP/3, WebTransport and its cache off, and no Tor client.
 const OFFLINE_FILE = ASSETS.offline
 	? new URL(ASSETS.offline, new URL(DIRECTORY, location.href)).href
 	: '/offline.html';

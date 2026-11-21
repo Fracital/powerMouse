@@ -47,8 +47,7 @@
   left of Fork us on GitHub, fetches it and saves it as offline.html with
   the page's direct wisp server written in, so a copy saved from a
   deployment with its own wisp server (STOMP_WISP_URL, a host's config)
-  tunnels through that one; never the Tor relay, which the file has no mode
-  for. A host that vendors the page names where to fetch it as
+  tunnels through that one; the file has no Tor mode. A host that vendors the page names where to fetch it as
   `STOMP_ASSETS.offline`, a URL of any origin or a name under the
   controller's directory; a sandboxed frame of the page saves only with
   `allow-downloads`. Download is hidden below 480 px and in the file

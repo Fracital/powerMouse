@@ -67,13 +67,7 @@ export async function startServers({ env: extra = {}, slots = 4 } = {}) {
 		...(typeof extra === 'function' ? extra(port) : extra),
 	};
 	const asked = typeof extra === 'function' ? extra(port) : extra;
-	for (const name of [
-		'STOMP_PROXY_ORIGIN',
-		'STOMP_WISP_URL',
-		'STOMP_TOR_SOCKS5',
-		'STOMP_TOR_WISP_URL',
-		'STOMP_DEV',
-	])
+	for (const name of ['STOMP_PROXY_ORIGIN', 'STOMP_WISP_URL', 'STOMP_DEV'])
 		if (!(name in asked)) delete env[name];
 	const server = spawn(process.execPath, [`${root}demo/server.js`], {
 		env,

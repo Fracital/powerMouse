@@ -52,7 +52,6 @@ const env = {
 	STOMP_SLOT_PORTS: '0',
 };
 delete env.STOMP_WISP_URL;
-delete env.STOMP_TOR_SOCKS5;
 delete env.STOMP_PROXY_ORIGIN;
 const server = spawn(process.execPath, [`${root}demo/server.js`], {
 	env,

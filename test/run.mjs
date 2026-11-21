@@ -99,7 +99,9 @@ const SUITE_ENV = {
 	'webrtc-net': { STOMP_TEST_TRANSPORT: '1', WISP_LOG: '1' },
 	// the wisp server's streams: the single file reaches nothing but the
 	// fixture through it
-	'offline-html': { WISP_LOG: '1' },
+	'offline-html': { WISP_LOG: '1', STOMP_TOR_CLIENT: 'stand-in' },
+	// Tor mode's transport, answered with epoxy (demo/public/test/tor-stand-in.mjs)
+	'demo-tor': { STOMP_TOR_CLIENT: 'stand-in' },
 	// epoxy plus the fixture hosts of test/mixed-servers.mjs
 	'mixed-content': { STOMP_TEST_TRANSPORT: '1' },
 	// an https page of the fixture's mixed.test, whose report-to the Reporting
