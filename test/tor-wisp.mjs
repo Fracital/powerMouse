@@ -181,6 +181,27 @@ test('synthetic DNS preserves original question, answers A only, and never resol
 	assert.equal(validationDnsAnswer(Buffer.from([1, 2, 3])), null);
 });
 
+test("synthetic DNS copies the query's RD flag instead of always setting it", () => {
+	const recursive = dnsQuestion('foo.onion', 1);
+	assert.equal(recursive[2] & 1, 1);
+	assert.equal(validationDnsAnswer(recursive).readUInt16BE(2), 0x8180);
+	for (const [name, type] of [
+		['foo.onion', 1],
+		['foo.onion', 28],
+		['localhost', 1],
+	]) {
+		const query = dnsQuestion(name, type);
+		query[2] &= ~1;
+		const answer = validationDnsAnswer(query);
+		assert.equal(answer[2] & 1, 0, `${name} ${type}: RD stays clear`);
+		assert.equal(answer[2] & 0x80, 0x80, `${name} ${type}: QR is set`);
+		assert.equal(answer[3] & 0x80, 0x80, `${name} ${type}: RA is set`);
+	}
+	const iterative = dnsQuestion('foo.onion', 1);
+	iterative[2] &= ~1;
+	assert.equal(validationDnsAnswer(iterative).readUInt16BE(2), 0x8080);
+});
+
 test('shim accepts only loopback UDP queries and does not forward', async () => {
 	const dns = await openValidationDns();
 	const client = createSocket('udp4');

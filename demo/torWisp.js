@@ -81,7 +81,12 @@ export function validationDnsAnswer(query) {
 	const answerA = !denied && klass === 1 && type === 1;
 	const response = Buffer.alloc(12);
 	query.copy(response, 0, 0, 2);
-	response.writeUInt16BE(0x8180 | (denied ? 3 : 0), 2); // response, recursive available; NXDOMAIN for local names
+	// a response with the query's RD (recursion desired) copied, as RFC 1035
+	// 4.1.1 says, and recursion available; NXDOMAIN for local names
+	response.writeUInt16BE(
+		0x8080 | ((query[2] & 0x01) << 8) | (denied ? 3 : 0),
+		2,
+	);
 	response.writeUInt16BE(1, 4); // echo exactly the question for the resolver's name check
 	response.writeUInt16BE(answerA ? 1 : 0, 6);
 	const question = query.subarray(12, end);
