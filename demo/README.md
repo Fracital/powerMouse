@@ -73,7 +73,10 @@ including `.onion` names. The helper resolver gives holyWisp a public
 placeholder address for its initial address-class check, without asking the
 machine's usual resolver; the original hostname is sent in the SOCKS5
 CONNECT. UDP, IP literals, local names and the ports browsers block are
-refused, never sent directly. The Tor listener must be on loopback.
+refused, never sent directly. The Tor listener must be on loopback. A
+malformed value of any of the variables below turns Tor off with a warning
+(`Tor Wisp disabled: ...`), as a relay that cannot start does; the server
+starts all the same, without `/wisp-tor/`.
 
 A SOCKS listener is not a bootstrapped Tor, so the server watches Tor and
 says what it sees at `GET /api/tor` (`down`, `bootstrapping` with Tor's

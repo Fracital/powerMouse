@@ -127,8 +127,14 @@ export async function openValidationDns() {
 
 /** Only a locally owned SOCKS5 endpoint is accepted as the Tor egress. */
 export function parseTorSocks5(value) {
-	const url = new URL(value);
+	let url = null;
+	try {
+		url = new URL(value);
+	} catch {
+		// the message below says what it must be
+	}
 	if (
+		!url ||
 		url.protocol !== 'socks5h:' ||
 		!['127.0.0.1', '[::1]'].includes(url.hostname) ||
 		url.username ||
@@ -852,18 +858,29 @@ export async function startTorWisp({
 	logLevel = 'error',
 	monitor: monitorOptions = {},
 } = {}) {
-	if (external)
-		return {
-			external: externalTorWisp(external),
-			relay: null,
-			dns: null,
-			monitor: null,
-		};
-	if (!socks5) return null;
-	const socks = parseTorSocks5(socks5);
-	const controlPort = control ? parseTorControl(control) : null;
-	const probeTarget =
-		!probe || /^(?:0|off)$/i.test(probe) ? null : parseTorProbe(probe);
+	// A malformed setting turns Tor off with a warning, as a relay that
+	// cannot start does: the demo still serves its direct relay, and a
+	// typo never crashes it at startup (nor reaches some other egress).
+	let socks;
+	let controlPort;
+	let probeTarget;
+	try {
+		if (external)
+			return {
+				external: externalTorWisp(external),
+				relay: null,
+				dns: null,
+				monitor: null,
+			};
+		if (!socks5) return null;
+		socks = parseTorSocks5(socks5);
+		controlPort = control ? parseTorControl(control) : null;
+		probeTarget =
+			!probe || /^(?:0|off)$/i.test(probe) ? null : parseTorProbe(probe);
+	} catch (error) {
+		console.warn(`Tor Wisp disabled: ${error.message}`);
+		return null;
+	}
 	const allowedOrigins = list(origins);
 	const proxies = list(trustedProxies);
 	let dns;

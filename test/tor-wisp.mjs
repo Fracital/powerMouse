@@ -223,6 +223,28 @@ test('unreachable SOCKS is fail-closed: the relay runs but says Tor is down', as
 	}
 });
 
+test('a malformed STOMP_TOR_SOCKS5 warns and leaves Tor off instead of crashing', async () => {
+	const warnings = [];
+	const warn = console.warn;
+	console.warn = (...args) => warnings.push(args.join(' '));
+	try {
+		for (const value of [
+			'not a url',
+			'socks5h://127.0.0.1:notaport',
+			'socks5h://127.0.0.1:70000',
+			'socks5://127.0.0.1:9050',
+			'socks5h://1.1.1.1:9050',
+		]) {
+			warnings.length = 0;
+			assert.equal(await startTorWisp({ socks5: value }), null, value);
+			assert.equal(warnings.length, 1, value);
+			assert.match(warnings[0], /^Tor Wisp disabled: STOMP_TOR_SOCKS5 must be/);
+		}
+	} finally {
+		console.warn = warn;
+	}
+});
+
 test('names, probe targets and control addresses are checked', () => {
 	for (const name of [
 		'localhost',
