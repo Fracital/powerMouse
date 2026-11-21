@@ -139,6 +139,14 @@ function makeThrottle() {
 
 // ---- a realm's stand-in ----
 
+/** the options' and a session's anticipated counts of the server's streams (Chrome 158 on), bidirectional first */
+const ANTICIPATED = [
+	'anticipatedConcurrentIncomingBidirectionalStreams',
+	'anticipatedConcurrentIncomingUnidirectionalStreams',
+];
+/** the members of the options older browsers do not read, in the order a browser reads them */
+const LATER_OPTIONS = [...ANTICIPATED, 'headers'];
+
 const INCOMING_AGE = 1;
 const OUTGOING_AGE = 2;
 const INCOMING_BUFFER = 3;
@@ -156,13 +164,15 @@ export function standIn(
 		makeThrottle();
 	}
 	const realm = client.global as unknown as Realm;
-	const { TypeError, RangeError, DOMException, Promise, Object } = realm as {
-		TypeError: TypeErrorConstructor;
-		RangeError: RangeErrorConstructor;
-		DOMException: typeof globalThis.DOMException;
-		Promise: PromiseConstructor;
-		Object: ObjectConstructor;
-	};
+	const { TypeError, RangeError, DOMException, Promise, Object, Date } =
+		realm as {
+			TypeError: TypeErrorConstructor;
+			RangeError: RangeErrorConstructor;
+			DOMException: typeof globalThis.DOMException;
+			Promise: PromiseConstructor;
+			Object: ObjectConstructor;
+			Date: DateConstructor;
+		};
 	const NativeError = realm.WebTransportError as new (init: {
 		message: string;
 	}) => object;
@@ -272,28 +282,89 @@ export function standIn(
 			? new Uint8Array(value.buffer, value.byteOffset, value.byteLength).slice()
 			: new Uint8Array(value).slice();
 
-	// Chrome 157 reads `headers` from the options (a member Chrome may
-	// leave out): asked of the realm's own constructor once, with a URL it
+	// the members of the options a browser may leave out (Chrome 157 reads
+	// `headers`, 158 the anticipated stream counts before it): which this one
+	// reads is asked of the realm's own constructor once, with a URL it
 	// refuses after reading them, so nothing is opened
-	let headersRead: boolean | undefined;
-	const takesHeaders = () =>
-		(headersRead ??= (() => {
-			let read = false;
+	let optionsRead: string[] | undefined;
+	const readsOption = (name: string) =>
+		(optionsRead ??= (() => {
+			const read: string[] = [];
+			const probe = {};
+			for (const each of LATER_OPTIONS)
+				Reflect.defineProperty(probe, each, {
+					get: () => void read.push(each),
+					enumerable: true,
+				});
 			try {
-				Reflect.construct(Native, [
-					'',
-					{
-						get headers() {
-							read = true;
-							return undefined;
-						},
-					},
-				]);
+				Reflect.construct(Native, ['', probe]);
 			} catch (error) {
 				// the URL, refused
 			}
 			return read;
-		})());
+		})()).includes(name);
+	/** the page's object as a primitive, as ToPrimitive with the hint `number` makes it */
+	const toPrimitive = (value: object, context: string) => {
+		const given = value as Record<PropertyKey, unknown>;
+		const exotic = given[Symbol.toPrimitive];
+		if (exotic !== undefined && exotic !== null) {
+			if (typeof exotic !== 'function') {
+				// (in the engine's words, which describe the value and the object:
+				// a Date's ToPrimitive is the engine's runtime one, as the
+				// browser's conversion, where `+` words it otherwise)
+				const like = {};
+				Reflect.setPrototypeOf(like, Reflect.getPrototypeOf(value));
+				Reflect.defineProperty(like, Symbol.toPrimitive, { value: exotic });
+				let text = '';
+				try {
+					Reflect.construct(Date, [like]);
+				} catch (error) {
+					text = (error as Error).message;
+				}
+				throw failed(context, text);
+			}
+			const made: unknown = Reflect.apply(exotic, value, ['number']);
+			if (!isObject(made)) return made;
+		} else
+			for (const name of ['valueOf', 'toString']) {
+				const method = given[name];
+				if (typeof method !== 'function') continue;
+				const made: unknown = Reflect.apply(method, value, []);
+				if (!isObject(made)) return made;
+			}
+		throw failed(context, 'Cannot convert object to primitive value');
+	};
+	/**
+	 * A WebIDL `[EnforceRange] unsigned short?` of the page's value. What the
+	 * conversion itself refuses carries `context` as Chrome's does; what the
+	 * page's own valueOf throws is thrown as it is
+	 */
+	const unsignedShort = (value: unknown, context: string) => {
+		if (value === undefined || value === null) return null;
+		const made = isObject(value)
+			? toPrimitive(value as object, context)
+			: value;
+		if (typeof made === 'symbol' || typeof made === 'bigint')
+			throw failed(
+				context,
+				`Cannot convert a ${typeof made === 'symbol' ? 'Symbol' : 'BigInt'} value to a number`,
+			);
+		const number = +(made as number);
+		if (number !== number)
+			throw failed(context, "Value is not of type 'unsigned short'.");
+		if (number - number !== 0)
+			throw failed(
+				context,
+				"Value is infinite and not of type 'unsigned short'.",
+			);
+		if (number <= -1 || number >= 0x10000)
+			throw failed(
+				context,
+				"Value is outside the 'unsigned short' value range.",
+			);
+		// (truncated; -0.5 is 0)
+		return number - (number % 1) + 0;
+	};
 	/** a WebIDL ByteString of the page's value */
 	const byteString = (value: unknown, context: string) => {
 		const text = primitive(value, context) as string;
@@ -327,19 +398,26 @@ export function standIn(
 	};
 
 	/**
-	 * The constructor's options, read as Chrome reads them: `headers` (157
-	 * on), `protocols`, then `serverCertificateHashes`
+	 * The constructor's options, read as Chrome reads them: the anticipated
+	 * counts of the server's bidirectional and unidirectional streams (158
+	 * on), `headers` (157 on), `protocols`, then `serverCertificateHashes`
 	 */
-	const options = (value: unknown): [string[], ArrayBuffer[], string[][]] => {
+	const options = (
+		value: unknown,
+	): [string[], ArrayBuffer[], string[][], (number | null)[]] => {
 		const context = "construct 'WebTransport'";
 		const values: ArrayBuffer[] = [];
-		if (value === undefined || value === null) return [[], values, []];
+		if (value === undefined || value === null)
+			return [[], values, [], [null, null]];
 		if (!isObject(value))
 			throw failed(context, notOfType('WebTransportOptions'));
 		const given = value as Record<string, unknown>;
 		const from = (name: string) =>
 			reading(context, name, 'WebTransportOptions');
-		const headers = takesHeaders()
+		const counts = ANTICIPATED.map((name) =>
+			readsOption(name) ? unsignedShort(given[name], from(name)) : null,
+		);
+		const headers = readsOption('headers')
 			? headerList(given.headers, from('headers'))
 			: [];
 		const protocols = given.protocols;
@@ -375,7 +453,7 @@ export function standIn(
 				if (name === 'sha-256' && bytes !== undefined)
 					values.push(copy(bytes as ArrayBuffer).buffer);
 			});
-		return [names, values, headers];
+		return [names, values, headers, counts];
 	};
 
 	/** the page's headers as Chrome sends them, or Chrome's refusal of them */
@@ -473,7 +551,7 @@ export function standIn(
 		const input = (
 			primitive(args[0], "construct 'WebTransport'") as string
 		).toWellFormed();
-		const [protocols, hashes, given] = options(args[1]);
+		const [protocols, hashes, given, anticipated] = options(args[1]);
 		// (no base: a relative URL is none)
 		let url: URL;
 		try {
@@ -523,6 +601,7 @@ export function standIn(
 			over: false,
 			ready: {},
 			closed: {},
+			draining: {},
 			creations: [],
 			streams: [],
 			controllers: [],
@@ -532,6 +611,7 @@ export function standIn(
 			protocols,
 			headers,
 			hashes,
+			anticipated,
 		};
 		const made = Reflect.construct(Object, [], newTarget) as object;
 		sessions.set(made, session);
@@ -663,7 +743,47 @@ export function standIn(
 	const part = (index: Part) => ({
 		get: (session: Session) => stream(session, index),
 	});
+	/** an anticipated count of the server's streams, which the page may set again */
+	const anticipated = (index: number) => ({
+		get: (session: Session) => session.anticipated[index],
+		set: (session: Session, value: unknown) => {
+			session.anticipated[index] = unsignedShort(
+				value,
+				`set the '${ANTICIPATED[index]}' property on 'WebTransport'`,
+			);
+		},
+	});
+	// an empty Headers the page cannot change (the browser's `responseHeaders`
+	// guard): the realm's own, taken with its first session
+	const ResponseOf = realm.Response as typeof Response | undefined;
+	const errorResponse = ResponseOf?.error;
+	const headersOf =
+		ResponseOf &&
+		Reflect.getOwnPropertyDescriptor(ResponseOf.prototype, 'headers')?.get;
 	hook(Native.prototype, sessions, {
+		// a session is HTTP/3 with datagrams once up (stomp-h3 has no other)
+		reliability: {
+			get: (session: Session) =>
+				session.live ? 'supports-unreliable' : 'pending',
+		},
+		// (stomp-h3 tells no DRAIN_WEBTRANSPORT_SESSION: it stays pending, as
+		// the browser's does for a session that ends otherwise)
+		draining: { get: (session: Session) => promiseOf(session.draining) },
+		// (the server's fields are not handed over by stomp-h3: an up session's
+		// are none, what Chrome shows of a server that sends only `:status`
+		// and `wt-protocol`)
+		responseHeaders: {
+			get: (session: Session) =>
+				session.live && errorResponse && headersOf
+					? (session.responseHeaders ??= Reflect.apply(
+							headersOf,
+							Reflect.apply(errorResponse, ResponseOf, []),
+							[],
+						) as object)
+					: null,
+		},
+		anticipatedConcurrentIncomingBidirectionalStreams: anticipated(0),
+		anticipatedConcurrentIncomingUnidirectionalStreams: anticipated(1),
 		ready: { get: (session: Session) => promiseOf(session.ready) },
 		closed: { get: (session: Session) => promiseOf(session.closed) },
 		protocol: { get: (session: Session) => session.protocol ?? '' },

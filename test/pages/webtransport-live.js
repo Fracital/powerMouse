@@ -91,6 +91,7 @@
 			}),
 			...(options.protocols && { protocols: options.protocols }),
 			...(options.headers && { headers: options.headers }),
+			...options.more,
 		});
 		t.closed.catch(() => {});
 		t.ready.catch(() => {});
@@ -361,6 +362,52 @@
 				const t = open(params, path);
 				out[path] = [await settled(t.ready), await settled(t.closed)];
 			}
+			return out;
+		},
+		/**
+		 * Chrome 158's members (each undefined before it) as a session comes
+		 * up and ends: the reliability, the server's fields (none from /echo
+		 * but its `:status`), draining, and the anticipated stream counts
+		 */
+		async later(params) {
+			const A = 'anticipatedConcurrentIncomingBidirectionalStreams';
+			const U = 'anticipatedConcurrentIncomingUnidirectionalStreams';
+			const members = (t) => {
+				const h = t.responseHeaders;
+				return [
+					t.reliability,
+					h === null || h === undefined
+						? String(h)
+						: [Object.prototype.toString.call(h), ...[...h].map(String)],
+					h === t.responseHeaders,
+					t[A],
+					t[U],
+				];
+			};
+			const t = open(params, '/echo', { more: { [A]: 4 } });
+			const out = { connecting: members(t) };
+			const draining = t.draining;
+			out.ready = await settled(t.ready);
+			out.up = members(t);
+			if (out.up[1] !== 'undefined')
+				out.immutable = (() => {
+					try {
+						t.responseHeaders.append('x-a', 'b');
+						return 'appended';
+					} catch (e) {
+						return e.name + ' ' + e.message;
+					}
+				})();
+			t[A] = 9;
+			t[U] = 1;
+			out.set = members(t);
+			t.close();
+			out.closed = await settled(t.closed);
+			out.over = members(t);
+			out.draining = [draining === t.draining, await settled(draining, 200)];
+			const refused = open(params, '/refuse');
+			await settled(refused.closed);
+			out.refused = members(refused);
 			return out;
 		},
 		/** the protocol the server picks from the page's */

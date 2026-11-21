@@ -31,6 +31,8 @@ export interface Session {
 	error?: unknown;
 	ready: Property;
 	closed: Property;
+	/** `draining` (Chrome 158 on): never settled */
+	draining: Property;
 	/** the page's createBidirectionalStream and createUnidirectionalStream calls a session keeps while it connects (Chrome 155 on): settle, refuse, unidirectional */
 	creations: [Settle, Settle, boolean][];
 	datagrams?: object;
@@ -53,6 +55,10 @@ export interface Session {
 	/** the page's own headers (Chrome 157 on) as they go out: checked, lower case, sorted by name */
 	headers: [string, string][];
 	hashes: ArrayBuffer[];
+	/** the anticipated counts of the server's bidirectional and unidirectional streams (Chrome 158 on), null for none */
+	anticipated: (number | null)[];
+	/** `responseHeaders` once read on an up session */
+	responseHeaders?: object;
 	/** the server's answer, once up */
 	protocol?: string;
 	live?: Live;

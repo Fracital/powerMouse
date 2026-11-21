@@ -36,10 +36,10 @@ WebTransport server (quic-go's) on the machine.
   contexts, in windows and in every kind of worker. There is no
   `WebTransportSendStream`, `WebTransportReceiveStream` or
   `WebTransportWriter`, and a session has no `getStats`, `draining`,
-  `reliability` or `congestionControl`: its members are `ready`, `closed`,
-  `protocol`, `datagrams`, `incomingBidirectionalStreams`,
-  `incomingUnidirectionalStreams`, `close`, `createBidirectionalStream` and
-  `createUnidirectionalStream`. A stream is a plain `ReadableStream` or
+  `reliability` or `congestionControl` (Chrome 158 adds some, below): its
+  members are `ready`, `closed`, `protocol`, `datagrams`,
+  `incomingBidirectionalStreams`, `incomingUnidirectionalStreams`, `close`,
+  `createBidirectionalStream` and `createUnidirectionalStream`. A stream is a plain `ReadableStream` or
   `WritableStream`; `datagrams.readable` is a byte stream.
 - The constructor reads two members of its options, `protocols` and then
   `serverCertificateHashes` (`allowPooling`, `requireUnreliable` and
@@ -61,6 +61,27 @@ WebTransport server (quic-go's) on the machine.
   order within one name), their values trimmed; a value of Latin-1 bytes
   goes as those bytes. (Measured with a server of our own, which logs the
   fields, and quic-go's for the Latin-1 bytes our server refuses.)
+- Chrome 158 (158.0.8127.36) reads two more before `headers`:
+  `anticipatedConcurrentIncomingBidirectionalStreams` and then
+  `anticipatedConcurrentIncomingUnidirectionalStreams`, each an
+  `[EnforceRange] unsigned short?` (null when absent; truncated; NaN, an
+  infinity and a number outside 0 to 65535 refused with a TypeError,
+  "Value is not of type 'unsigned short'.", "Value is infinite and not of
+  type 'unsigned short'.", "Value is outside the 'unsigned short' value
+  range."; a symbol, a BigInt or an object with no primitive refused in the
+  engine's words, all after "Failed to read the '<name>' property from
+  'WebTransportOptions'"; what the page's own `valueOf` throws thrown as it
+  is). A session reads them back as same-named attributes, which the page
+  may set (the same conversion, "Failed to set the '<name>' property on
+  'WebTransport'"). The prototype also gains `reliability` (`'pending'`
+  until the session is up, then `'supports-unreliable'` over HTTP/3, kept
+  after it ends; a session that never came up stays `'pending'`),
+  `draining` (one promise per session, which no ending of ours settles) and
+  `responseHeaders` (null until up, then one immutable `Headers` of the
+  200's fields without `wt-protocol` and `set-cookie`), and the constructor
+  a static `supportsReliableOnly` (false). There is still no `getStats` or
+  `congestionControl`, and `allowPooling`, `requireUnreliable` and
+  `congestionControl` are still not read.
 - A server that cannot be reached (a closed port, a name that does not
   resolve, with a pinned certificate or without): `closed` rejects and then
   `ready`, in one task, with one `WebTransportError` whose message is
@@ -242,15 +263,25 @@ The worker bundle has both parts as its own code.
 
 - The constructor's arguments, in Chrome's order and words: the URL
   converted to a string (a symbol, a `toString` that throws), the options
-  dictionary (`headers` where the realm's own constructor reads it,
-  `protocols` read before `serverCertificateHashes`, each a sequence read
+  dictionary (the anticipated stream counts and then `headers` where the
+  realm's own constructor reads them, `protocols` read before
+  `serverCertificateHashes`, each a sequence read
   through the page's iterator once, each hash's `algorithm` and `value`),
   then the URL (invalid, not https, a fragment), then the page's policy,
   then the protocol names (empty, a character outside printable ASCII, 512
   characters or more, a duplicate), then the headers as Chrome 157 checks
-  them. Whether the realm's constructor reads `headers` is asked of it once,
+  them. Which of those the realm's constructor reads is asked of it once,
   with a URL it refuses after reading its options, so nothing is opened.
-  The headers Chrome would send go with the session's handshake.
+  The headers Chrome would send go with the session's handshake; the
+  anticipated counts are a session's attributes and go nowhere (stomp-h3
+  takes no hint of how many streams the server will open).
+- Chrome 158's members of a session, where the browser's prototype has
+  them: the anticipated counts as given and set, `reliability` as the
+  browser's, `draining` a promise that stays pending, and `responseHeaders`
+  null until the session is up and then an immutable `Headers` with no
+  fields: stomp-h3 does not hand over the 200's fields, so a server that
+  sends more than `:status` and `wt-protocol` shows them natively and not
+  through the proxy.
 - A session's handshake starts when Chrome's throttle would have started
   it (the model above, one for the bundle; a handshake that failed keeps
   its place five minutes, one that came up gives it back). One that fails

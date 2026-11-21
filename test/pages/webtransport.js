@@ -136,6 +136,13 @@
 			return size;
 		});
 		out.protocol = t.protocol;
+		// Chrome 158's members (each undefined before it) once it is over
+		out.later = [
+			t.reliability,
+			String(t.responseHeaders),
+			t.draining === t.draining,
+			await settled(t.draining, 100),
+		];
 		out.log = log;
 		out.end = await Promise.race([ended, sleep(8000).then(() => 'pending')]);
 		return out;
@@ -312,6 +319,75 @@
 					serverCertificateHashes: [5],
 				}),
 			});
+			// Chrome 158's anticipated counts of the server's streams, as the
+			// options give them and as a session reads and sets them (each
+			// undefined before it)
+			const A = 'anticipatedConcurrentIncomingBidirectionalStreams';
+			const U = 'anticipatedConcurrentIncomingUnidirectionalStreams';
+			const counts = (t) => JSON.stringify([t[A], t[U]]);
+			const counted = (more) =>
+				attempt(() => {
+					const t = quiet(new WT(u, more));
+					t.close();
+					return counts(t);
+				});
+			const countValues = {
+				undefined: undefined,
+				null: null,
+				zero: 0,
+				seven: 7,
+				minusOne: -1,
+				max: 65535,
+				overMax: 65536,
+				fraction: 1.9,
+				minusHalf: -0.5,
+				minusZero: -0,
+				nan: NaN,
+				infinity: Infinity,
+				string: '7',
+				hexString: '0x10',
+				badString: 'x',
+				true: true,
+				array: [3],
+				object: {},
+				valueOf: { valueOf: () => 3 },
+				date: new Date(4),
+				symbol: Symbol('c'),
+				bigint: BigInt(10),
+				throws: {
+					valueOf() {
+						throw new RangeError('from valueOf');
+					},
+				},
+				valueOfSymbol: { valueOf: () => Symbol('v') },
+				noPrimitive: { valueOf: () => ({}), toString: () => ({}) },
+				toPrimitiveNumber: { [Symbol.toPrimitive]: 5 },
+				toPrimitiveHint: {
+					[Symbol.toPrimitive]: (hint) => (hint === 'number' ? 6 : 9),
+				},
+			};
+			out.counts = {};
+			for (const [name, value] of Object.entries(countValues)) {
+				out.counts[name] = counted({ [A]: value });
+				out.counts[name + 'Uni'] = counted({ [U]: value });
+			}
+			out.counts.both = counted({ [A]: 2, [U]: 3 });
+			// which refusal comes first
+			out.counts.badBoth = counted({ [A]: -1, [U]: Symbol('u') });
+			out.counts.badUniAndHeaders = counted({ [U]: -1, headers: 5 });
+			out.counts.badAndURL = make('x', { [A]: -1 });
+			out.counts.badAndProtocols = counted({ [A]: NaN, protocols: ['a', 'a'] });
+			const counting = quiet(new WT(u));
+			counting.close();
+			out.countsDefault = counts(counting);
+			out.supportsReliableOnly = attempt(() => WT.supportsReliableOnly);
+			out.countsSet = {};
+			for (const [name, value] of Object.entries(countValues))
+				out.countsSet[name] = attempt(() => {
+					counting[A] = value;
+					counting[U] = value;
+					return counts(counting);
+				});
 			const traced = (name, target) =>
 				new Proxy(target, {
 					get(t, key) {
@@ -336,6 +412,18 @@
 				}),
 			);
 			out.headersReadOrder = reads.filter(
+				(read) => !read.includes('Symbol(Symbol.toPrimitive)'),
+			);
+			reads.length = 0;
+			make(
+				u,
+				traced('options', {
+					[A]: traced('bidirectional', { valueOf: () => 2 }),
+					[U]: traced('unidirectional', { toString: () => '3' }),
+					headers: traced('headers', { 'x-a': 'b' }),
+				}),
+			);
+			out.countsReadOrder = reads.filter(
 				(read) => !read.includes('Symbol(Symbol.toPrimitive)'),
 			);
 			reads.length = 0;
@@ -519,6 +607,14 @@
 						' -> ' +
 						d[name];
 				}
+			// Chrome 158's members (each undefined before it) while it connects
+			out.later = [
+				t.reliability,
+				String(t.responseHeaders),
+				t.draining === t.draining,
+				tag(t.draining),
+				await settled(t.draining, 100),
+			];
 			out.close = {
 				number: attempt(() => t.close(5)),
 				string: attempt(() => t.close('x')),

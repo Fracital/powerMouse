@@ -179,6 +179,7 @@ const CASES = [
 	['abort', undefined, "the page's reset and stop-sending"],
 	['refused', undefined, 'a refused session'],
 	['protocol', undefined, 'the protocol the server picks'],
+	['later', undefined, "Chrome 158's members of a session"],
 	['headers', undefined, "the page's own headers on its CONNECT"],
 	['backpressure', undefined, 'a server that does not read'],
 	['webpki', undefined, 'a certificate the WebPKI takes'],
