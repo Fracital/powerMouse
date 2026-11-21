@@ -10,7 +10,8 @@
 			// suite's server (?port), which reads nothing for a while: the
 			// page sends a burst and reads bufferedAmount as the server holds
 			// it and after it read it all; sends of every kind keep their
-			// order; a close after a burst goes after the burst.
+			// order; a close after a burst goes after the burst; a
+			// WebSocketStream's writes settle as its messages leave.
 			// window.__run(tag, sizes) resolves with what the page saw.
 			const params = new URLSearchParams(location.search);
 			const base = 'ws://127.0.0.1:' + params.get('port');
@@ -100,7 +101,58 @@
 				return { closed, afterClose: ws.bufferedAmount };
 			}
 
+			// a WebSocketStream writing `total` bytes in `chunk` byte writes,
+			// each after writer.ready, to a server that reads nothing for
+			// `hold` ms: how much its writes had settled at times while the
+			// server holds it (and desiredSize then), and when the last
+			// settled. Natively a write settles once Chrome's network service
+			// took it, so the writer waits while the socket has no room
+			async function streamed(tag, { total, chunk, hold }) {
+				if (typeof WebSocketStream !== 'function') return { absent: true };
+				const stream = new WebSocketStream(
+					`${base}/hold?tag=${tag}&bytes=${total}&hold=${hold}`,
+				);
+				const { readable, writable } = await stream.opened;
+				const reader = readable.getReader();
+				const got = reader.read().then(({ value }) => JSON.parse(value));
+				const writer = writable.getWriter();
+				const bytes = chunkOf(chunk, 7);
+				const start = performance.now();
+				let settled = 0;
+				let failed = null;
+				const writing = (async () => {
+					const writes = [];
+					for (let sent = 0; sent < total; sent += chunk) {
+						await writer.ready;
+						writes.push(
+							writer.write(bytes).then(
+								() => (settled += chunk),
+								(error) => (failed = String(error)),
+							),
+						);
+					}
+					await Promise.all(writes);
+				})();
+				const marks = [hold * 0.25, hold * 0.5, hold * 0.9];
+				const at = [];
+				const desired = [];
+				for (const mark of marks) {
+					await sleep(mark - (performance.now() - start));
+					at.push(settled);
+					desired.push(writer.desiredSize);
+				}
+				await Promise.race([writing, sleep(hold + 20000)]);
+				const drained =
+					settled === total ? Math.round(performance.now() - start) : null;
+				const server = await Promise.race([got, sleep(20000).then(() => null)]);
+				stream.close();
+				return { at, desired, drained, settled, failed, server };
+			}
+
 			window.__run = async (tag, sizes) => ({
+				streamed: await streamed(`${tag}-stream`, sizes.held).catch((e) =>
+					String(e),
+				),
 				held: await held(tag, sizes.held).catch((e) => String(e)),
 				order: await order(tag, sizes.order).catch((e) => String(e)),
 				closing: await closing(tag, sizes.closing).catch((e) => String(e)),

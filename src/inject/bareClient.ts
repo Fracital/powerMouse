@@ -55,6 +55,9 @@ export interface SocketState {
 	leaving?: Promise<unknown>;
 }
 
+/** each WebSocket stand-in's state, for the WebSocketStream stand-in's writes */
+const socketStates = new WeakMap<object, SocketState>();
+
 const toTag = Object.prototype.toString;
 /**
  * What send() sends of `data`, as the browser converts its argument: a
@@ -179,6 +182,7 @@ function open(
 		url: parsed.toString(),
 		buffered: 0,
 	} as SocketState;
+	socketStates.set(target, state);
 
 	// no Cookie here: the controller adds the jar's (HttpOnly included)
 	// to the handshake, so the page never holds it
@@ -305,12 +309,16 @@ function open(
 	return state;
 }
 
-/** the stand-in's send() */
+/**
+ * the stand-in's send(): what the page sent settles (true) once it has left
+ * or (false) failed, and nothing comes back when nothing goes out (the
+ * page's close has started); WebSocketStream's writes wait on it
+ */
 function send(
 	state: SocketState,
 	target: EventTarget,
 	data: string | ArrayBufferLike | Blob | ArrayBufferView,
-) {
+): Promise<boolean> | undefined {
 	if (state.socket.readyState === CONNECTING) {
 		throw withStack(
 			new DOMException(
@@ -356,13 +364,19 @@ function send(
 		typeof socket._data === 'function'
 			? new Promise((resolve) => resolve(socket._data!(payload)))
 			: state.socket.send(payload);
-	state.leaving = leaving.then(
-		() => (state.buffered -= size),
+	const left = leaving.then(
+		() => {
+			state.buffered -= size;
+			return true;
+		},
 		(error) => {
 			console.error(error);
 			target.dispatchEvent(new Event('error'));
+			return false;
 		},
 	);
+	state.leaving = left;
+	return left;
 }
 
 /** the stand-in's close() */
@@ -475,9 +489,34 @@ function stream(
 						socket.close();
 					},
 				});
+				// a write settles once its message has left, as Chrome's
+				// settles once its network service took it, so writer.ready
+				// and desiredSize (a high water mark of one write) hold a
+				// writer back while the transport's stream has no room
+				// (bufferedAmount's measure, src/transport/socketSends.ts).
+				// The stand-in's own send, not the page's WebSocket's
+				// send(), which Chrome's stream never calls. A message still
+				// going when the socket ends never leaves, and its write
+				// fails then, as the socket's end errors Chrome's writable
+				const own = socketStates.get(socket);
+				const ended = new Promise<never>((_, reject) => {
+					const end = () =>
+						reject(networkError('The WebSocket connection was closed.'));
+					socket.addEventListener('close', end, { once: true });
+					socket.addEventListener('error', end, { once: true });
+				});
+				ended.catch(() => {});
 				const writable = new WritableStream({
 					write(chunk) {
-						socket.send(chunk);
+						if (!own) return void socket.send(chunk);
+						const left = send(own, socket, chunk);
+						if (!left) return;
+						return Promise.race([
+							left.then((ok) => {
+								if (!ok) throw networkError('The WebSocket connection failed.');
+							}),
+							ended,
+						]);
 					},
 					close() {
 						socket.close();

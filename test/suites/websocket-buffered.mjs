@@ -8,6 +8,10 @@
 // (the stand-in counted a message until it was handed to the transport
 // worker), so a speed test's upload, which counts `sent - bufferedAmount`,
 // read the speed of the page's own thread (src/transport/socketSends.ts).
+// A WebSocketStream's writes settle once their messages left, so a writer
+// that waits on writer.ready is held back as natively (they settled at
+// once, desiredSize never fell, and a 48 MiB burst was "written" before the
+// server read a byte).
 // Through the proxy more leaves before the server reads than natively (the
 // wisp server's stream window and its own socket's buffers, beside the
 // suite's server's), so the held amount is compared with the burst less
@@ -91,6 +95,35 @@ async function measure(frame, tag) {
 	};
 }
 
+/**
+ * Natively a WebSocketStream's writes settle as the burst's do (kernel
+ * buffers and Chrome's network service), so what settled while the server
+ * held it is some MiB and the writer waits (desiredSize 0)
+ */
+function streamChecks(mode, native, proxied) {
+	const s = proxied.streamed;
+	const n = native.streamed;
+	const { total, hold } = SIZES.held;
+	const nativeSettled = Math.max(...(n?.at ?? [total]));
+	ok(
+		`${mode}: a WebSocketStream's writes settle as natively while the server reads nothing (less no more than the wisp server's buffers beside), and the writer waits on writer.ready`,
+		Array.isArray(s?.at) &&
+			Math.max(...s.at) < total &&
+			Math.max(...s.at) <= nativeSettled + PROXY_SLACK &&
+			s.desired.at(-1) === 0 &&
+			!s.failed,
+		JSON.stringify({ native: n, proxied: s }),
+	);
+	ok(
+		`${mode}: the stream's last write settles only once the server read on, and the server has every byte intact`,
+		s?.drained >= hold - 100 &&
+			s.settled === total &&
+			s.server?.got === total &&
+			s.server.intact === true,
+		JSON.stringify(s),
+	);
+}
+
 /** the proxied frame of a demo page that has the fixture's runner */
 async function proxiedFrame(page) {
 	for (let i = 0; i < 160; i++) {
@@ -125,6 +158,19 @@ ok(
 		native.held.server.intact === true,
 	JSON.stringify(native.held),
 );
+const streams = !native.streamed?.absent;
+if (!streams) console.log('SKIP WebSocketStream: the browser has none');
+else
+	ok(
+		'natively: a WebSocketStream writer waits while the server reads nothing, and its last write settles once the server read on',
+		Array.isArray(native.streamed?.at) &&
+			Math.max(...native.streamed.at) < held.total &&
+			native.streamed.desired.at(-1) === 0 &&
+			native.streamed.drained >= held.hold - 100 &&
+			native.streamed.server?.got === held.total &&
+			native.streamed.server.intact === true,
+		JSON.stringify(native.streamed),
+	);
 ok(
 	'natively: every message reaches the server in the order it was sent',
 	native.order?.server?.order ===
@@ -182,6 +228,7 @@ for (const [mode, base] of [
 			proxied: [proxied.closing, proxied.closingServer],
 		}),
 	);
+	if (streams) streamChecks(mode, native, proxied);
 	await page.close();
 }
 

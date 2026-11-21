@@ -12,6 +12,11 @@
   "null", a number as its digits; the socket stopped on such a send).
   `websocket-buffered` compares a burst to a server that reads nothing for
   3 s natively and proxied; five `wpt-websockets` pages pass now.
+- A proxied `WebSocketStream`'s writes settle once their message has left,
+  by the same measure, so `writer.ready` and `desiredSize` hold a writer
+  back while the server reads nothing, as natively. Each write settled at
+  once (`desiredSize` never fell), and a 48 MiB burst read as written
+  before the server had read a byte (`websocket-buffered`).
 - A proxied WebTransport stream's write settles once the session's
   datagrams have carried all but 256 KiB of what its streams were written,
   not once quinn took the bytes into its send buffer (up to the server's
