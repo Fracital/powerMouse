@@ -233,6 +233,56 @@ try {
 	);
 	await second.close();
 
+	// with deploy/tor-js's build, epoxy on Tor streams: HTTP/2 (Cloudflare's
+	// trace says what the client spoke) and a WebSocket from the page
+	const streams_ = await page.evaluate(() => window.__pmTorClient?.streams);
+	if (!streams_)
+		console.log(
+			'SKIP HTTP/2 and WebSockets over Tor: the npm tor-js has no streams (deploy/tor-js/build.sh)',
+		);
+	else {
+		const h2Start = Date.now();
+		await submitOmni(page, 'https://one.one.one.one/cdn-cgi/trace');
+		const trace = await frameText(/http=/);
+		ok(
+			'a site answers over HTTP/2 through Tor (epoxy on a Tor stream)',
+			/\bhttp=http\/2\b/.test(trace.text),
+			/\bhttp=\S*/.exec(trace.text)?.[0] ?? trace.text.slice(0, 300),
+		);
+		console.log(`HTTP/2 site: ${Date.now() - h2Start} ms`);
+		// a WebSocket from an HTML page (a text one runs no STomp in its
+		// frame, so its socket would be the browser's own)
+		await submitOmni(page, 'https://example.com/');
+		await frameText(/Example Domain/);
+		const socket = await (
+			await activeFrame(page)
+		)
+			?.evaluate(
+				() =>
+					new Promise((resolve) => {
+						const ws = new WebSocket('wss://echo.websocket.org/');
+						const timer = setTimeout(() => resolve('timed out'), 60000);
+						const said = [];
+						ws.onmessage = ({ data }) => {
+							said.push(String(data));
+							if (said.includes('over tor')) {
+								clearTimeout(timer);
+								ws.close();
+								resolve(said);
+							}
+						};
+						ws.onopen = () => ws.send('over tor');
+						ws.onerror = () => resolve('error');
+					}),
+			)
+			.catch((error) => String(error));
+		ok(
+			'a WebSocket echoes through Tor',
+			Array.isArray(socket) && socket.includes('over tor'),
+			JSON.stringify(socket),
+		);
+	}
+
 	const otherStart = Date.now();
 	await submitOmni(page, 'https://api.ipify.org/?format=json');
 	const other = await frameText(/"ip"/);

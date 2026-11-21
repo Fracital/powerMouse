@@ -51,10 +51,11 @@ protects and what it does not, and how its profile is kept apart.
 - **The browser is the visitor's.** STomp's fingerprint protections apply as
   in normal mode, which is not Tor Browser's uniform fingerprint. Screen size,
   fonts, GPU, time zone and language can still tell visitors apart.
-- **TCP only, and no WebSockets yet.** Tor has no UDP, so HTTP/3,
-  WebTransport and WebRTC's UDP candidates do not work in Tor mode, and the
-  external ECH DNS lookup is off. WebSockets are refused until the client can
-  give epoxy a Tor stream (docs/tor-over-wisp.md, "Remaining work").
+- **TCP only.** Tor has no UDP, so HTTP/3, WebTransport and WebRTC's UDP
+  candidates do not work in Tor mode, and the external ECH DNS lookup is
+  off. With deploy/tor-js's build of the client, epoxy runs on Tor streams,
+  so HTTP/2 and WebSockets work; with the npm release alone, WebSockets are
+  refused (docs/tor-over-wisp.md, "Epoxy on Tor streams").
 - **Progress.** The Tor chip beside the toggle shows the client's bootstrap
   in Tor Browser's phases, and a load that failed while it connected loads
   again by itself once it is ready. `GET /api/tor` says only whether the

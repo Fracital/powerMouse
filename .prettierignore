@@ -4,6 +4,9 @@
 /vendor
 /package-lock.json
 /test/out
+# deploy/tor-js/build.sh's output (tor-js's own build)
+/deploy/tor-js/out
+/deploy/tor-js/out-upstream
 /.claude
 # vendored web-platform-tests (test/wpt/README.md); our own files stay checked
 /test/wpt/*

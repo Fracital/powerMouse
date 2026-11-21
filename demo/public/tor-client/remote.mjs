@@ -4,6 +4,7 @@
 // not answer in SHARED_ANSWER_MS (it could not start, its module failed),
 // the tab runs a client of its own as it would with no SharedWorker.
 import { TorService } from './service.mjs';
+import { streamOverPort } from './streamPort.mjs';
 
 const SHARED_ANSWER_MS = 15000;
 
@@ -96,6 +97,25 @@ export class RemoteService {
 		const own = await this.#settled;
 		if (own) own.newCircuitFor(url);
 		else this.#port.postMessage({ type: 'newCircuit', url });
+	}
+
+	async connect(host, port, site) {
+		const own = await this.#settled;
+		if (own) return own.connect(host, port, site);
+		const { port1, port2 } = new MessageChannel();
+		return new Promise((resolve, reject) => {
+			port1.onmessage = ({ data }) => {
+				if (data?.type === 'open') resolve(streamOverPort(port1));
+				else if (data?.type === 'error') {
+					port1.close();
+					reject(new Error(data.message));
+				}
+			};
+			this.#port.postMessage(
+				{ type: 'connect', host, port, site, stream: port2 },
+				[port2],
+			);
+		});
 	}
 
 	async fetch(url, init, site, signal) {

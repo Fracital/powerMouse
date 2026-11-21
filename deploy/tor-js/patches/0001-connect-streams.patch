@@ -1,0 +1,161 @@
+diff --git a/crates/tor-js-wasm/src/lib.rs b/crates/tor-js-wasm/src/lib.rs
+index 2bac0b4..fe7a392 100644
+--- a/crates/tor-js-wasm/src/lib.rs
++++ b/crates/tor-js-wasm/src/lib.rs
+@@ -353,6 +353,42 @@ impl TorClient {
+         })
+     }
+ 
++    /// Open a TCP stream to `host:port` through Tor (the exit resolves
++    /// `host`), on the circuits of `isolationKey`'s group when one is given
++    /// (the same groups as `fetch`'s `anonOptions.isolationKey`).
++    ///
++    /// Resolves to `{ readable, writable }`: a `ReadableStream` of the
++    /// `Uint8Array` chunks the stream carries, and a `WritableStream` that
++    /// takes `Uint8Array` chunks, each flushed to the circuit. Tor streams
++    /// have no half-close: the stream ends once both are done with.
++    #[wasm_bindgen(js_name = connect, skip_typescript)]
++    pub fn connect(&self, host: String, port: u16, isolation_key: Option<String>) -> js_sys::Promise {
++        let client = match &self.inner {
++            Some(c) => Arc::clone(c),
++            None => {
++                return wasm_bindgen_futures::future_to_promise(async {
++                    Err(JsTorError::not_initialized().into_js_value())
++                });
++            }
++        };
++        let isolation = match isolation_key {
++            Some(key) => match self.isolation.borrow_mut().group_for(&key, || self.tls.for_new_key()) {
++                Ok(group) => Some(group.token),
++                Err(e) => {
++                    let message = match e {
++                        KeyError::Empty => "isolationKey must not be empty".to_string(),
++                        KeyError::TooLong => format!("isolationKey is longer than {} bytes", MAX_KEY_LEN),
++                    };
++                    return wasm_bindgen_futures::future_to_promise(async move {
++                        Err(JsTorError::new("INVALID_OPTIONS", "validation", message, false).into_js_value())
++                    });
++                }
++            },
++            None => None,
++        };
++        wasm_bindgen_futures::future_to_promise(async move { connect_impl(&client, &host, port, isolation).await })
++    }
++
+     /// Wait until the client is ready for traffic (connection usable + valid directory).
+     #[wasm_bindgen(js_name = ready)]
+     pub fn ready(&self) -> js_sys::Promise {
+@@ -630,6 +666,64 @@ async fn fetch_impl(
+     Ok(response.into())
+ }
+ 
++/// A Tor stream to `host:port` as a pair of web streams (TorClient::connect).
++async fn connect_impl(
++    client: &ArtiTorClient<WasmRuntime>,
++    host: &str,
++    port: u16,
++    isolation: Option<IsolationToken>,
++) -> Result<JsValue, JsValue> {
++    use futures::io::{AsyncReadExt, AsyncWriteExt};
++    // the destination stays out of the log, as fetch's path does
++    info!("Opening a stream via Tor");
++    let stream = match isolation {
++        Some(token) => {
++            let mut prefs = StreamPrefs::new();
++            prefs.set_isolation(token);
++            client.connect_with_prefs((host, port), &prefs).await
++        }
++        None => client.connect((host, port)).await,
++    }
++    .map_err(|e| JsTorError::connect_failed(&e).into_js_value())?;
++    let (reader, writer) = stream.split();
++    let chunks = futures::stream::unfold(Some(reader), |state| async move {
++        let mut reader = state?;
++        let mut buf = vec![0u8; 16 * 1024];
++        match reader.read(&mut buf).await {
++            Ok(0) => None,
++            Ok(n) => Some((Ok(js_sys::Uint8Array::from(&buf[..n]).into()), Some(reader))),
++            Err(e) => Some((
++                Err(JsTorError::internal(format!("Tor stream read failed: {}", e)).into_js_value()),
++                None,
++            )),
++        }
++    });
++    let readable: web_sys::ReadableStream = wasm_streams::ReadableStream::from_stream(chunks).into_raw();
++    let sink = futures::sink::unfold(writer, |mut writer, chunk: JsValue| async move {
++        let bytes = chunk
++            .dyn_into::<js_sys::Uint8Array>()
++            .map_err(|_| {
++                JsTorError::new("INVALID_OPTIONS", "validation", "a Tor stream takes Uint8Array chunks", false)
++                    .into_js_value()
++            })?
++            .to_vec();
++        writer
++            .write_all(&bytes)
++            .await
++            .map_err(|e| JsTorError::internal(format!("Tor stream write failed: {}", e)).into_js_value())?;
++        writer
++            .flush()
++            .await
++            .map_err(|e| JsTorError::internal(format!("Tor stream flush failed: {}", e)).into_js_value())?;
++        Ok::<_, JsValue>(writer)
++    });
++    let writable: web_sys::WritableStream = wasm_streams::WritableStream::from_sink(sink).into_raw();
++    let out = js_sys::Object::new();
++    js_sys::Reflect::set(&out, &JsValue::from_str("readable"), &readable)?;
++    js_sys::Reflect::set(&out, &JsValue::from_str("writable"), &writable)?;
++    Ok(out.into())
++}
++
+ /// Extract body from JavaScript FetchInit object
+ fn extract_body_from_js(init: &JsValue) -> Result<fetch::RequestBody, JsValue> {
+     let body = js_sys::Reflect::get(init, &JsValue::from_str("body"))
+@@ -902,9 +996,17 @@ export interface FetchInit {
+ export interface TorClient {
+     /** Make an HTTP fetch request through Tor. Returns a standard Response. */
+     fetch(url: string, init?: FetchInit): Promise<Response>;
++    /** Open a TCP stream through Tor (the exit resolves `host`). */
++    connect(host: string, port: number, isolationKey?: string): Promise<TorStream>;
+     close(): Promise<void>;
+ }
+ 
++/** A TCP stream through Tor: what it carries, and what it sends. */
++export interface TorStream {
++    readable: ReadableStream<Uint8Array>;
++    writable: WritableStream<Uint8Array>;
++}
++
+ export interface TorClientOptions {
+     /**
+      * Set a custom storage implementation for persistent state.
+diff --git a/src/TorClient.ts b/src/TorClient.ts
+index 142948f..cbb99e2 100644
+--- a/src/TorClient.ts
++++ b/src/TorClient.ts
+@@ -140,6 +140,26 @@ export class TorClient {
+     return client.fetch(url, init);
+   }
+ 
++  /**
++   * Open a TCP stream to `host:port` through Tor (the exit resolves `host`),
++   * on circuits of `options.isolationKey`'s group when one is given (the
++   * same groups as fetch's `anonOptions.isolationKey`). Resolves to
++   * `{ readable, writable }` web streams of Uint8Array chunks.
++   */
++  async connect(
++    host: string,
++    port: number,
++    options?: { isolationKey?: string; signal?: AbortSignal },
++  ): Promise<{ readable: ReadableStream<Uint8Array>; writable: WritableStream<Uint8Array> }> {
++    if (this.closed) throw new Error('TorClient is closed');
++    const signal = options?.signal;
++    if (signal?.aborted) throw abortError();
++    await abortRace(this.ready(), signal, abortError);
++    const client = await this.clientPromise;
++    this.log.info('Opening a stream');
++    return client.connect(host, port, options?.isolationKey);
++  }
++
+   /**
+    * Wait for the Tor client to be ready for traffic
+    * (guard connected, usable consensus, and sufficient microdescs).

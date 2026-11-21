@@ -148,9 +148,15 @@ What `node_modules/tor-js` is, and how it was checked (2026-11-21):
   `c16065e5166e529492d1be856e1e40316e2532053027c6b7ab5a4a53c14d8c51`, which
   is the checksum in tor-js's `Cargo.lock` at the release commit
   (`scripts/tor-fallbacks.mjs` says how to regenerate it).
-- **Not done**: a build of the release from source on this machine to
-  compare the hash ourselves. That is the first step of `deploy/tor-js/`
-  (Remaining work), which would then build our own binary.
+- **Built here too**: `PATCHES=0 deploy/tor-js/build.sh` builds the
+  release commit from source in a container with its pinned tools and gets
+  the same `071ffb35...` (2026-11-21): the npm wasm is what the release's
+  source builds, on two machines. `deploy/tor-js/build.sh` with the patches
+  (the stream API, "Epoxy on Tor streams") builds
+  `2e435140e9d3ac8b7ddf3304fc1fdb379b7c2c15b0b77b207381a1a1b6981136`, the
+  same twice from clean (`PATCHED_WASM_SHA256` in `upstream.env`); the
+  patches are committed in the build with a fixed author and date, since
+  tor-js's `build.rs` embeds the commit, and a timestamp for a dirty tree.
 
 Updating tor-js means the same checks again: the integrity in the lock, the
 release commit's CI hash against the new binary, the fallback list.
@@ -295,9 +301,9 @@ proxied page -> service worker -> transport worker
   not available through `RESOLVE`; GREASE ECH stays.
 - **Refused in Tor mode**: UDP (Tor has none: HTTP/3 off, as now, and the
   virtual Wisp server closes any UDP CONNECT), WebTransport (UDP) and
-  WebRTC's UDP candidates. **WebSocket** is refused too for now, as decided
-  for this work; note that it is TCP, Tor carries it and Tor Browser allows
-  it, so with the stream API it is one flag to allow later.
+  WebRTC's UDP candidates. **WebSocket** is TCP, Tor carries it and Tor
+  Browser allows it: on Tor streams (deploy/tor-js's build) epoxy carries it
+  as in normal mode; with the npm release's fetch alone it is refused.
 - **Isolation of the wire format**: the transport takes the
   `$stomp$network` field and never sends it (`fieldSupport.partition`).
 
@@ -443,18 +449,48 @@ bootstrap of its own before); once both pages were gone, a fresh page's
 client started again from the kept state (2.2 s) and went to the first
 one's guards.
 
+### Epoxy on Tor streams
+
+deploy/tor-js builds tor-js 0.4.4 from source with one patch,
+`TorClient.connect(host, port, { isolationKey })`: a Tor stream as a pair
+of web streams, on the key's isolation group (deploy/tor-js/README.md).
+`demo/server.js` serves that build at `/tor-client/tor-js/` where it has
+been made (`deploy/tor-js/build.sh`), the npm release otherwise, and
+`service.mjs` tells them apart (`STREAMS`, `TorClient.prototype.connect`).
+With the stream API, Tor mode's transport is epoxy: one epoxy client for
+each top-level site (at most 32, the least lately used dropped with its
+connections), its function transport a Wisp v1 server in the transport
+worker (`wispServer.mjs`) whose every CONNECT is `connect(host, port, site)`
+on the shared client, the stream relayed between the SharedWorker and the
+tab over a port of its own with a window each way (`streamPort.mjs`). UDP
+CONNECTs close with reason 0x48. So connections are kept and pooled per
+site, HTTP/2 is negotiated, WebSockets work, and the site's TLS is epoxy's,
+Chrome's ClientHello, not tor-js's rustls one. New Tor circuit for this site
+drops the site's epoxy client in that tab (its kept connections were on the
+old circuit); another tab's keeps its connections until they close. A
+stream that does not open in 20 s, or fails, is tried once on a new circuit
+for the site. The `tor-streams` suite runs epoxy over the Wisp server and
+the port relay with the demo's own `/wisp/` standing in for Tor.
+
+The real-network smoke on this build (2026-11-21, Chrome): check.torproject.org
+says `IsTor: true`, one.one.one.one's trace says `http=http/2`, and
+echo.websocket.org echoes a WebSocket message from a proxied page.
+Bootstrap took 4.0 s and the first site 1.7 s after it; another site took
+1.6 s, the first site again 1.6 s and its new circuit 1.6 s (on tor-js's
+fetch they took 2.1 to 3.1 s, each request a stream and a TLS handshake of
+its own). Firefox 160 loads check.torproject.org through it too.
+
 What the client does not do yet:
 
-- **No connection reuse**: tor-js's `fetch` opens a new Tor stream and a new
-  TLS handshake per request (its log shows a handshake for each), HTTP/1.1
-  only. A real page's tens of requests each pay a round trip through the
-  circuit. The stream API with epoxy on top (pools, HTTP/2) is the fix.
-- **No WebSocket** (refused), no HTTP/3, no WebTransport, as intended for now.
+- **No HTTP/3, no WebTransport**: Tor carries no UDP.
+- **Without deploy/tor-js's build** (the npm release): no connection reuse,
+  HTTP/1.1 only and no WebSocket, through tor-js's own fetch.
 - **Progress and the menu items need the same origin**: in the isolated
   mode the page hears nothing from the proxy origin's worker; the status
   says "Tor route selected" and the items are not offered.
 - **A long wait for an answer's head** (over 30 s, a long poll) is cut and
-  tried again once, for GET, HEAD and OPTIONS.
+  tried again once, for GET, HEAD and OPTIONS, on tor-js's fetch only; on
+  Tor streams epoxy's own timeouts hold.
 - **A reload starts the client again** where it was the origin's only page
   (the SharedWorker ends with it): a warm bootstrap, 1 to 2 s. The carrier
   host's `extendedLifetime` (Chrome 157) would keep it across reloads.
@@ -474,21 +510,15 @@ there as in Chrome (bootstrap 4.0 s cold, the first answer 6.2 s).
 
 The client is Tor mode. What it still needs
 to be as good as Tor Browser's, with rough sizes (S under a day, M a few
-days, L a week or more). The stream API with epoxy on top (1 and 2) is
-about a day and a half: some 40 lines of Rust (`fetch_impl` in
-`crates/tor-js-wasm/src/lib.rs` already opens an isolated
-`client.connect((host, port))` and wraps streams with `wasm_streams`), a
-first reproducible container build of arti to wasm (30 to 60 minutes on
-this machine, more under load), the in-worker Wisp server (some 250 lines)
-and suites.
+days, L a week or more).
 
-1. **Stream API in tor-js** (M): `connect(host, port, isolationKey)` and
-   `resolve()` bindings in `crates/tor-js`, built from source in a container
-   like `deploy/epoxy/` (`deploy/tor-js/`, pinned revisions, reproducible
-   hash), plus `bootstrap_events()` and per-key circuit retirement.
-2. **epoxy over Tor streams** (M): the in-worker Wisp server for epoxy's
-   function transport, credit and CLOSE mapping, UDP refusal; Tor mode's
-   descriptor becomes epoxy with that function transport.
+1. **Stream API in tor-js** (done; S left): `connect(host, port,
+isolationKey)` (deploy/tor-js `0001`); left: `resolve()`,
+   `bootstrap_events()`, per-key circuit retirement, and publishing the
+   build (as deploy/epoxy publishes epoxy's) so a deploy serves it without
+   a container build.
+2. **epoxy over Tor streams** (done): the in-worker Wisp server for epoxy's
+   function transport, credit and CLOSE mapping, UDP refusal.
 3. **One client per profile** (done; S left): the Tor client in a
    SharedWorker (`sharedWorker` on the descriptor), the transport workers of
    every tab its clients; left: `extendedLifetime`, so a reload keeps it.

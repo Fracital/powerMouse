@@ -5,12 +5,22 @@
 // transport a port to (`sharedWorker`, shared.mjs), or in this transport
 // worker where there is none (Chrome on Android).
 //
-// A prototype: requests go through tor-js's own fetch (it has no stream API
-// yet, so epoxy cannot run on a Tor stream), and WebSockets are refused.
+// With deploy/tor-js's build (TorClient.connect, STREAMS) epoxy runs on
+// Tor streams: an epoxy client for each top-level site, its function
+// transport a Wisp server here (wispServer.mjs) whose every CONNECT is a
+// Tor stream on that site's circuits, so connections are pooled and kept
+// per site, HTTP/2 and WebSockets work, and the site's TLS is epoxy's
+// (Chrome's ClientHello). With the npm release, requests go through
+// tor-js's own fetch and WebSockets are refused.
+import Epoxy from '../epoxy/index.mjs';
 import { RemoteService } from './remote.mjs';
-import { TorService } from './service.mjs';
+import { siteMatches, STREAMS, TorService } from './service.mjs';
+import { wispServer } from './wispServer.mjs';
 
 const NETWORK_PARTITION = '$stomp$network';
+// sites with an epoxy client kept (and its connections); the least lately
+// used goes beyond that
+const MAX_SITES = 32;
 
 /** `body` as tor-js sends it (and a port carries it) */
 async function sendable(body) {
@@ -23,13 +33,38 @@ async function sendable(body) {
 	return new Uint8Array(await new Response(body).arrayBuffer());
 }
 
+/** the request's top-level site (its circuits' key) and its other fields */
+function siteOf(headers) {
+	let site = 'opaque';
+	const rest = [];
+	const pairs = Array.isArray(headers)
+		? headers
+		: Object.entries(headers ?? {});
+	for (const [name, value] of pairs)
+		if (name.toLowerCase() === NETWORK_PARTITION)
+			site = String(value).split(' ')[0] || 'opaque';
+		else rest.push([name, value]);
+	return { site, rest };
+}
+
 export default class TorClientTransport {
 	ready = false;
 	// the service worker's top-level site for each request, the key of its
-	// circuits (docs/tor-over-wisp.md "Per-site circuits"); never sent
-	fieldSupport = { partition: NETWORK_PARTITION };
+	// circuits (docs/tor-over-wisp.md "Per-site circuits"); never sent. On
+	// Tor streams, what epoxy reads too (it keeps its pools per partition)
+	fieldSupport = STREAMS
+		? {
+				acceptEncoding: 'gzip, deflate, br, zstd',
+				priority: true,
+				partition: NETWORK_PARTITION,
+				httpVersion: true,
+				timing: true,
+			}
+		: { partition: NETWORK_PARTITION };
 	#service;
 	#channel = null;
+	/** site: its epoxy client over Tor streams on its circuits */
+	#sites = new Map();
 
 	constructor({
 		wisp,
@@ -53,7 +88,7 @@ export default class TorClientTransport {
 
 	/** what bootstrap took and what it is doing, for the page and the smoke */
 	get status() {
-		return this.#service.status;
+		return { ...this.#service.status, streams: STREAMS };
 	}
 
 	#heard(data) {
@@ -77,28 +112,81 @@ export default class TorClientTransport {
 		this.ready = true;
 	}
 
-	/** New circuit for the site of `url` (the tab's address) */
+	/** site's epoxy client, made on its first request */
+	#epoxyFor(site) {
+		let entry = this.#sites.get(site);
+		if (entry) {
+			// the most lately used last
+			this.#sites.delete(site);
+			this.#sites.set(site, entry);
+			return entry;
+		}
+		const wisp = wispServer((host, port) =>
+			this.#service.connect(host, port, site),
+		);
+		const epoxy = new Epoxy({ wisp });
+		entry = { epoxy, wisp, ready: epoxy.init() };
+		entry.ready.catch(() => this.#forget(site, entry));
+		this.#sites.set(site, entry);
+		for (const [old, kept] of this.#sites) {
+			if (this.#sites.size <= MAX_SITES) break;
+			this.#forget(old, kept);
+		}
+		return entry;
+	}
+
+	/** site's epoxy client and its connections (on the circuits it had) gone */
+	#forget(site, entry) {
+		if (this.#sites.get(site) !== entry) return;
+		this.#sites.delete(site);
+		entry.wisp.close();
+	}
+
+	/**
+	 * New circuit for the site of `url` (the tab's address): its next
+	 * request builds one, on a connection of its own
+	 */
 	newCircuitFor(url) {
 		this.#service.newCircuitFor(url);
+		for (const [site, entry] of [...this.#sites])
+			if (siteMatches(site, url)) this.#forget(site, entry);
 	}
 
 	/** New Identity: no circuit of before is used again, in any tab */
 	newIdentity() {
 		this.#service.newIdentity();
+		for (const [site, entry] of [...this.#sites]) this.#forget(site, entry);
 	}
 
 	async request(remote, method, body, headers, signal) {
 		if (!this.ready) await this.init();
-		let partition;
+		if (STREAMS) {
+			const { site } = siteOf(headers);
+			const { epoxy, ready } = this.#epoxyFor(site);
+			await ready;
+			return epoxy
+				.request(remote, method, body, headers, signal)
+				.catch((error) => {
+					// the console's own record of which origin failed (epoxy's
+					// error names none)
+					if (!signal?.aborted)
+						console.warn(`[tor] ${method} ${remote.origin} failed`);
+					throw error;
+				});
+		}
+		return this.#fetched(remote, method, body, headers, signal);
+	}
+
+	/** a request through tor-js's own fetch (the npm release) */
+	async #fetched(remote, method, body, headers, signal) {
+		const { site, rest } = siteOf(headers);
 		const fields = {};
-		for (const [name, value] of headers) {
+		for (const [name, value] of rest) {
 			const lower = name.toLowerCase();
-			if (lower === NETWORK_PARTITION) partition = value;
-			else if (lower in fields)
+			if (lower in fields)
 				fields[lower] += `${lower === 'cookie' ? '; ' : ', '}${value}`;
 			else fields[lower] = value;
 		}
-		const site = partition?.split(' ')[0] || 'opaque';
 		const init = { method, headers: fields, body: await sendable(body) };
 		const {
 			status,
@@ -114,13 +202,40 @@ export default class TorClientTransport {
 		};
 	}
 
-	// Tor mode refuses WebSockets for now (docs/tor-over-wisp.md "HTTPS, DNS
-	// and what Tor mode refuses")
-	connect(_url, _protocols, _headers, _onopen, _onmessage, onclose, onerror) {
-		queueMicrotask(() => {
-			onerror('WebSockets are not available in Tor mode');
+	connect(url, protocols, headers, onopen, onmessage, onclose, onerror) {
+		if (!STREAMS) {
+			// tor-js's fetch carries no WebSocket (docs/tor-over-wisp.md
+			// "HTTPS, DNS and what Tor mode refuses")
+			queueMicrotask(() => {
+				onerror('WebSockets are not available in Tor mode');
+				onclose(1006, '');
+			});
+			return [() => {}, () => {}];
+		}
+		const { site, rest } = siteOf(headers);
+		// epoxy's connect needs its client made: a socket asked before
+		// sends and closes once it is
+		const opened = (async () => {
+			if (!this.ready) await this.init();
+			const { epoxy, ready } = this.#epoxyFor(site);
+			await ready;
+			return epoxy.connect(
+				url,
+				protocols,
+				rest,
+				onopen,
+				onmessage,
+				onclose,
+				onerror,
+			);
+		})();
+		opened.catch((error) => {
+			onerror(String(error?.message ?? error));
 			onclose(1006, '');
 		});
-		return [() => {}, () => {}];
+		return [
+			async (data) => (await opened)[0](data),
+			async (code, reason) => (await opened)[1](code, reason),
+		];
 	}
 }

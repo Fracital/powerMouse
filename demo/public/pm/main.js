@@ -460,9 +460,11 @@ const transports = {
 			? `${proxyBase()}/test/tor-stand-in.mjs`
 			: `${proxyBase()}/tor-client/transport.mjs`,
 		options: [{ wisp: wispURL(), channel: TOR_CLIENT_CHANNEL }],
-		// one Tor client for every tab (tor-client/shared.mjs)
+		// one Tor client for every tab (tor-client/shared.mjs), so no
+		// shards of the transport either: each would run a client
 		...(!CFG.torStandIn && {
 			sharedWorker: `${proxyBase()}/tor-client/shared.mjs`,
+			shards: 1,
 		}),
 		...(OFFLINE && { host: OFFLINE.transportHost }),
 	}),

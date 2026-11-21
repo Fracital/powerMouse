@@ -4,8 +4,9 @@
 // same client's (isolated per site as in one tab) and one client holds the
 // guard state. Each tab's transport (transport.mjs, remote.mjs) asks over
 // its port; a response's body comes back on a port of its own, a chunk for
-// each pull.
+// each pull, and a Tor stream on a port of its own (streamPort.mjs).
 import { TorService } from './service.mjs';
+import { serveStream } from './streamPort.mjs';
 
 /** `${wisp} ${storageName}`: the client and the ports it tells */
 const services = new Map();
@@ -114,7 +115,21 @@ self.addEventListener('connect', ({ ports: [port] }) => {
 		else if (data?.type === 'admit')
 			answer(data.id, service.admit(String(data.target)));
 		else if (data?.type === 'fetch') serveFetch(service, data);
-		else if (data?.type === 'newIdentity') service.newIdentity();
+		else if (data?.type === 'connect') {
+			const { stream } = data;
+			service
+				.connect(String(data.host), Number(data.port), String(data.site))
+				.then(
+					(opened) => {
+						stream.postMessage({ type: 'open' });
+						serveStream(opened, stream);
+					},
+					(error) => {
+						stream.postMessage({ type: 'error', message: message(error) });
+						stream.close();
+					},
+				);
+		} else if (data?.type === 'newIdentity') service.newIdentity();
 		else if (data?.type === 'newCircuit' && typeof data.url === 'string')
 			service.newCircuitFor(data.url);
 		else if (data?.type === 'bye') {

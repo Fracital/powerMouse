@@ -14,7 +14,8 @@
   Browser's phases, and the menu has New Identity and New Tor circuit for
   this site. Requests are isolated per top-level site, a request whose
   circuit gives no answer in 30 s is tried once on a new one, and WebSockets
-  are refused. `STOMP_TOR_CLIENT=0` turns Tor mode off. The demo's server
+  are refused (on tor-js's own fetch: changes/tor-streams.md has epoxy on
+  Tor streams). `STOMP_TOR_CLIENT=0` turns Tor mode off. The demo's server
   still sees that a visitor uses Tor and which Tor guard they use; bridges,
   which would hide that, are future work. It runs in Chrome and Firefox.
   docs/tor-over-wisp.md has the design, the wasm's provenance and the

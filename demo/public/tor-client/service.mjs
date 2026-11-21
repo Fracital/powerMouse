@@ -214,6 +214,33 @@ const CONSENSUS_KEYS = 'dir:consensus:';
 // covers the site's TLS handshake and its answer too)
 const STREAM_ANSWER_MS = 30000;
 const IDEMPOTENT = new Set(['GET', 'HEAD', 'OPTIONS']);
+// how long a Tor stream may take to open on one circuit before it is tried
+// on another (tor's stream attach timeouts are 10 and 15 s)
+const STREAM_OPEN_MS = 20000;
+
+/**
+ * Whether this tor-js has a stream API (`connect`, deploy/tor-js's
+ * patches), so Tor mode runs epoxy on Tor streams; the npm release has
+ * only `fetch`
+ */
+export const STREAMS = typeof TorClient.prototype.connect === 'function';
+
+/** whether the site key `site` is the host of `url` or a parent of it */
+export function siteMatches(site, url) {
+	let host;
+	try {
+		host = new URL(url).hostname;
+	} catch {
+		return false;
+	}
+	let siteHost;
+	try {
+		siteHost = new URL(site).hostname;
+	} catch {
+		siteHost = site;
+	}
+	return host === siteHost || host.endsWith(`.${siteHost}`);
+}
 
 // Tor Browser's bootstrap phases (tor's BOOTSTRAP_STATUS), from what arti
 // says as it goes; tor-js tells no progress of its own yet
@@ -389,28 +416,57 @@ export class TorService {
 	 * whose host is the URL's host or a parent of it
 	 */
 	newCircuitFor(url) {
-		let host;
-		try {
-			host = new URL(url).hostname;
-		} catch {
-			return;
-		}
-		for (const site of [...this.#siteNonces.keys()]) {
-			let siteHost;
-			try {
-				siteHost = new URL(site).hostname;
-			} catch {
-				siteHost = site;
-			}
-			if (host === siteHost || host.endsWith(`.${siteHost}`))
-				this.newCircuit(site);
-		}
+		for (const site of [...this.#siteNonces.keys()])
+			if (siteMatches(site, url)) this.newCircuit(site);
 	}
 
 	/** New Identity: no circuit of before is used again */
 	newIdentity() {
 		this.#session = nonce();
 		this.#siteNonces.clear();
+	}
+
+	/** a Tor stream on the site's circuit, given up when it does not open in time */
+	#connectOnce(host, port, site) {
+		const opening = this.#client.connect(host, port, {
+			isolationKey: this.#isolationKey(site),
+		});
+		let timer;
+		return Promise.race([
+			opening,
+			new Promise((_, reject) => {
+				timer = setTimeout(() => {
+					reject(new Error('no Tor stream in time'));
+					// one that opens after all is not used
+					opening.then(
+						({ readable, writable }) => {
+							readable.cancel().catch(() => {});
+							writable.abort().catch(() => {});
+						},
+						() => {},
+					);
+				}, STREAM_OPEN_MS);
+			}),
+		]).finally(() => clearTimeout(timer));
+	}
+
+	/**
+	 * A TCP stream to `host:port` through Tor on a circuit of `site`'s (the
+	 * exit resolves `host`): `{ readable, writable }` of Uint8Array chunks.
+	 * One that fails or does not open in time is tried once more on a new
+	 * circuit for the site (nothing was sent on it yet).
+	 */
+	async connect(host, port, site) {
+		if (!STREAMS) throw new Error('this tor-js has no stream API');
+		if (!Number.isInteger(port) || port < 1 || port > 65535)
+			throw new RangeError(`port ${port}`);
+		await this.init();
+		try {
+			return await this.#connectOnce(host, port, site);
+		} catch {
+			this.newCircuit(site);
+			return this.#connectOnce(host, port, site);
+		}
 	}
 
 	/** one try on the site's circuit, given up when no answer comes in time */

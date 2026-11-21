@@ -64,8 +64,9 @@ scope and a STomp profile of its own on the same origin (docs/tor.md,
 "Profiles"): its own cookie jar, site storage, HTTP and rewrite caches,
 permissions and extensions (none until one is installed in Tor mode), and
 the page's history and tabs are not kept. The profile is wiped when Tor is
-turned off and when the last Tor-mode tab closes. HTTP/3, UDP, WebTransport,
-WebSockets and the external ECH DNS lookup are off. Where the server offers
+turned off and when the last Tor-mode tab closes. HTTP/3, UDP, WebTransport
+and the external ECH DNS lookup are off, and so are WebSockets unless the
+server has deploy/tor-js's build (below). Where the server offers
 no Tor, a saved Tor choice stops browsing rather than trying the normal Wisp
 endpoint.
 
@@ -78,7 +79,11 @@ see that a visitor uses Tor and which Tor guard they use; bridges, which
 would hide that, are future work. The Tor chip shows the bootstrap's
 progress, and the menu has **New Identity** and **New Tor circuit for this
 site**. `node test/tor-client-smoke.mjs` checks it against the real Tor
-network. The suites run with `STOMP_TOR_CLIENT=stand-in`, which answers Tor
+network. With `deploy/tor-js/build.sh` run (tor-js from source with a
+stream API; deploy/tor-js/README.md), the server serves that build and
+Tor mode runs epoxy on Tor streams: connections kept per site, HTTP/2 and
+WebSockets. Without it, it serves the npm release, whose own fetch carries
+each request. The suites run with `STOMP_TOR_CLIENT=stand-in`, which answers Tor
 mode with epoxy over `/wisp/` (`demo/public/test/tor-stand-in.mjs`), since
 they reach no Tor network.
 
