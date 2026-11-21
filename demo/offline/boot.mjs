@@ -2,8 +2,9 @@
 // demo's config, then its files decoded and the page's side installed
 // (./host.mjs) before the demo's main.js asks for the controller
 // (`STOMP_OFFLINE.ready`).
-/* global __PM_PRELUDE__, __PM_ADBLOCK__, __PM_BUILD__, __PM_COMMITS__ */
+/* global __PM_PRELUDE__, __PM_ADBLOCK__, __PM_BUILD__, __PM_COMMITS__, __PM_VIBEOS__ */
 import { createFrame, dialing, install, ORIGIN, torOptions } from './host.mjs';
+import { vibeosFiles } from './vibeos.mjs';
 
 const WISP_KEY = 'stomp-demo:wisp';
 const query = new URLSearchParams(location.search);
@@ -110,6 +111,8 @@ globalThis.STOMP_OFFLINE = {
 	createFrame,
 	/** whether the tabs dial (./host.mjs dialing) */
 	dialing,
+	/** vibeOS's module, stylesheet and file resolver, when the file has it (./vibeos.mjs) */
+	vibeos: __PM_VIBEOS__ ? vibeosFiles : null,
 	/** what the controller is given beside the demo's own options */
 	controllerInit: {
 		// no SharedWorker (a file: page's cannot start), no worker of the

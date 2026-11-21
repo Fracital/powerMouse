@@ -22,6 +22,9 @@ const INPUTS = [
 	'scripts/offline-notices.mjs',
 	'scripts/offline-key.mjs',
 	'test/offline-tor-stand-in.mjs',
+	'scripts/offline-vibeos.mjs',
+	// the vibeOS commit dist/vibeos/ was built from (scripts/vibeos.mjs)
+	'dist/vibeos/vibeos.json',
 	'package-lock.json',
 	'LICENSE',
 	'assets/adblock-snapshot.UPSTREAM',

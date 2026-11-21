@@ -158,6 +158,43 @@ Wisp server, and has none in Tor mode. No frame is involved, so no address
 changes. A remote controller (an isolated host) has no transport in the
 page, and there the emulator says it cannot start.
 
+## In offline.html
+
+offline.html (`scripts/build-offline.mjs`, run from `file:` with no server)
+has vibeOS too when the build has `dist/vibeos/`, with the same switch,
+the same windows and the same `moveBefore` of each tab's frame. What the
+server serves from vibeOS's directory is inside the file
+(`scripts/offline-vibeos.mjs`): one gzipped archive, as base64 in a
+`<script type="application/octet-stream" id="pm-vibeos">` at the end of the
+body, which the browser parses as text and no script reads until the first
+switch. Then `demo/offline/vibeos.mjs` unpacks it, makes a `blob:` URL of
+each file and drops the element's text; `STOMP_OFFLINE.vibeos` hands the
+page the module's and the stylesheet's URLs and a resolver for the rest
+(`vibeHost.assets`, vibeOS's `BrowserHost.assets`): each root-relative path
+vibeOS asks for is its file's `blob:` URL, and one the file does not carry
+is `data:,`, so nothing is ever asked of `file:`. The stylesheet's `url()`s
+(icons, cursors, fonts) are written as the files' URLs when it is unpacked.
+
+The archive carries embed.js, embed.css and only the files they name: the
+Tango icons, cursors, wallpapers, fonts and bookmark icons the code and the
+stylesheet name, and the three games. No emulator (vibeOS fetches it through
+the proxy as on the served demo, and keeps it in the page's Cache Storage,
+which `file:` has in Chrome), no source maps, none of the legacy formats
+Chrome never loads (a game's `.eot` and SVG fonts and Flash files, iOS's
+home screen images), and not the 4 MB Garden Tiles wallpaper, more than the
+rest together (its tile in the Wallpaper Picker is empty there). It is about
+3.8 MB of files, 4.4 MB as gzipped base64, and offline.html goes from about
+10.8 MiB to 15.2 MiB.
+
+A game opens in its window from a `blob:` URL, but a document at a `blob:`
+URL of the file's page may load none of the page's other `blob:` URLs
+(Chrome refuses them as local resources), so each game's page is one text:
+every file it, its styles and its scripts name is a `data:` URL in it,
+written at build time. A name left as it was (an `.eot` font, a Flash
+movie) resolves against no `blob:` URL and is never asked of anything.
+The file's notices end with vibeOS's own: its licence, its bundled
+libraries', its fonts', the Tango icons' and its games'.
+
 ## Deploying
 
 The deploy gate (`deploy/terp-deploy-gate.sh`) builds in a stage checkout and
@@ -177,5 +214,12 @@ checkout never needs `vendor/vibeOS`.
   `dist/vibeos/`, a tampered core never run, a boot from Cache Storage with
   no request and, with the network (no `SKIP_NETWORK`), a fresh page's
   fetch of the pinned files through the proxy.
+- `npm test -- offline-vibeos`: offline.html from `file:` (skipped when it
+  has no vibeOS): the archive unread until the switch, no emulator in it,
+  the switch from the menu with the tab's frame moved into its window and
+  its state kept, the desktop's own `blob:` files with every image loaded,
+  Tetris, 2048 and Breakout from `blob:` URLs with their files, the
+  emulator booting from Cache Storage with nothing fetched, the way back,
+  and no request from the switch on to the network or to `file:`.
 - vibeOS's own checks, in `vendor/vibeOS` (they need its devDependencies):
   `npm run check`, `npm run build`.

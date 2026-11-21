@@ -541,6 +541,9 @@ that runs from `file:` or any static host with no service worker
 document of a tab is written into a frame of its own that loads one fixed
 page and fetches its route through that worker (`demo/offline/host.mjs`).
 The bundles, wasm modules and transports are gzipped in a JSON payload.
+With `dist/vibeos/` built, the file also carries vibeOS (about 4.4 MB of
+it; the file is then about 15 MB), unpacked at the first switch (see
+"vibeOS" below).
 
 The file is a build output, like `dist/`: `/build` is in `.gitignore`, so
 it is never committed, and it is not in the npm package (`package.json`
@@ -867,7 +870,10 @@ tab becomes a window of vibeOS's browser holding the tab's own frame element,
 moved there with `moveBefore`, so no tab reloads either way; the browser's tabs
 are the page's tabs (`vibeHost` in pm/main.js), and its menu is the page's
 menu. Without `moveBefore` the frames stay in `#frames` and are laid over
-their windows. Details in [`docs/vibeos.md`](../docs/vibeos.md).
+their windows. offline.html has it too, when its build had `dist/vibeos/`:
+gzipped in an element no script reads until the first switch, its files
+`blob:` URLs, its games' pages each one text (docs/vibeos.md, "In
+offline.html"). Details in [`docs/vibeos.md`](../docs/vibeos.md).
 
 ## Deploying somewhere real
 

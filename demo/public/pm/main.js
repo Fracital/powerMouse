@@ -7738,9 +7738,18 @@ menuAbout.addEventListener('click', () => {
 // and come back the same way. A browser without moveBefore keeps the frames
 // where they are and vibeOS lays each one over its window (body.vibeos-overlay).
 // The tabs of its browser are this page's tabs (vibeHost.createTab): there is
-// one list of tabs, shown two ways.
-const VIBEOS =
-	!OFFLINE && typeof CFG.vibeos?.base === 'string' ? CFG.vibeos.base : null;
+// one list of tabs, shown two ways. offline.html carries it inside itself
+// (demo/offline/vibeos.mjs, unpacked at the first switch): its module,
+// stylesheet and files are blob: URLs there, which vibeOS asks the page for
+// (vibeHost.assets).
+const VIBEOS = OFFLINE
+	? OFFLINE.vibeos
+	: typeof CFG.vibeos?.base === 'string'
+		? async () => ({
+				module: `${CFG.vibeos.base}embed.js`,
+				sheet: `${CFG.vibeos.base}embed.css`,
+			})
+		: null;
 const ATOMIC_MOVE = typeof Element.prototype.moveBefore === 'function';
 const vibeShown = () => !!vibe?.shown();
 let vibeLoading = null;
@@ -7878,15 +7887,17 @@ const vibeHost = {
 /** vibeOS's module and stylesheet, fetched the first time only */
 function loadVibe() {
 	vibeLoading ??= (async () => {
+		const files = await VIBEOS();
+		if (files.assets) vibeHost.assets = files.assets;
 		const sheet = document.createElement('link');
 		sheet.rel = 'stylesheet';
-		sheet.href = `${VIBEOS}embed.css`;
+		sheet.href = files.sheet;
 		const styled = new Promise((resolve, reject) => {
 			sheet.onload = resolve;
 			sheet.onerror = () => reject(new Error('its stylesheet did not load'));
 		});
 		document.head.append(sheet);
-		const [module] = await Promise.all([import(`${VIBEOS}embed.js`), styled]);
+		const [module] = await Promise.all([import(files.module), styled]);
 		// its own font (dist/vibeos/fonts/) before the desktop shows, never
 		// another for a moment
 		await Promise.all(

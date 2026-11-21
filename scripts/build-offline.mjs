@@ -30,6 +30,7 @@ import { gzipSync } from 'node:zlib';
 import { build } from 'esbuild';
 import { OFFLINE_WISP, offlineKey } from './offline-key.mjs';
 import { offlineNotices } from './offline-notices.mjs';
+import { offlineVibeOS, VIBEOS_ARCHIVE_ID } from './offline-vibeos.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -265,7 +266,11 @@ try {
 } catch {
 	// not a checkout: the home page says so
 }
+// vibeOS, when dist/ has it (scripts/offline-vibeos.mjs): an archive kept
+// as base64 at the end of the body, unpacked at the first switch
+const vibeos = offlineVibeOS(dist);
 const boot = await bundle('demo/offline/boot.mjs', {
+	__PM_VIBEOS__: String(!!vibeos),
 	__PM_PRELUDE__: JSON.stringify(prelude),
 	__PM_BUILD__: JSON.stringify(builtFrom),
 	__PM_COMMITS__: JSON.stringify(commits),
@@ -384,11 +389,25 @@ const notices = offlineNotices({
 	commit: builtFrom.commit,
 	adblock,
 });
+const allNotices = vibeos
+	? `${notices}\n\n==== vibeOS (BSD-3-Clause), built from https://github.com/Fracital/vibeOS/tree/${vibeos.commit}\n\n${vibeos.notices}`
+	: notices;
+if (/--!?>/.test(allNotices))
+	throw new Error('a notice would end the comment it is in');
+if (vibeos) {
+	// an element no script runs: the browser parses its text and nothing else
+	if (!/^[A-Za-z0-9+/=]*$/.test(vibeos.base64))
+		throw new Error("vibeOS's archive is not base64");
+	// (the page's own </body>, the last: an inlined script may name one)
+	const end = html.lastIndexOf('</body>');
+	if (end === -1) throw new Error('index.html no longer has </body>');
+	html = `${html.slice(0, end)}<script type="application/octet-stream" id="${VIBEOS_ARCHIVE_ID}">${vibeos.base64}</script>\n\t${html.slice(end)}`;
+}
 await swap(
 	'<!doctype html>',
 	`<!doctype html>\n<!-- offline.html (key ${key}): powerMouse and STomp, GPL-3.0-only, source at https://github.com/Fracital/powerMouse/tree/${builtFrom.commit}. The licences and notices of every part are at the end of this file. -->`,
 );
-html = `${html.trimEnd()}\n<!--\n${notices}\n-->\n`;
+html = `${html.trimEnd()}\n<!--\n${allNotices}\n-->\n`;
 if (html.split(WISP_SLOT).length !== 2)
 	throw new Error(`${WISP_SLOT} has to be named once in the file`);
 
@@ -400,5 +419,5 @@ await rename(partial, out);
 const size = (await stat(out)).size;
 const mb = (bytes) => `${(bytes / 1024 / 1024).toFixed(2)} MiB`;
 console.log(
-	`build-offline: ${out} ${mb(size)} (${size} B; payload ${FILES.length + GENERATED.length} files, ${mb(raw)} before gzip, Tor's ${mb(torBytes)} of it; wisp ${wisp}${adblock ? '' : '; no adblock'}${torStandIn ? '; Tor stand-in' : ''})`,
+	`build-offline: ${out} ${mb(size)} (${size} B; payload ${FILES.length + GENERATED.length} files, ${mb(raw)} before gzip, Tor's ${mb(torBytes)} of it; ${vibeos ? `vibeOS ${vibeos.files} files, ${mb(vibeos.raw)}, ${mb(vibeos.base64.length)} as gzipped base64` : 'no vibeOS'}; wisp ${wisp}${adblock ? '' : '; no adblock'}${torStandIn ? '; Tor stand-in' : ''})`,
 );
