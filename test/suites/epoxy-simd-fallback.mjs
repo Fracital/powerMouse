@@ -29,6 +29,25 @@ const dist = fileURLToPath(
 		import.meta.url,
 	),
 );
+// the dist/ served is node_modules'; a checkout whose install is older than
+// package-lock.json serves a build without the fallback, and every check
+// below then fails on a wasm magic word, which names nothing
+const PACKAGE = 'node_modules/@mercuryworkshop/epoxy-transport';
+const lockEntry = (file) =>
+	readFile(new URL(file, import.meta.url), 'utf8').then(
+		(text) => JSON.parse(text).packages?.[PACKAGE],
+		() => undefined,
+	);
+const pinned = await lockEntry('../../package-lock.json');
+const installed = await lockEntry('../../node_modules/.package-lock.json');
+ok(
+	'the installed epoxy-transport is the one package-lock.json pins',
+	pinned !== undefined &&
+		installed?.resolved === pinned.resolved &&
+		installed?.integrity === pinned.integrity,
+	`installed ${installed?.resolved ?? 'none'}, pinned ${pinned?.resolved} (npm ci)`,
+);
+
 const TYPES = {
 	'.mjs': 'text/javascript',
 	'.js': 'text/javascript',
