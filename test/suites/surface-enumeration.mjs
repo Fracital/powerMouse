@@ -87,6 +87,36 @@ const EXCLUDED = [
 		: []),
 ];
 
+// OPEN (Chrome 158 and later): a frame under the proxied top lacks
+// focus-without-user-activation, which natively it has. A sandboxed frame and
+// every frame under it lack the feature unless the frame's own allow names
+// it; the controller names it on the frame it sandboxes (allowWithFocus,
+// src/controller/remote.ts), not on the frames the page makes. The lists are
+// compared by index, so the name alone goes out of the frame's
+// featurePolicy (allowed natively, denied through the proxy) where that is
+// how it differs. A proxied frame that has it again is compared as it is;
+// permissions-policy's count of the frames that lack it fails then, and
+// this goes with its entry
+const OPEN_FOCUS = 'focus-without-user-activation';
+const OPEN_FOCUS_REASON = `OPEN: Chrome 158 and later: ${OPEN_FOCUS} in a frame under the proxied top, which the host frame's sandbox turns off`;
+/** a frame's featurePolicy records with OPEN_FOCUS out, or null where it is not how they differ */
+function withoutOpenFocus(major, realm, section, records) {
+	if (major < 158 || realm !== 'frame' || section !== 'featurePolicy')
+		return null;
+	const [first, second, proxied] = records;
+	if (
+		![first, second].every((record) => record?.allowed?.includes(OPEN_FOCUS)) ||
+		!proxied?.denied?.includes(OPEN_FOCUS)
+	)
+		return null;
+	const drop = (record) => ({
+		...record,
+		allowed: record.allowed.filter((name) => name !== OPEN_FOCUS),
+		denied: record.denied?.filter((name) => name !== OPEN_FOCUS),
+	});
+	return [drop(first), drop(second), drop(proxied)];
+}
+
 const CONFIGURATIONS = [
 	{
 		name: 'software GL, fake devices',
@@ -138,6 +168,7 @@ const show = (value) => String(JSON.stringify(value)).slice(0, 200);
 
 for (const configuration of CONFIGURATIONS) {
 	const browser = await launch(configuration.args, { env: configuration.env });
+	const major = Number(browser.version().split('.')[0]);
 	const native = async () => {
 		const context = await browser.newContext({ viewport: null });
 		const page = await context.newPage();
@@ -221,12 +252,23 @@ for (const configuration of CONFIGURATIONS) {
 				continue;
 			}
 			for (const section of Object.keys(a)) {
-				const natively = leaves(a[section], section, new Map());
-				const again = leaves(b?.[section], section, new Map());
-				const got = leaves(p?.[section], section, new Map());
+				const open = withoutOpenFocus(major, realm, section, [
+					a[section],
+					b?.[section],
+					p?.[section],
+				]);
+				const [aSection, bSection, pSection] = open ?? [
+					a[section],
+					b?.[section],
+					p?.[section],
+				];
+				const natively = leaves(aSection, section, new Map());
+				const again = leaves(bSection, section, new Map());
+				const got = leaves(pSection, section, new Map());
 				const differences = [];
 				let volatile = 0;
 				const left = new Map();
+				if (open) left.set(OPEN_FOCUS_REASON, 1);
 				const differ = (path, x, y) => {
 					const rule = EXCLUDED.find(
 						([realms, pattern, , only]) =>

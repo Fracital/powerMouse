@@ -191,7 +191,7 @@ import { justCallStomp, type CalledFrame } from './justCallStomp';
 import { mediaVerdict } from './mediaVerdict';
 import type { ReloadOptions, StaleInfo, TransportDescriptor } from './messages';
 import { forgetProfile, profileWorker, serviceWorkerScript } from './profiles';
-import { DEFAULT_SANDBOX } from './remote';
+import { allowWithFocus, DEFAULT_SANDBOX } from './remote';
 import RewriteWorkers, {
 	DEFAULT_REWRITE_TIMEOUT_MS,
 	defaultRewriteWorkers,
@@ -4468,7 +4468,11 @@ export class Frame extends EventTarget {
 		sandbox: string | null = DEFAULT_SANDBOX,
 	) {
 		super();
-		if (sandbox !== null) element.setAttribute('sandbox', sandbox);
+		if (sandbox !== null) {
+			element.setAttribute('sandbox', sandbox);
+			const focus = allowWithFocus(element.getAttribute('allow'));
+			if (focus !== null) element.setAttribute('allow', focus);
+		}
 		// the site pool in a cross-origin isolated page: the frame's documents
 		// are of the slots' origins, which the `cross-origin-isolated`
 		// permission reaches only when the frame names them (the default

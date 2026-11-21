@@ -262,6 +262,36 @@ function refusalError(refusal: FrameRefusal, proxyOrigin: string): Error {
 export const DEFAULT_SANDBOX =
 	'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock allow-presentation allow-orientation-lock allow-storage-access-by-user-activation';
 
+const SANDBOXED_FOCUS = 'focus-without-user-activation';
+
+/**
+ * The allow attribute a frame the controller sandboxes is given: the host's,
+ * with `focus-without-user-activation` named where the browser knows the
+ * feature and the host's attribute does not name it (null: the attribute
+ * stays as it is). Chrome 158 turns the feature off in a sandboxed frame and
+ * every frame under it unless the frame's own allow names it, whatever the
+ * sandbox's tokens, so the sandbox that keeps a proxied page from navigating
+ * the host would also keep it from focusing without user activation, which a
+ * page does natively. The documents the frame shows still turn it off where
+ * their own policy does (the service worker serves them that).
+ */
+export function allowWithFocus(allow: string | null): string | null {
+	let known = false;
+	try {
+		known = (
+			document as Document & { featurePolicy?: { features(): string[] } }
+		)
+			.featurePolicy!.features()
+			.includes(SANDBOXED_FOCUS);
+	} catch (error) {
+		// no featurePolicy (not Chrome): nothing to name
+	}
+	const base = allow?.trim() ?? '';
+	if (!known || /(^|;)\s*focus-without-user-activation(\s|;|$)/i.test(base))
+		return null;
+	return `${base}${base && !base.endsWith(';') ? '; ' : base ? ' ' : ''}${SANDBOXED_FOCUS}`;
+}
+
 /**
  * Events, as on StompController: `navigate`, `open`, `request` alongside the
  * callbacks; `carrier` (detail: CarrierInfo) as on StompController; `stale` (detail: StaleInfo) when the
@@ -1236,6 +1266,8 @@ export class RemoteFrame extends EventTarget {
 			nextReport: () => this.#nextReport(),
 		});
 		element.setAttribute('sandbox', sandbox);
+		const focus = allowWithFocus(element.getAttribute('allow'));
+		if (focus !== null) element.setAttribute('allow', focus);
 		element.setAttribute('referrerpolicy', 'no-referrer');
 		// in a cross-origin isolated host page the frame may be isolated too
 		// (a page whose own headers isolate it is; the service worker serves
