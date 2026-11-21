@@ -1209,8 +1209,14 @@ async function offlineVibeOS(tab) {
 		short({ ready, box }),
 	);
 	await submitLanding(tab, `${servers.fixture}pages/offline-html.html`);
+	// (loaded, not only titled: the reload below ends the Tor client's
+	// streams with the file's page, and a load of the page still on one
+	// fails there, which epoxy-transport logs as a console error)
 	const page = await tab.find(
-		() => document.title === 'Offline page one' && document.URL,
+		() =>
+			document.title === 'Offline page one' &&
+			document.readyState === 'complete' &&
+			document.URL,
 		{ skipTop: true, timeout: 60000 },
 	);
 	const kept = await tab.eval(standIn).catch(() => null);
