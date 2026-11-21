@@ -75,8 +75,8 @@ endpoint.
 circuits itself; `/wisp/` carries only TCP to Tor relays (the worker refuses
 a link to anything else), so the server never sees a destination. It does
 see that a visitor uses Tor and which Tor guard they use; bridges, which
-would hide that, are future work. The Tor chip shows the bootstrap's
-progress, and the menu has **New Identity** and **New Tor circuit for this
+would hide that, are future work. The Tor toggle's tooltip shows the
+bootstrap's progress, and the menu has **New Identity** and **New Tor circuit for this
 site**. `node test/tor-client-smoke.mjs` checks it against the real Tor
 network. The client is tor-js built from source with a stream API
 (deploy/tor-js/README.md), pinned in package.json as

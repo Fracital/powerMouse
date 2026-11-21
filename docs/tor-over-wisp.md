@@ -70,7 +70,7 @@ same-site|cross-site`, or `opaque`. A transport that declares
   opens its Wisp connection to the relay.
 - **Readiness.** `GET /api/tor` (demo/server.js) says the relay's view of the
   tor daemon (`createTorMonitor`, `demo/torWisp.js`: `off`, `starting`,
-  `ready`, ...); main.js `watchTor` polls it for the Tor chip.
+  `ready`, ...); main.js `watchTor` polls it for the Tor toggle's tooltip.
 - **What Tor mode turns off**: HTTP/3, WebTransport, the site pool, real
   ECH's DoH lookup (`ECH_DNS`), since each would leave the Tor route.
 
@@ -201,7 +201,7 @@ prototype; measured times are in "Prototype".
 `BootstrapStatus` reports as a fraction and a blocker: "Connecting to a
 relay", "Loading directory" (consensus), "Loading relay descriptors" (n of
 m microdescriptors), "Building a circuit", "Connected". The transport posts
-them to the controller as a transport event and the Tor chip shows the
+them to the controller as a transport event and the Tor toggle's tooltip shows the
 percentage and the phase, the way `watchTor` shows `/api/tor` today, which in
 client mode reads the transport, not the server.
 
@@ -392,7 +392,7 @@ The transport tells the page its bootstrap on a BroadcastChannel the page
 names in the descriptor (Tor Browser's phases: "Connecting to a relay",
 "Loading network status", "Loading authority certificates", "Loading relay
 descriptors", "Establishing a Tor circuit", "Done", read from arti's log), and
-the Tor chip and status line show it. The menu
+the Tor toggle's tooltip and the status line show it. The menu
 (the three dots) has **New Identity** (a new Tor session: the page loads
 again with a new transport worker, so no circuit of before, and the `tor`
 profile is forgotten; with other Tor tabs open it asks to close them first,
@@ -438,7 +438,7 @@ not seen again.
 A later run (2026-11-21, the default path: `?tor`, in the
 dialing mode production uses) also checked: `/api/tor` and `config.js` say
 `client` and the toggle is enabled; the page heard the bootstrap through to
-"Done" and the chip says on; the worker admits a fallback directory and
+"Done" and the toggle says Tor connected; the worker admits a fallback directory and
 refuses a site's address; New Tor circuit for this site loaded the site again
 through another exit (171.25.193.39, then 109.70.100.12); and no link arti
 asked for in the session was refused. Bootstrap 2.6 s cold, the first site
@@ -522,7 +522,7 @@ isolationKey)` (deploy/tor-js `0001`); left: `resolve()`,
 3. **One client per profile** (done; S left): the Tor client in a
    SharedWorker (`sharedWorker` on the descriptor), the transport workers of
    every tab its clients; left: `extendedLifetime`, so a reload keeps it.
-4. **Bootstrap UI** (done; S left): progress on the Tor chip from arti's log;
+4. **Bootstrap UI** (done; S left): progress in the Tor toggle's tooltip from arti's log;
    left: arti's own `bootstrap_events()` through tor-js, an error state with
    the blocker ("cannot reach any relay", "clock skew"), the isolated mode.
 5. **Fast-bootstrap snapshot** (S): the server builds `bootstrap.zip.zst`

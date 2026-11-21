@@ -1091,27 +1091,6 @@ button::-moz-focus-inner {
 	opacity: 0.55;
 	cursor: not-allowed;
 }
-/* what the server says of its Tor while Tor mode is on (main.js
-   watchTor): nothing until it answered */
-.torState:not(:empty) {
-	margin-left: 5px;
-	padding: 0 5px;
-	border-radius: 0.25rem;
-	font-size: 12px;
-	border: 1px solid currentColor;
-}
-#torLabel[data-tor-state='ready'] .torState {
-	color: #2e9e4f;
-}
-#torLabel[data-tor-state='bootstrapping'] .torState {
-	color: #f2a20d;
-}
-#torLabel[data-tor-state='down'] .torState,
-#torLabel[data-tor-state='off'] .torState,
-#torLabel[data-tor-state='error'] .torState {
-	color: #e0503f;
-}
-
 .chrome .select {
 	height: 28px;
 	box-sizing: border-box;

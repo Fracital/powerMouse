@@ -3860,15 +3860,9 @@ const torReadyStatus = () =>
 			: torStatusText();
 function showTorStatus() {
 	const state = torStatus?.state ?? '';
+	// the toggle carries no badge of its own, as no other toggle does: its
+	// state and the bootstrap's progress are its tooltip and the status line
 	torLabel.dataset.torState = state;
-	$('torState').textContent =
-		{
-			bootstrapping:
-				torStatus.progress != null ? `${torStatus.progress}%` : 'connecting',
-			ready: 'on',
-			failed: 'failed',
-			off: 'unavailable',
-		}[state] ?? '';
 	if (TOR_REQUESTED) torLabel.title = `${torStatusText()}. ${TOR_SCOPE_NOTE}`;
 	torStatusShown?.();
 }

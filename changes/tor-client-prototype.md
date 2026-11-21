@@ -10,8 +10,8 @@
   directory or a relay of the consensus it holds), so neither the Wisp
   server nor the demo's server sees a destination or content. The Tor toggle
   is enabled, `config.js` says `torClient: true` and `/api/tor` answers
-  `{"state":"client"}`; the Tor chip shows the bootstrap's progress in Tor
-  Browser's phases, and the menu has New Identity and New Tor circuit for
+  `{"state":"client"}`; the Tor toggle's tooltip and the status line show the
+  bootstrap's progress in Tor Browser's phases, and the menu has New Identity and New Tor circuit for
   this site. Requests are isolated per top-level site
   (changes/tor-streams.md has how they go). `STOMP_TOR_CLIENT=0` turns Tor mode off. The demo's server
   still sees that a visitor uses Tor and which Tor guard they use; bridges,

@@ -199,13 +199,15 @@ try {
 	);
 	const progress = await page.evaluate(() => ({
 		client: window.__pmTorClient ?? null,
-		chip: document.getElementById('torState').textContent,
+		state: document.getElementById('torLabel').dataset.torState,
+		title: document.getElementById('torLabel').title,
 	}));
 	ok(
-		'the page heard the bootstrap through to ready, and its Tor chip says on',
+		'the page heard the bootstrap through to ready, and the Tor toggle says connected',
 		progress.client?.state === 'ready' &&
 			progress.client?.progress === 100 &&
-			progress.chip === 'on',
+			progress.state === 'ready' &&
+			progress.title.startsWith('Tor connected'),
 		JSON.stringify(progress),
 	);
 
