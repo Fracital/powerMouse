@@ -70,6 +70,12 @@ const DEFAULTS = [
 		description:
 			'Play Krunker Box Office: the Krunker FPS rebuilt as a native engine. Free fast-paced multiplayer in your browser or as a desktop client. No download required.',
 	},
+	{
+		title: 'Flying Gorilla',
+		url: 'https://pages.eli.gift/fg/',
+		icon: '/pm/icons/flyinggorilla.png',
+		description: 'Flying Gorilla - swing, fling and glide as far as you can.',
+	},
 	// the quick links, at the URLs their tiles open
 	{
 		title: 'Reddit',

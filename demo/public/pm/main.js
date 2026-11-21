@@ -4623,7 +4623,9 @@ const BOOKMARKS_KEY = 'stomp-demo:bookmarks';
 // public/icon.svg and krunker.png (Apache-2.0, the same owner), estrogen's
 // estrogen.png is estro.help's own PWA icon (its manifest's
 // /icons/icon-192.png, the @sysce/estrogen site of the same owner, fetched
-// 2026-11-20 and stored at 64 px as the others), vibeOS (which declares
+// 2026-11-20 and stored at 64 px as the others), Flying Gorilla's
+// flyinggorilla.png is its page's own icon (TemplateData/icons/icon-192.png,
+// fetched 2026-11-21 and stored at 64 px), vibeOS (which declares
 // none) has the Tango computer from vibeOS's own icon set (at 32 px, the
 // largest it serves), and globe.png, the Tango web
 // browser from the same set, stands in for a page whose icon could not be
@@ -4668,6 +4670,14 @@ const DEFAULT_BOOKMARKS = [
 			'Play Krunker Box Office: the Krunker FPS rebuilt as a native engine. Free fast-paced multiplayer in your browser or as a desktop client. No download required.',
 		icon: '/pm/icons/krunker.png',
 		color: '#ffd95c',
+	},
+	{
+		title: 'Flying Gorilla',
+		url: 'https://pages.eli.gift/fg/',
+		description: 'Flying Gorilla - swing, fling and glide as far as you can.',
+		icon: '/pm/icons/flyinggorilla.png',
+		// its page's theme colour
+		color: '#1B7F3B',
 	},
 	{
 		title: 'Reddit',
@@ -4743,7 +4753,10 @@ const SITE_ICONS = new Map([
 ]);
 // icons drawn as a whole tile (their own rounded square, art to the edges)
 // fill the tile instead of sitting in its middle
-const FULL_TILE_ICONS = new Set(['/pm/icons/krunker.png']);
+const FULL_TILE_ICONS = new Set([
+	'/pm/icons/krunker.png',
+	'/pm/icons/flyinggorilla.png',
+]);
 const bookmarksPanel = $('bookmarks');
 const bookmarksList = $('bookmarksList');
 const bookmarksTab = $('bookmarksTab');
