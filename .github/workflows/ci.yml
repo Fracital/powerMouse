@@ -240,25 +240,29 @@ jobs:
   browser:
     name: browser suites (${{ matrix.group.name }})
     runs-on: ubuntu-latest
-    # the adversarial corpus (about 5 minutes here) runs as a job of its own,
-    # and the rest as six shards beside it (alone they took 64 to 69 of the
-    # 70 minutes; four shards took about 20 each, and the web-platform-tests
-    # suites, gates since 2026-11-18, add about 80 minutes of suite time, so
-    # four would take about 30)
+    # the adversarial corpus (about 9 minutes) runs as a job of its own, and
+    # the rest (about 290 minutes of suites, PARALLEL=2 each) as ten shards
+    # beside it, cut by test/suite-seconds.json so they end together: about
+    # 15 minutes each (six took 25 to 33). Eleven jobs at two suites each are
+    # what a 28-core machine runs side by side before the suites slow down
     strategy:
       fail-fast: false
       matrix:
         group:
-          - { name: main 1, suites: '!adversarial-', shard: 1/6 }
-          - { name: main 2, suites: '!adversarial-', shard: 2/6 }
-          - { name: main 3, suites: '!adversarial-', shard: 3/6 }
-          - { name: main 4, suites: '!adversarial-', shard: 4/6 }
-          - { name: main 5, suites: '!adversarial-', shard: 5/6 }
-          - { name: main 6, suites: '!adversarial-', shard: 6/6 }
+          - { name: main 1, suites: '!adversarial-', shard: 1/10 }
+          - { name: main 2, suites: '!adversarial-', shard: 2/10 }
+          - { name: main 3, suites: '!adversarial-', shard: 3/10 }
+          - { name: main 4, suites: '!adversarial-', shard: 4/10 }
+          - { name: main 5, suites: '!adversarial-', shard: 5/10 }
+          - { name: main 6, suites: '!adversarial-', shard: 6/10 }
+          - { name: main 7, suites: '!adversarial-', shard: 7/10 }
+          - { name: main 8, suites: '!adversarial-', shard: 8/10 }
+          - { name: main 9, suites: '!adversarial-', shard: 9/10 }
+          - { name: main 10, suites: '!adversarial-', shard: 10/10 }
           - { name: adversarial, suites: 'adversarial-', shard: '' }
-    # a clean run takes about 40 minutes (cross-origin-isolation alone takes
-    # about 15, visited about 3); a suite that failed runs once more alone
-    # after the others and needs room for it
+    # the longest suites take 9 to 11 minutes alone (wpt-navigation-api,
+    # top-navigation, csp-navigation); a suite that failed runs once more
+    # alone after the others and needs room for it
     timeout-minutes: 70
     steps:
       - name: Still master's head?
@@ -289,9 +293,12 @@ jobs:
         if: steps.head.outputs.superseded != 'true'
         run: npm ci --ignore-scripts
 
+      # the bundles and the offline page the suites load; the type check and
+      # the declarations `npm run build` adds are the check job's (half a
+      # minute of every shard's)
       - name: Build
         if: steps.head.outputs.superseded != 'true'
-        run: npm run build
+        run: node build.js && npm run build:offline
 
       # which Chrome gates this push: the runner image updates it on its own
       - name: Chrome version

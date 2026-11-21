@@ -207,7 +207,11 @@ const suiteTimeoutMs = (name) =>
 	60 *
 	1000;
 
-if (!existsSync(`${root}dist/serviceWorker.js`)) {
+// LIST=1 prints the suites the run would run (after SUITES, SHARD and the
+// SKIP_* flags), one per line, and starts nothing: what CI's shards hold
+const LIST = process.env.LIST === '1';
+
+if (!LIST && !existsSync(`${root}dist/serviceWorker.js`)) {
 	console.error('dist/ is missing: run `npm run build` first');
 	process.exit(2);
 }
@@ -260,14 +264,16 @@ const isMeasurement = (name) =>
 const SKIP_MEASUREMENT = process.env.SKIP_MEASUREMENT === '1';
 // SUITES=<prefix> runs only the suites named with it, SUITES=!<prefix> all
 // but those; SHARD=<k>/<n> then keeps the k-th (1-based) of n shards of what
-// is left. GitHub CI runs the adversarial corpus as a job of its own and the
-// rest as six shards beside it: the rest alone took 64 to 69 of the job's 70
-// minutes. The shards are cut by how long each suite took on CI
-// (test/suite-seconds.json, the seconds column of a green run's summary
-// tables; a suite it does not name counts as its median), longest first, each
-// to the shard with the least so far (ties to the lower shard, equal seconds
-// by name), so every machine cuts the same shards and they end together: cut
-// every n-th by name, they took 12 to 31 minutes.
+// is left. CI runs the adversarial corpus as a job of its own and the rest
+// as ten shards beside it: the rest alone is about five hours of suites. The
+// shards are cut by how long each suite took on CI (test/suite-seconds.json,
+// each suite's median over recent runs' summary tables, which
+// test/suite-seconds.mjs reads; a suite it does not name counts as its
+// median), longest first, each to the shard with the least so far (ties to
+// the lower shard, equal seconds by name), so every machine cuts the same
+// shards and they end together: cut every n-th by name, they took 12 to 31
+// minutes, and by numbers recorded before a third of the suites existed, 25
+// to 33.
 const GROUP = process.env.SUITES ?? '';
 const SHARD = /^(\d+)\/(\d+)$/.exec(process.env.SHARD ?? '');
 if (process.env.SHARD && (!SHARD || +SHARD[1] < 1 || +SHARD[1] > +SHARD[2])) {
@@ -356,6 +362,11 @@ if (SHARD && !wanted.length) {
 if (!suites.length) {
 	console.error(`no suites match ${wanted.join(', ')}`);
 	process.exit(2);
+}
+
+if (LIST) {
+	console.log(suites.join('\n'));
+	process.exit(0);
 }
 
 /** a port nothing listens on, so two runs (or a dev server) never collide */

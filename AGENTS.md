@@ -466,16 +466,23 @@ request: `npm ci --ignore-scripts`, `npm run check`, `npm run lint`,
 `npx prettier --check .`, `npm run check:prose` (no em dashes, no AI
 attribution, well-formed `changes/` fragments; the same script checks a
 PR's commit messages) and the esbuild
-build. All of it must pass locally before you push. Seven `browser suites`
+build. All of it must pass locally before you push. Eleven `browser suites`
 jobs (`SUITES=adversarial-` for the adversarial corpus, `SUITES=!adversarial-`
-with `SHARD=1/6` to `6/6` for the rest, side by side so none nears the time
-limit) run `npm test` on the runner's Chrome with `SKIP_NETWORK=1` (the suites
-that drive Wikipedia and the public HTTP/3 servers stay out), `SKIP_TIMING=1`
-(the suites' checks that read pointer timing or a speed ratio, which each
-suite skips itself and keeps the rest) and `SKIP_MEASUREMENT=1` (the
-`measure-*` timings, but those `GATED` in test/run.mjs names, whose checks
-hold on any machine) and `PARALLEL=2`, after printing the runner's Chrome
-version. The vendored web-platform-tests (`wpt-*`) run there as gates: each
+with `SHARD=1/10` to `10/10` for the rest, side by side so the run takes
+about as long as its longest shard) run `npm test` on the runner's Chrome
+after `node build.js && npm run build:offline` (the type check and the
+declarations are the check job's). The shards are cut by
+`test/suite-seconds.json`, each suite's seconds on CI: when a suite is added
+or changes its length a lot, refresh it with `node test/suite-seconds.mjs
+<job logs>` from recent green runs, and `LIST=1` with a job's `SUITES` and
+`SHARD` prints the suites that shard runs. They run with `SKIP_NETWORK=1`
+(the suites that drive Wikipedia and the public HTTP/3 servers stay out),
+`SKIP_TIMING=1` (the suites' checks that read pointer timing or a speed
+ratio, which each suite skips itself and keeps the rest) and
+`SKIP_MEASUREMENT=1` (the `measure-*` timings, but those `GATED` in
+test/run.mjs names, whose checks hold on any machine) and `PARALLEL=2`,
+after printing the runner's Chrome version. The vendored
+web-platform-tests (`wpt-*`) run there as gates: each
 compares the proxied verdicts with the native ones and its expected-failure
 list, and leaves out by name, with the reason, a page whose verdict flips.
 A suite goes in one of those buckets only when it cannot be deterministic on
