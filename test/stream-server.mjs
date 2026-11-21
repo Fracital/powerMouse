@@ -36,7 +36,10 @@
 //              was given up before its end was sent (the toolbar suite's
 //              Stop); with `answer=nothing` the answer after `head` is a
 //              204, with `answer=download` an attachment. With `hold`, wait
-//              for POST /stream/stop-release?k=<key> instead of a timer.
+//              for POST /stream/stop-release?k=<key> instead of a timer;
+//              with `hold=late`, only the late paragraph waits for it (a
+//              runner slower than `wait` would end the load before the
+//              suite saw it)
 //     link     a page whose one link (#go, its data-k the key) goes to
 //              `to`, a path under /stream/ (a page's own navigation, for
 //              the toolbar suite)
@@ -168,6 +171,13 @@ export function stream(req, res) {
 		const timers = [];
 		const head = Math.min(Number(url.searchParams.get('head')) || 0, 8000);
 		const answer = url.searchParams.get('answer');
+		const hold = key ? url.searchParams.get('hold') : null;
+		/** what POST /stream/stop-release runs for this request, if anything */
+		let held = null;
+		const holdFor = (fn) => {
+			held = fn;
+			heldStops.set(key, fn);
+		};
 		const send = () => {
 			log.headers = true;
 			if (answer === 'nothing' || answer === 'download') {
@@ -190,24 +200,26 @@ export function stream(req, res) {
 			res.write(
 				`<!doctype html><html><head><meta charset="utf-8"><title>stream stop</title>${PAD}</head><body>`,
 			);
+			const finish = () => {
+				log.ended = true;
+				res.end(
+					`<p id="late">late</p><script>window.__done = true;</script></body></html>`,
+				);
+			};
 			timers.push(
 				later(100, () =>
 					res.write(`<h1 id="early" data-k="${key}">early</h1>`),
 				),
-				later(wait, () => {
-					log.ended = true;
-					res.end(
-						`<p id="late">late</p><script>window.__done = true;</script></body></html>`,
-					);
-				}),
 			);
+			if (hold === 'late') holdFor(finish);
+			else timers.push(later(wait, finish));
 		};
 		res.on('close', () => {
 			for (const timer of timers) clearTimeout(timer);
-			if (heldStops.get(key) === send) heldStops.delete(key);
+			if (held && heldStops.get(key) === held) heldStops.delete(key);
 			if (!log.ended) log.closed = true;
 		});
-		if (key && url.searchParams.has('hold')) heldStops.set(key, send);
+		if (hold !== null && hold !== 'late') holdFor(send);
 		else timers.push(later(head, send));
 		return true;
 	}

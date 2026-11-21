@@ -176,7 +176,7 @@ const isReload = (look) =>
 	look.title === 'Reload this page' &&
 	look.pictures.length === 1 &&
 	/^view-refresh-(24|32)\.png$/.test(look.pictures[0]);
-async function lookUntil(view, test, timeout = 15000) {
+async function lookUntil(view, test, timeout = 20000) {
 	const until = Date.now() + timeout;
 	let look = await reloadLook(view);
 	while (!test(look) && Date.now() < until) {
@@ -190,7 +190,7 @@ const served = async (key) =>
 	(await fetch(`${FIXTURE}stream/stop-log?k=${key}`)).json();
 const release = (key) =>
 	fetch(`${FIXTURE}stream/stop-release?k=${key}`, { method: 'POST' });
-async function servedUntil(key, test, timeout = 8000) {
+async function servedUntil(key, test, timeout = 20000) {
 	const until = Date.now() + timeout;
 	let log = await served(key);
 	while (!test(log) && Date.now() < until) {
@@ -230,6 +230,12 @@ const pageState = async (view) =>
 		late: !!document.getElementById('late'),
 		mark: window.__stopMark ?? null,
 	}))) ?? {};
+/**
+ * the stop fixture's requests are known by their key in the run's process,
+ * whose fixture a second run of the suite meets again: each run's keys are
+ * its own, so a request is never read for the last run's
+ */
+const RUN = Math.random().toString(36).slice(2, 8);
 const markPage = (view, mark) =>
 	inFrame(
 		view,
@@ -240,14 +246,14 @@ const markPage = (view, mark) =>
 	);
 
 async function stopChecks(view, mode) {
-	const drip = (key, query) =>
-		`${FIXTURE}stream/stop?${query}&k=${mode}-${key}`;
-	// a document that is still arriving: Stop keeps what it has
-	const committed = drip('body', 'wait=5000');
-	const started = Date.now();
+	const run = `${RUN}-${mode}`;
+	const drip = (key, query) => `${FIXTURE}stream/stop?${query}&k=${run}-${key}`;
+	// a document that is still arriving: Stop keeps what it has (its end is
+	// held at the origin until the suite lets it go, after the Stop)
+	const committed = drip('body', 'hold=late');
 	await submitOmni(view, committed);
-	await frameUntil(view, early, `${mode}-body`);
-	const loading = await lookUntil(view, isStop, 5000);
+	await frameUntil(view, early, `${run}-body`);
+	const loading = await lookUntil(view, isStop);
 	ok(
 		`${mode}: while the page loads, Reload is Stop (picture, tooltip and name)`,
 		isStop(loading) && !loading.disabled,
@@ -261,13 +267,15 @@ async function stopChecks(view, mode) {
 		isReload(after) && !after.disabled && after.status !== 'Loading…',
 		JSON.stringify(after),
 	);
-	const given = await servedUntil(`${mode}-body`, (log) => log?.closed);
+	const given = await servedUntil(`${run}-body`, (log) => log?.closed);
 	ok(
 		`${mode}: Stop gives the document's request up at the origin`,
 		given?.closed === true && given.ended === false,
 		JSON.stringify(given),
 	);
-	await sleep(Math.max(0, started + 6500 - Date.now()));
+	// the end, if the origin still had the request: it never reaches the page
+	await release(`${run}-body`);
+	await frameUntil(view, () => !!document.getElementById('late'), null, 3000);
 	const partial = await pageState(view);
 	ok(
 		`${mode}: the stopped page keeps what it had, complete, and nothing more arrives`,
@@ -284,16 +292,17 @@ async function stopChecks(view, mode) {
 		JSON.stringify(stayed),
 	);
 
-	// a navigation still waiting for its answer: Stop drops it
-	const pending = drip('head', 'head=6000&wait=100');
+	// a navigation still waiting for its answer (held at the origin): Stop
+	// drops it
+	const pending = drip('head', 'hold&wait=8000');
 	await submitOmni(view, pending);
-	const waiting = await lookUntil(view, isStop, 5000);
+	const waiting = await lookUntil(view, isStop);
 	ok(
 		`${mode}: Reload is Stop from the start of a navigation`,
 		isStop(waiting) && (await omni(view)) === pending,
 		JSON.stringify(waiting),
 	);
-	await servedUntil(`${mode}-head`, (log) => log?.asked);
+	await servedUntil(`${run}-head`, (log) => log?.asked);
 	await sleep(500);
 	await view.click('#toolReload');
 	const dropped = await reloadLook(view);
@@ -302,7 +311,9 @@ async function stopChecks(view, mode) {
 		isReload(dropped) && (await omni(view)) === committed,
 		JSON.stringify([dropped, await omni(view)]),
 	);
-	const cut = await servedUntil(`${mode}-head`, (log) => log?.closed);
+	// the answer comes after the Stop, its end 8 s after its head
+	await release(`${run}-head`);
+	const cut = await servedUntil(`${run}-head`, (log) => log?.closed);
 	ok(
 		// (a request whose answer has not started cannot be taken back over
 		// the transport: its answer is cancelled as it comes, as on a page's
@@ -311,7 +322,7 @@ async function stopChecks(view, mode) {
 		cut?.closed === true && cut.ended === false,
 		JSON.stringify(cut),
 	);
-	await sleep(7000);
+	await sleep(2000);
 	const kept = await pageState(view);
 	ok(
 		`${mode}: the stopped navigation never commits: the tab keeps its page`,
@@ -326,7 +337,7 @@ async function stopChecks(view, mode) {
 	// stopped before the controller sent it, and the moment the frame was
 	// sent (its src set), before its request reached the worker
 	for (const when of ['unsent', 'sent']) {
-		const instant = drip(when, 'head=300&wait=100');
+		const instant = drip(when, 'head=300&wait=8000');
 		await view.evaluate(
 			([url, sent, dialing]) => {
 				const press = () => document.getElementById('toolReload').click();
@@ -352,8 +363,12 @@ async function stopChecks(view, mode) {
 			[instant, when === 'sent', mode.startsWith('dialing')],
 		);
 		await sleep(3000);
+		// a request that reached the origin: until it is given up there (on
+		// its answer's head) or its end is sent
+		const instantLog = (await served(`${run}-${when}`))
+			? await servedUntil(`${run}-${when}`, (log) => log.closed || log.ended)
+			: null;
 		const notCommitted = await pageState(view);
-		const instantLog = await served(`${mode}-${when}`);
 		ok(
 			`${mode}: a navigation stopped ${when === 'sent' ? 'as the frame is sent' : 'before it is sent'} never commits either`,
 			notCommitted.mark === 'body' &&
@@ -365,17 +380,18 @@ async function stopChecks(view, mode) {
 	}
 
 	// Escape from the page (the navigation gives it the focus)
-	await submitOmni(view, drip('escape', 'wait=5000'));
-	await frameUntil(view, early, `${mode}-escape`);
+	await submitOmni(view, drip('escape', 'hold=late'));
+	await frameUntil(view, early, `${run}-escape`);
 	await markPage(view, 'escape');
-	await lookUntil(view, isStop, 5000);
+	await lookUntil(view, isStop);
 	const focused = await view.evaluate(
 		() => document.activeElement?.classList.contains('frame') ?? false,
 	);
 	await view.keyboard.press('Escape');
-	const escaped = await lookUntil(view, isReload, 5000);
-	const escapedLog = await servedUntil(`${mode}-escape`, (log) => log?.closed);
+	const escaped = await lookUntil(view, isReload);
+	const escapedLog = await servedUntil(`${run}-escape`, (log) => log?.closed);
 	const escapedPage = await pageState(view);
+	await release(`${run}-escape`);
 	ok(
 		`${mode}: Escape in the page stops its load`,
 		focused &&
@@ -393,16 +409,17 @@ async function stopChecks(view, mode) {
  * download: from the page's link and from the bar
  */
 async function answerChecks(view, mode) {
+	const run = `${RUN}-${mode}`;
 	const linkPage = async (key, to) => {
-		const url = `${FIXTURE}stream/link?to=${encodeURIComponent(to)}&k=${mode}-${key}`;
+		const url = `${FIXTURE}stream/link?to=${encodeURIComponent(to)}&k=${run}-${key}`;
 		await submitOmni(view, url);
 		await frameUntil(
 			view,
 			(k) => document.getElementById('go')?.dataset.k === k,
-			`${mode}-${key}`,
+			`${run}-${key}`,
 		);
 		await markPage(view, key);
-		await lookUntil(view, isReload, 5000);
+		await lookUntil(view, isReload);
 		return url;
 	};
 	// (the page's own click: a click of Playwright's waits for the commit)
@@ -413,11 +430,11 @@ async function answerChecks(view, mode) {
 
 	// Hold the response until Stop is pressed. A fixed delay can elapse
 	// before Playwright samples the button on a busy runner.
-	const slow = `/stream/stop?hold&wait=1000&k=${mode}-link`;
+	const slow = `/stream/stop?hold&wait=1000&k=${run}-link`;
 	const linkUrl = await linkPage('link', slow);
 	await follow();
-	const leaving = await lookUntil(view, isStop, 5000);
-	const before = await servedUntil(`${mode}-link`, (log) => log?.asked);
+	const leaving = await lookUntil(view, isStop);
+	const before = await servedUntil(`${run}-link`, (log) => log?.asked);
 	ok(
 		`${mode}: a page's own navigation shows Stop from its start, before its answer`,
 		isStop(leaving) && before?.headers === false,
@@ -425,8 +442,8 @@ async function answerChecks(view, mode) {
 	);
 	if (isStop(leaving)) await view.click('#toolReload');
 	const linkStopped = await reloadLook(view);
-	await release(`${mode}-link`);
-	await servedUntil(`${mode}-link`, (log) => log?.closed || log?.ended);
+	await release(`${run}-link`);
+	await servedUntil(`${run}-link`, (log) => log?.closed || log?.ended);
 	await sleep(500);
 	const linkKept = await pageState(view);
 	ok(
@@ -442,18 +459,18 @@ async function answerChecks(view, mode) {
 	// answered with no document: the page's link, then the bar
 	for (const answer of ['nothing', 'download']) {
 		const what = answer === 'nothing' ? 'a 204' : 'a download';
-		const key = `${mode}-${answer}`;
+		const key = `${run}-${answer}`;
 		const to = `/stream/stop?hold&answer=${answer}&k=${key}`;
 		const pageUrl = await linkPage(answer, to);
 		await follow();
-		const going = await lookUntil(view, isStop, 5000);
+		const going = await lookUntil(view, isStop);
 		const asked = await servedUntil(key, (log) => log?.asked);
 		const saved =
 			answer === 'download'
-				? view.waitForEvent('download', { timeout: 8000 }).catch(() => null)
+				? view.waitForEvent('download', { timeout: 20000 }).catch(() => null)
 				: null;
 		await release(key);
-		const back = await lookUntil(view, isReload, 8000);
+		const back = await lookUntil(view, isReload);
 		const download = await saved;
 		const stayedPage = await pageState(view);
 		ok(
@@ -475,17 +492,17 @@ async function answerChecks(view, mode) {
 			]),
 		);
 
-		const typedKey = `${mode}-typed-${answer}`;
+		const typedKey = `${run}-typed-${answer}`;
 		const typed = `${FIXTURE}stream/stop?hold&answer=${answer}&k=${typedKey}`;
 		await submitOmni(view, typed);
-		const typedGoing = await lookUntil(view, isStop, 5000);
+		const typedGoing = await lookUntil(view, isStop);
 		const typedAsked = await servedUntil(typedKey, (log) => log?.asked);
 		const typedSaved =
 			answer === 'download'
-				? view.waitForEvent('download', { timeout: 8000 }).catch(() => null)
+				? view.waitForEvent('download', { timeout: 20000 }).catch(() => null)
 				: null;
 		await release(typedKey);
-		const typedBack = await lookUntil(view, isReload, 8000);
+		const typedBack = await lookUntil(view, isReload);
 		const typedDownload = await typedSaved;
 		const typedPage = await pageState(view);
 		ok(
@@ -513,20 +530,21 @@ await stopChecks(page, 'isolated');
 await answerChecks(page, 'isolated');
 
 // Escape on the toolbar, and in the address bar after its edit is reverted
-await submitOmni(page, `${FIXTURE}stream/stop?head=6000&wait=100&k=bar`);
-await lookUntil(page, isStop, 5000);
+// (both held at the origin until they are stopped)
+await submitOmni(page, `${FIXTURE}stream/stop?hold&wait=100&k=${RUN}-bar`);
+await lookUntil(page, isStop);
 await page.focus('#toolSaved');
 await page.keyboard.press('Escape');
-const fromToolbar = await lookUntil(page, isReload, 3000);
+const fromToolbar = await lookUntil(page, isReload);
 ok(
 	'Escape with the focus on the toolbar stops the load',
 	isReload(fromToolbar),
 	JSON.stringify(fromToolbar),
 );
 const stayedOn = await omni(page);
-const typed = `${FIXTURE}stream/stop?head=6000&wait=100&k=omnibox`;
+const typed = `${FIXTURE}stream/stop?hold&wait=100&k=${RUN}-omnibox`;
 await submitOmni(page, typed);
-await lookUntil(page, isStop, 5000);
+await lookUntil(page, isStop);
 await page.click('#omni input');
 await page.keyboard.press('Control+A');
 await page.keyboard.type('an edit');
@@ -546,23 +564,27 @@ ok(
 	JSON.stringify(reverted),
 );
 await page.keyboard.press('Escape');
-const fromBar = await lookUntil(page, isReload, 3000);
+const fromBar = await lookUntil(page, isReload);
 ok(
 	'then Escape there stops the load, and the bar has the page it stayed on',
 	isReload(fromBar) && (await omni(page)) === stayedOn,
 	JSON.stringify([fromBar, await omni(page)]),
 );
+await release(`${RUN}-bar`);
+await release(`${RUN}-omnibox`);
 
 // a load that ends while the pointer is pressed on Stop: Stop stays,
-// disabled, and the release reloads nothing
-await submitOmni(page, `${FIXTURE}stream/stop?wait=3000&k=held`);
-await frameUntil(page, early, 'held');
+// disabled, and the release reloads nothing (the load's end held at the
+// origin until the pointer is down)
+await submitOmni(page, `${FIXTURE}stream/stop?hold=late&k=${RUN}-held`);
+await frameUntil(page, early, `${RUN}-held`);
 await markPage(page, 'held');
-await lookUntil(page, isStop, 5000);
+await lookUntil(page, isStop);
 const box = await page.locator('#toolReload').boundingBox();
 await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
 await page.mouse.down();
-await frameUntil(page, () => !!document.getElementById('late'), null, 10000);
+await release(`${RUN}-held`);
+await frameUntil(page, () => !!document.getElementById('late'), null, 20000);
 await sleep(300);
 const held = await reloadLook(page);
 await page.mouse.up();
@@ -574,11 +596,7 @@ ok(
 	JSON.stringify([held, heldPage]),
 );
 await page.mouse.move(box.x + box.width / 2, box.y + box.height + 200);
-const left = await lookUntil(
-	page,
-	(look) => isReload(look) && !look.disabled,
-	3000,
-);
+const left = await lookUntil(page, (look) => isReload(look) && !look.disabled);
 ok(
 	'the pointer leaving it makes it Reload again',
 	isReload(left) && !left.disabled,
@@ -588,9 +606,9 @@ ok(
 // a load that ends with the keyboard's focus on Stop, the pointer on it
 // too: Reload in that same task, never held, and the focus stays on it
 // (a disabled button would leave it on the page's body)
-await submitOmni(page, `${FIXTURE}stream/stop?wait=3000&k=focus`);
-await frameUntil(page, early, 'focus');
-await lookUntil(page, isStop, 5000);
+await submitOmni(page, `${FIXTURE}stream/stop?hold=late&k=${RUN}-focus`);
+await frameUntil(page, early, `${RUN}-focus`);
+await lookUntil(page, isStop);
 await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
 await page.focus('#toolReload');
 await page.evaluate(() => {
@@ -605,7 +623,8 @@ await page.evaluate(() => {
 		}),
 	).observe(button, { attributes: true });
 });
-await frameUntil(page, () => !!document.getElementById('late'), null, 10000);
+await release(`${RUN}-focus`);
+await frameUntil(page, () => !!document.getElementById('late'), null, 20000);
 await sleep(300);
 const kept = {
 	look: await reloadLook(page),

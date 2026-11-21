@@ -182,6 +182,9 @@ const callPageHTML = (
 	const above = ancestors && ancestors.length ? ancestors[0] : null;
 	const scope = new URL('.', location.href).pathname;
 	const fetching = fetch.bind(window);
+	const later = setTimeout.bind(window);
+	const rootOf = Object.getOwnPropertyDescriptor(Document.prototype, 'documentElement').get;
+	const closing = Document.prototype.close;
 	const pending = new Set();
 	let settled = false;
 	const text = (value, limit) => typeof value === 'string' && value.length <= limit;
@@ -356,7 +359,16 @@ const callPageHTML = (
 			performance.clearResourceTimings();
 			document.open();
 			document.write(markup);
-			document.close();
+			// closed a task later, unless the shell's client wrote the page
+			// by then: its bundle can run inside the write (a script already
+			// at hand), and then it writes the page only from a microtask
+			// after this one, when a close here would have ended the shell's
+			// parse and fired the frame's load event first (the host read
+			// the tab as loaded while the page still came)
+			const root = rootOf.call(document);
+			later(() => {
+				if (rootOf.call(document) === root) closing.call(document);
+			});
 		};
 		// (the host knows at once that this is a call page, and that it heard)
 		port.postMessage({ ready: true });
