@@ -15,6 +15,9 @@
 //   RERUN=0 npm test           no second run, alone, for a suite that failed
 //   DIAL_DEFAULT=1 npm test    every suite on the demo's default (dialing),
 //                              not only the demo's own (dials() below)
+//   STOMP_SHARED_BROWSER=0 npm test
+//                              a Chrome for each suite, not one for the run
+//                              (SHARED_BROWSER below)
 //
 // Needs a built dist/ (`npm run build`) and Chrome (CHROME env, default
 // /usr/bin/google-chrome). PORT / FIXTURE_PORT pin the ports of a sequential
@@ -35,7 +38,7 @@ import { createServer } from 'node:net';
 import { availableParallelism } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { startFixture } from './fixture.mjs';
-import { sleep, waitForServer } from './lib.mjs';
+import { launchServer, sleep, waitForServer } from './lib.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const suitesDir = `${root}test/suites/`;
@@ -434,6 +437,76 @@ process.on('SIGINT', () => {
 	process.exit(130);
 });
 
+// One Chrome for the run's suites instead of one for each: a suite whose
+// launch() asks for no flag or option of its own (test/lib.mjs) connects to
+// this browser server, and its pages are browser contexts of its own, with
+// cookies, storage, service workers, the HTTP cache, HSTS, permissions and
+// renderer processes of their own. Each Chrome is a browser process, a GPU,
+// network, storage and utility process and their memory before the first
+// page (about 90 MB PSS and ten processes), so eight suites at once ran some
+// eighty processes before any page. STOMP_SHARED_BROWSER=0 gives every suite
+// its own again. A suite that reads or changes something of the whole
+// browser keeps its own (OWN_BROWSER), as does a measurement (isMeasurement),
+// whose numbers are the browser's alone; a suite that failed runs again with
+// its own (RERUN), so a failure that only sharing makes shows as flaky. The
+// server is replaced after SHARED_BROWSER_SUITES suites, so whatever a
+// browser gathers over hours of suites is not every later suite's, and when
+// it dies, for the next suite; the suites still on the old one finish there.
+const SHARED_BROWSER = process.env.STOMP_SHARED_BROWSER !== '0';
+const SHARED_BROWSER_SUITES = 40;
+const OWN_BROWSER = new Set([
+	// ends every SharedWorker of the browser (Target.closeTarget): every
+	// other suite's carrier hosts too
+	'carrier-host',
+	// counts IndexedDB index reads anywhere in the browser (Tracing), and
+	// one tracing session is the browser's
+	'jar-kept-domains',
+	// sums every renderer of the browser (SystemInfo.getProcessInfo)
+	'rtc-cost',
+]);
+let shared = null;
+function sharedServer() {
+	const server = { users: 0, served: 0, dead: false, retired: false };
+	server.ready = launchServer().then((browser) => {
+		browser.process().once('exit', () => (server.dead = true));
+		return browser;
+	});
+	server.ready.catch(() => (server.dead = true));
+	return server;
+}
+function closeShared(server) {
+	return server.ready.then((browser) => browser.close()).catch(() => {});
+}
+/** the shared browser for one run of `name`, or null for one of its own */
+async function takeBrowser(name, own) {
+	if (!SHARED_BROWSER || own || OWN_BROWSER.has(name) || isMeasurement(name))
+		return null;
+	if (!shared || shared.dead || shared.served >= SHARED_BROWSER_SUITES) {
+		const old = shared;
+		shared = sharedServer();
+		if (old) {
+			old.retired = true;
+			if (!old.users) closeShared(old);
+		}
+	}
+	const server = shared;
+	server.users++;
+	server.served++;
+	try {
+		return { server, endpoint: (await server.ready).wsEndpoint() };
+	} catch (error) {
+		console.log(`shared browser failed to start: ${error.message}`);
+		releaseBrowser({ server });
+		return null;
+	}
+}
+function releaseBrowser(taken) {
+	if (!taken) return;
+	taken.server.users--;
+	if (taken.server.retired && !taken.server.users) closeShared(taken.server);
+}
+running.add(() => shared && closeShared(shared));
+
 /**
  * A demo server and a fixture site of their own. No STOMP_PROXY_ORIGIN, so
  * localhost:PORT is the isolated host (proxy on 127.0.0.1) and 127.0.0.1:PORT
@@ -603,11 +676,15 @@ async function startServersOnce(name) {
 function runSuite(
 	name,
 	{ port, fixturePort, slotPorts, contentPorts, wispLog },
+	browser,
 ) {
 	return new Promise((resolve) => {
+		const env = { ...process.env };
+		delete env.STOMP_BROWSER_WS;
 		const child = spawn(process.execPath, [`${suitesDir}${name}.mjs`], {
 			env: {
-				...process.env,
+				...env,
+				...(browser && { STOMP_BROWSER_WS: browser.endpoint }),
 				...blockerEnv(fixturePort),
 				...dialingEnv(name),
 				PORT: port,
@@ -659,13 +736,18 @@ function runSuite(
 	});
 }
 
-/** one suite with servers of its own, start to finish */
-async function runOne(name) {
+/**
+ * one suite with servers of its own, start to finish (`own`: and a browser
+ * of its own)
+ */
+async function runOne(name, own = false) {
 	const started = Date.now();
 	let servers;
+	const browser = takeBrowser(name, own);
 	try {
 		servers = await startServers(name);
 	} catch (error) {
+		releaseBrowser(await browser);
 		console.log(`FAIL ${name}: ${error.message}`);
 		return {
 			name,
@@ -676,7 +758,9 @@ async function runOne(name) {
 			seconds: 0,
 		};
 	}
-	const result = await runSuite(name, servers);
+	const taken = await browser;
+	const result = await runSuite(name, servers, taken);
+	releaseBrowser(taken);
 	servers.stop();
 	await sleep(300);
 	return {
@@ -704,6 +788,8 @@ const workers = Array.from(
 	},
 );
 await Promise.all(workers);
+// a second run has a browser of its own
+if (shared) await closeShared(shared);
 results.sort((a, b) => suites.indexOf(a.name) - suites.indexOf(b.name));
 
 // A suite that failed runs once more, alone, once the others are done: beside
@@ -719,7 +805,7 @@ const oneLine = (text) => text.replace(/\s+/g, ' ').replaceAll('::', ': :');
 if (RERUN)
 	for (const first of results.filter(failedRun)) {
 		console.log(`\nRERUN ${first.name}, alone`);
-		const second = await runOne(first.name);
+		const second = await runOne(first.name, true);
 		first.rerun = failedRun(second) ? 'failed' : 'passed';
 		first.seconds += second.seconds;
 		if (first.rerun === 'passed' && annotate)

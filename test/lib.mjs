@@ -154,6 +154,24 @@ export async function launch(
 		backForwardCache = false,
 	} = {},
 ) {
+	// the run's shared Chrome (test/run.mjs SHARED_BROWSER) when the suite
+	// asks for no flag and no option of its own: browser.close() then closes
+	// the contexts this suite made and leaves the browser to the others
+	if (
+		process.env.STOMP_BROWSER_WS &&
+		!args.length &&
+		!scrollbars &&
+		!env &&
+		!popupBlocker &&
+		!backForwardCache
+	)
+		try {
+			return await chromium.connect(process.env.STOMP_BROWSER_WS, {
+				timeout: 30000,
+			});
+		} catch (error) {
+			console.error(`shared browser unreachable, launching one: ${error}`);
+		}
 	const ignored = [
 		...(scrollbars ? ['--hide-scrollbars'] : []),
 		...(popupBlocker ? ['--disable-popup-blocking'] : []),
@@ -163,12 +181,28 @@ export async function launch(
 		executablePath: CHROME,
 		headless: true,
 		...(env ? { env: { ...process.env, ...env } } : {}),
-		args: [
-			'--no-sandbox',
-			'--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE *.localhost, EXCLUDE 127.0.0.1',
-			...args,
-		],
+		args: [...CHROME_ARGS, ...args],
 		...(ignored.length ? { ignoreDefaultArgs: ignored } : {}),
+	});
+}
+
+const CHROME_ARGS = [
+	'--no-sandbox',
+	'--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE *.localhost, EXCLUDE 127.0.0.1',
+];
+
+/**
+ * The Chrome `launch()` starts with no flags or options, as a browser server
+ * the suites of a run connect to (test/run.mjs SHARED_BROWSER): each suite's
+ * pages are in browser contexts of its own, which share no cookies, storage,
+ * service workers, HTTP cache, HSTS or permissions with another's, and no
+ * renderer process either
+ */
+export function launchServer() {
+	return chromium.launchServer({
+		executablePath: CHROME,
+		headless: true,
+		args: CHROME_ARGS,
 	});
 }
 
