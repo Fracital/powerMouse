@@ -655,6 +655,19 @@ suite, and they run against the real thing:
    `test/corpus/sample/` (the site and bundle named in the file), which CI
    checks on every push.
 
+Firefox: `npm run test:firefox` (test/firefox/smoke.mjs) drives the demo in
+a headless Firefox on a fresh profile over WebDriver BiDi (test/firefox/
+bidi.mjs, a client of our own: playwright-core drives only Playwright's
+patched Firefox), against a demo server and fixture of its own: boot, the
+fixture page firefox-smoke.html proxied in both modes against its native
+load, Wikipedia, MDN, the Web Store and Hacker News (`SKIP_NETWORK=1`
+leaves them out), Back, Forward and a reload with the `?N` tokens, Ctrl+R,
+Stop, themes and Page appearance, the Extensions page, the Tor box and Tor
+mode, offline.html's Download and the saved file, and dialing on content
+slots. It is not in CI and says
+SKIP where there is no Firefox (FIREFOX names a binary); a difference
+Firefox still has goes in its `KNOWN` list with the reason.
+
 ## Style
 
 Prettier (`.prettierrc.json`) and ESLint (`eslint.config.mjs`) are the source

@@ -1,0 +1,4 @@
+{
+	"cache-control": "no-store",
+	"set-cookie": ["ffServer=1; Path=/", "ffHidden=1; Path=/; HttpOnly"]
+}

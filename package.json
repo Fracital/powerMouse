@@ -61,6 +61,7 @@
 		"changelog": "node scripts/changelog.mjs fold",
 		"demo": "node demo/server.js",
 		"test": "node test/run.mjs",
+		"test:firefox": "node test/firefox/smoke.mjs",
 		"test262": "node test/test262/run.mjs",
 		"test262:report": "node test/test262/report.mjs --known test/test262/known.txt",
 		"bench": "python3 -I bench/run.py",

@@ -1,0 +1,131 @@
+<!doctype html>
+<title>firefox smoke</title>
+<body>
+	<h1 id="heading">Firefox smoke</h1>
+	<form id="form" action="/landed" target="formTarget" method="get">
+		<input name="q" value="smoke" />
+	</form>
+	<iframe name="formTarget" id="formTarget"></iframe>
+	<script>
+		// What test/firefox/smoke.mjs reads of a page, natively and through
+		// the proxy, in Firefox: each case a value that is the same in both
+		// when the proxy works (its document, cookies, storage, a synchronous
+		// request through the sync bridge, a WebSocket, a frame, a worker, a
+		// form). The report is window.__ffReport, as JSON, once every case
+		// ran.
+		const report = {};
+		const timed = async (name, run, ms = 15000) => {
+			try {
+				report[name] = await Promise.race([
+					run(),
+					new Promise((resolve) => setTimeout(() => resolve('timed out'), ms)),
+				]);
+			} catch (error) {
+				report[name] = `threw ${error.name}: ${error.message}`;
+			}
+		};
+		(async () => {
+			await timed('location', async () => [
+				location.href,
+				location.origin,
+				document.URL,
+			]);
+			await timed('title', async () => document.title);
+			await timed(
+				'elements',
+				async () => document.getElementsByTagName('*').length,
+			);
+			await timed('cookie', async () => {
+				document.cookie = 'ffPage=1; path=/';
+				return document.cookie.split('; ').sort().join('; ');
+			});
+			await timed('fetchCookie', async () => {
+				const headers = await (await fetch('/echo-headers')).json();
+				return (headers.cookie ?? '').split('; ').sort().join('; ');
+			});
+			await timed('localStorage', async () => {
+				localStorage.setItem('ff-smoke', 'kept');
+				sessionStorage.setItem('ff-smoke', 'session');
+				return [
+					localStorage.getItem('ff-smoke'),
+					sessionStorage.getItem('ff-smoke'),
+				];
+			});
+			await timed('syncXhr', async () => {
+				const start = performance.now();
+				const request = new XMLHttpRequest();
+				request.open('GET', '/pages/um-data.json', false);
+				request.send();
+				return [
+					request.status,
+					request.responseText.trim(),
+					performance.now() - start < 5000,
+				];
+			});
+			await timed(
+				'webSocket',
+				() =>
+					new Promise((resolve, reject) => {
+						const socket = new WebSocket(
+							`${location.origin.replace(/^http/, 'ws')}/ws-echo`,
+						);
+						socket.onmessage = (event) => {
+							const seen = JSON.parse(event.data);
+							resolve({
+								cookie:
+									/ffPage=1/.test(seen.cookie) &&
+									/ffHidden=1/.test(seen.cookie),
+								origin: seen.origin === location.origin,
+								url: seen.url,
+							});
+						};
+						socket.onerror = () => reject(new Error('socket error'));
+					}),
+			);
+			await timed(
+				'iframe',
+				() =>
+					new Promise((resolve) => {
+						addEventListener('message', function listen(event) {
+							if (!event.data?.ffFrame) return;
+							removeEventListener('message', listen);
+							resolve({
+								...event.data.ffFrame,
+								source: event.source === frame.contentWindow,
+								origin: event.origin === location.origin,
+								title: frame.contentDocument?.title,
+							});
+						});
+						const frame = document.createElement('iframe');
+						frame.src = 'firefox-smoke-frame.html';
+						document.body.append(frame);
+					}),
+			);
+			await timed(
+				'worker',
+				() =>
+					new Promise((resolve, reject) => {
+						const worker = new Worker('firefox-smoke-worker.js');
+						worker.onmessage = (event) => resolve(event.data);
+						worker.onerror = (event) =>
+							reject(new Error(event.message || 'worker error'));
+					}),
+			);
+			await timed(
+				'form',
+				() =>
+					new Promise((resolve) => {
+						const target = document.getElementById('formTarget');
+						target.onload = () =>
+							resolve([
+								target.contentDocument?.title,
+								target.contentWindow.location.pathname +
+									target.contentWindow.location.search,
+							]);
+						document.getElementById('form').submit();
+					}),
+			);
+			window.__ffReport = JSON.stringify(report);
+		})();
+	</script>
+</body>

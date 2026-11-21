@@ -1,0 +1,18 @@
+<!doctype html>
+<title>firefox smoke frame</title>
+<p id="frameText">in the frame</p>
+<script>
+	// test/firefox/smoke.mjs: what a same-origin frame of firefox-smoke.html
+	// reads of itself, told to its parent
+	parent.postMessage(
+		{
+			ffFrame: {
+				href: location.href,
+				cookie: /ffPage=1/.test(document.cookie),
+				stored: localStorage.getItem('ff-smoke'),
+				parentTitle: parent.document.title,
+			},
+		},
+		'*',
+	);
+</script>
