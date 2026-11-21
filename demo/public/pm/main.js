@@ -1210,10 +1210,12 @@ if (stomp.kind === 'document') {
 // start carries when it was said (a navigation's, when it started), on
 // the host's clock, so one that comes after the tab's load was stopped or
 // ended counts for nothing (a document's word can come after the frame's
-// load event, which ended that load)
+// load event, which ended that load). A document that is the browser's
+// top (a popup the page opened keeps a window of its own) has no tab to
+// tell, and its word would be a message to the page itself
 const LOAD_MESSAGE = '$stompDemo$load';
 const LOAD_HOOK = `
-if (stomp.kind === 'document' && stomp.isTop) {
+if (stomp.kind === 'document' && stomp.isTop && stomp.window.top !== stomp.window) {
 	const win = stomp.window;
 	const doc = win.document;
 	const origin = win.performance.timeOrigin;
