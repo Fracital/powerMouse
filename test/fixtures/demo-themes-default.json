@@ -1,7 +1,7 @@
 {
 	"views": {
 		"landing": {
-			"digest": "aa2465f529836c89de2db6770c74aabf4f1a5616f35fa0edcf36cc294d752c0e",
+			"digest": "6535f0c75c2e26b3feabe7e9603e6b054d84e4176ac4a189a4dca6dc621c8f00",
 			"common": {
 				"::placeholderbackground-color": "rgba(0, 0, 0, 0)",
 				"::placeholderbackground-image": "none",
@@ -209,20 +209,6 @@
 					"color": "rgb(0, 0, 0)",
 					"outline-color": "rgb(0, 0, 0)"
 				},
-				"label#torLabel": {
-					"opacity": "0.55"
-				},
-				"input#tor": {
-					"::placeholdercolor": "rgb(84, 84, 84)",
-					"accent-color": "rgb(76, 169, 251)",
-					"border-bottom-color": "rgb(84, 84, 84)",
-					"border-left-color": "rgb(84, 84, 84)",
-					"border-right-color": "rgb(84, 84, 84)",
-					"border-top-color": "rgb(84, 84, 84)",
-					"caret-color": "rgb(84, 84, 84)",
-					"color": "rgb(84, 84, 84)",
-					"outline-color": "rgb(84, 84, 84)"
-				},
 				"div#browser>div.chrome:0": {
 					"background-color": "rgb(0, 0, 0)",
 					"background-image": "url(\"/pm/header-background.png\")",
@@ -408,7 +394,7 @@
 			}
 		},
 		"browser": {
-			"digest": "8aad17412772ea69ba6b09ae11cad65bea44c86239ac78708bc72cae23249045",
+			"digest": "a5c2159e7d2e6706511aeb18f249e2bdd8b71823dbeed9e68b40efb8395b361d",
 			"common": {
 				"::placeholderbackground-color": "rgba(0, 0, 0, 0)",
 				"::placeholderbackground-image": "none",
@@ -616,20 +602,6 @@
 					"color": "rgb(0, 0, 0)",
 					"outline-color": "rgb(0, 0, 0)"
 				},
-				"label#torLabel": {
-					"opacity": "0.55"
-				},
-				"input#tor": {
-					"::placeholdercolor": "rgb(84, 84, 84)",
-					"accent-color": "rgb(76, 169, 251)",
-					"border-bottom-color": "rgb(84, 84, 84)",
-					"border-left-color": "rgb(84, 84, 84)",
-					"border-right-color": "rgb(84, 84, 84)",
-					"border-top-color": "rgb(84, 84, 84)",
-					"caret-color": "rgb(84, 84, 84)",
-					"color": "rgb(84, 84, 84)",
-					"outline-color": "rgb(84, 84, 84)"
-				},
 				"div#browser>div.chrome:0": {
 					"background-color": "rgb(0, 0, 0)",
 					"background-image": "url(\"/pm/header-background.png\")",
@@ -828,7 +800,7 @@
 			}
 		},
 		"shields": {
-			"digest": "8af457b909d7c661ffb351f96633a9248fe6acf8d09d26c89cd3b444de8bd2f7",
+			"digest": "a76c02adb6d18e70210b2a7f533c930e48a24e71a0ebd90e8f087f2015fa561d",
 			"common": {
 				"::afterbackground-color": null,
 				"::afterbackground-image": null,
@@ -1048,24 +1020,6 @@
 					"caret-color": "rgb(0, 0, 0)",
 					"color": "rgb(0, 0, 0)",
 					"outline-color": "rgb(0, 0, 0)"
-				},
-				"label#torLabel": {
-					"border-bottom-color": "rgb(255, 255, 255)",
-					"border-left-color": "rgb(255, 255, 255)",
-					"border-right-color": "rgb(255, 255, 255)",
-					"border-top-color": "rgb(255, 255, 255)",
-					"opacity": "0.55"
-				},
-				"input#tor": {
-					"::placeholdercolor": "rgb(84, 84, 84)",
-					"accent-color": "rgb(76, 169, 251)",
-					"border-bottom-color": "rgb(84, 84, 84)",
-					"border-left-color": "rgb(84, 84, 84)",
-					"border-right-color": "rgb(84, 84, 84)",
-					"border-top-color": "rgb(84, 84, 84)",
-					"caret-color": "rgb(84, 84, 84)",
-					"color": "rgb(84, 84, 84)",
-					"outline-color": "rgb(84, 84, 84)"
 				},
 				"div#browser>div.chrome:0": {
 					"background-color": "rgb(0, 0, 0)",
