@@ -5,10 +5,14 @@
 //
 // Each suite gets the median of its seconds over the logs given. A row whose
 // suite was run again (failed, then ran alone) counts its two runs together,
-// so it is left out when other logs have the suite without a rerun. A suite
-// no log names keeps its number, and one no longer in test/suites/ is
-// dropped. Give it the logs of recent green runs on the machine CI runs on:
-// shards cut by stale or foreign numbers end minutes apart.
+// and counts as it is: the second run comes after the shard's other suites,
+// with nothing beside it, so a suite that often fails costs its shard that
+// much. (Leaving such rows out whenever another log had a run without one
+// cut shards whose longest ran 20 minutes against 19, on four runs each
+// held out from the other three's numbers.) A suite no log names keeps its
+// number, and one no longer in test/suites/ is dropped. Give it the logs of
+// recent green runs on the machine CI runs on, or on one whose suites take
+// as long: shards cut by stale or foreign numbers end minutes apart.
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -22,7 +26,7 @@ if (!logs.length) {
 
 // │ 12 │ 'name' │ pass │ fail │ exit │ seconds │ 'rerun' │ (colours aside)
 const ROW =
-	/^│\s*\d+\s*│\s*'([^']+)'\s*│\s*\d+\s*│\s*\d+\s*│\s*(?:-?\d+|null)\s*│\s*(\d+)\s*│(?:\s*'([a-z]*)'\s*│)?/;
+	/^│\s*\d+\s*│\s*'([^']+)'\s*│\s*\d+\s*│\s*\d+\s*│\s*(?:-?\d+|null)\s*│\s*(\d+)\s*│/;
 // eslint-disable-next-line no-control-regex
 const ANSI = /\x1b\[[0-9;]*[A-Za-z]/g;
 
@@ -31,10 +35,8 @@ for (const log of logs)
 	for (const line of readFileSync(log, 'utf8').split('\n')) {
 		const match = ROW.exec(line.replace(ANSI, ''));
 		if (!match) continue;
-		const [, name, seconds, rerun] = match;
-		const runs = seen.get(name) ?? [];
-		runs.push({ seconds: Number(seconds), rerun: Boolean(rerun) });
-		seen.set(name, runs);
+		const [, name, seconds] = match;
+		seen.set(name, [...(seen.get(name) ?? []), Number(seconds)]);
 	}
 
 const median = (values) => {
@@ -55,8 +57,7 @@ let measured = 0;
 for (const name of names) {
 	const runs = seen.get(name);
 	if (runs) {
-		const plain = runs.filter((run) => !run.rerun);
-		out[name] = median((plain.length ? plain : runs).map((r) => r.seconds));
+		out[name] = median(runs);
 		measured++;
 	} else if (old[name] !== undefined) out[name] = old[name];
 }
