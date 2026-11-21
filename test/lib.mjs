@@ -449,19 +449,22 @@ export async function downloadBytes(download) {
 /**
  * The CDP browserContextId of a Playwright context (Target.getTargetInfo of
  * one of its pages), or null while it has no page: what tells its targets
- * from the others of a browser's Target domain
+ * from the others of a browser's Target domain. The page's session it asks
+ * through is never detached: a detach ends what the page's domains hold for
+ * every session of it (a WebAuthn virtual authenticator goes, and passkeys
+ * failed 57 checks while this detached its session).
  */
+const contextIds = new WeakMap();
 export async function contextIdOf(context) {
+	if (contextIds.has(context)) return contextIds.get(context);
 	for (const page of context.pages()) {
-		let session;
 		try {
-			session = await context.newCDPSession(page);
+			const session = await context.newCDPSession(page);
 			const { targetInfo } = await session.send('Target.getTargetInfo');
+			contextIds.set(context, targetInfo.browserContextId);
 			return targetInfo.browserContextId;
 		} catch (error) {
 			// the page closed
-		} finally {
-			await session?.detach().catch(() => {});
 		}
 	}
 	return null;
