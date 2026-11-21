@@ -371,11 +371,21 @@ export default class NavigateModule extends Module<DocumentClient> {
 			).NavigationCurrentEntryChangeEvent?.prototype ?? {},
 			'navigationType',
 		)?.get;
-		if (navigation && changeType)
+		// (not a called document's: its navigation and its events are the
+		// inject's, whose currententrychange the browser's getter refuses as
+		// an illegal invocation, thrown out of the page's navigate(); it says
+		// how it moved with called.moved below)
+		if (navigation && changeType && !moduleClient.called)
 			Reflect.apply(global.EventTarget.prototype.addEventListener, navigation, [
 				'currententrychange',
 				(event: Event) => {
-					const type = Reflect.apply(changeType, event, []);
+					let type: unknown;
+					try {
+						type = Reflect.apply(changeType, event, []);
+					} catch (error) {
+						// an event the page made of another kind
+						return;
+					}
 					if (typeof type === 'string') how = type;
 				},
 			]);
