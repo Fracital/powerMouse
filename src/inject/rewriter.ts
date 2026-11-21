@@ -258,10 +258,13 @@ export const deferredHeld = (): boolean => deferredMade.has(DEFERRED_FACTORY);
 export function deferredFactory(
 	name: string = DEFERRED_FACTORY,
 	part?: string,
+	// false: only a text this realm or the realm above holds, never the
+	// file's synchronous request (src/inject/dom/deferred.ts partAtHand)
+	ask = true,
 ): (shared: unknown, part?: string) => unknown {
 	let made = deferredMade.get(name);
 	if (!made) {
-		const text = statementText(name);
+		const text = statementText(name, ask);
 		const group = text !== null && part ? partGroup(text, part) : null;
 		// named as the file the statement is in: the stack cleaner drops the
 		// frames of the inject's own files
@@ -280,7 +283,7 @@ export function deferredFactory(
 }
 
 /** one of the file's statements (fileStatements), by its name: the top's, or the file's */
-function statementText(name: string): string | null {
+function statementText(name: string, ask = true): string | null {
 	try {
 		const held: unknown =
 			name === LIGHT_FACTORY
@@ -290,6 +293,7 @@ function statementText(name: string): string | null {
 	} catch (error) {
 		// the realm above is gone or of another kind: this one asks
 	}
+	if (!ask && fetched === null) return null;
 	return fileStatements()[DEFERRED_STATEMENTS.indexOf(name) + 1] ?? null;
 }
 

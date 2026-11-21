@@ -12,7 +12,10 @@
 // natively, in time, in both modes. The first proxied document of a tab
 // there often had a Request with no body getter (as a fresh profile's first
 // page has natively), which the bundle read as it loaded: such a document
-// never ran (changes/request-body-absent.md). WebKit stops a page's
+// never ran (changes/request-body-absent.md). A frame's own reads
+// (localStorage, document.cookie) there reached their 10 s limit and threw a
+// RangeError: the frame held no part to ask with
+// (changes/firefox-frame-sync-reads.md). WebKit stops a page's
 // worker while the page waits (src/server/syncFrozen.ts), so no answer of
 // the bridge came at all: a request there came back with status 0 after
 // 30 s, localStorage and document.cookie threw a RangeError after 10 s,
@@ -40,12 +43,7 @@ const REPORT = 'window.__seReport';
 
 // Differences known and left, by engine, mode and case, with why. One
 // that now reads as natively fails too: take it off.
-const FIREFOX_FRAME =
-	"in Firefox 160 a frame's own reads of the bridge (localStorage, document.cookie) reach their 10 s limit and throw a RangeError, as at 09c3fd26 (open: the answer to a frame's request)";
-const KNOWN = {
-	'Firefox same-origin: frame': FIREFOX_FRAME,
-	'Firefox isolated: frame': FIREFOX_FRAME,
-};
+const KNOWN = {};
 
 function compare(engine, mode, want, got) {
 	for (const name of new Set([

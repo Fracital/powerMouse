@@ -9,7 +9,7 @@ import Module from '../../Module';
 import ResourceTimingModule from '../../modules/ResourceTiming';
 import { withStack } from '../../nativeErrors';
 import DocumentClient from '../Client';
-import { deferred, heldPart } from '../deferred';
+import { deferred, heldPart, partAtHand } from '../deferred';
 
 const statusEmpty: number[] = [101, 204, 205, 304];
 
@@ -444,6 +444,14 @@ export default class SyncModule extends Module<DocumentClient> {
 			}, RELEASE_MS);
 		}
 
+		// the ask for the answer (syncAnswer.ts). A frame holds no parts of
+		// its own: where the browser may let the worker answer the ask
+		// (Firefox) it makes the part from its top's text, or every read of
+		// a frame there waited out the limit
+		const asker =
+			client.syncAnswers === false
+				? heldPart('syncAnswer')
+				: partAtHand('syncAnswer');
 		const timeout = limit ?? (loopback ? LOOPBACK_TIMEOUT : TIMEOUT);
 		const deadline = Date.now() + timeout;
 		// an answer this late may be one that cannot come: the controller is
@@ -457,7 +465,7 @@ export default class SyncModule extends Module<DocumentClient> {
 			// to a control character: wait for the whole of it
 			// (or in the answer to an ask for them: syncAnswer.ts)
 			const answer = joinAnswer(
-				readCookies() + (heldPart('syncAnswer')?.(client, id, deadline) ?? ''),
+				readCookies() + (asker?.(client, id, deadline) ?? ''),
 				id,
 			);
 			if (!answer) {

@@ -35,10 +35,12 @@ const parts = { __proto__: null } as unknown as Partial<DeferredParts>;
  */
 export function deferred<Name extends keyof DeferredParts>(
 	name: Name,
+	// false: never the file's synchronous request (partAtHand)
+	ask = true,
 ): DeferredParts[Name] {
 	const part = parts[name];
 	if (part !== undefined) return part as DeferredParts[Name];
-	const group = deferredFactory(undefined, name)(shared, name) as
+	const group = deferredFactory(undefined, name, ask)(shared, name) as
 		Partial<DeferredParts> | undefined;
 	if (!group) throw new Error(`Stomp: the deferred parts have no ${name}`);
 	for (const key of Reflect.ownKeys(group) as (keyof DeferredParts)[])
@@ -55,6 +57,28 @@ export function heldPart<Name extends keyof DeferredParts>(
 	name: Name,
 ): DeferredParts[Name] | undefined {
 	return parts[name] ?? (deferredHeld() ? deferred(name) : undefined);
+}
+
+/** whether partAtHand found the parts out of reach: it looks once */
+let outOfReach = false;
+
+/**
+ * The deferred part `name` where it costs this realm no request: held (as
+ * heldPart), or made from the text of the top above it (a frame's, which no
+ * shell gave the parts' function), else undefined. Never the file's
+ * synchronous request, and it looks for the top's text once.
+ */
+export function partAtHand<Name extends keyof DeferredParts>(
+	name: Name,
+): DeferredParts[Name] | undefined {
+	const held = heldPart(name);
+	if (held !== undefined || outOfReach) return held;
+	try {
+		return deferred(name, false);
+	} catch (error) {
+		outOfReach = true;
+		return undefined;
+	}
 }
 
 /** the passkey provider's client, once this bundle has evaluated it */
