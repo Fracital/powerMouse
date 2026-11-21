@@ -71,14 +71,6 @@
 	"/websockets/Send-before-open.any.worker.html?default": {
 		"Send data on a WebSocket before connection is opened - INVALID_STATE_ERR is returned": "FAIL: assert_throws_dom: function \"function() { wsocket.send(\"Message to send\") }\" threw object \"Error: Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.\" that is not a DOMException INVALI"
 	},
-	"/websockets/Send-null.any.html?default": {
-		"(harness)": "TIMEOUT: ",
-		"Send null data on a WebSocket - Connection should be closed": "TIMEOUT: Test timed out"
-	},
-	"/websockets/Send-null.any.worker.html?default": {
-		"(harness)": "TIMEOUT: ",
-		"Send null data on a WebSocket - Connection should be closed": "TIMEOUT: Test timed out"
-	},
 	"/websockets/close-invalid.any.html?default": {
 		"0 on a websocket": "FAIL: assert_throws_dom: function \"function() { ws.close(t[0]); }\" threw object \"Error: Failed to execute 'close' on 'WebSocket': The code must be either 1000, or between 3000 and 4999. 0 is neither.\" that ",
 		"500 on a websocket": "FAIL: assert_throws_dom: function \"function() { ws.close(t[0]); }\" threw object \"Error: Failed to execute 'close' on 'WebSocket': The code must be either 1000, or between 3000 and 4999. 500 is neither.\" tha",
@@ -261,10 +253,6 @@
 	"/websockets/constructor/007.html?default": {
 		"WebSockets: new WebSocket(url, null char)": "FAIL: assert_throws_dom: function \"function() { new WebSocket(SCHEME_DOMAIN_PORT + '/empty-message', 'a' + String.fromCharCode(0) + 'b') }\" threw object \"Error: Failed to construct 'WebSocket': The subproto"
 	},
-	"/websockets/constructor/013.html?default": {
-		"(harness)": "TIMEOUT: timeout: no report within 30 s",
-		"WebSockets: multiple WebSocket objects": "MISSING: the harness ended TIMEOUT before this subtest"
-	},
 	"/websockets/constructor/021.html?default": {
 		"WebSockets: Same sub protocol twice": "FAIL: assert_throws_dom: function \"function(){new WebSocket(\"ws://certo2.oslo.osa/protocol_array\",[\"foobar, foobar\"])}\" threw object \"Error: Failed to construct 'WebSocket': The subprotocol 'foobar, foobar'"
 	},
@@ -326,23 +314,6 @@
 		"lone low surrogate": "FAIL: assert_throws_dom: function \"function(){ws.send('a\\uDC00x')}\" threw object \"Error: Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.\" that is not a DOMException INVALID_STATE_ERR: pr",
 		"lone high surrogate": "FAIL: assert_throws_dom: function \"function(){ws.send('a\\uD800x')}\" threw object \"Error: Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.\" that is not a DOMException INVALID_STATE_ERR: pr",
 		"surrogates in wrong order": "FAIL: assert_throws_dom: function \"function(){ws.send('a\\uDC00\\uD800x')}\" threw object \"Error: Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.\" that is not a DOMException INVALID_STATE_E"
-	},
-	"/websockets/interfaces/WebSocket/send/010.html?default": {
-		"(harness)": "TIMEOUT: timeout: no report within 30 s",
-		"Constructor succeeds": "MISSING: the harness ended TIMEOUT before this subtest",
-		"WebSockets: sending non-strings (null)": "MISSING: the harness ended TIMEOUT before this subtest",
-		"WebSockets: sending non-strings (undefined)": "MISSING: the harness ended TIMEOUT before this subtest",
-		"WebSockets: sending non-strings (1)": "MISSING: the harness ended TIMEOUT before this subtest",
-		"WebSockets: sending non-strings ([object Window])": "MISSING: the harness ended TIMEOUT before this subtest",
-		"WebSockets: sending non-strings ([object HTMLBodyElement])": "MISSING: the harness ended TIMEOUT before this subtest",
-		"WebSockets: sending non-strings ([object Object])": "MISSING: the harness ended TIMEOUT before this subtest",
-		"WebSockets: sending non-strings ()": "MISSING: the harness ended TIMEOUT before this subtest",
-		"WebSockets: sending non-strings ([object WebSocket])": "MISSING: the harness ended TIMEOUT before this subtest",
-		"WebSockets: sending non-strings (function(){})": "MISSING: the harness ended TIMEOUT before this subtest",
-		"WebSockets: sending non-strings (Error)": "MISSING: the harness ended TIMEOUT before this subtest"
-	},
-	"/websockets/interfaces/WebSocket/send/012.html?default": {
-		"WebSockets: sending null": "FAIL: assert_unreached: Reached unreachable code"
 	},
 	"/websockets/opening-handshake/005.html?default": {
 		"WebSockets: response header and close frame in same packet": "FAIL: assert_equals: expected 1001 but got 1005"

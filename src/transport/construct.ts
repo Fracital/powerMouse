@@ -13,6 +13,7 @@ import {
 	shardedTransport,
 	type ShardsOption,
 } from './ShardedTransport';
+import { settledSends } from './socketSends';
 import { useWebTransportModule } from './webTransportHost';
 import {
 	CarrierTransport,
@@ -119,7 +120,8 @@ export async function constructTransport(
 	).then(({ default: Transport }) => {
 		if (typeof Transport !== 'function')
 			throw new TypeError(`${module} has no default export to construct`);
-		return Transport;
+		// a socket's sends settle when epoxy's do (socketSends.ts)
+		return settledSends(Transport);
 	});
 	// epoxy's `ech_dns` answers are kept across reloads (echCache.ts)
 	const args = withEchCache(options || []);

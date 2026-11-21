@@ -230,10 +230,18 @@ function makeLeaf() {
  * Starts a server on a UDP socket of its own. `events` fills as the server
  * reports (connect, closed, bidi, uni, reset, refused); `waitFor` resolves
  * with the first event, past or future, that `predicate` takes.
+ * `streamWindow` grants each stream that many bytes of flow control (twice
+ * it the connection) instead of 64 KiB; `uplinkMbps` makes what the server
+ * receives come over a link of that rate, a datagram dropped once it would
+ * wait more than `uplinkQueueMs` behind the others, as a slow path's
+ * bottleneck drops them.
  */
 export async function startWebTransportServer({
 	host = '127.0.0.1',
 	port = 0,
+	streamWindow,
+	uplinkMbps,
+	uplinkQueueMs = 40,
 } = {}) {
 	compiled ??= WebAssembly.compile(
 		readFileSync(new URL('wtserver.wasm', here)),
@@ -268,9 +276,23 @@ export async function startWebTransportServer({
 			events.push(event);
 			for (const w of waiters) w(event);
 		},
+		streamWindow,
 	);
-	socket.on('message', (message, from) =>
-		server.recv(message, from.address, from.port),
+	const receive = (message, from) =>
+		server.recv(message, from.address, from.port);
+	// the link's queue: when each datagram is through it (performance.now())
+	let free = 0;
+	socket.on(
+		'message',
+		!uplinkMbps
+			? receive
+			: (message, from) => {
+					const now = performance.now();
+					if (free - now > uplinkQueueMs) return;
+					free =
+						Math.max(free, now) + (message.length * 8) / (uplinkMbps * 1000);
+					setTimeout(() => receive(message, from), free - now);
+				},
 	);
 
 	let closed = false;

@@ -85,7 +85,9 @@ export type ShardToHost = {
 export type ShardSocketMessage =
 	| { type: 'data'; data: WebSocketDataType }
 	| { type: 'close'; code: number; reason: string }
-	| { type: 'error'; error: string };
+	| { type: 'error'; error: string }
+	/** (from the shard) the oldest frame sent that had not left has left (socketSends.ts) */
+	| { type: 'sent' };
 
 /** a raw stream's port, from the shard */
 type RawFromShard =

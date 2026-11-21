@@ -1857,7 +1857,13 @@ export type TransportToHost = {
 			port: MessagePort;
 		},
 		(
-			| { result: 'success'; protocol: string; extensions: string }
+			| {
+					result: 'success';
+					protocol: string;
+					extensions: string;
+					/** one `sent` comes on the port for each frame, once it has left (socketSends.ts) */
+					acks?: true;
+			  }
 			| { result: 'failure'; error: string }
 		),
 	];
@@ -1947,7 +1953,9 @@ export type WorkerToController = {
 
 export type WebSocketMessage =
 	| { type: 'data'; data: WebSocketDataType }
-	| { type: 'close'; code: number; reason: string };
+	| { type: 'close'; code: number; reason: string }
+	/** (to the page) the oldest frame it sent that had not left has left (socketSends.ts) */
+	| { type: 'sent' };
 
 const portPostMessage = MessagePort.prototype.postMessage as (
 	this: MessagePort,

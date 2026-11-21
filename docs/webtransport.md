@@ -335,8 +335,15 @@ before a page makes a session:
    realm's own `ReadableStream` (bytes, as natively) and `WritableStream`
    (a high-water mark of one chunk): what arrives is in the page's stream
    as it arrives, up to 256 KiB ahead of its reader, each chunk the page
-   writes is answered once QUIC took it, so QUIC's flow control is the
-   page's backpressure both ways, and every buffer is transferred.
+   writes is answered once QUIC took it and the session's datagrams have
+   carried all but 256 KiB of what its streams were written (stomp-h3's
+   `until_sent`, as Chrome's write settles once its pipe to the network
+   service took it), so QUIC's flow control and the path's pace are the
+   page's backpressure both ways, and every buffer is transferred. A write
+   settled once quinn took it into its send buffer before (up to the
+   server's flow control and quinn's 15 MiB send window), and an upload
+   counted by settled writes read the page's own speed
+   (`webtransport-buffered`).
    `WebTransportBidirectionalStream`'s two getters are wrapped as the
    session's members are. A session ends in Chrome's order: the datagrams'
    streams, the streams' readables, their writables, `closed`, the two
@@ -429,6 +436,15 @@ a worker, and one the content blocker's list refuses, which the server
 never hears of through the proxy. Natively Chrome takes the server's
 certificate with a pinned hash, or with `--ignore-certificate-errors-spki-list`
 and `--origin-to-force-quic-on`.
+
+`webtransport-buffered` (no network): an upload over a slow path, the
+suite's server granting 16 MiB stream windows (`streamWindow`) and taking
+what it receives through a 24 Mbit/s link that drops what would wait more
+than 40 ms (`uplinkMbps`): what the page's writes settled at 0.5, 1 and 2 s
+is about what the link carried, natively and proxied in both demo modes,
+and the server reads every byte. With a stomp-h3 whose writes settle once
+quinn took them (test/webtransport-env.mjs `writesSettleAsSent`) the
+proxied pace is reported as known: all 8 MiB settled by 0.5 s.
 
 ## Wisp over WebTransport
 

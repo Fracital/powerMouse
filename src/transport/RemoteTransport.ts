@@ -145,7 +145,8 @@ export default class RemoteTransport implements ProxyTransport {
 		onclose: (code: number, reason: string) => void,
 		onerror: (error: string) => void,
 	): [
-		(data: WebSocketDataType) => void,
+		/** settles once the frame has left (bufferedAmount) */
+		(data: WebSocketDataType) => Promise<void> | void,
 		(code: number, reason: string) => void,
 	] {
 		const [port, theirs] = privateChannel();
@@ -184,9 +185,15 @@ export default class RemoteTransport implements ProxyTransport {
 			opened ? ended(1006, '') : failed('Stomp: the transport port closed');
 		this.sockets.add(dropped);
 		const pending: WebSocketMessage[] = [];
+		// each frame's send settles once the serving side says it has left
+		// (socketSends.ts): the page's bufferedAmount. A serving side that
+		// says nothing of it (acks unset) settles each at once
+		let acks = false;
+		const leaving: (() => void)[] = [];
 		const deliver = (data: WebSocketMessage) => {
 			if (over) return;
 			if (data.type === 'data') onmessage(data.data);
+			else if (data.type === 'sent') leaving.shift()?.();
 			else if (data.type === 'close') ended(data.code, data.reason);
 		};
 
@@ -199,6 +206,7 @@ export default class RemoteTransport implements ProxyTransport {
 			.then((response) => {
 				if (over) return;
 				if (response.result === 'success') {
+					acks = response.acks === true;
 					onopen(response.protocol, response.extensions);
 					opened = true;
 					for (const data of pending.splice(0)) deliver(data);
@@ -215,12 +223,16 @@ export default class RemoteTransport implements ProxyTransport {
 		);
 
 		return [
-			(data) =>
+			(data) => {
 				postToPort(
 					port,
 					{ type: 'data', data } satisfies WebSocketMessage,
 					transferablesOf(data),
-				),
+				);
+				// (a frame of a socket that ended never leaves)
+				if (acks && !over)
+					return new Promise<void>((resolve) => leaving.push(resolve));
+			},
 			closeSocket,
 		];
 	}

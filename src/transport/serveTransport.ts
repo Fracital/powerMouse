@@ -29,6 +29,7 @@ import {
 import { resumableBody } from './resumableBody';
 import { RpcHelper } from './rpc';
 import { poolOf, reportsVersion, type SocketPass } from './socketPool';
+import { acknowledgedSends } from './socketSends';
 import {
 	connectionLine,
 	logTransport,
@@ -572,7 +573,7 @@ export default function serveTransport(
 							logTransport(
 								`WebSocket to ${url}: HTTP/1.1 Upgrade over ${url.startsWith('wss:') ? 'TLS over ' : ''}a Wisp TCP stream, ${rideOf(transport, false)}`,
 							);
-						resolve({ result: 'success', protocol, extensions });
+						resolve({ result: 'success', protocol, extensions, acks: true });
 					},
 					(data) =>
 						postToPort(
@@ -615,8 +616,12 @@ export default function serveTransport(
 					socket.close();
 				}
 				if (!over) sockets.add(end);
+				// the page is told when each frame has left (its bufferedAmount)
+				const sendFrame = acknowledgedSends(send, () =>
+					postToPort(socket, { type: 'sent' } satisfies WebSocketMessage),
+				);
 				socket.onmessage = ({ data }: MessageEvent<WebSocketMessage>) => {
-					if (data.type === 'data') send(data.data);
+					if (data.type === 'data') sendFrame(data.data);
 					else if (data.type === 'close') {
 						sockets.delete(end);
 						pass.closed();

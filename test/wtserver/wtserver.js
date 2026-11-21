@@ -309,15 +309,19 @@ export class Server {
 	}
 	/**
 	 * `cert`: the leaf's DER; `key`: its PKCS#8 DER; `address`/`port`: the
-	 * socket the host bound; `send(bytes, address, port)`; `emit(json)`.
+	 * socket the host bound; `send(bytes, address, port)`; `emit(json)`;
+	 * `stream_window`: the flow control window of each stream instead of
+	 * the Go fixture's 64 KiB (and twice it for the connection), as a
+	 * server that grants a client a long path's worth.
 	 * @param {Uint8Array} cert
 	 * @param {Uint8Array} key
 	 * @param {string} address
 	 * @param {number} port
 	 * @param {Function} send
 	 * @param {Function} emit
+	 * @param {number | null} [stream_window]
 	 */
-	constructor(cert, key, address, port, send, emit) {
+	constructor(cert, key, address, port, send, emit, stream_window) {
 		try {
 			const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
 			const ptr0 = passArray8ToWasm0(cert, wasm.__wbindgen_export_2);
@@ -341,6 +345,7 @@ export class Server {
 				port,
 				addHeapObject(send),
 				addHeapObject(emit),
+				isLikeNone(stream_window) ? 0x100000001 : stream_window >>> 0,
 			);
 			var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
 			var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);

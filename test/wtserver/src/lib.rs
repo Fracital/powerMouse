@@ -45,7 +45,10 @@ pub struct Server {
 #[wasm_bindgen]
 impl Server {
 	/// `cert`: the leaf's DER; `key`: its PKCS#8 DER; `address`/`port`: the
-	/// socket the host bound; `send(bytes, address, port)`; `emit(json)`.
+	/// socket the host bound; `send(bytes, address, port)`; `emit(json)`;
+	/// `stream_window`: the flow control window of each stream instead of
+	/// the Go fixture's 64 KiB (and twice it for the connection), as a
+	/// server that grants a client a long path's worth.
 	#[wasm_bindgen(constructor)]
 	pub fn new(
 		cert: Vec<u8>,
@@ -54,6 +57,7 @@ impl Server {
 		port: u16,
 		send: Function,
 		emit: Function,
+		stream_window: Option<u32>,
 	) -> Result<Server, JsError> {
 		EMIT.with(|e| *e.borrow_mut() = Some(emit));
 		let local = SocketAddr::new(address.parse().map_err(fail)?, port);
@@ -74,9 +78,13 @@ impl Server {
 		// the Go fixture's limits: 64 KiB per stream, 1 MiB per connection
 		// (fixed windows), datagrams on, quic-go's 100 streams each way
 		let mut transport = TransportConfig::default();
+		let (stream_window, window) = match stream_window {
+			Some(n) => (n, n.saturating_mul(2)),
+			None => (64 * 1024, 1024 * 1024),
+		};
 		transport
-			.stream_receive_window(VarInt::from_u32(64 * 1024))
-			.receive_window(VarInt::from_u32(1024 * 1024))
+			.stream_receive_window(VarInt::from_u32(stream_window))
+			.receive_window(VarInt::from_u32(window))
 			// what the server may have unacknowledged toward a client in all:
 			// quinn's 10 MB default would bind before Chrome's windows do on
 			// a long path (test/wisp-wt.mjs delayMs)

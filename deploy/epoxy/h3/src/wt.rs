@@ -399,6 +399,17 @@ impl<F> Drop for Wait<'_, F> {
 	}
 }
 
+/// What a stream's write may leave unsent when it settles: Chrome's write
+/// settles once its bytes are in the pipe to the network service, which
+/// sends them as QUIC's congestion window lets it, so a page's
+/// `writer.ready` and its write promises keep pace with the path. quinn takes
+/// a write into its send buffer as far as flow control and `send_window`
+/// (15 MiB) allow, so a write settled long before its bytes left and an
+/// upload measured by them read the page's own speed. A write here settles
+/// once the session's datagrams have carried all but this much of what its
+/// streams were written (`write`).
+const UNSENT_AHEAD: u64 = 256 * 1024;
+
 const READ: usize = 0;
 const WRITE: usize = 1;
 const RESET: usize = 2;
@@ -575,6 +586,11 @@ struct Session {
 	protocol: RefCell<String>,
 	datagrams_sent: Cell<u64>,
 	datagrams_received: Cell<u64>,
+	/// the datagram bytes sent when the session began, and every byte its
+	/// streams have been written since: a write settles once the datagrams
+	/// sent since carry nearly that many (`write`)
+	sent_base: u64,
+	written: Cell<u64>,
 }
 
 
@@ -1267,7 +1283,7 @@ pub async fn connect_webtransport(
 		quic,
 		endpoint,
 		socket,
-		stats,
+		stats: stats.clone(),
 		handshake_ms: start.elapsed().as_secs_f64() * 1000.0,
 		change: Notify::default(),
 		ended: Cell::new(false),
@@ -1288,6 +1304,8 @@ pub async fn connect_webtransport(
 		protocol: RefCell::new(String::new()),
 		datagrams_sent: Cell::new(0),
 		datagrams_received: Cell::new(0),
+		sent_base: stats.sent_bytes.load(std::sync::atomic::Ordering::Relaxed),
+		written: Cell::new(0),
 	});
 	{
 		// the connection ending ends the session
@@ -1320,6 +1338,49 @@ pub async fn connect_webtransport(
 			Err(fail(&e))
 		}
 	}
+}
+
+/// Waits for the datagrams to carry what the streams were written, `len`
+/// more bytes of it now (`UNSENT_AHEAD`). The datagrams' bytes are
+/// counted whole (headers, acknowledgements, other streams' and
+/// datagrams' bytes, retransmissions), so this never waits longer than
+/// the bytes take to leave. A stop or the session's end settles it as
+/// the write's own would; a send side over another way settles it.
+async fn until_sent(s: &Session, st: &Rc<RefCell<Stream>>, len: u64) -> Result<(), JsValue> {
+	let target = s.written.get() + len;
+	s.written.set(target);
+	poll_fn(|cx| {
+		let mut guard = st.borrow_mut();
+		let stream = &mut *guard;
+		if let Some(n) = stream.stop_code {
+			return Poll::Ready(Err(js_error(format!("stop {n}"))));
+		}
+		if s.ended.get() {
+			return Poll::Ready(Err(gone()));
+		}
+		let sent = s.stats.sent_bytes.load(std::sync::atomic::Ordering::Relaxed) - s.sent_base;
+		if sent + UNSENT_AHEAD >= target || stream.send.is_none() {
+			return Poll::Ready(Ok(()));
+		}
+		// woken by the next datagram sent, or by quinn on a STOP_SENDING
+		// (or the stream's end), or by the session's end
+		s.stats.wake_on_send(cx.waker());
+		let stopped = stream.poll_with(WRITE, cx, |stream, cx| {
+			let send = stream.send.as_ref().unwrap();
+			pin!(send.stopped()).poll(cx)
+		});
+		match stopped {
+			Poll::Ready(Ok(Some(code))) => {
+				let n = h3_to_wt(code.into_inner());
+				stream.stop_code = Some(n);
+				stream.send_open = false;
+				Poll::Ready(Err(js_error(format!("stop {n}"))))
+			}
+			Poll::Ready(_) => Poll::Ready(Ok(())),
+			Poll::Pending => Poll::Pending,
+		}
+	})
+	.await
 }
 
 /// One WebTransport session: streams by handle, datagrams, close.
@@ -1454,8 +1515,10 @@ impl WtSession {
 		}
 	}
 
-	/// Resolves once quinn has taken every byte (its flow control and send
-	/// buffer are the backpressure). Rejects "stop <n>", "gone".
+	/// Resolves once quinn has taken every byte (its flow control is the
+	/// backpressure) and the session's datagrams have carried all but
+	/// `UNSENT_AHEAD` of what its streams were written. Rejects "stop <n>",
+	/// "gone".
 	pub async fn write(&self, handle: u32, data: Vec<u8>) -> Result<(), JsValue> {
 		let s = self.s.clone();
 		let st = s.stream(handle)?;
@@ -1490,7 +1553,8 @@ impl WtSession {
 				}
 			}
 		})
-		.await
+		.await?;
+		until_sent(&s, &st, data.len() as u64).await
 	}
 
 	/// FIN after what was written

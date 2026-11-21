@@ -14,7 +14,7 @@ use std::{
 		atomic::{AtomicBool, AtomicU64, Ordering},
 		Arc, Mutex,
 	},
-	task::{Context, Poll},
+	task::{Context, Poll, Waker},
 };
 
 use futures_channel::mpsc;
@@ -41,6 +41,19 @@ pub struct Stats {
 	pub received: AtomicU64,
 	pub sent_bytes: AtomicU64,
 	pub received_bytes: AtomicU64,
+	/// woken (and let go) each time a datagram is sent: a WebTransport
+	/// write waits on them for its bytes to leave (wt.rs, `write`)
+	pub sent_wakers: Mutex<Vec<Waker>>,
+}
+
+impl Stats {
+	/// `waker` is woken at the next datagram sent
+	pub fn wake_on_send(&self, waker: &Waker) {
+		let mut wakers = self.sent_wakers.lock().unwrap();
+		if !wakers.iter().any(|w| w.will_wake(waker)) {
+			wakers.push(waker.clone());
+		}
+	}
 }
 
 pub struct ChannelSocket {
@@ -153,6 +166,10 @@ impl AsyncUdpSocket for ChannelSocket {
 		let chunk = Uint8Array::from(transmit.contents);
 		self.stats.sent.fetch_add(1, Ordering::Relaxed);
 		self.stats.sent_bytes.fetch_add(transmit.contents.len() as u64, Ordering::Relaxed);
+		let woken: Vec<Waker> = std::mem::take(&mut *self.stats.sent_wakers.lock().unwrap());
+		for waker in woken {
+			waker.wake();
+		}
 		let failed = self.write_failed.clone();
 		// a datagram is fire and forget; a rejected write means the stream is
 		// gone, and the next send reports it

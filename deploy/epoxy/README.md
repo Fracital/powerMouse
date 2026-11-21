@@ -216,6 +216,13 @@ on and an origin offers h3 (docs/http3.md).
   connection goes quiet (no ACK and no CONNECTION_CLOSE after); a
   STOP_SENDING on the CONNECT stream is answered with RESET_STREAM and
   turns the close that follows into a lost session.
+  A stream's write settles once quinn took its bytes and the session's
+  datagrams (`src/socket.rs`, which wakes the writers at each one sent)
+  have carried all but 256 KiB of what the session's streams were written
+  (`until_sent`, `UNSENT_AHEAD`), as Chrome's settles once its pipe to the
+  network service took it: quinn takes a write as far as flow control and
+  its 15 MiB send window allow, so a write settled long before its bytes
+  left (`webtransport-buffered`).
   `serverCertificateHashes` replaces WebPKI with `src/certhash.rs`
   (SHA-256 of the leaf, at most 14 days of validity that hold now, a
   P-256, P-384, Ed25519 or RSA key, the handshake signature checked).

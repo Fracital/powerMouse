@@ -11,6 +11,11 @@
 //   send collects it before the read side sees it (a QUIC Initial goes out
 //   two datagrams at a time), so such a stream closes on a later
 //   retransmit or never, and the session fails when the handshake gives up.
+// - `writesSettleAsSent`: whether that stomp-h3's stream writes settle once
+//   the session's datagrams carried the bytes (deploy/epoxy/h3/src/wt.rs,
+//   `until_sent`) rather than once quinn took them; its glue carries the
+//   write's doc comment, which names `UNSENT_AHEAD`. webtransport-buffered
+//   holds an older build's early settling as known.
 import { createSocket } from 'node:dgram';
 import { readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -27,6 +32,14 @@ export const webTransportClient = (() => {
 		return /export (?:async )?function connect_webtransport\b/.test(
 			readFileSync(STOMP_H3, 'utf8'),
 		);
+	} catch {
+		return false;
+	}
+})();
+
+export const writesSettleAsSent = (() => {
+	try {
+		return /UNSENT_AHEAD/.test(readFileSync(STOMP_H3, 'utf8'));
 	} catch {
 		return false;
 	}

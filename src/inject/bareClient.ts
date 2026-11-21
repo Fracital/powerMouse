@@ -51,15 +51,38 @@ export interface SocketState {
 	 * and every byte it sent once its close had started, which never goes
 	 */
 	buffered: number;
+	/** settles once the last frame sent has left (or failed) */
+	leaving?: Promise<unknown>;
 }
 
-/** the bytes send() puts on the wire for `data` (a string goes as UTF-8) */
-function sentBytes(data: unknown): number {
+const toTag = Object.prototype.toString;
+/**
+ * What send() sends of `data`, as the browser converts its argument: a
+ * Blob, a buffer or a view as it is (of any realm: a frame's page hands its
+ * own), anything else as its string (null goes as "null")
+ */
+function sendable(
+	data: unknown,
+): string | ArrayBufferLike | Blob | ArrayBufferView {
+	if (typeof data === 'string' || ArrayBuffer.isView(data)) return data;
+	const tag = Reflect.apply(toTag, data, []) as string;
+	if (
+		tag === '[object ArrayBuffer]' ||
+		tag === '[object SharedArrayBuffer]' ||
+		tag === '[object Blob]' ||
+		tag === '[object File]'
+	)
+		return data as ArrayBufferLike | Blob;
+	return String(data);
+}
+
+/** the bytes send() puts on the wire for `data` (sendable's; a string goes as UTF-8) */
+function sentBytes(
+	data: string | ArrayBufferLike | Blob | ArrayBufferView,
+): number {
 	if (typeof data === 'string') return new TextEncoder().encode(data).length;
-	if (ArrayBuffer.isView(data)) return data.byteLength;
-	if (data instanceof Blob) return data.size;
-	if (data instanceof ArrayBuffer) return data.byteLength;
-	return new TextEncoder().encode(String(data)).length;
+	if ('size' in data) return data.size;
+	return data.byteLength;
 }
 
 /**
@@ -296,13 +319,15 @@ function send(
 		);
 	}
 
-	// what the page sends counts in bufferedAmount until the transport has
-	// taken it, which is never while the page's script runs (a promise's
-	// reaction). Once the page's close has started, or the socket closed,
+	// what the page sends counts in bufferedAmount until it has left: the
+	// transport's send settles once the frame was written within the wisp
+	// stream's flow control (src/transport/socketSends.ts), never while the
+	// page's script runs. Once the page's close has started, or the socket closed,
 	// nothing more goes out, natively: the bytes stay counted and that is
 	// all (through the proxy they went out ahead of the close frame, which
 	// the transport is given a microtask later, and a server's answer to
 	// them reached the page)
+	data = sendable(data);
 	const size = sentBytes(data);
 	state.buffered += size;
 	if (state.closeRequest || state.closed) return;
@@ -311,16 +336,27 @@ function send(
 	// the page's own stays as it was, natively, so the transport is given a
 	// copy (of a view, of its bytes only)
 	const sent =
-		data instanceof ArrayBuffer
+		!ArrayBuffer.isView(data) && typeof data !== 'string' && !('size' in data)
 			? data.slice(0)
 			: ArrayBuffer.isView(data)
 				? new Uint8Array(data.buffer, data.byteOffset, data.byteLength).slice()
 						.buffer
 				: data;
 
-	// resolved by then; the transport may still reject, which the
-	// native API would surface as a close/error event
-	state.socket.send(sent as string | ArrayBuffer | Blob).then(
+	// BareCompatibleWebSocket's send drops what the transport's answers
+	// (RemoteTransport's: settled once the frame left), so the transport's
+	// is called itself, as that send calls it once the socket is open; the
+	// transport may still reject, which the native API would surface as a
+	// close/error event
+	const socket = state.socket as unknown as {
+		_data?: (data: string | ArrayBuffer | Blob) => unknown;
+	};
+	const payload = sent as string | ArrayBuffer | Blob;
+	const leaving =
+		typeof socket._data === 'function'
+			? new Promise((resolve) => resolve(socket._data!(payload)))
+			: state.socket.send(payload);
+	state.leaving = leaving.then(
 		() => (state.buffered -= size),
 		(error) => {
 			console.error(error);
@@ -358,8 +394,12 @@ function close(state: SocketState, code?: number, reason?: string) {
 		state.socket.close(code === 1005 ? 1000 : code, reason);
 		// epoxy reports no close for a close that carries anything but
 		// 1000 and no reason (measured): the page's close event comes
-		// once the server had time to answer, as the browser's would
-		setTimeout(() => state.closeNow?.(code, reason), CLOSE_ANSWER_MS);
+		// once the server had time to answer, as the browser's would. The
+		// close frame goes after what the page sent before it, so the time
+		// starts once that has left
+		void Promise.resolve(state.leaving).then(() =>
+			setTimeout(() => state.closeNow?.(code, reason), CLOSE_ANSWER_MS),
+		);
 	});
 }
 

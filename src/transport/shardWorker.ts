@@ -30,6 +30,7 @@ import {
 	type ShardSocketMessage,
 	type ShardToHost,
 } from './shards';
+import { acknowledgedSends, settledSends } from './socketSends';
 import { lanePipe } from './wispSplit';
 
 type RawClient = {
@@ -69,9 +70,11 @@ export function serveShard(scope: DedicatedWorkerGlobalScope) {
 	const rpc = new RpcHelper<ShardBound, ShardToHost>(
 		{
 			make: async ({ instance, module, options }) => {
-				const { default: Transport } = (await import(
+				const { default: Imported } = (await import(
 					/* @vite-ignore */ module
 				)) as { default: new (...args: unknown[]) => ProxyTransport };
+				// a socket's sends settle when epoxy's do (socketSends.ts)
+				const Transport = settledSends(Imported);
 				const [first, ...rest] = options as [Record<string, unknown>];
 				const entry = { opened: false, lanes: new Set() } as Made;
 				// epoxy's function transport: a lane of the transport worker's
@@ -198,8 +201,9 @@ export function serveShard(scope: DedicatedWorkerGlobalScope) {
 						else settle({ result: 'failure', error: errorText(error) });
 					},
 				);
+				const sendFrame = acknowledgedSends(send, () => tell({ type: 'sent' }));
 				port.onmessage = ({ data }: MessageEvent<ShardSocketMessage>) => {
-					if (data.type === 'data') send(data.data);
+					if (data.type === 'data') sendFrame(data.data);
 					else if (data.type === 'close') close(data.code, data.reason);
 				};
 				port.start();

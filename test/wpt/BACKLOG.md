@@ -742,9 +742,8 @@ still fail are the last group below.
   - lone surrogates throw (from the transport's encoder) where they go as
     U+FFFD: `websockets/interfaces/WebSocket/send/004.html?default` (3);
   - `send()` after `close()` must drop the data and count it in
-    bufferedAmount, and null must go as the string "null":
-    `websockets/interfaces/WebSocket/send/007.html?default`,
-    `websockets/interfaces/WebSocket/send/012.html?default` (1 each).
+    bufferedAmount: `websockets/interfaces/WebSocket/send/007.html?default`
+    (1).
 - bufferedAmount is always 0 (`get bufferedAmount() { return 0; }`; the
   stand-in never counts what it handed the transport):
   `websockets/Send-data.any.html?default`,
@@ -760,8 +759,8 @@ still fail are the last group below.
   `websockets/interfaces/WebSocket/bufferedAmount/bufferedAmount-getting.html?default`,
   `websockets/interfaces/WebSocket/bufferedAmount/bufferedAmount-large.html?default`,
   `websockets/interfaces/WebSocket/bufferedAmount/bufferedAmount-unicode.html?default`
-  (1 each). When the transport's send resolves is not when the bytes left,
-  which matters to a page that throttles on bufferedAmount.
+  (1 each). The stand-in now counts a message until the transport says it
+  left (src/transport/socketSends.ts, the `websocket-buffered` suite).
 - Closing while connecting: `readyState` reports CLOSING only when the
   transport socket is open, and `close()` during CONNECTING does not fail
   the connection (error, then close 1006, in a task of their own):
@@ -801,14 +800,6 @@ still fail are the last group below.
     `websockets/Send-binary-arraybuffer.any.worker.html?default`,
     `websockets/Send-binary-65K-arraybuffer.any.html?default`,
     `websockets/Send-binary-65K-arraybuffer.any.worker.html?default`;
-  - `send()` hands a value that is neither a string nor binary (null, a
-    number, an object) to the transport, which throws "Invalid websocket
-    payload: JsValue(..)" where the browser sends `String(value)` (the
-    send/012 row above): `websockets/Send-null.any.html?default`,
-    `websockets/Send-null.any.worker.html?default`,
-    `websockets/interfaces/WebSocket/send/010.html?default`,
-    `websockets/constructor/013.html?default` (013 sends `this.id`, a
-    number; 25 sockets at once work);
   - a frame with a reserved opcode after open fires no error event through
     the proxy (epoxy's read loop errors; not traced where the error is lost:
     the transport's connect, the transport worker or the stand-in):

@@ -992,7 +992,7 @@ class ShardedTransport implements ProxyTransport {
 		onclose: (code: number, reason: string) => void,
 		onerror: (error: string) => void,
 	): [
-		(data: WebSocketDataType) => void,
+		(data: WebSocketDataType) => unknown,
 		(code: number, reason: string) => void,
 	] {
 		const scheme =
@@ -1005,7 +1005,7 @@ class ShardedTransport implements ProxyTransport {
 		// what the page says before the socket is placed waits for it
 		let calls: Calls | null = null;
 		let closed: [number, string] | null = null;
-		const early: WebSocketDataType[] = [];
+		const early: [WebSocketDataType, (sent: unknown) => void][] = [];
 		void this.#take(groupOf(scheme, url.host)).then(
 			(ticket) => {
 				const closes = (code: number, reason: string) => {
@@ -1036,15 +1036,16 @@ class ShardedTransport implements ProxyTransport {
 							closes,
 							fails,
 						);
-				for (const data of early.splice(0)) calls[0](data);
+				for (const [data, sent] of early.splice(0)) sent(calls[0](data));
 				if (closed) calls[1](...closed);
 			},
 			(error) => onerror(errorText(error)),
 		);
 		return [
+			// (settles once the frame has left: socketSends.ts)
 			(data) => {
-				if (calls) calls[0](data);
-				else early.push(data);
+				if (calls) return calls[0](data);
+				return new Promise((sent) => early.push([data, sent]));
 			},
 			(code, reason) => {
 				if (calls) calls[1](code, reason);
@@ -1068,8 +1069,11 @@ class ShardedTransport implements ProxyTransport {
 		// frames come on their own port and can overtake the connect's answer
 		let opened = false;
 		const pending: ShardSocketMessage[] = [];
+		/** each frame sent until the shard says it left, in order */
+		const leaving: (() => void)[] = [];
 		const deliver = (message: ShardSocketMessage) => {
 			if (message.type === 'data') onmessage(message.data);
+			else if (message.type === 'sent') leaving.shift()?.();
 			else if (message.type === 'close') {
 				// the last word: the channel goes, or both workers keep it
 				// (and the shard epoxy's socket) for the transport's life
@@ -1111,11 +1115,13 @@ class ShardedTransport implements ProxyTransport {
 				},
 			);
 		return [
-			(data) =>
+			(data) => {
 				port.postMessage(
 					{ type: 'data', data } satisfies ShardSocketMessage,
 					transferablesOf(data),
-				),
+				);
+				return new Promise<void>((resolve) => leaving.push(resolve));
+			},
 			(code, reason) =>
 				port.postMessage({
 					type: 'close',

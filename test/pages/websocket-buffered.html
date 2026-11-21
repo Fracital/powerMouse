@@ -1,0 +1,110 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>WEBSOCKET BUFFERED</title>
+	</head>
+	<body>
+		<script>
+			// A WebSocket's bufferedAmount against the websocket-buffered
+			// suite's server (?port), which reads nothing for a while: the
+			// page sends a burst and reads bufferedAmount as the server holds
+			// it and after it read it all; sends of every kind keep their
+			// order; a close after a burst goes after the burst.
+			// window.__run(tag, sizes) resolves with what the page saw.
+			const params = new URLSearchParams(location.search);
+			const base = 'ws://127.0.0.1:' + params.get('port');
+			const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+			const chunkOf = (n, seed) => {
+				const bytes = new Uint8Array(n);
+				for (let i = 0; i < n; i++) bytes[i] = (i * seed + 3) & 255;
+				return bytes;
+			};
+			const opened = (path) =>
+				new Promise((resolve, reject) => {
+					const ws = new WebSocket(base + path);
+					ws.binaryType = 'arraybuffer';
+					ws.onopen = () => resolve(ws);
+					ws.onerror = () => reject(new Error('socket failed'));
+				});
+			const answer = (ws) =>
+				new Promise((resolve) => {
+					ws.onmessage = (event) => resolve(JSON.parse(event.data));
+				});
+
+			// a burst of `total` bytes in `chunk` byte messages to a server
+			// that reads nothing for `hold` ms: bufferedAmount right after the
+			// burst, at times while the server holds it, and when it reached 0
+			async function held(tag, { total, chunk, hold }) {
+				const ws = await opened(`/hold?tag=${tag}&bytes=${total}&hold=${hold}`);
+				const got = answer(ws);
+				const bytes = chunkOf(chunk, 7);
+				const start = performance.now();
+				for (let sent = 0; sent < total; sent += chunk) ws.send(bytes);
+				const afterSend = ws.bufferedAmount;
+				const at = {};
+				let drained = null;
+				let lowest = afterSend;
+				const marks = [hold * 0.25, hold * 0.5, hold * 0.9];
+				while (drained === null && performance.now() - start < hold + 20000) {
+					const now = performance.now() - start;
+					const amount = ws.bufferedAmount;
+					if (now < hold) lowest = Math.min(lowest, amount);
+					for (const mark of marks)
+						if (now >= mark && !(mark in at)) at[mark] = amount;
+					if (amount === 0) drained = Math.round(now);
+					await sleep(5);
+				}
+				const server = await Promise.race([got, sleep(20000).then(() => null)]);
+				ws.close();
+				return {
+					afterSend,
+					at: marks.map((mark) => at[mark] ?? null),
+					lowest,
+					drained,
+					server,
+				};
+			}
+
+			// messages of every kind, sent as fast as the page can: the server
+			// reads each one's first byte, in the order they came
+			async function order(tag, { rounds }) {
+				const ws = await opened(`/order?tag=${tag}&count=${rounds * 4}`);
+				const got = answer(ws);
+				const big = 'B'.repeat(200 * 1024);
+				for (let i = 0; i < rounds; i++) {
+					ws.send(new Blob([big]));
+					ws.send('s');
+					ws.send(new TextEncoder().encode('a').buffer);
+					ws.send(new Blob(['b']));
+				}
+				const server = await Promise.race([got, sleep(15000).then(() => null)]);
+				const left = ws.bufferedAmount;
+				ws.close();
+				return { server, left };
+			}
+
+			// a burst and the page's close at once: the server reads the whole
+			// burst and then the close
+			async function closing(tag, { total, chunk, hold }) {
+				const ws = await opened(
+					`/hold?tag=${tag}&bytes=${total}&hold=${hold}&quiet=1`,
+				);
+				const bytes = chunkOf(chunk, 7);
+				for (let sent = 0; sent < total; sent += chunk) ws.send(bytes);
+				ws.close(4001, 'after');
+				const closed = await new Promise((resolve) => {
+					ws.onclose = (event) => resolve(event.code);
+					setTimeout(() => resolve('timeout'), hold + 15000);
+				});
+				return { closed, afterClose: ws.bufferedAmount };
+			}
+
+			window.__run = async (tag, sizes) => ({
+				held: await held(tag, sizes.held).catch((e) => String(e)),
+				order: await order(tag, sizes.order).catch((e) => String(e)),
+				closing: await closing(tag, sizes.closing).catch((e) => String(e)),
+			});
+		</script>
+	</body>
+</html>
