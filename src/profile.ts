@@ -110,11 +110,21 @@ export function storeName(base: string): string {
 	return profileStoreName(base, realmProfile());
 }
 
-/** the service worker script URL of `profile` */
+/**
+ * The service worker script URL of `profile`. The query's other parts stay
+ * as they are written: URLSearchParams writes a bare hash
+ * (`transportWorker.js?<hash>`, src/version.ts) back as `?<hash>=`, which
+ * names no hash to a host that keeps the file for good under it (the demo's
+ * askedByHash), so every reload revalidated the transport worker.
+ */
 export function profileScriptURL(script: URL, profile: string): URL {
 	const url = new URL(script);
-	if (profile) url.searchParams.set('profile', profile);
-	else url.searchParams.delete('profile');
+	const parts = url.search
+		.slice(1)
+		.split('&')
+		.filter((part) => part !== '' && !new URLSearchParams(part).has('profile'));
+	if (profile) parts.push(`profile=${encodeURIComponent(profile)}`);
+	url.search = parts.length ? `?${parts.join('&')}` : '';
 	return url;
 }
 
