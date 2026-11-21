@@ -134,7 +134,9 @@ export function instructionData(
  * parser makes it at its end. The stylesheet is fetched through the proxy,
  * from the document's own origin only (Chrome refuses any other), its
  * imports and includes routed; one that fails to load or transform leaves
- * the document as it is.
+ * the document as it is. A browser without XSLT (Chrome 158 removed it)
+ * neither fetches the stylesheet nor transforms: the PI is no more than a
+ * node there, and the document lands as it is.
  */
 export function xmlProlog(
 	client: DocumentClient,
@@ -161,7 +163,8 @@ export function xmlProlog(
 			)!.value;
 		(before ? prolog : epilog).push(node);
 	}
-	if (xslt === null) return land(prolog, epilog);
+	if (xslt === null || typeof client.global.XSLTProcessor !== 'function')
+		return land(prolog, epilog);
 	const url = new URL(xslt, client.url.toString());
 	const route = (target: string) =>
 		new URL(
