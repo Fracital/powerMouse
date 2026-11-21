@@ -1197,7 +1197,14 @@ export default class Client {
 	 * the restricted stand-in). Null when there is none.
 	 */
 	controlledClient(): Client | null {
-		if (this.controlled) return this;
+		return this.#nearest((client) => client.controlled);
+	}
+	/**
+	 * The nearest client `test` is true of: this one, or an ancestor up the
+	 * chain of each client's native parent. Null when there is none
+	 */
+	#nearest(test: (client: Client) => unknown): Client | null {
+		if (test(this)) return this;
 		if (!this.isDOM) return null;
 		const parentOf = (client: Client) =>
 			(client as unknown as { parent?: typeof globalThis }).parent;
@@ -1210,7 +1217,7 @@ export default class Client {
 					this.names.client
 				];
 				if (!next) break;
-				if (next.controlled) return next;
+				if (test(next)) return next;
 				below = next.global;
 				parent = parentOf(next);
 			} catch (error) {
@@ -1247,27 +1254,7 @@ export default class Client {
 				return false;
 			}
 		};
-		if (routed(this)) return this;
-		if (!this.isDOM) return null;
-		const parentOf = (client: Client) =>
-			(client as unknown as { parent?: typeof globalThis }).parent;
-		let below: typeof globalThis = this.global;
-		let parent = parentOf(this);
-		for (let depth = 0; depth < 16; depth++) {
-			try {
-				if (!parent || parent === below) break;
-				const next = (parent as unknown as Record<string, Client | undefined>)[
-					this.names.client
-				];
-				if (!next) break;
-				if (routed(next)) return next;
-				below = next.global;
-				parent = parentOf(next);
-			} catch (error) {
-				break;
-			}
-		}
-		return null;
+		return this.#nearest(routed);
 	}
 	/**
 	 * The fetch a routed request goes through: this realm's own when a service
@@ -1395,31 +1382,15 @@ export default class Client {
 			this.#serviceWorkerPostMessage.call(controller, message, transfer);
 			return true;
 		}
-		const port = this.#offlineWorker ?? this.#offlineAbove();
+		const port = this.#offlineAbove();
 		if (!port || !this.#portPostMessage) return false;
 		this.#portPostMessage.call(port, message, transfer);
 		return true;
 	}
-	/** offline.html's port of the nearest document above this one that has it (a frame the page made) */
+	/** offline.html's port of this document, else of the nearest one above it that has it (a frame the page made) */
 	#offlineAbove(): MessagePort | null {
-		if (!this.isDOM) return null;
-		let below: unknown = this.global;
-		let parent = (this as unknown as { parent?: unknown }).parent;
-		for (let depth = 0; depth < 16; depth++) {
-			try {
-				if (!parent || parent === below) return null;
-				const next = (parent as Record<string, Client | undefined>)[
-					this.names.client
-				];
-				if (!next) return null;
-				if (next.#offlineWorker) return next.#offlineWorker;
-				below = next.global;
-				parent = (next as unknown as { parent?: unknown }).parent;
-			} catch (error) {
-				return null;
-			}
-		}
-		return null;
+		const found = this.#nearest((client) => client.#offlineWorker);
+		return found ? found.#offlineWorker : null;
 	}
 	/**
 	 * The routed URL of an inline document (src/server/inline.ts) for markup
