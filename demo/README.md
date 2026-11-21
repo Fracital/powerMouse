@@ -314,14 +314,16 @@ holyWisp is started.
     address bar, opens a sidebar listing the bookmarks; a click opens one
     in the current tab, the middle button or Ctrl in a new one, and a drag
     (a long press with a finger) or Alt+Up/Down reorders them. The
-    first visit bookmarks Fracital, vibeOS, Estro and Krunk, then the quick
+    first visit bookmarks Fracital, vibeOS, estrogen and Krunk, then the quick
     links Reddit, Google, YouTube and Discord at the URLs their tiles open,
-    then the Chrome Web Store (which the Extensions page installs from),
-    each once: `stomp-demo:bookmarks-seeded` keeps the URLs already offered
+    then the Chrome Web Store (which the Extensions page installs from)
+    and N SVG (vibeOS's Nsvg, with vibeOS's icon for it), each once: `stomp-demo:bookmarks-seeded` keeps the URLs already offered
     (it was `1` when the defaults were the first four), so one the user
     removes stays removed and a default added later still comes to a list
     seeded before it. They carry curated icons and tile colours bundled in
-    `pm/icons/`, and the titles and descriptions their pages gave.
+    `pm/icons/`, and the titles and descriptions their pages gave. A
+    default that changed (Estro became estrogen) updates in a profile
+    seeded before: each field still at its old value takes the new one.
 
 13. **Sign in with token (Discord).** A key button in the address bar, to the
     left of the status ticker, shows only on a discord.com page (its real

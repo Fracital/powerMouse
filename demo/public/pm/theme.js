@@ -1,5 +1,5 @@
 // The demo UI's themes (docs/themes.md): Default (Powermouse's own look),
-// Light, Dark, Follow system, and themes installed from the Chrome Web
+// Light, Dark, SystemYA Light, Follow system, and Chrome Web Store
 // Store. A classic script in index.html's <head>, after main.css: it puts
 // the chosen theme on the root before the body is parsed, so the first
 // paint is in it. globalThis.PMTheme is the interface; pm/main.js builds
@@ -9,9 +9,17 @@
 // themes are attribute rules there (data-pm-theme), and an installed theme
 // is Light or Dark (its scheme) with its own values for some tokens, written
 // here into a rule of their own.
+//
+// The pages' mode (Settings, Page appearance) is Chrome's Light, Dark or
+// Device, with the theme's scheme in place of the device's: the proxied
+// pages' prefers-color-scheme. It is data-pm-page-scheme on the root, and
+// main.css gives every frame that color-scheme, which is what a frame's
+// document takes its preference from (Chrome 157, measured).
 (() => {
 	const CHOICE_KEY = 'stomp-demo:theme';
 	const INSTALLED_KEY = 'stomp-demo:themes';
+	const MODE_KEY = 'stomp-demo:page-scheme';
+	const MODES = Object.freeze(['theme', 'light', 'dark']);
 	const DB_NAME = 'stomp-demo-themes';
 	const DB_STORE = 'images';
 	const root = document.documentElement;
@@ -191,7 +199,13 @@
 			id: 'dark',
 			name: 'Dark',
 			scheme: 'dark',
-			preview: preview('#2e3436', '#2a2f31', '#232728', '#8cb3e0', '#eeeeec'),
+			preview: preview('#000', '#000', '#000', '#e8ed58', '#fff'),
+		},
+		{
+			id: 'systemya-light',
+			name: 'SystemYA Light',
+			scheme: 'light',
+			preview: preview('#000', '#fff', '#000', '#e8ed58', '#fff'),
 		},
 		{ id: 'system', name: 'Follow system', scheme: 'light', preview: null },
 	].map((theme) =>
@@ -836,7 +850,9 @@
 				? systemScheme()
 				: theme.id === 'default'
 					? null
-					: theme.scheme;
+					: theme.id === 'systemya-light'
+						? theme.id
+						: theme.scheme;
 		clearCustom();
 		root.removeAttribute('data-pm-custom');
 		root.removeAttribute('data-pm-ntp-image');
@@ -844,7 +860,8 @@
 		if (scheme) root.setAttribute('data-pm-theme', scheme);
 		else root.removeAttribute('data-pm-theme');
 		root.dataset.pmChoice = theme.id;
-		if (theme.source === 'builtin') return;
+		paintPageScheme();
+		if (theme.source === 'builtin') return paintTitleBar();
 		const rule = customRule();
 		for (const [name, value] of Object.entries(theme.tokens))
 			rule.setProperty(`--pm-${name}`, value);
@@ -854,6 +871,7 @@
 		if (theme.images.theme_ntp_background)
 			root.setAttribute('data-pm-ntp-image', '');
 		root.setAttribute('data-pm-custom', '');
+		paintTitleBar();
 		loadPictures(theme).then((urls) => {
 			if (ticket !== applying) return;
 			for (const [name, url] of Object.entries(urls))
@@ -865,11 +883,71 @@
 		});
 	}
 
+	// ---- the installed app's title bar ------------------------------------
+
+	// Chrome paints the installed app's title bar with the theme color.
+	// Use the toolbar color in the browser, and the page color at home.
+	const titleBar = document.querySelector('meta[name="theme-color"]');
+	function paintTitleBar() {
+		if (!titleBar) return;
+		const browser = document.getElementById('browser');
+		const bar =
+			root.classList.contains('opening') ||
+			(browser && !browser.classList.contains('hidden'));
+		const color = getComputedStyle(root)
+			.getPropertyValue(bar ? '--pm-toolbar' : '--pm-page')
+			.trim();
+		if (color && titleBar.content !== color) titleBar.content = color;
+	}
+	addEventListener('DOMContentLoaded', () => {
+		const browser = document.getElementById('browser');
+		if (browser)
+			new MutationObserver(paintTitleBar).observe(browser, {
+				attributeFilter: ['class'],
+			});
+		paintTitleBar();
+	});
+
+	// ---- the pages' mode ---------------------------------------------------
+
+	const readMode = () => {
+		const saved = storage.get(MODE_KEY);
+		return MODES.includes(saved) ? saved : 'theme';
+	};
+	let mode = readMode();
+
+	/** the preference the pages have: the mode's, or the theme's scheme */
+	function pageScheme() {
+		if (mode !== 'theme') return mode;
+		const theme = shown ?? builtin('default');
+		return theme.id === 'system' ? systemScheme() : theme.scheme;
+	}
+	function paintPageScheme() {
+		root.dataset.pmPageScheme = pageScheme();
+	}
+
+	/** choose the pages' mode: 'theme' (Match theme), 'light' or 'dark' */
+	function setPageMode(next) {
+		if (!MODES.includes(next))
+			throw new TypeError(`PMTheme: no page mode ${next}`);
+		storage.set(MODE_KEY, next === 'theme' ? null : next);
+		mode = next;
+		paintPageScheme();
+		changed('mode');
+		return pageScheme();
+	}
+
 	const events = new EventTarget();
 	function changed(reason) {
 		events.dispatchEvent(
 			new CustomEvent('change', {
-				detail: { reason, id: choice, theme: current() },
+				detail: {
+					reason,
+					id: choice,
+					theme: current(),
+					pageMode: mode,
+					pageScheme: pageScheme(),
+				},
 			}),
 		);
 	}
@@ -1057,6 +1135,12 @@
 	});
 	// another window of the demo chose or installed a theme
 	addEventListener('storage', (event) => {
+		if (event.key === MODE_KEY) {
+			mode = readMode();
+			paintPageScheme();
+			changed('storage');
+			return;
+		}
 		if (event.key !== CHOICE_KEY && event.key !== INSTALLED_KEY) return;
 		installed = readInstalled();
 		for (const id of [...pictures.keys()])
@@ -1079,9 +1163,13 @@
 		// (the name the Web Store side calls it by)
 		uninstall: remove,
 		fromChrome,
+		pageMode: () => mode,
+		setPageMode,
+		pageScheme,
 		addEventListener: events.addEventListener.bind(events),
 		removeEventListener: events.removeEventListener.bind(events),
 		TOKENS,
+		PAGE_MODES: MODES,
 		IMAGES: Object.freeze(Object.keys(IMAGE_TOKENS)),
 	});
 

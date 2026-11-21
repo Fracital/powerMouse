@@ -15,8 +15,8 @@
 /* ---- themes (pm/theme.js, docs/themes.md) --------------------------------
    Every colour and background of the UI is one of these tokens. :root holds
    the Default theme, Powermouse's own look; data-pm-theme on the root picks
-   Light or Dark, and an installed theme (a Chrome Web Store theme) is one of
-   those two with its own values for some tokens, which pm/theme.js writes in
+   Light, Dark or SystemYA Light. An installed Chrome Web Store theme uses
+   Light or Dark with its own values for some tokens, which pm/theme.js writes in
    a rule of its own over them. The -rgb tokens are channels that rules use
    at an alpha of their own (rgba(var(--pm-x-rgb), 0.12)); --pm-shadow-k
    scales every shadow's alpha. What stays as it is in every theme: the quick
@@ -312,118 +312,36 @@
 	--pm-shadow-k: 0.35;
 }
 
-/* Dark: the darkest Aluminiums, flat, with Sky Blue and Butter */
+/* Dark keeps the original black powerMouse homepage. Only the browser and
+   navigation bars lose the Default theme's striped header image. */
 :root[data-pm-theme='dark'] {
 	color-scheme: dark;
-	--pm-page: #1b1e1f;
-	--pm-page-image: none;
-	--pm-text: #eeeeec;
-	--pm-ntp: #232728;
-	--pm-ntp-text: #eeeeec;
-	--pm-border: #41474a;
-	--pm-link: #8cb3e0;
-	--pm-link-hover: #a9c7ea;
-	--pm-link-active: #729fcf;
-	--pm-link-bright: #a9c7ea;
-	--pm-focus: #8cb3e0;
-	--pm-status: #8cb3e0;
-	--pm-error: #ef6b6b;
-	--pm-error-soft: rgba(239, 41, 41, 0.2);
-	--pm-muted: #a0a49e;
-	--pm-hover: #2c3133;
-	--pm-raised: #2e3436;
-	--pm-raised-ring: #555753;
-	--pm-rail: #3d4345;
-	--pm-avatar: #3d4345;
-	--pm-accent: #fce94f;
-	--pm-accent-hover: #fdf08a;
-	--pm-accent-active: #edd400;
-	--pm-accent-text: #fce94f;
-	--pm-on-accent: #1b1e1f;
-	--pm-frame: #2e3436;
-	--pm-frame-image: none;
-	--pm-frame-overlay: none;
-	--pm-frame-text: #eeeeec;
-	--pm-frame-inactive: #34393b;
-	--pm-toolbar: #2a2f31;
+	--pm-toolbar: #000;
 	--pm-toolbar-image: none;
-	--pm-toolbar-text: #eeeeec;
-	--pm-navbar: #16191a;
-	--pm-navbar-icon: #d3d7cf;
-	--pm-navbar-press: rgba(114, 159, 207, 0.25);
-	--pm-navbar-press-icon: #8cb3e0;
-	--pm-field: #1b1e1f;
-	--pm-field-active: #23282a;
-	--pm-field-text: #eeeeec;
-	--pm-field-border: #4a5154;
-	--pm-field-muted: #9a9e97;
-	--pm-field-focus: #729fcf;
-	--pm-field-focus-ring: rgba(114, 159, 207, 0.25);
-	--pm-field-divider: #2e3436;
-	--pm-field-hover: #2b3a4c;
-	--pm-field-hover-text: #eeeeec;
-	--pm-field-fg-rgb: 255, 255, 255;
-	--pm-chip: #555753;
-	--pm-chip-text: #eeeeec;
-	--pm-btn-blue: #4fa8e0;
-	--pm-btn-green: #8ae234;
-	--pm-btn-orange: #fcaf3e;
-	--pm-btn-red: #ef2929;
-	--pm-btn-text: #16191a;
-	--pm-recents:
-		radial-gradient(ellipse at 30% 20%, #3a4144 0%, transparent 60%),
-		radial-gradient(ellipse at 80% 80%, #262b2c 0%, transparent 55%), #16191a;
-	--pm-tab-text: #eeeeec;
-	--pm-tab-icon: #eeeeec;
-	--pm-tab-text-muted: rgba(238, 238, 236, 0.7);
-	--pm-tab-pill-border: rgba(238, 238, 236, 0.3);
-	--pm-tab-hover: rgba(255, 255, 255, 0.1);
-	--pm-tab-line: rgba(255, 255, 255, 0.12);
-	--pm-sheet: rgba(27, 30, 31, 0.94);
-	--pm-sheet-fg-rgb: 238, 238, 236;
-	--pm-sheet-ok: #8ae234;
-	--pm-sheet-warn: #fcaf3e;
-	--pm-sheet-error: #ef6b6b;
-	--pm-sheet-link: #8cb3e0;
-	--pm-sheet-on-link: #16191a;
-	--pm-sheet-tag: #a9c7ea;
-	--pm-sheet-tag-border: rgba(140, 179, 224, 0.5);
-	--pm-bookmark-text: #eeeeec;
-	--pm-scrim: rgba(0, 0, 0, 0.5);
-	--pm-dialog: #2a2f31;
-	--pm-dialog-text: #eeeeec;
-	--pm-dialog-muted: #a0a49e;
-	--pm-dialog-focus: #8cb3e0;
-	--pm-dialog-scrim: rgba(0, 0, 0, 0.5);
-	--pm-panel: #262b2c;
-	--pm-panel-sunken: #1d2122;
-	--pm-panel-raised: #30363a;
-	--pm-panel-raised-hover: #3a4144;
-	--pm-panel-control: #22272a;
-	--pm-panel-gutter: #191c1d;
-	--pm-panel-text: #eeeeec;
-	--pm-panel-text-2: #d3d7cf;
-	--pm-panel-text-3: #a0a49e;
-	--pm-panel-text-4: #6f746e;
-	--pm-panel-strong: #ffffff;
-	--pm-panel-accent: #9fbfe3;
-	--pm-panel-accent-rgb: 159, 191, 227;
-	--pm-panel-on-accent: #14263a;
-	--pm-panel-accent-border: #3d5a7a;
-	--pm-panel-accent-hover: #729fcf;
-	--pm-panel-icon: #d3d7cf;
-	--pm-panel-divider: #3a4144;
-	--pm-panel-outline: #555753;
-	--pm-panel-thumb: #eeeeec;
-	--pm-panel-warn: #f5c27a;
-	--pm-panel-warn-rgb: 252, 175, 62;
-	--pm-panel-good: #8ae234;
-	--pm-panel-chevron: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M3 4.5 6 7.5 9 4.5' fill='none' stroke='%23d3d7cf' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>");
-	--pm-code-domain: #8ae234;
-	--pm-code-sep: #f28fb8;
-	--pm-code-selector: #c9a0dc;
-	--pm-code-option: #fcaf3e;
-	--pm-code-exception: #8cb3e0;
+	--pm-navbar: #000;
+}
+
+/* SystemYA Light keeps the original black homepage and paints both bars flat
+   white. The toolbar controls and navigation glyphs stay legible on white. */
+:root[data-pm-theme='systemya-light'] {
+	color-scheme: light;
+	--pm-toolbar: #fff;
+	--pm-toolbar-image: none;
+	--pm-toolbar-text: #202124;
+	--pm-toolbar-fg-rgb: 0, 0, 0;
+	--pm-navbar: #fff;
+	--pm-navbar-icon: #303030;
+	--pm-navbar-icon-hover: #000;
+	--pm-navbar-press: rgba(0, 0, 0, 0.12);
+	--pm-navbar-press-icon: #000;
+	--pm-chip: #e8e8e8;
+	--pm-chip-text: #202124;
+}
+
+:root[data-pm-theme='systemya-light'] .toolbtn img,
+:root[data-pm-theme='systemya-light'] .cardChrome .toolbtn img,
+:root[data-pm-theme='systemya-light'] .cardChrome .menubtn img {
+	filter: brightness(0.55);
 }
 
 /* the window behind another (Chrome's inactive frame); pm/theme.js sets it */
@@ -446,11 +364,66 @@
 	content: '';
 	position: absolute;
 	top: 128px;
-	right: 25px;
-	width: min(240px, 40%);
+	right: 85px;
+	width: min(240px, calc(40% - 60px));
 	height: 52px;
 	background: var(--pm-ntp-attribution) right center / contain no-repeat;
 	pointer-events: none;
+}
+
+/* ---- focus ---------------------------------------------------------------
+   No element of the UI draws the browser's own focus ring (the auto
+   outline), for a click or a key. Chrome's own UI draws none either: it
+   draws a ring of its own, 2px in the theme's accent and following the
+   control's corners, and only when the keyboard moved the focus
+   (:focus-visible). Its colour is --pm-focus on the bar, the home page, the
+   tabs and the bookmarks, the panels' accent in a popover or a dialog of
+   theirs and the sheets' own in a site's sheet (below); a rule further down
+   only moves a control's ring (outline-offset). A text field shows its
+   focus with its own border, as the omnibox does, so a click in one draws
+   no ring either. A dialog's own box and a frame (a tab's page, an
+   extension's popup) never draw one: the page in a frame draws its own
+   rings, as natively. In forced colours the browser's ring comes back (at
+   the end of this file). */
+:focus,
+:focus-visible {
+	outline: none;
+}
+::-moz-focus-inner {
+	border: 0;
+}
+:focus-visible:where(
+	:not(
+		iframe,
+		frame,
+		dialog,
+		[role='dialog'],
+		[role='alertdialog'],
+		textarea,
+		[contenteditable],
+		input:not(
+			[type='button'],
+			[type='submit'],
+			[type='reset'],
+			[type='image'],
+			[type='checkbox'],
+			[type='radio'],
+			[type='range'],
+			[type='color'],
+			[type='file']
+		)
+	)
+) {
+	outline: 2px solid var(--pm-focus);
+	outline-offset: 2px;
+}
+.popover :focus-visible,
+.shieldsPage :focus-visible,
+.extInstall :focus-visible {
+	outline-color: var(--pm-panel-accent);
+}
+.permissionPrompt :focus-visible {
+	outline-color: var(--pm-dialog-focus);
 }
 
 body {
@@ -509,6 +482,13 @@ a span:active,
 		var(--pm-frame-overlay) left top no-repeat,
 		var(--pm-frame) var(--pm-frame-image);
 }
+/* Built-in Dark and SystemYA Light use the original home's literal header
+   background, including its rounded-corner rendering. Installed themes
+   still use the frame and picture their manifest supplied. */
+:root[data-pm-theme='dark']:not([data-pm-custom]) .head,
+:root[data-pm-theme='systemya-light'] .head {
+	background: #000 url('/pm/header-background.png');
+}
 .head > h1 {
 	vertical-align: middle;
 	display: block;
@@ -533,6 +513,10 @@ a span:active,
 	padding: 5px;
 	line-height: 25px;
 	transition: none;
+}
+:root[data-pm-theme='dark']:not([data-pm-custom]) .listing,
+:root[data-pm-theme='systemya-light'] .listing {
+	background: #000;
 }
 .lbottom {
 	position: absolute;
@@ -657,7 +641,6 @@ a span:active,
 	color: var(--pm-field-text);
 	background-color: var(--pm-field-active);
 	border-color: var(--pm-field-focus);
-	outline: 0;
 	box-shadow: 0 0 0 0.2rem var(--pm-field-focus-ring);
 	border-bottom-left-radius: 0px;
 	border-bottom-right-radius: 0px;
@@ -748,19 +731,15 @@ button::-moz-focus-inner {
 
 .btn-blu:focus {
 	box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.5);
-	outline: 0;
 }
 .btn-grn:focus {
 	box-shadow: 0 0 0 0.2rem rgba(119, 179, 0, 0.5);
-	outline: 0;
 }
 .btn-red:focus {
 	box-shadow: 0 0 0 0.2rem rgba(204, 0, 0, 0.5);
-	outline: 0;
 }
 .btn-org:focus {
 	box-shadow: 0 0 0 0.2rem rgba(255, 136, 0, 0.5);
-	outline: 0;
 }
 
 .url {
@@ -962,8 +941,17 @@ button::-moz-focus-inner {
 		width: 200px;
 		height: 65px;
 	}
+	/* the box is measured against its own form, never the card: the home
+	   screen's zoom in (zoomLanding) transforms the form, and a transformed
+	   form is its absolute box's containing block, so a box sized from the
+	   card (Powermouse's calc(100% - 122px) of .listing) lost the card's 50px
+	   of margin and padding while the zoom ran and snapped back after it.
+	   72px is that 122px less the 50px. */
+	#mainForm {
+		position: relative;
+	}
 	.urlFill {
-		width: calc(100% - 122px);
+		width: calc(100% - 72px);
 		position: absolute;
 	}
 	.url {
@@ -1259,7 +1247,20 @@ html.restoring .omnibox::placeholder {
 	flex: 1 1 auto;
 	width: 100%;
 	border: 0;
-	background: #fff;
+	background: Canvas;
+}
+
+/* The pages' mode (Settings, Page appearance; pm/theme.js): a frame's
+   document takes its prefers-color-scheme from the used color-scheme of its
+   element (Chrome 157, measured), as a tab's page takes it from Chrome's
+   mode. Under a frame is Canvas in that scheme: a page whose own scheme is
+   the frame's has a transparent canvas, which is Chrome's (white, or #121212
+   dark) only over that; with another scheme Chrome paints the page's own */
+:root[data-pm-page-scheme='light'] iframe {
+	color-scheme: light;
+}
+:root[data-pm-page-scheme='dark'] iframe {
+	color-scheme: dark;
 }
 
 /* early-Android (Holo) navigation bar: black strip, white outline glyphs,
@@ -1301,9 +1302,7 @@ html.restoring .omnibox::placeholder {
 	color: var(--pm-navbar-icon-hover);
 }
 
-.navbtn:active,
-.navbtn:focus-visible {
-	outline: 0;
+.navbtn:active {
 	background: var(--pm-navbar-press);
 	color: var(--pm-navbar-press-icon);
 }
@@ -1377,6 +1376,17 @@ body.recents.recents-from-home .dock {
 	transition: none;
 }
 
+/* opening from a tab: the labels do not fade in as one. The active card's
+   bar copy stands in for the live bar, hidden at once, so it is solid from
+   the first frame of its zoom out, as it is for the zoom in (fading in with
+   the controls, it was all but invisible until the card had nearly shrunk:
+   the page zoomed out and the bar seemed to appear in place). The other
+   cards fade in on their own (renderRecents) */
+body.recents.recents-from-tab .recents > .recentsLabels {
+	opacity: 1;
+	transition: none;
+}
+
 /* the switcher's own controls (tab count, new tab, Close all, the dock) go
    at once too: the panel is drawn over every page, so fading them painted
    them over the opening card. Their parts as well, which the universal
@@ -1399,7 +1409,7 @@ body.recents .frames .frame {
 		opacity 0.25s ease,
 		border-radius 0.25s ease,
 		clip-path 0.25s ease;
-	background: #fff;
+	background: Canvas;
 }
 
 body.recents .frames .frame.shade {
@@ -1538,10 +1548,9 @@ body.recents .frames .frame.gone,
 	display: block;
 }
 
-/* the live menu button shows while its menu is open, and when the keyboard
-   is on it (a quiet fill, as the demo has no focus rings) */
-.toolbtn.menubtn[aria-expanded='true'],
-.toolbtn.menubtn:focus-visible {
+/* the live menu button shows while its menu is open (a quiet fill; the
+   keyboard's focus is the ring every control has) */
+.toolbtn.menubtn[aria-expanded='true'] {
 	background: rgba(var(--pm-toolbar-fg-rgb), 0.12);
 	border-color: rgba(var(--pm-toolbar-fg-rgb), 0.18);
 }
@@ -1892,7 +1901,8 @@ body.recents.recents-from-home .dock {
 	animation: landingZoom 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
-/* ---- no browser focus rings anywhere in the demo UI ----------------------- */
+/* ---- no focus glow on the demo's own fields and buttons (the ring is at
+   the top of this file) ---------------------------------------------------- */
 .url:focus,
 .omnibox:focus,
 .form-text:focus,
@@ -1916,7 +1926,6 @@ a:focus,
 button:focus-visible,
 select:focus-visible,
 input:focus-visible {
-	outline: none;
 	box-shadow: none;
 }
 
@@ -2181,11 +2190,6 @@ input:focus-visible {
 	display: inline-block;
 	vertical-align: middle;
 }
-.commit:focus-visible,
-.commitsHead a:focus-visible {
-	outline: 2px solid var(--pm-focus);
-	outline-offset: 2px;
-}
 
 /* the commits fill the room between the status line and the quick-link
    tiles, as a git log: a rail with a dot per commit, the same yellow as
@@ -2403,9 +2407,6 @@ input:focus-visible {
 	width: min(380px, calc(100% - 32px));
 	padding: 16px;
 }
-.passkeyPrompt:focus {
-	outline: none;
-}
 .passkeyPrompt .passkeyHead {
 	align-items: center;
 	gap: 10px;
@@ -2466,10 +2467,6 @@ input:focus-visible {
 .permissionPrompt .close {
 	color: var(--pm-dialog-text);
 }
-.passkeyPrompt button:focus-visible {
-	outline: 2px solid var(--pm-dialog-focus);
-	outline-offset: 2px;
-}
 
 /* ---- bookmarks ------------------------------------------------------------ */
 /* The star: Tango's Butter when the page is bookmarked, hollow Aluminium when
@@ -2505,11 +2502,16 @@ input:focus-visible {
 	opacity: 0.35;
 }
 
+/* The bar's buttons and the bookmarks' ring sit clear of the next control. */
+.toolbtn:focus-visible,
+.navbtn:focus-visible,
 .starbtn:focus-visible,
 .bookmarksTab:focus-visible,
+.extensionsTab:focus-visible,
 .bookmarks button:focus-visible,
-.tokenbtn:focus-visible {
-	outline: 2px solid var(--pm-focus);
+.tokenbtn:focus-visible,
+.shieldsbtn:focus-visible,
+.extAction:focus-visible {
 	outline-offset: 1px;
 }
 
@@ -2557,14 +2559,14 @@ input:focus-visible {
 	inset: calc(-8px / var(--k, 1));
 }
 
-/* the home page's tab, hanging off the card's left edge: flush against the
-   inside of its border, square on that side, in its own band between the
-   status line and the commits */
-.bookmarksTab {
+/* the home page's two tabs hang off the card's edges, flush against its
+   border. They sit opposite one another in the band between the status
+   line and the commits */
+.bookmarksTab,
+.extensionsTab {
 	position: absolute;
 	z-index: 1; /* under .urlFill (2): the suggestions drop over it */
 	top: 132px;
-	left: 0;
 	width: 60px;
 	height: 44px;
 	display: grid;
@@ -2572,21 +2574,35 @@ input:focus-visible {
 	padding: 0;
 	/* one solid line in the card's own border colour */
 	border: 1px solid var(--pm-border);
-	border-left: 0;
-	border-radius: 0 10px 10px 0;
+	border-radius: 10px;
 	background: var(--pm-handle); /* Tango Chocolate */
 	cursor: pointer;
 }
 
-.bookmarksTab:hover {
+.bookmarksTab {
+	left: 0;
+	border-left: 0;
+	border-radius: 0 10px 10px 0;
+}
+
+.extensionsTab {
+	right: 0;
+	border-right: 0;
+	border-radius: 10px 0 0 10px;
+}
+
+.bookmarksTab:hover,
+.extensionsTab:hover {
 	background-color: var(--pm-handle-hover);
 }
 
-.bookmarksTab:active {
+.bookmarksTab:active,
+.extensionsTab:active {
 	background-color: var(--pm-handle-active);
 }
 
-.bookmarksTab img {
+.bookmarksTab img,
+.extensionsTab img {
 	display: block;
 	pointer-events: none;
 	user-select: none;
@@ -2871,12 +2887,14 @@ input:focus-visible {
 }
 
 @media only screen and (max-width: 767px) {
-	.bookmarksTab {
+	.bookmarksTab,
+	.extensionsTab {
 		top: 206px;
 		width: 52px;
 		height: 40px;
 	}
-	.bookmarksTab img {
+	.bookmarksTab img,
+	.extensionsTab img {
 		width: 28px;
 		height: 28px;
 	}
@@ -2884,12 +2902,14 @@ input:focus-visible {
 
 /* a landscape phone: the tab is slimmer, to stay clear of the footer */
 @media only screen and (min-width: 768px) and (max-height: 440px) {
-	.bookmarksTab {
+	.bookmarksTab,
+	.extensionsTab {
 		top: 126px;
 		width: 52px;
 		height: 34px;
 	}
-	.bookmarksTab img {
+	.bookmarksTab img,
+	.extensionsTab img {
 		width: 24px;
 		height: 24px;
 	}
@@ -2925,6 +2945,7 @@ input:focus-visible {
 	.bookmarksScrim,
 	.bookmarksScrim.open,
 	.bookmarksTab,
+	.extensionsTab,
 	.starbtn,
 	.bookmarksList.sorting .bookmark {
 		transition: none;
@@ -2977,10 +2998,6 @@ input:focus-visible {
 }
 .shieldsbtn:active {
 	background-color: rgba(var(--pm-field-fg-rgb), 0.12);
-}
-.shieldsbtn:focus-visible {
-	outline: 2px solid var(--pm-focus);
-	outline-offset: 1px;
 }
 
 .shieldsBadge {
@@ -3119,7 +3136,6 @@ input:focus-visible {
 	background: rgba(var(--pm-panel-fg-rgb), 0.06);
 }
 .pmMenuItem:focus-visible {
-	outline: 2px solid var(--pm-panel-accent);
 	outline-offset: -2px;
 }
 .pmMenuItem .shieldsIcon {
@@ -3174,10 +3190,6 @@ input:focus-visible {
 .extAction[aria-expanded='true'] {
 	background: rgba(var(--pm-toolbar-fg-rgb), 0.12);
 	border-color: rgba(var(--pm-toolbar-fg-rgb), 0.18);
-}
-.extAction:focus-visible {
-	outline: 2px solid var(--pm-focus);
-	outline-offset: 1px;
 }
 /* the icon's 28px area (IconWithBadgeImageSource): the icon at 16px in its
    middle, greyed when the action is off for the tab (Chrome's HSL shift: no
@@ -3258,8 +3270,7 @@ input:focus-visible {
 .toolbtn.extbtn[hidden] {
 	display: none;
 }
-.toolbtn.extbtn[aria-expanded='true'],
-.toolbtn.extbtn:focus-visible {
+.toolbtn.extbtn[aria-expanded='true'] {
 	background: rgba(var(--pm-toolbar-fg-rgb), 0.12);
 	border-color: rgba(var(--pm-toolbar-fg-rgb), 0.18);
 }
@@ -3358,7 +3369,6 @@ input:focus-visible {
 	background: rgba(var(--pm-panel-fg-rgb), 0.06);
 }
 .extRowMore:focus-visible {
-	outline: 2px solid var(--pm-panel-accent);
 	outline-offset: -2px;
 }
 .extPin.on {
@@ -3492,9 +3502,6 @@ input:focus-visible {
 .extInstall * {
 	box-sizing: border-box;
 }
-.extInstall:focus {
-	outline: none;
-}
 /* a long name wraps, as Chrome's title does, beside the icon's top */
 .extInstall .extDialogHead {
 	align-items: flex-start;
@@ -3566,7 +3573,7 @@ input:focus-visible {
 	max-width: calc(100vw - 16px);
 	max-height: calc(100vh - 76px);
 	border: 0;
-	background: #fff;
+	background: Canvas;
 }
 
 /* the Extensions page (the settings-page dialog): a card per extension */
@@ -3755,10 +3762,6 @@ input:focus-visible {
 .shieldsToggle:checked::after {
 	transform: translateX(25px);
 	background: var(--pm-panel-on-accent);
-}
-.shieldsToggle:focus-visible {
-	outline: 2px solid var(--pm-panel-accent);
-	outline-offset: 2px;
 }
 .shieldsToggle.small {
 	width: 40px;
@@ -3955,7 +3958,6 @@ input:focus-visible {
 	transform: rotate(180deg);
 }
 .shieldsDropBtn:focus-visible {
-	outline: 2px solid var(--pm-panel-accent);
 	outline-offset: 1px;
 }
 /* Leo menu open: --leo-duration-m (200ms) --leo-easing-out, opacity and a
@@ -4062,7 +4064,6 @@ input:focus-visible {
 	border-color: var(--pm-panel-accent-hover);
 }
 .shieldsFooter button:focus-visible {
-	outline: 2px solid var(--pm-panel-accent);
 	outline-offset: 1px;
 }
 
@@ -4102,7 +4103,6 @@ input:focus-visible {
 	background: rgba(var(--pm-panel-fg-rgb), 0.05);
 }
 .shieldsBack:focus-visible {
-	outline: 2px solid var(--pm-panel-accent);
 	outline-offset: 1px;
 }
 .shieldsBack .shieldsIcon {
@@ -4339,10 +4339,6 @@ input:focus-visible {
 	border-color: var(--pm-panel-accent);
 	background: rgba(var(--pm-panel-accent-rgb), 0.08);
 }
-.spThemePick:focus-visible {
-	outline: 2px solid var(--pm-panel-accent);
-	outline-offset: 2px;
-}
 .spThemeSwatch {
 	flex: none;
 	display: flex;
@@ -4385,6 +4381,10 @@ input:focus-visible {
 .spThemePick .spRowSub {
 	display: block;
 }
+/* Page appearance's rows: no swatch, the text where a swatch's would start */
+.spModePick {
+	padding: 10px 12px;
+}
 .spThemeRemove {
 	flex: none;
 }
@@ -4421,16 +4421,11 @@ input:focus-visible {
 	overflow-wrap: anywhere;
 	user-select: text;
 }
-.spBack:focus-visible,
-.spClose:focus-visible,
-.spBtn:focus-visible,
-.spCheck:focus-visible,
-.spSelect:focus-visible,
-.spInput:focus-visible,
-.spSettingRow.nav:focus-visible,
-.cmInput:focus-visible {
-	outline: 2px solid var(--pm-panel-accent);
-	outline-offset: 2px;
+/* a text field's focus is its border in the accent (the editor's, around
+   its gutter and text) */
+.spInput:focus,
+.cmEditor:focus-within {
+	border-color: var(--pm-panel-accent);
 }
 
 .spBody {
@@ -4738,7 +4733,6 @@ input:focus-visible {
 	color: var(--pm-panel-text);
 }
 .shieldsSelect:focus-visible {
-	outline: 2px solid var(--pm-panel-accent);
 	outline-offset: 1px;
 }
 .spSelect {
@@ -4964,5 +4958,14 @@ input:focus-visible {
 	.shieldsDropList li,
 	.shieldsDropBtn .chev {
 		transition: none;
+	}
+}
+
+/* forced colours (high contrast): the browser's own focus ring, on every
+   control the keyboard reaches and on a text field, over the themed one */
+@media (forced-colors: active) {
+	:focus-visible {
+		outline: revert !important;
+		outline-offset: revert !important;
 	}
 }

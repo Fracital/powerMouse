@@ -1,21 +1,27 @@
 # Themes in the demo
 
 The demo UI (demo/public) has themes: Default (powerMouse's own look, black
-with the noise and the striped header), Light, Dark, Follow system (Light or
-Dark as the system's `prefers-color-scheme` is), and the Chrome Web Store
-themes a user installs. The menu's Settings has the picker. The theme system
+with the noise and the striped header), Light (Tango's colours), Dark (the
+original black homepage with a solid black browser bar), SystemYA Light (the
+original black homepage with a solid white browser bar), Follow system (Light
+or Dark as the system's `prefers-color-scheme` is), and Chrome Web Store themes.
+The menu's Settings has the picker. The theme system
 is the demo's, not the library's: `pm/theme.js` and the tokens in
 `pm/main.css`, with `globalThis.PMTheme` as the interface the picker and the
 Web Store install use.
 
-The demo-themes suite covers it (see [Tests](#tests)).
+The demo-themes suite covers it (see [Tests](#tests)), and the page-scheme
+suite the pages' mode ([Page appearance](#page-appearance)).
 
 ## How it works
 
 Every colour and background of the UI is a CSS custom property, a token,
 named `--pm-<name>`. `:root` in `pm/main.css` holds the Default theme's
-values. `:root[data-pm-theme='light']` and `:root[data-pm-theme='dark']` hold
-Light's and Dark's. An installed theme is Light or Dark (its `scheme`) with
+values. `:root[data-pm-theme='light']`, `:root[data-pm-theme='dark']` and
+`:root[data-pm-theme='systemya-light']` hold the other built-in variants.
+Dark inherits the original black homepage, and SystemYA Light keeps it while
+painting the browser and navigation bars white. An installed theme is Light
+or Dark (its `scheme`) with
 its own values for the tokens it sets. `pm/theme.js` writes those values into
 a rule of its own, `:root[data-pm-theme][data-pm-custom]` in
 `<style id="pmTheme">`, one `setProperty` call per token.
@@ -30,14 +36,15 @@ picture. The pictures of the theme under it never show through.
 
 The attributes on `<html>`:
 
-| Attribute             | Meaning                                                                         |
-| --------------------- | ------------------------------------------------------------------------------- |
-| `data-pm-theme`       | `light` or `dark`; absent for Default                                           |
-| `data-pm-choice`      | the chosen theme's id (`default`, `light`, `dark`, `system` or an installed id) |
-| `data-pm-custom`      | an installed theme is shown                                                     |
-| `data-pm-ntp-image`   | it has a new tab page picture (`theme_ntp_background`)                          |
-| `data-pm-attribution` | it has an attribution picture as well, which Chrome shows only with one         |
-| `data-pm-inactive`    | the window does not have the focus (Chrome's inactive frame colour)             |
+| Attribute             | Meaning                                                                                |
+| --------------------- | -------------------------------------------------------------------------------------- |
+| `data-pm-theme`       | `light`, `dark` or `systemya-light`; absent for Default                                |
+| `data-pm-choice`      | the chosen id (`default`, `light`, `dark`, `systemya-light`, `system` or installed id) |
+| `data-pm-custom`      | an installed theme is shown                                                            |
+| `data-pm-ntp-image`   | it has a new tab page picture (`theme_ntp_background`)                                 |
+| `data-pm-attribution` | it has an attribution picture as well, which Chrome shows only with one                |
+| `data-pm-inactive`    | the window does not have the focus (Chrome's inactive frame colour)                    |
+| `data-pm-page-scheme` | `light` or `dark`: the pages' preference ([Page appearance](#page-appearance))         |
 
 Where the choice is kept (the demo page's own origin, like the other
 settings):
@@ -47,8 +54,15 @@ settings):
 | `localStorage['stomp-demo:theme']`            | the chosen theme's id                                                |
 | `localStorage['stomp-demo:themes']`           | the installed themes, with `'stored'` in place of each picture       |
 | IndexedDB `stomp-demo-themes`, store `images` | the pictures, keyed `<id>\n<image name>` (and `\n<scale>` per scale) |
+| `localStorage['stomp-demo:page-scheme']`      | Page appearance: `light` or `dark`; absent is Match theme            |
 
 Another window of the demo follows a change through the `storage` event.
+
+`pm/theme.js` also keeps `index.html`'s `<meta name="theme-color">` in the
+theme: `--pm-toolbar` while the browser view shows, `--pm-page` on the home
+screen. It is the colour of the installed app's title bar (demo/README.md,
+"The installed app"), so the title bar matches the theme as Chrome's frame
+does.
 
 ### Default stays as it was
 
@@ -59,10 +73,65 @@ Two rules keep Default's literal backgrounds rather than `var()`: `.head`
 the rounded corners of a `display: table` box a shade differently once its
 background comes through `var()`, or has an explicit position, size or
 repeat. The themed rules (`:root[data-pm-theme] .head`,
-`:root[data-pm-ntp-image] .listing`) carry the tokens instead.
+`:root[data-pm-ntp-image] .listing`) carry the tokens instead. Dark and
+SystemYA Light retain the original literal home header and card backgrounds.
 
-What no theme changes: the quick links' coloured tiles, the white canvas
-under a page (as in Chrome), and a card's close button over its page.
+Focus rings come from the tokens too. No element of the UI draws the
+browser's own ring (the auto outline), for a click or a key; as in Chrome's
+own UI, the keyboard's focus (`:focus-visible`) draws a 2px ring that follows
+the control's corners, in `--pm-focus` on the bar, the home page, the tabs
+and the bookmarks, `--pm-panel-accent` in a popover and the settings dialog,
+and `--pm-dialog-focus` in a site's sheet. A text field shows its focus with
+its border, and a tab's frame draws none (the page in it draws its own). In
+forced colours the browser's ring is back. The rules are at the top of
+`main.css`; a control's own rule only moves its ring (`outline-offset`).
+
+What no theme changes: the quick links' coloured tiles and a card's close
+button over its page. The canvas under a page is Chrome's for the pages'
+mode ([Page appearance](#page-appearance)).
+
+## Page appearance
+
+Settings has Page appearance under the theme: Match theme (the default),
+Light or Dark. It is Chrome's mode (Settings, Appearance, Mode; Customize
+Chrome's Light, Dark and Device), the light or dark preference every page
+gets, with the theme standing for the device: Match theme is the theme's
+`scheme`, so Default (black, with the noise) and Dark are dark, Light and
+SystemYA Light are light, Follow system is the system's, and a Web Store theme is the scheme
+fromChrome gave it, dark when its frame is dark by Chromium's `IsDark` (or
+the `scheme` an installed theme declares).
+
+`pm/theme.js` puts the preference on the root as `data-pm-page-scheme`, and
+`main.css` gives every `iframe` of the demo that `color-scheme`. Chrome 157
+gives a frame's document the used `color-scheme` of its element as its
+`prefers-color-scheme`, when the element's names only one of light and dark
+(the parent document's preference otherwise, so a page's own frames follow
+it). Measured natively, for a frame of the same origin and of another, a
+frame in a frame, and a change while the page is open, which fires the
+media query's `change` event once. So a proxied page sees a real
+preference with nothing emulated: `matchMedia`, `@media` in its
+stylesheets, a `<picture>`'s `<source media>`, `color-scheme: light dark`
+and `<meta name="color-scheme">` all answer as in Chrome in that mode, the
+page's client hint too (docs/client-hints.md). Emulation of the preference
+(DevTools, Playwright's `colorScheme`) outranks the element's, as it
+outranks Chrome's mode.
+
+The frames' background is `Canvas` in that scheme. A frame whose document
+has the frame's scheme has a transparent canvas (white text on the old
+`#fff` for a dark page in Dark), and one with the other scheme gets
+Chrome's opaque canvas for its own, so a page of `color-scheme: normal` is
+white and one of `light dark` is `#121212` in Dark, as a tab is in Chrome.
+Form controls follow the page's own `color-scheme`, as natively.
+
+```js
+PMTheme.pageMode(); // 'theme', 'light' or 'dark'
+PMTheme.setPageMode('dark'); // keep a mode; returns the pages' scheme
+PMTheme.pageScheme(); // 'light' or 'dark': what the pages read
+PMTheme.PAGE_MODES; // ['theme', 'light', 'dark']
+```
+
+A `change` event's `detail` has `pageMode` and `pageScheme` as well; a
+mode change's `reason` is `mode`, another window's is `storage`.
 
 ## The tokens
 
@@ -95,7 +164,7 @@ The `panel-*` tokens were `--sh-*` before themes.
 ## PMTheme
 
 ```js
-PMTheme.list(); // every theme: the four built-in ones, then the installed ones
+PMTheme.list(); // every theme: the five built-in ones, then the installed ones
 PMTheme.current(); // the theme shown
 PMTheme.apply('dark'); // choose a theme by id, and keep the choice
 PMTheme.apply(theme); // show a theme object that is not installed, for this visit only
@@ -295,7 +364,7 @@ with `--disable-default-apps`. Without the key the page uses its own list.
   rewrites it from a run after a deliberate change to Default.
 - `PMTheme.TOKENS` matches the tokens `main.css` defines and uses, and each
   built-in theme gives every token a value.
-- Light, Dark and Follow system, through the picker and its arrow keys, on a
+- Light, Dark, SystemYA Light and Follow system, through the picker and its arrow keys, on a
   dark system that turns light, and in another window.
 - The theme after a reload, from the first frame.
 - fromChrome on three manifests: Chrome's own colours for an empty theme,
@@ -314,3 +383,13 @@ theme applied it shows Default and uninstalls it, and it stays gone after a
 reload. With no list in the config
 the page asks the update service for Shooting Star (pink), and the failed
 download leaves the profile as it was.
+
+`test/suites/page-scheme.mjs` compares a proxied page in Light and in Dark
+with Chrome light and dark (a Chrome of its own with `--force-dark-mode`,
+no emulation), in both controller modes: `matchMedia`, `@media` inline and
+linked, a `<picture>`, a form control, the canvas of a page of `normal`
+and of `light dark`, a nested frame of another site, and the navigation's,
+an image's and the nested frame's `Sec-CH-Prefers-Color-Scheme`. Match theme
+with Default, Light and Dark, and Settings' radio group, while the page is
+open: one change event each, and the image after the switch and the next
+navigation carry the new hint.

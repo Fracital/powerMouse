@@ -18,7 +18,12 @@
 //  - an installed theme is chosen at once, comes back after a reload with
 //    its pictures, is listed in the picker with Remove, and Remove forgets
 //    it (and its stored pictures) with a 'remove' event; the same version
-//    installed again leaves the choice alone.
+//    installed again leaves the choice alone;
+//  - focus rings, in Default and Dark: a click on a toolbar button, the
+//    omnibox, a menu item or a dialog's button draws no ring (no native
+//    one either), nor does the tab's frame; Tab through the bar, in the
+//    settings dialog and into the menu draws the 2px ring in the theme's
+//    colour for the surface; in forced colours the browser's ring is back.
 /* global PMTheme -- the demo page's, in the functions evaluated there */
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -39,8 +44,8 @@ const EXPECTED = fileURLToPath(
 const UPDATE = process.env.UPDATE_EXPECTED === '1';
 const PAGE = `${FIXTURE}pages/bookmark-a.html`;
 const LIGHT_PAGE = 'rgb(228, 230, 225)'; // main.css, Light's --pm-page
-const DARK_PAGE = 'rgb(27, 30, 31)'; // Dark's
 const DEFAULT_PAGE = 'rgb(0, 0, 0)';
+const DARK_PAGE = DEFAULT_PAGE; // Dark keeps the original black homepage
 // a 1x1 PNG, for a theme's pictures
 const PNG =
 	'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
@@ -147,6 +152,37 @@ const state = async (page) => {
 		scheme: getComputedStyle(document.documentElement).colorScheme,
 		stored: localStorage.getItem('stomp-demo:theme'),
 	}));
+};
+const homeAppearance = () => {
+	const styles = (selector) => {
+		const css = getComputedStyle(document.querySelector(selector));
+		return [
+			css.backgroundColor,
+			css.backgroundImage,
+			css.color,
+			css.borderColor,
+		];
+	};
+	return [styles('body'), styles('.head'), styles('.listing')];
+};
+const barAppearance = () => {
+	const bar = getComputedStyle(document.querySelector('.chrome'));
+	const nav = getComputedStyle(document.querySelector('.navbar'));
+	const navIcon = getComputedStyle(document.querySelector('.navbtn'));
+	const card = document.createElement('div');
+	card.className = 'cardChrome';
+	document.body.append(card);
+	const cardStyle = getComputedStyle(card);
+	const view = {
+		bar: bar.backgroundColor,
+		image: bar.backgroundImage,
+		card: cardStyle.backgroundColor,
+		cardImage: cardStyle.backgroundImage,
+		nav: nav.backgroundColor,
+		navIcon: navIcon.color,
+	};
+	card.remove();
+	return view;
 };
 
 /** the browser view on the fixture page, its menu button up */
@@ -390,7 +426,7 @@ const page = await open(ctx);
 	const unset = await page.evaluate((names) => {
 		const css = getComputedStyle(document.documentElement);
 		const out = {};
-		for (const scheme of [null, 'light', 'dark']) {
+		for (const scheme of [null, 'light', 'dark', 'systemya-light']) {
 			if (scheme)
 				document.documentElement.setAttribute('data-pm-theme', scheme);
 			else document.documentElement.removeAttribute('data-pm-theme');
@@ -402,7 +438,7 @@ const page = await open(ctx);
 		return out;
 	}, tokens.api);
 	ok(
-		'Default, Light and Dark each give every token a value',
+		'Every built-in theme gives every token a value',
 		Object.values(unset).every((names) => !names.length),
 		JSON.stringify(unset),
 	);
@@ -420,16 +456,18 @@ const page = await open(ctx);
 			now.stored === null,
 		JSON.stringify(now),
 	);
+	const originalHome = await page.evaluate(homeAppearance);
 	const list = await page.evaluate(() =>
 		PMTheme.list().map(({ id, name, source }) => [id, name, source]),
 	);
 	ok(
-		'the built-in themes are Default, Light, Dark and Follow system',
+		'the built-in themes include SystemYA Light',
 		JSON.stringify(list) ===
 			JSON.stringify([
 				['default', 'Default', 'builtin'],
 				['light', 'Light', 'builtin'],
 				['dark', 'Dark', 'builtin'],
+				['systemya-light', 'SystemYA Light', 'builtin'],
 				['system', 'Follow system', 'builtin'],
 			]),
 		JSON.stringify(list),
@@ -454,6 +492,7 @@ const page = await open(ctx);
 				['default', 'radio', 'true'],
 				['light', 'radio', 'false'],
 				['dark', 'radio', 'false'],
+				['systemya-light', 'radio', 'false'],
 				['system', 'radio', 'false'],
 			]),
 		JSON.stringify(picks),
@@ -508,6 +547,18 @@ const page = await open(ctx);
 			focused === 'dark',
 		JSON.stringify({ now, focused }),
 	);
+	const darkHome = await page.evaluate(homeAppearance);
+	const darkBar = await page.evaluate(barAppearance);
+	ok(
+		'Dark keeps the original powerMouse homepage with solid black bars',
+		JSON.stringify(darkHome) === JSON.stringify(originalHome) &&
+			darkBar.bar === 'rgb(0, 0, 0)' &&
+			darkBar.card === darkBar.bar &&
+			darkBar.nav === darkBar.bar &&
+			darkBar.image === 'none' &&
+			darkBar.cardImage === 'none',
+		JSON.stringify({ darkHome, darkBar, originalHome }),
+	);
 	const fired = await events.jsonValue();
 	ok(
 		"each choice fires 'change'",
@@ -517,6 +568,42 @@ const page = await open(ctx);
 				['apply', 'dark'],
 			]),
 		JSON.stringify(fired),
+	);
+	await page.click('.spThemePick[data-theme="systemya-light"]');
+	now = await state(page);
+	const systemyaHome = await page.evaluate(homeAppearance);
+	const systemyaBar = await page.evaluate(barAppearance);
+	const systemyaPageScheme = await page.evaluate(() => PMTheme.pageScheme());
+	ok(
+		'SystemYA Light keeps the original homepage and paints the bars white',
+		now.theme === 'systemya-light' &&
+			now.choice === 'systemya-light' &&
+			now.stored === 'systemya-light' &&
+			now.scheme === 'light' &&
+			systemyaPageScheme === 'light' &&
+			JSON.stringify(systemyaHome) === JSON.stringify(originalHome) &&
+			systemyaBar.bar === 'rgb(255, 255, 255)' &&
+			systemyaBar.card === systemyaBar.bar &&
+			systemyaBar.nav === systemyaBar.bar &&
+			systemyaBar.image === 'none' &&
+			systemyaBar.cardImage === 'none' &&
+			systemyaBar.navIcon === 'rgb(48, 48, 48)',
+		JSON.stringify({ now, systemyaHome, systemyaBar, originalHome }),
+	);
+	await page.reload();
+	await ready(page);
+	const systemyaFrames = await seen(page);
+	ok(
+		'SystemYA Light is applied from the first frame of a reload',
+		systemyaFrames.length >= 2 &&
+			systemyaFrames.every(
+				(f) =>
+					f.theme === 'systemya-light' &&
+					f.choice === 'systemya-light' &&
+					f.page === '#000' &&
+					(f.body === null || f.body === DEFAULT_PAGE),
+			),
+		JSON.stringify(systemyaFrames),
 	);
 
 	// another window of the demo follows
@@ -548,7 +635,7 @@ const page = await open(ctx);
 				(f) =>
 					f.theme === 'dark' &&
 					f.choice === 'dark' &&
-					f.page === '#1b1e1f' &&
+					f.page === '#000' &&
 					(f.body === null || f.body === DARK_PAGE),
 			),
 		JSON.stringify(frames),
@@ -976,11 +1063,11 @@ const page = await open(ctx);
 	);
 	ok(
 		'the picker lists it, chosen, with Remove; the built-in ones have none',
-		rows.length === 5 &&
-			rows[4].id === ID &&
-			rows[4].checked === 'true' &&
-			rows[4].remove === 'Remove' &&
-			rows.slice(0, 4).every((row) => row.remove === null),
+		rows.length === 6 &&
+			rows[5].id === ID &&
+			rows[5].checked === 'true' &&
+			rows[5].remove === 'Remove' &&
+			rows.slice(0, 5).every((row) => row.remove === null),
 		JSON.stringify(rows),
 	);
 	await page.evaluate(() => {
@@ -1031,7 +1118,7 @@ const page = await open(ctx);
 			]) &&
 			after.keys.length === 0 &&
 			!after.list.includes(ID) &&
-			after.picks.length === 4 &&
+			after.picks.length === 5 &&
 			now.choice === 'default' &&
 			now.theme === null &&
 			now.body === DEFAULT_PAGE &&
@@ -1061,7 +1148,7 @@ const page = await open(ctx);
 				.getPropertyValue('--pm-page')
 				.trim();
 			await PMTheme.remove('bad');
-			return kept === '#1b1e1f';
+			return kept === '#000';
 		}),
 	);
 	ok(
@@ -1082,5 +1169,175 @@ const page = await open(ctx);
 }
 
 await ctx.close();
+
+// ---- focus rings ------------------------------------------------------------
+
+/**
+ * The focused element's outline once its transition is over (main.css's
+ * universal one), and the colour its ring should have: the panels' accent in
+ * a popover or the settings dialog, a sheet's own in a site's sheet, else
+ * --pm-focus
+ */
+const ring = async (page) => {
+	await calm(page);
+	return page.evaluate(() => {
+		const element = document.activeElement;
+		const style = getComputedStyle(element);
+		const token = element.closest('.popover, .shieldsPage, .extInstall')
+			? '--pm-panel-accent'
+			: element.closest('.permissionPrompt')
+				? '--pm-dialog-focus'
+				: '--pm-focus';
+		const probe = document.createElement('i');
+		probe.style.color = `var(${token})`;
+		document.body.append(probe);
+		const want = getComputedStyle(probe).color;
+		probe.remove();
+		return {
+			element: element.id
+				? `#${element.id}`
+				: `${element.localName}.${[...element.classList].join('.')}`,
+			keyboard: element.matches(':focus-visible'),
+			style: style.outlineStyle,
+			width: style.outlineWidth,
+			color: style.outlineColor,
+			want,
+		};
+	});
+};
+const themed = (seen) =>
+	seen.keyboard &&
+	seen.style === 'solid' &&
+	seen.width === '2px' &&
+	seen.color === seen.want;
+
+for (const theme of ['default', 'dark']) {
+	const focusContext = await context();
+	const page = await open(focusContext);
+	await page.evaluate((id) => PMTheme.apply(id), theme);
+	await browse(page);
+
+	// a click draws no ring on anything: a toolbar button, the omnibox, the
+	// menu's first item (focused by the menu as it opens), a dialog's
+	// button, the tab's frame
+	const clicked = {};
+	await page.click('#toolReload');
+	clicked.toolbar = await ring(page);
+	await page.click('#omni input');
+	clicked.omnibox = await ring(page);
+	await page.click('#toolMenu');
+	await settle(page, 100);
+	clicked.menuItem = await ring(page);
+	await page.click('#menuSettings');
+	await page.waitForSelector('#spThemes .spThemePick');
+	await settle(page, 100);
+	await page.click('.spThemePick[aria-checked="true"]');
+	clicked.dialogButton = await ring(page);
+	ok(
+		`${theme}: a click draws no focus ring on a button, the omnibox, a menu item or a dialog's button`,
+		Object.values(clicked).every((seen) => seen.style === 'none') &&
+			clicked.toolbar.element === '#toolReload' &&
+			clicked.menuItem.element === '#menuFullscreen' &&
+			clicked.dialogButton.element === 'button.spThemePick',
+		JSON.stringify(clicked),
+	);
+	// the keyboard in the dialog: the panels' accent
+	await page.keyboard.press('Shift+Tab');
+	const inDialog = await ring(page);
+	ok(
+		`${theme}: Tab in the settings dialog draws the themed ring`,
+		themed(inDialog) && inDialog.want !== '',
+		JSON.stringify(inDialog),
+	);
+	await page.keyboard.press('Escape');
+	await settle(page, 100);
+
+	// Tab through the bar from the address box: each button has the ring in
+	// --pm-focus; the address box shows its focus with its border only
+	await page.click('#omni input');
+	const bar = [];
+	for (let i = 0; i < 8; i++) {
+		await page.keyboard.press('Tab');
+		const seen = await ring(page);
+		bar.push(seen);
+		if (seen.element === '#toolMenu') break;
+	}
+	await page.click('#omni input');
+	await page.keyboard.press('Shift+Tab');
+	bar.push(await ring(page));
+	ok(
+		`${theme}: Tab through the toolbar draws the themed ring on each button`,
+		bar.length >= 4 &&
+			bar.every(themed) &&
+			['#toolShields', '#toolMenu', '#toolSaved'].every((id) =>
+				bar.some((seen) => seen.element === id),
+			),
+		JSON.stringify(bar),
+	);
+	// the menu from the keyboard: its item in the panels' accent
+	await page.focus('#toolMenu');
+	await page.keyboard.press('Shift+Tab');
+	await page.keyboard.press('Tab');
+	await page.keyboard.press('Enter');
+	await settle(page, 100);
+	const item = await ring(page);
+	ok(
+		`${theme}: the menu opened from the keyboard rings its item in the panels' accent`,
+		themed(item) && item.element === '#menuFullscreen',
+		JSON.stringify(item),
+	);
+	await page.keyboard.press('Escape');
+	await settle(page, 100);
+
+	// a click in the tab's page: the frame element draws nothing (the page
+	// in it draws its own rings)
+	const frame = await page.$('#frames .frame:not(.hidden)');
+	const box = await frame.boundingBox();
+	await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+	const inFrame = await ring(page);
+	// and none when Enter in the address box hands the focus to the page (a
+	// keyboard focus, which the browser's own ring drew around the page)
+	await page.click('#omni input');
+	await page.keyboard.press('Enter');
+	await until(
+		page,
+		() => document.activeElement?.localName === 'iframe',
+		Boolean,
+	);
+	const entered = await ring(page);
+	ok(
+		`${theme}: the tab's frame draws no ring when its page has the focus`,
+		[inFrame, entered].every(
+			(seen) => seen.element.startsWith('iframe') && seen.style === 'none',
+		),
+		JSON.stringify({ inFrame, entered }),
+	);
+
+	// forced colours: the browser's own ring on the keyboard's focus
+	await page.emulateMedia({ forcedColors: 'active' });
+	await page.focus('#toolMenu');
+	await page.keyboard.press('Shift+Tab');
+	const forced = await ring(page);
+	await page.emulateMedia({ forcedColors: 'none' });
+	ok(
+		`${theme}: in forced colours the keyboard's focus has the browser's ring`,
+		forced.keyboard && forced.style === 'auto',
+		JSON.stringify(forced),
+	);
+
+	// a text field's click on the Extensions page: its border, no ring
+	await page.evaluate(() => window.openExtensionsPage());
+	await page.waitForSelector('#xpSearch');
+	await settle(page, 100);
+	await page.click('#xpSearch');
+	const search = await ring(page);
+	ok(
+		`${theme}: a click in the Extensions page's search box draws no ring`,
+		search.element === '#xpSearch' && search.style === 'none',
+		JSON.stringify(search),
+	);
+	await focusContext.close();
+}
+
 ok('no page errors', errors.length === 0, JSON.stringify(errors));
 await done(browser);

@@ -482,6 +482,192 @@ ok(
 	JSON.stringify([phoneRest, phoneAfter]),
 );
 
+/**
+ * Every frame of an opening of the manager, from the moment it opens: the
+ * centred card's bar copy and its page, each as [width, painted opacity]
+ * (its own opacity times its ancestors', 0 when hidden)
+ */
+const watchOpen = async (open) => {
+	await page.evaluate(() => {
+		window.__opening = new Promise((resolve) => {
+			const painted = (el) => {
+				if (getComputedStyle(el).visibility === 'hidden') return 0;
+				let opacity = 1;
+				for (let n = el; n; n = n.parentElement)
+					opacity *= +getComputedStyle(n).opacity;
+				return +opacity.toFixed(2);
+			};
+			const watch = new MutationObserver(() => {
+				if (!document.body.classList.contains('recents')) return;
+				watch.disconnect();
+				const out = [];
+				const start = performance.now();
+				const tick = () => {
+					const label = [...document.querySelectorAll('.cardLabel')].find(
+						(l) => l.style.opacity === '1',
+					);
+					const bar = label?.querySelector('.cardChrome');
+					const frame = document.querySelector('.frames .frame:not(.hidden)');
+					out.push(
+						[bar, frame].map((el) =>
+							el
+								? [+el.getBoundingClientRect().width.toFixed(1), painted(el)]
+								: null,
+						),
+					);
+					if (performance.now() - start < 400) requestAnimationFrame(tick);
+					else resolve(out);
+				};
+				requestAnimationFrame(tick);
+			});
+			watch.observe(document.body, {
+				attributes: true,
+				attributeFilter: ['class'],
+			});
+		});
+	});
+	await open();
+	const frames = await page.evaluate(() => window.__opening);
+	await page.keyboard.press('Escape'); // back the way it was entered
+	await sleep(500);
+	return frames;
+};
+
+/**
+ * Opened from a tab, the bar copy zooms out of the live bar, solid on every
+ * frame, as it zooms back in: it starts at the full width, passes through
+ * sizes in between and ends on the card. It used to fade in with the
+ * switcher's controls, so it was all but invisible until the card had
+ * nearly shrunk and the bar seemed not to zoom out at all.
+ */
+const zoomsOut = (frames) => {
+	const bars = frames.map((f) => f[0]);
+	if (bars.some((b) => !b)) return false;
+	const first = bars[0][0];
+	const last = bars.at(-1)[0];
+	const between = bars.filter(([w]) => w < first - 2 && w > last + 2);
+	return (
+		first >= 1279 &&
+		last < 1280 * 0.8 &&
+		between.length >= 2 &&
+		bars.every(([, opacity]) => opacity >= 0.99)
+	);
+};
+const zoomDetail = (frames) =>
+	frames
+		.map((f) => f.map((x) => (x ? x.join('@') : '-')).join('/'))
+		.slice(0, 12)
+		.join(' ');
+
+await page.setViewportSize({ width: 1280, height: 800 });
+await sleep(500);
+const clickTabs = () => page.click('#recents');
+const routes = [
+	['by the Tabs button', async () => {}, clickTabs],
+	[
+		'by Enter on the Tabs button',
+		async () => {},
+		async () => {
+			await page.focus('#recents');
+			await page.keyboard.press('Enter');
+		},
+	],
+	[
+		'just after a navigation',
+		async () => {
+			await submitOmni(page, `${ONE}?zoom`);
+			await shows('HIST 1');
+		},
+		clickTabs,
+	],
+	[
+		'while it loads',
+		async () => {
+			await submitOmni(page, `${TWO}?zoom`);
+			await sleep(30);
+		},
+		clickTabs,
+	],
+	[
+		'just after its menu closed',
+		async () => {
+			await page.click('#toolMenu');
+			await sleep(300);
+			await page.keyboard.press('Escape');
+			await sleep(50);
+		},
+		clickTabs,
+	],
+	[
+		'after switching tabs',
+		async () => {
+			await clickTabs();
+			await sleep(500);
+			await page.evaluate(() =>
+				[...document.querySelectorAll('.cardLabel')]
+					.find((l) => l.style.opacity !== '1')
+					.click(),
+			);
+			await sleep(500);
+			await page.evaluate(() =>
+				[...document.querySelectorAll('.cardLabel')]
+					.find((l) => l.style.opacity === '1')
+					.click(),
+			);
+			await sleep(600);
+		},
+		clickTabs,
+	],
+];
+for (const [route, prep, open] of routes) {
+	const runs = [];
+	for (let i = 0; i < 3; i++) {
+		await prep();
+		runs.push(await watchOpen(open));
+	}
+	const bad = runs.find((frames) => !zoomsOut(frames));
+	ok(
+		`opened from a tab ${route}: its bar copy zooms out, solid, each time`,
+		!bad,
+		bad ? zoomDetail(bad) : `${runs.map((r) => r.length)} frames`,
+	);
+}
+
+// from home no tab is on screen: the cards appear in their slots, the bar
+// copy and its page together, neither zooming out of a full-screen box (the
+// page used to, under a bar copy that stayed put)
+const fromHome = [];
+for (let i = 0; i < 3; i++) {
+	await page.click('#home');
+	await sleep(400);
+	fromHome.push(await watchOpen(clickTabs));
+	// into the tab again, by its card, so the next press of Home leaves a tab
+	await clickTabs();
+	await sleep(500);
+	await page.evaluate(() =>
+		[...document.querySelectorAll('.cardLabel')]
+			.find((l) => l.style.opacity === '1')
+			.click(),
+	);
+	await sleep(600);
+}
+const inPlace = (frames) =>
+	frames.every(
+		([bar, frame]) =>
+			bar &&
+			frame &&
+			bar[0] < 1280 * 0.8 &&
+			Math.abs(bar[0] - frames[0][0][0]) < 1 &&
+			Math.abs(frame[0] - bar[0]) < 1 &&
+			Math.abs(frame[1] - bar[1]) <= 0.05,
+	);
+const strayHome = fromHome.find((frames) => !inPlace(frames));
+ok(
+	'opened from home: the card appears in its slot, its bar copy and page together',
+	!strayHome,
+	strayHome ? zoomDetail(strayHome) : `${fromHome.map((r) => r.length)} frames`,
+);
+
 await done(
 	browser,
 	page.errors.filter((e) => !/max cycles/.test(e)),

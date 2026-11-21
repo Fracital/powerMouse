@@ -3,7 +3,8 @@
    nav (My extensions, Keyboard shortcuts, the Chrome Web Store; Brave's
    style, the current item in the accent with no fill) and a grid of
    cards. Colours are the theme's --pm-panel tokens only (docs/themes.md);
-   a narrow window folds the side nav behind the toolbar's menu button. */
+   a narrow window folds the side nav behind the toolbar's menu button. The
+   focus ring is main.css's, as everywhere in the UI (its focus section). */
 .shieldsPage[data-view='extensions'] {
 	width: min(1040px, calc(100vw - 32px));
 	height: min(780px, calc(100vh - 56px));
@@ -146,14 +147,6 @@
 	width: 18px;
 	height: 18px;
 }
-.xpIconBtn:focus-visible,
-.xpLink:focus-visible,
-.xpErrorPick:focus-visible,
-.xpSide .xpNav:focus-visible {
-	outline: 2px solid var(--pm-panel-accent);
-	outline-offset: 2px;
-}
-
 /* the cards */
 .xpGrid {
 	display: grid;

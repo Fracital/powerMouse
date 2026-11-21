@@ -1895,7 +1895,13 @@ function createLabel(tab) {
 	return label;
 }
 
-function renderRecents(fromFullScreen = false) {
+/**
+ * Build or refresh the cards. Entering the manager `from` a tab, the active
+ * card zooms out of the full-screen view and the others fade in in place;
+ * `from` home, where no tab was on screen, every card appears in its slot
+ */
+function renderRecents(from = null) {
+	const fromFullScreen = from === 'tab';
 	for (const empty of recentsLabels.querySelectorAll('.recentsEmpty'))
 		empty.remove();
 
@@ -1951,6 +1957,18 @@ function renderRecents(fromFullScreen = false) {
 		}
 		void recentsLabels.offsetHeight; // flush, so the next layout transitions
 	}
+	// from home no card moves, it fades in in its slot: the labels with the
+	// switcher, each frame on its own in step. Without this every card flew
+	// in from wherever its boxes last were (the frame from the full view, the
+	// label from where its card last opened), as layoutRecents reads the
+	// bar's height before placing them: the page zoomed out of a full-screen
+	// box under a bar copy that stayed put
+	if (from === 'home')
+		for (const tab of tabs) {
+			labelFor.get(tab).style.transition = 'none';
+			tab.element.style.opacity = '0';
+			tab.element.style.transition = 'opacity 0.25s ease';
+		}
 
 	layoutRecents();
 
@@ -1960,6 +1978,13 @@ function renderRecents(fromFullScreen = false) {
 		void recentsLabels.offsetHeight;
 		for (const tab of tabs) {
 			if (tab === activeTab) continue;
+			labelFor.get(tab).style.transition = '';
+			tab.element.style.transition = '';
+		}
+	}
+	if (from === 'home') {
+		void recentsLabels.offsetHeight; // placed; later moves animate again
+		for (const tab of tabs) {
 			labelFor.get(tab).style.transition = '';
 			tab.element.style.transition = '';
 		}
@@ -1979,9 +2004,12 @@ function showRecents() {
 	const fromHome = recentsReturn === 'landing';
 	const tileRects = fromHome ? rectsOf(homeTiles) : null;
 	document.body.classList.toggle('recents-from-home', fromHome);
+	// the active card's bar copy takes over from the live bar, which is
+	// hidden at once: the copy is solid from the first frame of its zoom out
+	document.body.classList.toggle('recents-from-tab', fromBrowser);
 	document.body.classList.add('recents');
 	recentsPanel.classList.remove('hidden');
-	renderRecents(fromBrowser);
+	renderRecents(fromBrowser ? 'tab' : 'home');
 	void recentsPanel.offsetHeight; // flush, so the fade-in transitions
 	document.body.classList.add('recents-visible');
 	if (tileRects) slideFrom(dockButtons, tileRects);
@@ -1994,6 +2022,7 @@ function teardownRecents() {
 		'recents',
 		'recents-visible',
 		'recents-from-home',
+		'recents-from-tab',
 		'recents-closing',
 	);
 	recentsPanel.classList.add('hidden');
@@ -2925,14 +2954,51 @@ const AGO_UNITS = [
 	[3600, 'hour'],
 	[60, 'minute'],
 ];
-function ago(iso) {
-	const seconds = (Date.now() - new Date(iso)) / 1000;
+function ago(iso, now = Date.now()) {
+	const seconds = (now - new Date(iso)) / 1000;
 	for (const [unit, name] of AGO_UNITS) {
 		const n = Math.floor(seconds / unit);
 		if (n >= 1) return `${n} ${name}${n > 1 ? 's' : ''} ago`;
 	}
 	return 'just now';
 }
+/** milliseconds until ago(iso) says something else: the next whole count of
+ * its unit, or the start of the next larger unit, whichever comes first */
+function agoChangesIn(iso, now = Date.now()) {
+	const elapsed = now - new Date(iso);
+	const at = AGO_UNITS.findIndex(([unit]) => elapsed >= unit * 1000);
+	if (at === -1) return AGO_UNITS.at(-1)[0] * 1000 - elapsed; // just now
+	const unit = AGO_UNITS[at][0] * 1000;
+	let next = (Math.floor(elapsed / unit) + 1) * unit;
+	if (at > 0) next = Math.min(next, AGO_UNITS[at - 1][0] * 1000);
+	return next - elapsed;
+}
+// The commits' times stay current: one timer brings every row's <time> up
+// to date and sets itself for when the soonest of them changes, so a minute
+// ticks over on time. None runs while the page is hidden; showing it again
+// brings them up to date at once.
+let commitTimesTimer = 0;
+function tickCommitTimes() {
+	clearTimeout(commitTimesTimer);
+	commitTimesTimer = 0;
+	if (document.hidden) return;
+	const now = Date.now();
+	let soonest = Infinity;
+	for (const time of $('commitList').querySelectorAll('time[datetime]')) {
+		const label = ago(time.dateTime, now);
+		if (time.textContent !== label) time.textContent = label;
+		const wait = agoChangesIn(time.dateTime, now);
+		if (wait < soonest) soonest = wait;
+	}
+	if (soonest === Infinity) return;
+	// a moment past the change, and at most a day ahead (a longer delay
+	// overflows setTimeout's range)
+	commitTimesTimer = setTimeout(
+		tickCommitTimes,
+		Math.min(soonest + 50, 86400000),
+	);
+}
+document.addEventListener('visibilitychange', tickCommitTimes);
 function element(tag, className, text) {
 	const node = document.createElement(tag);
 	if (className) node.className = className;
@@ -2980,6 +3046,7 @@ async function showCommits() {
 		}
 		note.textContent = data.commits.length ? '' : 'No commits yet';
 		fitCommits();
+		tickCommitTimes();
 	} catch (error) {
 		note.textContent = `GitHub did not answer (${error.message}). The repository is linked above.`;
 	}
@@ -3300,18 +3367,24 @@ addEventListener(
 
 const BOOKMARKS_KEY = 'stomp-demo:bookmarks';
 // The defaults' icons and tile colours are curated, as Fracital's quick
-// links are: Fracital's, Estro's and Krunker's are copies of Fracital's
-// public/icon.svg, estro.svg and krunker.png (Apache-2.0, the same owner),
-// vibeOS (which declares none) has the Tango computer from vibeOS's own
-// icon set (at 32 px, the largest it serves), and globe.png, the Tango web
+// links are: Fracital's and Krunker's are copies of Fracital's
+// public/icon.svg and krunker.png (Apache-2.0, the same owner), estrogen's
+// estrogen.png is estro.help's own PWA icon (its manifest's
+// /icons/icon-192.png, the @sysce/estrogen site of the same owner, fetched
+// 2026-11-20 and stored at 64 px as the others), vibeOS (which declares
+// none) has the Tango computer from vibeOS's own icon set (at 32 px, the
+// largest it serves), and globe.png, the Tango web
 // browser from the same set, stands in for a page whose icon could not be
 // had. The quick links follow them, at the URLs their tiles open, in their
 // tiles' colours, then the Chrome Web Store, which the Extensions page
-// installs from. Their titles, descriptions and icons are what their pages
-// gave (2026-11; reddit.png, google.png, discord.png and chromewebstore.png
-// are the icons the pages declared, at 64 px). Reddit answers with its bot
-// wall, so its name only; Google's, Fracital's and vibeOS's pages declare
-// no description.
+// installs from, then N SVG, which vibeOS's app menu opens as Nsvg. Their
+// titles, descriptions and icons are what their pages gave (2026-11;
+// reddit.png, google.png, discord.png and chromewebstore.png are the icons
+// the pages declared, at 64 px). N SVG's page declares no icon, so nsvg.png
+// is the one vibeOS gives it, Tango's svg mimetype (public domain), at
+// 32 px as vibeOS's tango/mimetypes/32/svg.png. Reddit answers with its bot
+// wall, so its name only; Google's, Fracital's, vibeOS's and N SVG's pages
+// declare no description.
 const DEFAULT_BOOKMARKS = [
 	{
 		title: 'Fracital',
@@ -3326,11 +3399,15 @@ const DEFAULT_BOOKMARKS = [
 		color: '#3465a4',
 	},
 	{
-		title: 'Estro',
+		title: 'estrogen',
 		url: 'https://estro.help/',
-		description: 'Estro: three coding models, one key.',
-		icon: '/pm/icons/estro.svg',
-		color: '#9a5ae7',
+		description:
+			'Estrogen transforms your JavaScript to be more fun for internet crawlers. Running @sysce/estrogen in WASM.',
+		icon: '/pm/icons/estrogen.png',
+		// black, its manifest's theme and background colour, the ground its
+		// icon is drawn for: the orange syringe stands out on it. The #33b5e5
+		// accent is the brand's colour on that black, not a ground of its own
+		color: '#000',
 	},
 	{
 		title: 'Krunk',
@@ -3380,8 +3457,32 @@ const DEFAULT_BOOKMARKS = [
 		// which its white bag reads (on white only the bag's grey band shows)
 		color: '#4989f4',
 	},
+	{
+		title: 'N SVG',
+		url: 'https://cojmar.github.io/nsvg/',
+		icon: '/pm/icons/nsvg.png',
+		// it declares no theme colour: Tango's dark green, from the icon's own
+		// palette, on which its white page reads (on white it would not)
+		color: '#4e9a06',
+	},
 ];
 const GLOBE_ICON = '/pm/icons/globe.png';
+// A default's earlier fields, by URL. A profile seeded before the change
+// keeps them, and the sidebar edits no bookmark, so a field still at its old
+// value is the default's untouched one and takes the new value; a field that
+// differs (a bookmark the user made of the page has the page's own title and
+// icon) is kept. Estro became estrogen (2026-11).
+const FORMER_DEFAULTS = new Map([
+	[
+		'https://estro.help/',
+		{
+			title: 'Estro',
+			description: 'Estro: three coding models, one key.',
+			icon: '/pm/icons/estro.svg',
+			color: '#9a5ae7',
+		},
+	],
+]);
 // a site whose own icon reads poorly on a tile has a curated one, by host,
 // whatever icon its bookmark kept: YouTube's white logo on its red, as
 // Fracital's link cards draw it
@@ -3390,10 +3491,7 @@ const SITE_ICONS = new Map([
 ]);
 // icons drawn as a whole tile (their own rounded square, art to the edges)
 // fill the tile instead of sitting in its middle
-const FULL_TILE_ICONS = new Set([
-	'/pm/icons/estro.svg',
-	'/pm/icons/krunker.png',
-]);
+const FULL_TILE_ICONS = new Set(['/pm/icons/krunker.png']);
 const bookmarksPanel = $('bookmarks');
 const bookmarksList = $('bookmarksList');
 const bookmarksTab = $('bookmarksTab');
@@ -3410,11 +3508,17 @@ function loadBookmarks() {
 	if (!Array.isArray(list)) return [];
 	const seen = new Set();
 	const kept = [];
-	for (const entry of list) {
-		if (typeof entry?.url !== 'string' || seen.has(entry.url)) continue;
-		seen.add(entry.url);
-		// a default seeded before it had its curated icon gets it now
-		const curated = DEFAULT_BOOKMARKS.find((other) => other.url === entry.url);
+	for (const stored of list) {
+		if (typeof stored?.url !== 'string' || seen.has(stored.url)) continue;
+		seen.add(stored.url);
+		// a default seeded before it had its curated icon gets it now, and
+		// one seeded before it changed takes the new fields it left untouched
+		const curated = DEFAULT_BOOKMARKS.find((other) => other.url === stored.url);
+		const former = FORMER_DEFAULTS.get(stored.url);
+		const entry = { ...stored };
+		if (former && curated)
+			for (const [field, value] of Object.entries(former))
+				if (entry[field] === value) entry[field] = curated[field];
 		const icon =
 			typeof entry.icon === 'string' &&
 			(entry.icon.startsWith('data:image/') ||
@@ -4007,6 +4111,7 @@ function closeBookmarks(restoreFocus = true, { instant = false } = {}) {
 }
 
 bookmarksTab.addEventListener('click', () => openBookmarks(bookmarksTab));
+$('extensionsTab').addEventListener('click', () => openExtensionsPage());
 $('toolSaved').addEventListener('click', () => openBookmarks($('toolSaved')));
 $('bookmarksClose').addEventListener('click', () => closeBookmarks());
 $('bookmarksScrim').addEventListener('click', () => closeBookmarks());
@@ -7349,7 +7454,7 @@ function fillAbout() {
 // ---- Settings: the theme -----------------------------------------------------
 // The menu's Settings (the settings-page dialog): the theme picker, over
 // globalThis.PMTheme (pm/theme.js, docs/themes.md). Default, Light, Dark,
-// Follow system, then each theme installed from the Chrome Web Store with
+// SystemYA Light, Follow system, then Chrome Web Store themes with
 // Remove; installing one there switches to it, as in Chrome. The choice is
 // kept in this page's localStorage, as the other settings are.
 const THEME_STORE = 'https://chromewebstore.google.com/category/themes';
@@ -7396,6 +7501,9 @@ function themeNote(theme) {
 	if (theme.id === 'system')
 		return `Light or Dark, as your system is set (${theme.scheme} now)`;
 	if (theme.id === 'default') return 'The powerMouse look';
+	if (theme.id === 'dark') return 'Original black homepage, solid black bars';
+	if (theme.id === 'systemya-light')
+		return 'Original black homepage, solid white bars';
 	if (theme.source === 'builtin') return 'Built in';
 	return 'From the Chrome Web Store';
 }
@@ -7448,6 +7556,65 @@ function renderThemes(focusId = null) {
 			?.focus();
 }
 
+// Page appearance: Chrome's mode (Settings > Appearance, and Customize
+// Chrome's Light, Dark and Device), which is what the pages' prefers-color-scheme
+// is. Match theme stands for Device: the theme's own scheme, Default's dark.
+const PAGE_MODES = [
+	['theme', 'Match theme'],
+	['light', 'Light'],
+	['dark', 'Dark'],
+];
+
+function pageModeNote(mode) {
+	if (mode === 'theme')
+		return `Light or dark as the theme is (${PMTheme.current().scheme} now)`;
+	return `Pages are shown ${mode}, whatever the theme`;
+}
+
+function renderPageModes(focusMode = null) {
+	const box = shieldsPage.querySelector('#spPageModes');
+	if (!box) return;
+	const chosen = PMTheme.pageMode();
+	box.replaceChildren();
+	for (const [mode, name] of PAGE_MODES) {
+		const pick = element('button', 'spThemePick spModePick');
+		pick.type = 'button';
+		pick.setAttribute('role', 'radio');
+		pick.setAttribute('aria-checked', String(mode === chosen));
+		pick.tabIndex = mode === chosen ? 0 : -1;
+		pick.dataset.pageMode = mode;
+		const text = element('span', 'spRowText');
+		text.append(
+			element('span', 'spRowLabel', name),
+			element('span', 'spRowSub', pageModeNote(mode)),
+		);
+		pick.append(text, element('span', 'spThemeMark'));
+		pick.addEventListener('click', () => PMTheme.setPageMode(mode));
+		box.append(pick);
+	}
+	if (focusMode)
+		box
+			.querySelector(`.spModePick[data-page-mode="${CSS.escape(focusMode)}"]`)
+			?.focus();
+}
+
+/** a radio group's keys: the arrows move the choice along `selector`'s picks */
+function radioKeys(group, selector) {
+	group.addEventListener('keydown', (event) => {
+		const step = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[
+			event.key
+		];
+		if (!step) return;
+		const picks = [...group.querySelectorAll(selector)];
+		const at = picks.indexOf(document.activeElement);
+		if (at < 0) return;
+		event.preventDefault();
+		const next = picks[(at + step + picks.length) % picks.length];
+		next.focus();
+		next.click();
+	});
+}
+
 function buildSettingsPage() {
 	shieldsPage.dataset.view = 'settings';
 	shieldsPage.innerHTML = `
@@ -7464,6 +7631,11 @@ function buildSettingsPage() {
 					<button class="spBtn ghost" id="spGetThemes" type="button">Get themes</button>
 				</div>
 			</section>
+			<section class="spSection">
+				<h3 class="spSectionTitle" id="spPageModeTitle">Page appearance</h3>
+				<p class="spSectionNote">Whether websites are shown light or dark, as Chrome's mode sets it: what pages read for prefers-color-scheme and send as Sec-CH-Prefers-Color-Scheme. Open pages change with it.</p>
+				<div class="spThemes" id="spPageModes" role="radiogroup" aria-labelledby="spPageModeTitle"></div>
+			</section>
 			<div class="spStatus" id="spStatus" aria-live="polite"></div>
 		</div>`;
 	const page = (selector) => shieldsPage.querySelector(selector);
@@ -7472,29 +7644,20 @@ function buildSettingsPage() {
 		closeShieldsPage();
 		navigate(THEME_STORE, { newTab: true });
 	});
-	// a radio group's keys: the arrows move the choice along the list
-	page('#spThemes').addEventListener('keydown', (event) => {
-		const step = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[
-			event.key
-		];
-		if (!step) return;
-		const picks = [...shieldsPage.querySelectorAll('.spThemePick')];
-		const at = picks.indexOf(document.activeElement);
-		if (at < 0) return;
-		event.preventDefault();
-		const next = picks[(at + step + picks.length) % picks.length];
-		next.focus();
-		next.click();
-	});
+	radioKeys(page('#spThemes'), '.spThemePick');
+	radioKeys(page('#spPageModes'), '.spModePick');
 	renderThemes();
+	renderPageModes();
 }
 
 // another window, Follow system or an install changed the theme: the open
 // picker follows
 PMTheme.addEventListener('change', () => {
 	if (shieldsPageOpen() && shieldsPage.dataset.view === 'settings') {
-		const focused = document.activeElement?.dataset?.theme ?? null;
-		renderThemes(shieldsPage.contains(document.activeElement) ? focused : null);
+		const inside = shieldsPage.contains(document.activeElement);
+		const focused = document.activeElement?.dataset ?? {};
+		renderThemes(inside ? (focused.theme ?? null) : null);
+		renderPageModes(inside ? (focused.pageMode ?? null) : null);
 	}
 });
 

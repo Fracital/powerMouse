@@ -1033,6 +1033,7 @@ async function defaults() {
 		['default', 'true'],
 		['light', 'false'],
 		['dark', 'false'],
+		['systemya-light', 'false'],
 		['system', 'false'],
 	];
 	ok(

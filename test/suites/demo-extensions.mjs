@@ -39,6 +39,10 @@
 //  - at 390px the buttons give way to the puzzle piece and at 320px the
 //    piece to the menu's item: the address box keeps 120px, the list, a
 //    popup and the page fit the window;
+//  - back on the home page from the Extensions page (closed over it, or
+//    closed in a tab and then Home or Back), the search box keeps its
+//    width, its right edge and its gap to Go on every frame, the home
+//    screen's zoom in included;
 //  - the same on the same-origin host (the bar's button, its popup), the
 //    popup shown at its size with the Shields panel's open animation, the
 //    first click after a reload, and a tab older than its worker (a deploy),
@@ -340,6 +344,71 @@ const popupState = (page) =>
 	});
 
 // ---- the isolated host, desktop ------------------------------------------------
+// The home card's Extensions tab mirrors the left Bookmarks tab, and
+// opens the same page as Manage extensions with its own keyboard focus.
+const home = await openDemo(browser, HOST);
+for (const viewport of [
+	{ width: 1280, height: 800 },
+	{ width: 844, height: 390 },
+	{ width: 412, height: 915 },
+	{ width: 320, height: 568 },
+]) {
+	await home.setViewportSize(viewport);
+	const edge = await home.evaluate(() => {
+		const rect = (selector) => {
+			const box = document.querySelector(selector).getBoundingClientRect();
+			return {
+				left: box.left,
+				right: box.right,
+				top: box.top,
+				bottom: box.bottom,
+			};
+		};
+		return {
+			card: rect('.listing'),
+			bookmarks: rect('#bookmarksTab'),
+			extensions: rect('#extensionsTab'),
+			label: document
+				.querySelector('#extensionsTab')
+				.getAttribute('aria-label'),
+		};
+	});
+	ok(
+		`home at ${viewport.width}x${viewport.height}: Extensions hangs off the right edge opposite Bookmarks`,
+		edge.label === 'Extensions' &&
+			Math.abs(edge.card.right - edge.extensions.right - 1) <= 1 &&
+			Math.abs(edge.bookmarks.left - edge.card.left - 1) <= 1 &&
+			Math.abs(edge.bookmarks.top - edge.extensions.top) <= 1 &&
+			Math.abs(edge.bookmarks.bottom - edge.extensions.bottom) <= 1,
+		JSON.stringify(edge),
+	);
+}
+await home.setViewportSize({ width: 1280, height: 800 });
+await home.focus('#extensionsTab');
+await home.keyboard.press('Enter');
+await painted(home);
+ok(
+	'Enter on the home Extensions tab opens the manager',
+	await home.evaluate(() => {
+		const manager = document.getElementById('shieldsPage');
+		return (
+			!manager.classList.contains('hidden') &&
+			manager.dataset.view === 'extensions' &&
+			document.getElementById('shieldsPageTitle').textContent === 'Extensions'
+		);
+	}),
+);
+await home.keyboard.press('Escape');
+ok(
+	'Escape closes the home Extensions manager and returns focus to its tab',
+	await home.evaluate(
+		() =>
+			document.getElementById('shieldsPage').classList.contains('hidden') &&
+			document.activeElement?.id === 'extensionsTab',
+	),
+);
+await home.close();
+
 const page = await browsing(HOST);
 // every text the address bar's status chip shows from here on
 await page.evaluate(() => {
@@ -749,6 +818,7 @@ await page.evaluate(() => {
 		['default', 'Default'],
 		['light', 'Light'],
 		['dark', 'Dark'],
+		['systemya-light', 'SystemYA Light'],
 		['system', 'Follow system'],
 	].map(([id, name]) => ({ id, name, source: 'builtin' }));
 	let shown = 'default';
@@ -774,8 +844,14 @@ ok(
 	'Themes: hidden without PMTheme; with it the themes, a check on the one shown, Get themes and Reset to default (off at the default)',
 	withoutThemes &&
 		themesMenu.open &&
-		JSON.stringify(themesMenu.entries.slice(0, 4)) ===
-			JSON.stringify(['(x) Default', 'Light', 'Dark', 'Follow system']) &&
+		JSON.stringify(themesMenu.entries.slice(0, 5)) ===
+			JSON.stringify([
+				'(x) Default',
+				'Light',
+				'Dark',
+				'SystemYA Light',
+				'Follow system',
+			]) &&
 		JSON.stringify(themesMenu.entries.slice(-3)) ===
 			JSON.stringify(['---', 'Get themes', '(off) Reset to default']),
 	JSON.stringify({ withoutThemes, themesMenu }),
@@ -1411,6 +1487,149 @@ if (process.env.EXT_SHOTS) {
 errors.push(...page.errors);
 await page.close();
 
+// ---- the home page's search bar on the way back from the Extensions page ----
+// Every frame from the press to 500 ms after it, read in a
+// requestAnimationFrame callback: the box's width and right edge and the gap
+// to its Go button, in the form's own frame (the home screen's zoom in
+// scales the form, which this takes out), are their settled values on every
+// frame the bar is shown. The zoom made the form the containing block of
+// its absolute .urlFill, which was sized from the card: the box was 50px
+// narrower and 50px short of the button until the zoom's cleanup.
+{
+	const home = await browsing(HOST);
+	await home.evaluate(() => {
+		window.__barFrames = (done) => {
+			const frames = [];
+			const form = document.getElementById('mainForm');
+			const input = form.querySelector('input[name="url"]');
+			const go = form.querySelector('.visit');
+			const read = () => {
+				const f = form.getBoundingClientRect();
+				const i = input.getBoundingClientRect();
+				const b = go.getBoundingClientRect();
+				const k = f.width ? form.offsetWidth / f.width : 1;
+				return {
+					shown:
+						!document.getElementById('landing').classList.contains('hidden') &&
+						i.width > 0,
+					zoom: document
+						.getAnimations()
+						.some((a) => a.animationName === 'landingZoom'),
+					width: +(i.width * k).toFixed(1),
+					right: +((i.right - f.left) * k).toFixed(1),
+					gap: +((b.left - i.right) * k).toFixed(1),
+				};
+			};
+			const start = performance.now();
+			const tick = () => {
+				frames.push(read());
+				if (performance.now() - start < 500) requestAnimationFrame(tick);
+				else
+					setTimeout(() => {
+						done({ frames, settled: read() });
+					}, 300);
+			};
+			requestAnimationFrame(tick);
+		};
+	});
+	/** the frames of the bar while `act` brings the home page back */
+	const barFrames = async (act) => {
+		const recording = home.evaluate(
+			() => new Promise((resolve) => window.__barFrames(resolve)),
+		);
+		await act();
+		return recording;
+	};
+	const off = ({ frames, settled }) =>
+		frames.filter(
+			(f) =>
+				f.shown &&
+				['width', 'right', 'gap'].some(
+					(key) => Math.abs(f[key] - settled[key]) > 0.5,
+				),
+		);
+	const openPage = async (via) => {
+		if (via === 'home') await home.click('#extensionsTab');
+		else if (via === 'menu') {
+			await home.click('#toolMenu');
+			await painted(home);
+			await home.click('#menuExtensions');
+			await painted(home);
+			await home.click('.extSubmenu [data-command="manage"]');
+		} else {
+			await home.click('#toolExtensions');
+			await painted(home);
+			await home.click('#extPanel .extManage');
+		}
+		await painted(home);
+		return home.evaluate(
+			() => document.getElementById('shieldsPage').dataset.view,
+		);
+	};
+	const backInTab = async () => {
+		await submitLanding(home, PAGE);
+		await until(
+			home,
+			() => !document.getElementById('browser').classList.contains('hidden'),
+			Boolean,
+		);
+		await painted(home);
+	};
+	const runs = {};
+	// on the home page: the page over it, closed by Escape (no zoom)
+	await home.click('#home');
+	await sleep(400);
+	let view = await openPage('home');
+	runs['home tab, Escape'] = {
+		view,
+		...(await barFrames(() => home.keyboard.press('Escape'))),
+	};
+	// from a tab: the menu's Manage extensions, closed, then Home; the
+	// puzzle piece's, Escape, then Back at the start of the tab's history
+	for (const [via, close, back] of [
+		['menu', '#shieldsPage .spClose', '#home'],
+		['puzzle', 'Escape', '#back'],
+	]) {
+		await backInTab();
+		view = await openPage(via);
+		if (close === 'Escape') await home.keyboard.press('Escape');
+		else await home.click(close);
+		await painted(home);
+		runs[`${via}, ${close === 'Escape' ? 'Escape' : 'close'}, ${back}`] = {
+			view,
+			...(await barFrames(() => home.click(back))),
+		};
+	}
+	const summary = Object.fromEntries(
+		Object.entries(runs).map(([name, run]) => [
+			name,
+			{
+				view: run.view,
+				settled: run.settled,
+				shown: run.frames.filter((f) => f.shown).length,
+				zoomed: run.frames.filter((f) => f.shown && f.zoom).length,
+				off: off(run).slice(0, 4),
+			},
+		]),
+	);
+	ok(
+		"after the Extensions page, every frame of the home page shows its search box's width, right edge and gap to Go at their settled values, the zoom in included",
+		Object.values(summary).every(
+			(run) =>
+				run.view === 'extensions' &&
+				run.shown >= 5 &&
+				!run.off.length &&
+				run.settled.gap > 0 &&
+				run.settled.gap < 20,
+		) &&
+			summary['menu, close, #home'].zoomed > 0 &&
+			summary['puzzle, Escape, #back'].zoomed > 0,
+		JSON.stringify(summary),
+	);
+	errors.push(...home.errors);
+	await home.close();
+}
+
 // ---- phone widths --------------------------------------------------------------
 for (const [width, height] of [
 	[390, 844],
@@ -1666,6 +1885,13 @@ await same.route('**/stale-build/Controller.js', (route) =>
 			.join(olderBuild),
 	}),
 );
+// (the demo's app worker answers the page's load, which the route then
+// never sees: it goes first)
+await same.evaluate(async () => {
+	const registration = await navigator.serviceWorker.getRegistration('/');
+	if (registration && new URL(registration.scope).pathname === '/')
+		await registration.unregister();
+});
 // (a failed extensions call is a console warning: extFailed)
 const staleWarnings = [];
 same.on('console', (message) => {

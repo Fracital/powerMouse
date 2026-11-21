@@ -1,15 +1,18 @@
-// The demo's bookmarks: the nine it starts with (the maker's four, the
-// quick links and the Chrome Web Store), each once (a removed one stays
-// removed, and a list seeded with the first four before the quick links
-// joined gets those once); the page's description where it gives one,
+// The demo's bookmarks: the ten it starts with (the maker's four, the
+// quick links, the Chrome Web Store and N SVG), each once (a removed one
+// stays removed, a list seeded with the first four before the quick links
+// joined gets those once, and one seeded before N SVG joined gets it once,
+// at the end); the page's description where it gives one,
 // under the title; the home page's star tab in its own band between the
 // status line and the commits, hanging off the card's left edge; the
 // sidebar it opens (empty state, rows, open, remove, Escape); the address
 // bar's star and every tab card's, in step with each other, the sidebar and
 // another window of the demo; the real URL stored, never the route, with
 // the title and the page's icon; the list kept across a reload; and no
-// links beside the title, the bookmarks having taken them over. Both
-// controller modes at once, each in a context of its own.
+// links beside the title, the bookmarks having taken them over; Estro's
+// default, now estrogen, renamed in a profile seeded before; and the
+// home page's commit times kept current as time passes. Both controller
+// modes at once, each in a context of its own.
 import {
 	done,
 	FIXTURE,
@@ -44,10 +47,11 @@ const DEFAULTS = [
 		icon: '/pm/icons/vibeos.png',
 	},
 	{
-		title: 'Estro',
+		title: 'estrogen',
 		url: 'https://estro.help/',
-		icon: '/pm/icons/estro.svg',
-		description: 'Estro: three coding models, one key.',
+		icon: '/pm/icons/estrogen.png',
+		description:
+			'Estrogen transforms your JavaScript to be more fun for internet crawlers. Running @sysce/estrogen in WASM.',
 	},
 	{
 		title: 'Krunk',
@@ -88,8 +92,25 @@ const DEFAULTS = [
 		description:
 			'Add new features to your browser and personalize your browsing experience.',
 	},
+	// vibeOS's Nsvg, with the Tango svg icon vibeOS gives it; its page
+	// declares no description
+	{
+		title: 'N SVG',
+		url: 'https://cojmar.github.io/nsvg/',
+		icon: '/pm/icons/nsvg.png',
+	},
 ];
 const N = DEFAULTS.length;
+const ESTRO = 'https://estro.help/';
+// Estro's default as a profile seeded before it became estrogen keeps it
+const OLD_ESTRO = {
+	url: ESTRO,
+	title: 'Estro',
+	description: 'Estro: three coding models, one key.',
+	icon: '/pm/icons/estro.svg',
+	color: '#9a5ae7',
+};
+const NSVG = 'https://cojmar.github.io/nsvg/';
 // the defaults a list seeded before the quick links joined has
 const FIRST_FOUR = DEFAULTS.slice(0, 4);
 const SEEDED_KEY = 'stomp-demo:bookmarks-seeded';
@@ -304,7 +325,7 @@ async function run(mode, base) {
 			(await page.getAttribute('#bookmarksTab', 'aria-expanded')) === 'true',
 	);
 	ok(
-		`${mode}: the first visit starts with Fracital, vibeOS, Estro, Krunk and the quick links Reddit, Google, YouTube and Discord, then the Chrome Web Store, each with its bundled icon and the description its page gave`,
+		`${mode}: the first visit starts with Fracital, vibeOS, estrogen, Krunk and the quick links Reddit, Google, YouTube and Discord, then the Chrome Web Store and N SVG, each with its bundled icon and the description its page gave`,
 		JSON.stringify(await rows(page)) === JSON.stringify(DEFAULTS) &&
 			(await until(
 				page,
@@ -319,8 +340,10 @@ async function run(mode, base) {
 			urlsOf(await stored(page)) === JSON.stringify(DEFAULT_URLS),
 		JSON.stringify(await rows(page)),
 	);
-	// Estro's and Krunker's icons are whole tiles and cover theirs; vibeOS's
-	// 32 px Tango computer shows at 22 px, as every other icon does
+	// Krunker's icon is a whole tile and covers its; vibeOS's 32 px Tango
+	// computer, estrogen's 64 px syringe and N SVG's 32 px Tango svg page show
+	// at 22 px, as every other icon does, estrogen's on black and N SVG's on
+	// Tango's dark green
 	const tiles = await page.evaluate(() =>
 		[...document.querySelectorAll('#bookmarksList .bookmarkTile')].map(
 			(tile) => {
@@ -336,19 +359,33 @@ async function run(mode, base) {
 						Math.round(i.height),
 					],
 					natural: [image.naturalWidth, image.naturalHeight],
+					background: getComputedStyle(tile).backgroundColor,
 				};
 			},
 		),
 	);
 	ok(
-		`${mode}: Estro's and Krunk's icons fill their 34 px tiles, vibeOS's 32 px one shows at 22 px`,
+		`${mode}: Krunk's icon fills its 34 px tile, vibeOS's 32 px one shows at 22 px`,
 		JSON.stringify(tiles.map((t) => t.tile)) ===
 			JSON.stringify(DEFAULTS.map(() => [34, 34])) &&
-			JSON.stringify(tiles[2].image) === '[0,0,34,34]' &&
 			JSON.stringify(tiles[3].image) === '[0,0,34,34]' &&
 			JSON.stringify(tiles[1].image.slice(2)) === '[22,22]' &&
 			JSON.stringify(tiles[1].natural) === '[32,32]',
 		JSON.stringify(tiles),
+	);
+	ok(
+		`${mode}: estrogen's 64 px icon, estro.help's own, shows at 22 px in the middle of a black tile`,
+		JSON.stringify(tiles[2].image) === '[6,6,22,22]' &&
+			JSON.stringify(tiles[2].natural) === '[64,64]' &&
+			tiles[2].background === 'rgb(0, 0, 0)',
+		JSON.stringify(tiles[2]),
+	);
+	ok(
+		`${mode}: N SVG's 32 px icon, the one vibeOS gives Nsvg, shows at 22 px in the middle of a #4e9a06 tile`,
+		JSON.stringify(tiles[N - 1].image) === '[6,6,22,22]' &&
+			JSON.stringify(tiles[N - 1].natural) === '[32,32]' &&
+			tiles[N - 1].background === 'rgb(78, 154, 6)',
+		JSON.stringify(tiles[N - 1]),
 	);
 	ok(
 		`${mode}: the keyboard is in the sidebar, on the first bookmark`,
@@ -810,7 +847,7 @@ async function run(mode, base) {
 	await reopen();
 	await page.click('#bookmarksTab');
 	ok(
-		`${mode}: the Chrome Web Store, removed, does not come back on a reload`,
+		`${mode}: N SVG, removed, does not come back on a reload`,
 		urlsOf(await rows(page)) === JSON.stringify(DEFAULT_URLS.slice(0, -1)) &&
 			urlsOf(await stored(page)) === JSON.stringify(DEFAULT_URLS.slice(0, -1)),
 		urlsOf(await rows(page)),
@@ -871,7 +908,7 @@ async function run(mode, base) {
 	const migrated = [A, ...DEFAULT_URLS.slice(0, 3), ...DEFAULT_URLS.slice(4)];
 	await page.click('#bookmarksTab');
 	ok(
-		`${mode}: a list seeded with the first four gets the quick links and the Web Store once, after it, and a removed default stays away`,
+		`${mode}: a list seeded with the first four gets the quick links, the Web Store and N SVG once, after it, and a removed default stays away`,
 		urlsOf(
 			await until(
 				page,
@@ -907,7 +944,7 @@ async function run(mode, base) {
 			(await page.evaluate(() => {
 				const row = document.querySelector(
 					'#bookmarksList .bookmark:nth-child(4)',
-				); // Estro
+				); // estrogen
 				const title = row
 					.querySelector('.bookmarkTitle')
 					.getBoundingClientRect();
@@ -949,6 +986,166 @@ async function run(mode, base) {
 		) === JSON.stringify(withoutReddit) &&
 			urlsOf(await stored(page)) === JSON.stringify(withoutReddit),
 		urlsOf(await stored(page)),
+	);
+
+	// a profile seeded before N SVG joined (its marker every default but
+	// N SVG), the user's own bookmark first and Reddit removed: N SVG comes
+	// once, at the end, with its icon and colour, and stays away once removed
+	const seededBefore = DEFAULTS.filter(
+		(entry) => entry.url !== NSVG && entry.url !== 'https://www.reddit.com/',
+	);
+	await page.evaluate(
+		([key, seededKey, list, marker]) => {
+			localStorage.setItem(key, JSON.stringify(list));
+			localStorage.setItem(seededKey, JSON.stringify(marker));
+		},
+		[
+			KEY,
+			SEEDED_KEY,
+			[{ url: A, title: 'Bookmark A', icon: null }, ...seededBefore],
+			DEFAULT_URLS.filter((url) => url !== NSVG),
+		],
+	);
+	await page.keyboard.press('Escape');
+	await reopen();
+	await page.click('#bookmarksTab');
+	const withNsvg = [A, ...seededBefore.map((entry) => entry.url), NSVG];
+	ok(
+		`${mode}: a profile seeded before N SVG joined gets it once, at the end, with its icon and tile colour`,
+		urlsOf(
+			await until(
+				page,
+				() =>
+					[...document.querySelectorAll('#bookmarksList .bookmark')].map(
+						(row) => ({ url: row.dataset.url }),
+					),
+				(v) => v?.length > 1,
+				5000,
+			),
+		) === JSON.stringify(withNsvg) &&
+			urlsOf(await stored(page)) === JSON.stringify(withNsvg) &&
+			JSON.stringify((await rows(page)).at(-1)) ===
+				JSON.stringify(DEFAULTS.at(-1)) &&
+			(await page.evaluate(
+				() =>
+					getComputedStyle(
+						document.querySelector(
+							'#bookmarksList .bookmark:last-child .bookmarkTile',
+						),
+					).backgroundColor,
+			)) === 'rgb(78, 154, 6)' &&
+			JSON.stringify(
+				await page.evaluate(
+					(seededKey) => JSON.parse(localStorage.getItem(seededKey)),
+					SEEDED_KEY,
+				),
+			) === JSON.stringify(DEFAULT_URLS),
+		urlsOf(await stored(page)),
+	);
+	await page.click(
+		`#bookmarksList .bookmark[data-url="${NSVG}"] .bookmarkRemove`,
+	);
+	await page.keyboard.press('Escape');
+	await reopen();
+	await page.click('#bookmarksTab');
+	await sleep(500);
+	ok(
+		`${mode}: N SVG, removed from that profile, does not come back on a reload`,
+		urlsOf(
+			await until(
+				page,
+				() =>
+					[...document.querySelectorAll('#bookmarksList .bookmark')].map(
+						(row) => ({ url: row.dataset.url }),
+					),
+				(v) => v?.length > 1,
+				5000,
+			),
+		) === JSON.stringify(withNsvg.slice(0, -1)) &&
+			urlsOf(await stored(page)) === JSON.stringify(withNsvg.slice(0, -1)),
+		urlsOf(await stored(page)),
+	);
+
+	// a profile seeded while Estro was a default: its untouched entry takes
+	// estrogen's title, description, icon and colour, where it stood
+	await page.evaluate(
+		([key, list]) => localStorage.setItem(key, JSON.stringify(list)),
+		[KEY, [{ url: A, title: 'Bookmark A', icon: null }, OLD_ESTRO]],
+	);
+	await page.keyboard.press('Escape');
+	await reopen();
+	await page.click('#bookmarksTab');
+	const estrogen = DEFAULTS.find((entry) => entry.url === ESTRO);
+	const renamed = await until(
+		page,
+		() =>
+			[...document.querySelectorAll('#bookmarksList .bookmark')].map((row) => ({
+				title: row.querySelector('.bookmarkTitle').textContent,
+				url: row.querySelector('.bookmarkUrl').textContent,
+				icon: row.querySelector('img.bookmarkIcon').getAttribute('src'),
+				description: row.querySelector('.bookmarkDescription')?.textContent,
+				background: getComputedStyle(row.querySelector('.bookmarkTile'))
+					.backgroundColor,
+			})),
+		(v) => v?.length > 1,
+		5000,
+	);
+	ok(
+		`${mode}: a profile's untouched Estro bookmark becomes estrogen, with its description, icon and black tile, in its place`,
+		urlsOf(renamed) === JSON.stringify([A, ESTRO]) &&
+			JSON.stringify(renamed[1]) ===
+				JSON.stringify({
+					title: estrogen.title,
+					url: ESTRO,
+					icon: estrogen.icon,
+					description: estrogen.description,
+					background: 'rgb(0, 0, 0)',
+				}),
+		JSON.stringify(renamed),
+	);
+	// a bookmark the user made of the page keeps the page's title and icon
+	// (only fields still at Estro's old values change)
+	const ownIcon = 'data:image/png;base64,iVBORw0KGgo=';
+	await page.evaluate(
+		([key, list]) => localStorage.setItem(key, JSON.stringify(list)),
+		[
+			KEY,
+			[
+				{
+					url: ESTRO,
+					title: 'estrogen obfuscator',
+					icon: ownIcon,
+					color: OLD_ESTRO.color,
+				},
+			],
+		],
+	);
+	await page.keyboard.press('Escape');
+	await reopen();
+	await page.click('#bookmarksTab');
+	const own = await until(
+		page,
+		() =>
+			[...document.querySelectorAll('#bookmarksList .bookmark')].map((row) => ({
+				title: row.querySelector('.bookmarkTitle').textContent,
+				icon: row.querySelector('img.bookmarkIcon').getAttribute('src'),
+				background: getComputedStyle(row.querySelector('.bookmarkTile'))
+					.backgroundColor,
+			})),
+		(v) => v?.length === 1,
+		5000,
+	);
+	ok(
+		`${mode}: a bookmark of estro.help the user made keeps its own title and icon, and only an old field (Estro's tile colour) takes the new value`,
+		JSON.stringify(own) ===
+			JSON.stringify([
+				{
+					title: 'estrogen obfuscator',
+					icon: ownIcon,
+					background: 'rgb(0, 0, 0)',
+				},
+			]),
+		JSON.stringify(own),
 	);
 
 	// YouTube has its curated icon, white on its red, whatever picture its
@@ -1219,5 +1416,178 @@ async function touchDrag(page, cdp, from, to, hold) {
 	await sleep(400);
 }
 
-await Promise.all([run('same-origin', PROXY), run('isolated', HOST)]);
+// The home page's commit times stay current with no reload. A stand-in
+// clock in the demo's own window (not Playwright's: its clock runs every
+// frame's timers, and the controller's frame never lets a run end) moves
+// the time, so nothing waits for real minutes: __setClock jumps to a time
+// and __advanceClock moves it on, each firing the timers then due. Two
+// commits, at 59 min 50 s and 30 s before the time set: the first says
+// "1 hour ago" when the hour comes, the second "1 minute ago" when its
+// minute does; a hidden page changes nothing, and showing it brings the
+// labels up to date at once.
+async function commitTimes(base) {
+	await waitForServer(base);
+	const context = await browser.newContext({
+		viewport: { width: 1280, height: 800 },
+	});
+	await context.addInitScript(() => {
+		if (window.top !== window) return;
+		const RealDate = Date;
+		const realSet = setTimeout;
+		const realClear = clearTimeout;
+		let offset = 0;
+		const now = () => RealDate.now() + offset;
+		window.Date = class extends RealDate {
+			constructor(...args) {
+				if (args.length) super(...args);
+				else super(now());
+			}
+			static now() {
+				return now();
+			}
+		};
+		const pending = new Map();
+		window.setTimeout = (fn, delay, ...args) => {
+			const id = realSet(() => {
+				pending.delete(id);
+				if (typeof fn === 'function') fn(...args);
+			}, delay);
+			pending.set(id, { due: now() + (Number(delay) || 0), fn, args });
+			return id;
+		};
+		window.clearTimeout = (id) => {
+			pending.delete(id);
+			realClear(id);
+		};
+		const fireDue = () => {
+			for (;;) {
+				const due = [...pending]
+					.filter(([, timer]) => timer.due <= now())
+					.sort((a, b) => a[1].due - b[1].due)[0];
+				if (!due) return;
+				const [id, timer] = due;
+				pending.delete(id);
+				realClear(id);
+				if (typeof timer.fn === 'function') timer.fn(...timer.args);
+			}
+		};
+		window.__setClock = (time) => {
+			offset = time - RealDate.now();
+			fireDue();
+		};
+		window.__advanceClock = (ms) => {
+			offset += ms;
+			fireDue();
+		};
+	});
+	const page = await context.newPage();
+	page.on('pageerror', (error) =>
+		errors.push(`commit times: ${error.message}`),
+	);
+	const time = Date.parse('2026-11-20T12:00:00Z');
+	const at = (ms) => new Date(time - ms).toISOString();
+	const dates = [at(59 * 60000 + 50000), at(30000)];
+	const REPO = 'https://example.com/repo';
+	await page.route('**/api/commits', (route) =>
+		route.fulfill({
+			contentType: 'application/json',
+			body: JSON.stringify({
+				repo: 'example/repo',
+				url: REPO,
+				commits: dates.map((date, i) => ({
+					sha: `000000${i}`,
+					url: `${REPO}/commit/000000${i}`,
+					message: `Commit ${i}`,
+					author: 'Someone',
+					avatar: null,
+					date,
+				})),
+			}),
+		}),
+	);
+	await page.goto(base);
+	await page.waitForFunction(
+		() => document.getElementById('logMsg').textContent === 'Ready',
+		null,
+		{ timeout: 45000 },
+	);
+	await page.waitForFunction(
+		() => document.querySelectorAll('#commitList time').length === 2,
+		null,
+		{ timeout: 10000 },
+	);
+	const show = (hidden) =>
+		page.evaluate((hidden) => {
+			Object.defineProperty(document, 'hidden', {
+				configurable: true,
+				get: () => hidden,
+			});
+			Object.defineProperty(document, 'visibilityState', {
+				configurable: true,
+				get: () => (hidden ? 'hidden' : 'visible'),
+			});
+			document.dispatchEvent(new Event('visibilitychange'));
+		}, hidden);
+	const times = () =>
+		page.evaluate(() =>
+			[...document.querySelectorAll('#commitList time')].map((time) => ({
+				text: time.textContent,
+				datetime: time.getAttribute('datetime'),
+				title: time.title,
+			})),
+		);
+	const labels = async () => (await times()).map((time) => time.text);
+	const advance = (ms) => page.evaluate((ms) => window.__advanceClock(ms), ms);
+	// the clock set while the page is hidden, then shown: the labels are
+	// brought up to that time at once
+	await show(true);
+	await page.evaluate((time) => window.__setClock(time), time);
+	await show(false);
+	const first = await times();
+	ok(
+		'commit times: each row has a <time datetime> of its ISO date, the absolute time as its tooltip, and the relative label, brought up to date when the page shows',
+		JSON.stringify(first.map((time) => time.datetime)) ===
+			JSON.stringify(dates) &&
+			first.every((time) => time.title) &&
+			JSON.stringify(first.map((time) => time.text)) ===
+				JSON.stringify(['59 minutes ago', 'just now']),
+		JSON.stringify(first),
+	);
+	await advance(9000);
+	const before = await labels();
+	await advance(1500);
+	const hour = await labels();
+	ok(
+		'commit times: when the hour comes, the first row says 1 hour ago, and not before',
+		JSON.stringify(before) === JSON.stringify(['59 minutes ago', 'just now']) &&
+			JSON.stringify(hour) === JSON.stringify(['1 hour ago', 'just now']),
+		JSON.stringify({ before, hour }),
+	);
+	await advance(20000);
+	const minute = await labels();
+	ok(
+		'commit times: when its minute comes, the second row says 1 minute ago',
+		JSON.stringify(minute) === JSON.stringify(['1 hour ago', '1 minute ago']),
+		JSON.stringify(minute),
+	);
+	// hidden: no timer runs, the labels stay as they were
+	await show(true);
+	await advance(61000);
+	const hidden = await labels();
+	await show(false);
+	const shown = await labels();
+	ok(
+		'commit times: a hidden page leaves them be, and showing it updates them at once',
+		JSON.stringify(hidden) === JSON.stringify(minute) &&
+			JSON.stringify(shown) === JSON.stringify(['1 hour ago', '2 minutes ago']),
+		JSON.stringify({ hidden, shown }),
+	);
+	await context.close();
+}
+
+await Promise.all([
+	run('same-origin', PROXY),
+	run('isolated', HOST),
+	commitTimes(HOST),
+]);
 await done(browser, errors);

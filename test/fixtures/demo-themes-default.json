@@ -1,7 +1,7 @@
 {
 	"views": {
 		"landing": {
-			"digest": "ca80f924c47391ef5d6a6cc0ab294a855a3b9ab52a16891556f14662186496b3",
+			"digest": "027d198c1bca998d4645df0231e381f3670737accda359f6322cab91f5d8ee11",
 			"common": {
 				"::placeholderbackground-color": "rgba(0, 0, 0, 0)",
 				"::placeholderbackground-image": "none",
@@ -156,6 +156,17 @@
 					"border-bottom-color": "rgb(182, 182, 182)",
 					"border-left-color": "rgb(0, 0, 0)",
 					"border-right-color": "rgb(182, 182, 182)",
+					"border-top-color": "rgb(182, 182, 182)",
+					"caret-color": "rgb(0, 0, 0)",
+					"color": "rgb(0, 0, 0)",
+					"outline-color": "rgb(0, 0, 0)"
+				},
+				"button#extensionsTab": {
+					"::placeholdercolor": "rgb(0, 0, 0)",
+					"background-color": "rgb(143, 89, 2)",
+					"border-bottom-color": "rgb(182, 182, 182)",
+					"border-left-color": "rgb(182, 182, 182)",
+					"border-right-color": "rgb(0, 0, 0)",
 					"border-top-color": "rgb(182, 182, 182)",
 					"caret-color": "rgb(0, 0, 0)",
 					"color": "rgb(0, 0, 0)",
@@ -402,7 +413,7 @@
 			}
 		},
 		"browser": {
-			"digest": "d8aa51ebf8dda93d2788c3212a93a88e6ec098518514ba6b1bd58a7302ce36c9",
+			"digest": "bd1debd74c553fe4b2be5283f0af707b52b3484f30aa43896320e3b2214413bc",
 			"common": {
 				"::placeholderbackground-color": "rgba(0, 0, 0, 0)",
 				"::placeholderbackground-image": "none",
@@ -562,6 +573,17 @@
 					"color": "rgb(0, 0, 0)",
 					"outline-color": "rgb(0, 0, 0)"
 				},
+				"button#extensionsTab": {
+					"::placeholdercolor": "rgb(0, 0, 0)",
+					"background-color": "rgb(143, 89, 2)",
+					"border-bottom-color": "rgb(182, 182, 182)",
+					"border-left-color": "rgb(182, 182, 182)",
+					"border-right-color": "rgb(0, 0, 0)",
+					"border-top-color": "rgb(182, 182, 182)",
+					"caret-color": "rgb(0, 0, 0)",
+					"color": "rgb(0, 0, 0)",
+					"outline-color": "rgb(0, 0, 0)"
+				},
 				"div#landing>div.listing:1>div.inputWrapper:0>section.commits>div.commitsHead": {
 					"::placeholdercolor": "rgb(154, 154, 154)",
 					"border-bottom-color": "rgb(154, 154, 154)",
@@ -673,7 +695,8 @@
 					"outline-color": "rgb(0, 0, 0)"
 				},
 				"div#frames>iframe.frame": {
-					"background-color": "rgb(255, 255, 255)"
+					"background-color": "rgb(18, 18, 18)",
+					"color-scheme": "dark"
 				},
 				"span#recentsCount": {
 					"background-color": "rgba(0, 0, 0, 0.25)",
@@ -815,7 +838,7 @@
 			}
 		},
 		"shields": {
-			"digest": "660783fc606b114ca3127c75e2f90275ebf88846beda89da058f25e29a7ad79d",
+			"digest": "d857e524b6bcb009b9b042165496ce0fbc019b23daf87570fcaecf7a0d84fe6e",
 			"common": {
 				"::afterbackground-color": null,
 				"::afterbackground-image": null,
@@ -987,6 +1010,17 @@
 					"color": "rgb(0, 0, 0)",
 					"outline-color": "rgb(0, 0, 0)"
 				},
+				"button#extensionsTab": {
+					"::placeholdercolor": "rgb(0, 0, 0)",
+					"background-color": "rgb(143, 89, 2)",
+					"border-bottom-color": "rgb(182, 182, 182)",
+					"border-left-color": "rgb(182, 182, 182)",
+					"border-right-color": "rgb(0, 0, 0)",
+					"border-top-color": "rgb(182, 182, 182)",
+					"caret-color": "rgb(0, 0, 0)",
+					"color": "rgb(0, 0, 0)",
+					"outline-color": "rgb(0, 0, 0)"
+				},
 				"div#landing>div.listing:1>div.inputWrapper:0>section.commits>div.commitsHead": {
 					"::placeholdercolor": "rgb(154, 154, 154)",
 					"border-bottom-color": "rgb(154, 154, 154)",
@@ -1120,11 +1154,12 @@
 					"outline-color": "rgb(0, 0, 0)"
 				},
 				"div#frames>iframe.frame": {
-					"background-color": "rgb(255, 255, 255)",
+					"background-color": "rgb(18, 18, 18)",
 					"border-bottom-color": "rgb(255, 255, 255)",
 					"border-left-color": "rgb(255, 255, 255)",
 					"border-right-color": "rgb(255, 255, 255)",
-					"border-top-color": "rgb(255, 255, 255)"
+					"border-top-color": "rgb(255, 255, 255)",
+					"color-scheme": "dark"
 				},
 				"span#recentsCount": {
 					"background-color": "rgba(0, 0, 0, 0.25)",

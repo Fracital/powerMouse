@@ -307,7 +307,16 @@ async function runNative(browser, scenario) {
 
 async function runProxied(browser, base, scenario) {
 	const site = await sites(scenario.pages);
-	const tab = await openDemo(browser, base);
+	// the native run is Playwright's emulated light, which outranks a frame
+	// element's color-scheme in the documents but not in what the controller
+	// reads of a frame of another origin: the demo's pages in Light (Page
+	// appearance) for both to agree; page-scheme compares Dark
+	const tab = await openDemo(browser, base, {}, (page) =>
+		page.addInitScript(() => {
+			if (window === window.top)
+				localStorage.setItem('stomp-demo:page-scheme', 'light');
+		}),
+	);
 	const steps = scenario.steps(site);
 	await submitLanding(tab, steps[0]);
 	for (const url of steps.slice(1)) {
