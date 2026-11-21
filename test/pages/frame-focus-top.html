@@ -1,0 +1,14 @@
+<!doctype html>
+<title>FRAME FOCUS TOP</title>
+<body>
+	<script>
+		// frame-focus.html, once the activation that brought this page here
+		// (a submitted landing) has expired: a frame with transient activation
+		// may focus whatever its policy says (Chrome's lasts 5 s)
+		setTimeout(() => {
+			const frame = document.createElement('iframe');
+			frame.src = 'frame-focus.html';
+			document.body.append(frame);
+		}, 6000);
+	</script>
+</body>

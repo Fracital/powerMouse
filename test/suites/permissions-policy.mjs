@@ -34,19 +34,6 @@ import {
 const target = `${FIXTURE}pages/permissions-policy.html`;
 const plain = `${FIXTURE}pages/permissions-policy-frame.html?plain`;
 const browser = await launch();
-// OPEN (Chrome 158 and later): a sandboxed frame and every frame under it
-// lack focus-without-user-activation unless the frame's own allow names it.
-// The controller names it on the frame it sandboxes (allowWithFocus,
-// src/controller/remote.ts), so the proxied top has it, but a frame the
-// page makes under it has no such allow and lacks it, where natively it has
-// it. Left out of each frame's comparison and counted: once a frame has it
-// again the count check fails, and this goes
-const OPEN_FOCUS =
-	Number(browser.version().split('.')[0]) >= 158
-		? 'focus-without-user-activation'
-		: null;
-let openFocus = 0;
-let nestedFrames = 0;
 
 /** the newest frame that answers `read` with something */
 async function find(page, read, title) {
@@ -129,12 +116,7 @@ for (const [mode, base] of [
 	]) {
 		const want = view(native?.[name]);
 		const got = view(proxied?.[name]);
-		let missing = want?.allowed.filter((f) => !got?.allowed.includes(f));
-		if (name !== 'top') nestedFrames++;
-		if (name !== 'top' && OPEN_FOCUS && missing?.includes(OPEN_FOCUS)) {
-			missing = missing.filter((f) => f !== OPEN_FOCUS);
-			openFocus++;
-		}
+		const missing = want?.allowed.filter((f) => !got?.allowed.includes(f));
 		const extra = got?.allowed.filter((f) => !want?.allowed.includes(f));
 		ok(
 			`${mode}: ${name}: the features the browser allows, the camera and a synchronous XMLHttpRequest are as natively`,
@@ -166,10 +148,4 @@ for (const [mode, base] of [
 	}
 	await page.close();
 }
-if (OPEN_FOCUS)
-	ok(
-		`known open on Chrome ${browser.version()}: every frame under the proxied top lacks ${OPEN_FOCUS}, which natively it has`,
-		openFocus === nestedFrames && nestedFrames > 0,
-		`${openFocus} of ${nestedFrames} frames`,
-	);
 await done(browser);

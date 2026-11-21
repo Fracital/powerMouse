@@ -52,8 +52,20 @@ const isMarker = (name: string | null): name is string =>
  * type's parameters), the page reads no type (DOMHooks isHidden)
  */
 export const hiddenSuffix = () => `;${marker}hidden`;
+/**
+ * The allow of a frame the page gave none (DOMAttributes frameAllow): it
+ * names focus-without-user-activation, `granted` for everyone, else for an
+ * origin no document has, the one that marks it as the hooks' (a name of
+ * this marker's that no host has; Chrome warns of neither, measured on 158)
+ */
+export const hiddenAllow = (granted: boolean) =>
+	`focus-without-user-activation ${granted ? '* ' : ''}https://${marker.replace(/[^a-z0-9]/gi, '').toLowerCase()}-allow.invalid`;
+/** whether `value` is one the page did not write: a hidden type, or allow */
 export const isHiddenValue = (value: string | null): boolean =>
-	!!value?.endsWith(hiddenSuffix());
+	!!value &&
+	(value.endsWith(hiddenSuffix()) ||
+		value === hiddenAllow(true) ||
+		value === hiddenAllow(false));
 
 // native accessors, taken when the bundle is evaluated, before any hook:
 // interface checks are not realm checks, so they serve every realm the

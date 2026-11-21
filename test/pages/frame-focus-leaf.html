@@ -1,0 +1,36 @@
+<!doctype html>
+<title>FOCUS LEAF</title>
+<body>
+	<script>
+		// whether this document may focus without user activation, for the
+		// page above: what its policy says, and what focus() does. `?name`
+		// reports as name; `?name&nest` makes a frame of its own origin too,
+		// which reports as `name/nested`; `?name&nofocus` does not focus (the
+		// frame would have focus for its next document)
+		const [raw, nest] = location.search.slice(1).split('&');
+		const name = decodeURIComponent(raw);
+		const input = document.createElement('input');
+		document.body.append(input);
+		if (nest !== 'nofocus') input.focus();
+		const report = (target) =>
+			target.postMessage(
+				{
+					focusReport: {
+						name,
+						allowed: document.featurePolicy.allowsFeature(
+							'focus-without-user-activation',
+						),
+						focused: nest !== 'nofocus' && document.activeElement === input,
+					},
+				},
+				'*',
+			);
+		report(parent);
+		if (parent.parent !== parent) report(parent.parent);
+		if (nest === 'nest') {
+			const frame = document.createElement('iframe');
+			frame.src = `${location.pathname}?${name}%2Fnested`;
+			document.body.append(frame);
+		}
+	</script>
+</body>

@@ -21,6 +21,7 @@ import DocumentClient, {
 import cloneRawNode, {
 	inertClones,
 	inertDocumentOf,
+	isHTMLFrame,
 	isHTMLTemplate,
 	isScriptElement,
 	parseHTMLFragmentIn,
@@ -778,6 +779,14 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 						element,
 						[],
 					) as string[];
+					// a frame with no allow at all gets its real one now, before
+					// it is in the document (DOMAttributes frameAllow)
+					if (
+						domAttributesModule.frameAllow &&
+						!names.includes('allow') &&
+						isHTMLFrame(element)
+					)
+						domAttributesModule.frameAllow(element);
 					if (
 						!names.some(
 							(name) =>

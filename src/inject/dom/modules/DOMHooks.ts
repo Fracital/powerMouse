@@ -49,6 +49,7 @@ import type WriteStream from '../WriteStream';
 import { isStomp } from './Context';
 import {
 	attributeName,
+	hiddenAllow,
 	hiddenSuffix,
 	hookWrite,
 	isHiddenValue,
@@ -75,18 +76,50 @@ const appliedTab = new WeakMap<Element, Map<string, string | null>>();
  */
 function pageWrite<T>(element: Element, name: string, callback: () => T): T {
 	// (a name the page gave that is no string is the browser's to refuse)
-	if (typeof name === 'string')
-		appliedTab.get(element)?.delete(attributeName(element, name));
-	return observedPageWrite(element, name, callback);
+	if (typeof name !== 'string')
+		return observedPageWrite(element, name, callback);
+	const actual = attributeName(element, name);
+	appliedTab.get(element)?.delete(actual);
+	pageWrites.push([element, actual]);
+	try {
+		return observedPageWrite(element, name, callback);
+	} finally {
+		pageWrites.pop();
+	}
+}
+// the element and attribute of each page write under way, innermost last
+const pageWrites: [Element, string][] = [];
+/**
+ * Whether the hooks run for the page's own write of `name` on `element`
+ * (its value is the one the element has now), not for another attribute's
+ * or an insertion (where the marker is the page's)
+ */
+export const pageWriting = (element: Element, name: string): boolean =>
+	pageWrites.some((write) => write[0] === element && write[1] === name);
+
+/**
+ * Put the hooks' pending write of `name` on `element` before their others:
+ * a frame's allow is the browser's container policy for a navigation only
+ * when it is there before the src that starts it
+ */
+export function writeFirst(element: Element, name: string) {
+	const tab = attributeTab.get(element as CustomElement);
+	if (!tab?.has(name)) return;
+	const value = tab.get(name)!;
+	const rest = [...tab].filter(([key]) => key !== name);
+	tab.clear();
+	tab.set(name, value);
+	for (const [key, other] of rest) tab.set(key, other);
 }
 
 /**
  * Whether `name` of `element` is an attribute the page does not have: a
- * type the hooks hid (an object's while its copy loads, DOMAttributes hold)
- * that no marker of the page's stands for
+ * type the hooks hid (an object's while its copy loads, DOMAttributes hold),
+ * or a frame's allow (DOMAttributes frameAllow), that no marker of the
+ * page's stands for
  */
 const isHidden = (element: unknown, name: unknown): boolean =>
-	name === 'type' &&
+	(name === 'type' || name === 'allow') &&
 	isHiddenValue(Reflect.apply(nativeElement.getAttribute, element, [name])) &&
 	!Reflect.apply(nativeElement.hasAttribute, element, [markerPrefix() + name]);
 /** isHidden of the name a call with `name` acts on */
@@ -2013,6 +2046,21 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				),
 		);
 
+		// an element whose one attribute is one the page has none of (a
+		// frame's allow, isHidden) has none for the page
+		realm.Element.prototype.hasAttributes = proxyModule.wrapFunction(
+			realm.Element.prototype.hasAttributes,
+			(target, that, args) => {
+				if (!Reflect.apply(target, that, args)) return false;
+				const names = Reflect.apply(
+					nativeElement.getAttributeNames,
+					that,
+					[],
+				) as string[];
+				return names.length !== 1 || !isHidden(that, names[0]);
+			},
+		);
+
 		// Attr.value: the page's value when the element keeps one for it, and
 		// a style the CSSOM wrote as getAttribute reads it
 		const attrValue = (attr: Attr, native: string | null) => {
@@ -2260,9 +2308,10 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 								node.setAttribute(base, node.getAttribute(name)!);
 								node.removeAttribute(name);
 							}
-						// a type the page has none of (isHidden)
-						if (isHiddenValue(node.getAttribute('type')))
-							node.removeAttribute('type');
+						// a type or allow the page has none of (isHidden)
+						for (const hidden of ['type', 'allow'])
+							if (isHiddenValue(node.getAttribute(hidden)))
+								node.removeAttribute(hidden);
 						// an attribute a hook dropped was set again at the end: every
 						// attribute goes back to the order the page wrote them in
 						if (dropped)
@@ -2383,10 +2432,12 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				SELECTOR_ATTRIBUTE,
 				(match, name, op = '', value = '', flag = '') => {
 					const rest = op ? `${op}${value}${flag ? ` ${flag}` : ''}` : '';
-					// (and not a type the page has none of, isHidden)
+					// (and not a type or allow the page has none of, isHidden)
 					const hidden = /^type$/i.test(name)
 						? `:not([${name}$="${hiddenSuffix()}"])`
-						: '';
+						: /^allow$/i.test(name)
+							? `:not([${name}="${hiddenAllow(true)}"],[${name}="${hiddenAllow(false)}"])`
+							: '';
 					return `:is([${marker}${name}${rest}],[${name}${rest}]:not([${marker}${name}])${hidden})`;
 				},
 			);
@@ -2478,10 +2529,11 @@ export default class DOMHooksModule extends Module<DocumentClient> {
 				// stays none
 				if (isHiddenOn(that, args[0])) {
 					if (args.length > 1 && !args[1]) return false;
-					pageWrite(that, 'type', () =>
+					const name = attributeName(that, String(args[0]));
+					pageWrite(that, name, () =>
 						usePrototype(that, CustomElement.prototype, (element) => {
-							element.setAttribute('type', '');
-							this.updateAttributeHooks(element, 'type');
+							element.setAttribute(name, '');
+							this.updateAttributeHooks(element, name);
 						}),
 					);
 					return true;

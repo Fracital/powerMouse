@@ -164,6 +164,20 @@ const nativeOwnerDocument = Reflect.getOwnPropertyDescriptor(
 	Node.prototype,
 	'ownerDocument',
 )!.get!;
+const nativeHasAttribute = Element.prototype.hasAttribute;
+// whether the browser knows focus-without-user-activation (Chrome 158),
+// taken when the bundle is evaluated, before any page code
+const knowsFocus = (() => {
+	try {
+		return (
+			document as Document & { featurePolicy: { features(): string[] } }
+		).featurePolicy
+			.features()
+			.includes('focus-without-user-activation');
+	} catch (error) {
+		return false;
+	}
+})();
 const nativeTemplateContent = Reflect.getOwnPropertyDescriptor(
 	HTMLTemplateElement.prototype,
 	'content',
@@ -194,6 +208,20 @@ export function isHTMLTemplate(node: unknown): node is HTMLTemplateElement {
 		return (
 			Reflect.apply(nativeNodeType, node, []) === 1 &&
 			Reflect.apply(nativeLocalName, node, []) === 'template' &&
+			Reflect.apply(nativeNamespace, node, []) === HTML_NAMESPACE
+		);
+	} catch (error) {
+		// not a node
+		return false;
+	}
+}
+
+/** whether `node` is an HTML <iframe>, by the browser's own getters (as isHTMLTemplate) */
+export function isHTMLFrame(node: unknown): node is HTMLIFrameElement {
+	try {
+		return (
+			Reflect.apply(nativeNodeType, node, []) === 1 &&
+			Reflect.apply(nativeLocalName, node, []) === 'iframe' &&
 			Reflect.apply(nativeNamespace, node, []) === HTML_NAMESPACE
 		);
 	} catch (error) {
@@ -711,6 +739,16 @@ export default function cloneRawNode(
 					});
 					// (the copy may live on in the page: it keeps nothing of the markup)
 					if (base) parsedBases.delete(target);
+					// a frame the markup gave no allow: the hooks see it has none,
+					// and give it the real one it needs before it is put anywhere
+					// (Chrome 158, DOMAttributes frameAllow; the markup a sink
+					// hands the browser carries it)
+					if (
+						knowsFocus &&
+						isHTMLFrame(target) &&
+						!Reflect.apply(nativeHasAttribute, target, ['allow'])
+					)
+						target.removeAttribute('allow');
 
 					// An XML document's external scripts ran in the order the
 					// parser met them. A script made here is not the parser's: the

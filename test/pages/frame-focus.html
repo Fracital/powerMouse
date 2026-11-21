@@ -1,0 +1,186 @@
+<!doctype html>
+<title>FRAME FOCUS</title>
+<body>
+	<!-- frames the parser makes: of another site, of this one, with an allow of the page's, under a sandbox of the page's, and a srcdoc -->
+	<iframe id="parsedCross"></iframe>
+	<iframe id="parsedSame"></iframe>
+	<iframe id="parsedCamera" allow="camera"></iframe>
+	<iframe id="parsedSandbox" sandbox="allow-scripts allow-same-origin"></iframe>
+	<iframe
+		id="parsedSrcdoc"
+		srcdoc="<script>const i = document.createElement('input'); document.documentElement.append(i); i.focus(); parent.postMessage({ focusReport: { name: 'parsedSrcdoc', allowed: document.featurePolicy.allowsFeature('focus-without-user-activation'), focused: document.activeElement === i } }, '*');</script>"
+	></iframe>
+	<iframe id="parsedBlank"></iframe>
+	<script>
+		// Whether each frame's document may focus without user activation
+		// (Chrome 158 has focus-without-user-activation), and what the page
+		// reads of the frames' allow attributes: frames the parser made
+		// (above) and the script makes, of another site and of this one,
+		// with and without an allow of the page's, an about:blank one, one
+		// whose allow the page changes after it loaded (it counts from the
+		// next navigation), and a nested one. window.__focus holds the
+		// reports and window.__reads what the page read.
+		const FEATURE = 'focus-without-user-activation';
+		const other = location.origin.includes('127.0.0.1')
+			? location.origin.replace('127.0.0.1', 'localhost')
+			: location.origin.replace('localhost', '127.0.0.1');
+		const leaf = (origin, name) =>
+			`${origin}/pages/frame-focus-leaf.html?${name}`;
+		const reports = {};
+		const reads = {};
+		const expected = [];
+		const blankReport = (name, frame) => {
+			const doc = frame.contentDocument;
+			const input = doc.createElement('input');
+			doc.body.append(input);
+			input.focus();
+			reports[name] = {
+				name,
+				allowed: doc.featurePolicy.allowsFeature(FEATURE),
+				focused: doc.activeElement === input,
+			};
+		};
+		const view = (frame) => ({
+			attribute: frame.getAttribute('allow'),
+			property: frame.allow,
+			has: frame.hasAttribute('allow'),
+			hasAttributes: frame.hasAttributes(),
+			names: frame.getAttributeNames(),
+			attributes: [...frame.attributes].map((a) => `${a.name}=${a.value}`),
+			node: frame.getAttributeNode('allow')?.value ?? null,
+			outer: frame.outerHTML.slice(0, 300),
+			clone: frame.cloneNode().outerHTML.slice(0, 300),
+			matches: frame.matches('[allow]'),
+		});
+		const records = [];
+		const observer = new MutationObserver((list) => {
+			for (const record of list)
+				records.push(`${record.attributeName}:${record.oldValue}`);
+		});
+		const parsed = {
+			parsedCross: leaf(other, 'parsedCross&nest'),
+			parsedSame: leaf(location.origin, 'parsedSame'),
+			parsedCamera: leaf(other, 'parsedCamera'),
+			parsedSandbox: leaf(other, 'parsedSandbox'),
+		};
+		// one frame at a time, each once the one before reported: frames
+		// focusing at once take the focus from each other
+		const steps = [];
+		let waiting = null;
+		const next = () => {
+			const step = steps.shift();
+			if (!step) return;
+			waiting = step[0];
+			step[1]();
+			if (waiting in reports) next();
+		};
+		for (const [id, src] of Object.entries(parsed)) {
+			steps.push([
+				id === 'parsedCross' ? 'parsedCross/nested' : id,
+				() => {
+					document.getElementById(id).src = src;
+				},
+			]);
+			expected.push(id);
+		}
+		expected.push('parsedCross/nested', 'parsedSrcdoc');
+		steps.push([
+			'parsedBlank',
+			() => blankReport('parsedBlank', document.getElementById('parsedBlank')),
+		]);
+		const made = [
+			['madeCross', other, null],
+			['madeSame', location.origin, null],
+			['madeNone', other, `${FEATURE} 'none'`],
+			['madeSelfCross', other, `${FEATURE} 'self'`],
+			['madeSelfSame', location.origin, `${FEATURE} 'self'`],
+			['madeOrigin', other, `${FEATURE} ${other}`],
+			['madeOtherOrigin', location.origin, `${FEATURE} ${other}`],
+			['madeGarbage', other, `${FEATURE} garbage 'self'`],
+			['madeBare', other, FEATURE],
+			['madeCamera', other, 'camera; microphone'],
+		];
+		for (const [name, origin, allow] of made) {
+			steps.push([
+				name,
+				() => {
+					const frame = document.createElement('iframe');
+					if (allow !== null) frame.setAttribute('allow', allow);
+					frame.src = leaf(origin, name);
+					document.body.append(frame);
+				},
+			]);
+			expected.push(name);
+		}
+		// about:blank, made with no attribute at all
+		steps.push([
+			'madeBlank',
+			() => {
+				const blank = document.createElement('iframe');
+				document.body.append(blank);
+				blankReport('madeBlank', blank);
+				reads.blank = view(blank);
+			},
+		]);
+		steps.push([
+			'madeBlankNone',
+			() => {
+				const blankNone = document.createElement('iframe');
+				blankNone.allow = `${FEATURE} 'none'`;
+				document.body.append(blankNone);
+				blankReport('madeBlankNone', blankNone);
+				reads.blankNone = view(blankNone);
+			},
+		]);
+		// the page's allow written once the frame loaded: the next navigation has it
+		const later = document.createElement('iframe');
+		steps.push([
+			'laterSecond',
+			() => {
+				later.src = leaf(other, 'laterFirst&nofocus');
+				document.body.append(later);
+			},
+		]);
+		expected.push('laterFirst', 'laterSecond');
+		addEventListener('message', (event) => {
+			const report = event.data?.focusReport;
+			if (!report) return;
+			reports[report.name] = report;
+			if (report.name === 'laterFirst') {
+				observer.observe(later, {
+					attributes: true,
+					attributeOldValue: true,
+				});
+				later.setAttribute('allow', `${FEATURE} 'none'`);
+				reads.laterSet = view(later);
+				later.removeAttribute('allow');
+				reads.laterRemoved = view(later);
+				later.allow = `${FEATURE} 'none'`;
+				reads.laterProperty = view(later);
+				later.toggleAttribute('allow');
+				later.toggleAttribute('allow');
+				reads.laterToggled = view(later);
+				later.setAttribute('allow', `${FEATURE} 'none'`);
+				later.src = leaf(other, 'laterSecond');
+			}
+			if (report.name === waiting) next();
+			if (expected.every((name) => name in reports)) {
+				reads.parsedCross = view(document.getElementById('parsedCross'));
+				reads.parsedCamera = view(document.getElementById('parsedCamera'));
+				reads.madeCross = view(document.querySelectorAll('iframe')[6]);
+				reads.selected = document.querySelectorAll('iframe[allow]').length;
+				reads.unselected = document.querySelectorAll(
+					'iframe:not([allow])',
+				).length;
+				reads.records = records;
+				reads.markup = document.body.innerHTML
+					.replace(/<script>[^]*<\/script>/, '')
+					.replace(/srcdoc="[^"]*"/, '')
+					.slice(0, 3000);
+				window.__reads = reads;
+				window.__focus = reports;
+			}
+		});
+		next();
+	</script>
+</body>

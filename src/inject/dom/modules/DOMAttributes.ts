@@ -46,6 +46,7 @@ import {
 import { ELEMENT_STYLE_INTERFACES } from '../cssRules';
 import { deferred } from '../deferred';
 import type { DeferredParts } from '../deferredParts';
+import { FOCUS_FEATURE, focusAllow } from '../focusAllow';
 import { forgetDestination, frameWindow } from '../freshContext';
 import type { ObjectLoads } from '../objectLoads';
 import { responseURLOf } from '../responseDocuments';
@@ -59,12 +60,16 @@ import DOMHooksModule, {
 	CustomElement,
 	nativeElement,
 	nativeRead,
+	pageWriting,
 	pendingAttributes,
+	writeFirst,
 } from './DOMHooks';
 import {
+	hiddenAllow,
 	hiddenMutation,
 	isHiddenValue,
 	markerPrefix,
+	unseenWrite,
 } from './MutationObserver';
 import NavigationHintModule from './NavigationHint';
 import TokenListsModule from './TokenLists';
@@ -74,11 +79,17 @@ import TokenListsModule from './TokenLists';
  * `allowfullscreen` read as `fullscreen *` where the attribute does not name
  * the feature, as Chrome reads it (empty: neither attribute)
  */
+/** a frame element's allow as the page wrote it (null: none) */
+function pageAllow(element: CustomElement): string | null {
+	const allow =
+		element.getAttributeOG('allow') ?? element.getAttribute('allow');
+	return isHiddenValue(allow) ? null : allow;
+}
+
 function containerPolicy(element: CustomElement): string {
-	// as the page wrote it (the site pool may give the browser another)
-	const allow = element.hasAttributeOG('allow')
-		? element.getAttributeOG('allow')
-		: element.getAttribute('allow');
+	// as the page wrote it (the site pool and Chrome 158's focus give the
+	// browser another; the hidden one is none)
+	const allow = pageAllow(element);
 	if (!element.hasAttribute('allowfullscreen')) return allow ?? '';
 	if (allow !== null && /(?:^|;)\s*fullscreen(?:\s|;|$)/i.test(allow))
 		return allow;
@@ -133,6 +144,8 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 	copyRules?: (sheet: CSSStyleSheet) => void;
 	/** @internal copy the routed loads of an element's style that came into a document no service worker controls (DOMContentHooks) */
 	copyInline?: (element: Element) => void;
+	/** give a frame the page made or parsed with no allow its real one (Chrome 158, frameAllow) */
+	frameAllow?: (element: Element) => void;
 	/** @internal the page's view of a CSSStyleDeclaration: reads unrouted, writes routed (CSSReadback) */
 	wrapDeclaration?: (declaration: CSSStyleDeclaration) => CSSStyleDeclaration;
 	// captured before the hooks replace them, for serializeStyle
@@ -1297,8 +1310,126 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					element.setAttributeOG('allow', allow);
 					element.setAttribute('allow', deferred('slotContainerPolicy')(allow));
 				};
-		if (slotAllow)
-			domHooksModule.useAttributes(slotAllow, [['IFRAME', 'allow']]);
+		// Chrome 158: every frame the page makes or parses gets a real allow
+		// naming focus-without-user-activation (../focusAllow.ts), which
+		// the page never sees: one it wrote stays in the marker, and none is
+		// one with the hidden value (MutationObserver hiddenAllow, DOMHooks
+		// isHidden). It is given before the frame is first in the document
+		// (DOMContentHooks routeUnseen, cloneNode), and made again when the
+		// page's allow, sandbox, srcdoc or src changes it, before the
+		// navigation that takes it (as natively, an allow written later
+		// counts from the next navigation). A browser that does not know the
+		// feature (it would warn of it) gets none.
+		const focusKnown = (() => {
+			try {
+				const policy = Reflect.apply(
+					Reflect.getOwnPropertyDescriptor(
+						realm.Document.prototype,
+						'featurePolicy',
+					)!.get!,
+					realm.document,
+					[],
+				) as { features(): string[] };
+				return policy.features().includes(FOCUS_FEATURE);
+			} catch (error) {
+				// no featurePolicy (not Chrome)
+				return false;
+			}
+		})();
+		/** the origin of the document `element` shows next (null: opaque), as the page names it */
+		const frameTarget = (element: CustomElement): string | null => {
+			if (element.hasAttributeOG('srcdoc') || element.hasAttribute('srcdoc'))
+				return moduleClient.origin;
+			const src = element.getAttributeOG('src') ?? element.getAttribute('src');
+			if (!src) return moduleClient.origin;
+			try {
+				const { url } = pageURL(src);
+				if (url.protocol === 'about:' || url.protocol === 'javascript:')
+					return moduleClient.origin;
+				return url.origin === 'null' ? null : url.origin;
+			} catch (error) {
+				// no URL: the frame stays on its about:blank
+				return moduleClient.origin;
+			}
+		};
+		let allowProperty = false;
+		const frameAllow = (element: CustomElement) => {
+			if (
+				element.localName !== 'iframe' ||
+				element.namespaceURI !== HTML_NAMESPACE
+			)
+				return;
+			const marker = element.getAttributeOG('allow');
+			const current = element.getAttribute('allow');
+			// the page's: what it writes now, else what the marker keeps of
+			// it, else what it wrote unseen (a node of DOMParser's); the
+			// hidden one is none
+			const page = pageWriting(element, 'allow')
+				? current
+				: (marker ?? (isHiddenValue(current) ? null : current));
+			const sandbox =
+				element.getAttributeOG('sandbox') ?? element.getAttribute('sandbox');
+			const real = focusAllow(page, {
+				sandbox,
+				target:
+					sandbox !== null && !sandboxTokens(sandbox).has('allow-same-origin')
+						? null
+						: frameTarget(element),
+				self: moduleClient.origin,
+				pool: !!this.client.sites,
+				base:
+					page !== null && this.client.sites
+						? deferred('slotContainerPolicy')(page)
+						: undefined,
+				hidden: hiddenAllow,
+			});
+			if (page === null) {
+				if (marker !== null) element.removeAttributeOG('allow');
+			} else if (marker !== page) element.setAttributeOG('allow', page);
+			// the page's allow where the hidden one was is where the page put
+			// it: after the rest
+			const moved =
+				page !== null &&
+				marker === null &&
+				isHiddenValue(
+					Reflect.apply(nativeElement.getAttribute, element, ['allow']),
+				);
+			if (moved) {
+				Reflect.apply(nativeElement.removeAttribute, element, ['allow']);
+				element.setAttribute('allow', real);
+			} else if (current !== real) {
+				if (page === null) unseenWrite(element, 'allow');
+				element.setAttribute('allow', real);
+			}
+			// before a src written with it (one the element has already: a
+			// new one's place is the page's)
+			if (Reflect.apply(nativeElement.hasAttribute, element, ['allow']))
+				writeFirst(element, 'allow');
+			// the property reads the page's (the empty string for none)
+			if (!allowProperty) {
+				allowProperty = true;
+				domHooksModule.useAttributes(frameAllow, [
+					[
+						realm.HTMLIFrameElement,
+						'allow',
+						(element: CustomElement) =>
+							element.getAttributeOG('allow') ??
+							(isHiddenValue(element.getAttribute('allow')) ? '' : false),
+					],
+				]);
+			}
+		};
+		const allowHook = focusKnown ? frameAllow : slotAllow;
+		if (allowHook)
+			domHooksModule.useAttributes(allowHook, [['IFRAME', 'allow']]);
+		if (focusKnown) {
+			domHooksModule.useAttributes(frameAllow, [
+				['IFRAME', 'srcdoc'],
+				[realm.HTMLIFrameElement, 'srcdoc', ogOrFalse('srcdoc')],
+			]);
+			this.frameAllow = (element) =>
+				usePrototype(element, CustomElement.prototype, frameAllow);
+		}
 		domHooksModule.useAttributes(
 			(element, attribute) => {
 				// Chrome takes a frame's credentialless attribute at its next
@@ -1391,11 +1522,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 							// lets be (the site pool: and the frame's sandbox,
 							// which a frame of another slot cannot read)
 							moduleClient.childRouteFor(
-								moduleClient.hostIsolated
-									? element.hasAttributeOG('allow')
-										? element.getAttributeOG('allow')
-										: element.getAttribute('allow')
-									: null,
+								moduleClient.hostIsolated ? pageAllow(element) : null,
 								moduleClient.hostIsolated ? resource.url.origin : null,
 								// (only where the browser has credentialless frames:
 								// elsewhere the attribute is nothing to it)
@@ -1448,7 +1575,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					} catch (error) {
 						// a document of another origin, or none
 					}
-					slotAllow?.(element);
+					allowHook?.(element);
 					element.setAttribute('src', routed);
 				}
 			},
@@ -2578,47 +2705,47 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 			iframePrototype,
 			'contentDocument',
 		)!.get!;
-		domHooksModule.useAttributes(
-			(element) => {
-				element.restoreAttributesOG('sandbox');
-				const lists = moduleClient.getModule(TokenListsModule);
-				if (!element.hasAttribute('sandbox')) {
-					lists?.sync(element, null);
-					return;
-				}
-				const value = element.getAttribute('sandbox')!;
-				lists?.sync(element, value);
-				element.setAttributeOG('sandbox', value);
-				element.setAttribute('sandbox', realSandbox(value));
-				if (
-					sandboxTokens(value).has('allow-scripts') &&
-					moduleClient.allows('allow-scripts')
-				)
-					return;
-				try {
-					const child = Reflect.apply(
-						contentDocument,
-						element,
-						[],
-					) as Document | null;
-					if (child && child.URL === 'about:blank') guardDocument(child);
-				} catch (error) {
-					// nothing shown yet
-				}
-			},
-			[
-				['IFRAME', 'sandbox'],
-				...(Reflect.getOwnPropertyDescriptor(iframePrototype, 'sandbox')?.set
-					? [
-							[realm.HTMLIFrameElement, 'sandbox', nativeRead] as [
-								typeof HTMLIFrameElement,
-								string,
-								typeof nativeRead,
-							],
-						]
-					: []),
-			],
-		);
+		const sandboxHooks: Parameters<typeof domHooksModule.useAttributes>[1] = [
+			['IFRAME', 'sandbox'],
+			...(Reflect.getOwnPropertyDescriptor(iframePrototype, 'sandbox')?.set
+				? [
+						[realm.HTMLIFrameElement, 'sandbox', nativeRead] as [
+							typeof HTMLIFrameElement,
+							string,
+							typeof nativeRead,
+						],
+					]
+				: []),
+		];
+		domHooksModule.useAttributes((element) => {
+			element.restoreAttributesOG('sandbox');
+			const lists = moduleClient.getModule(TokenListsModule);
+			if (!element.hasAttribute('sandbox')) {
+				lists?.sync(element, null);
+				return;
+			}
+			const value = element.getAttribute('sandbox')!;
+			lists?.sync(element, value);
+			element.setAttributeOG('sandbox', value);
+			element.setAttribute('sandbox', realSandbox(value));
+			if (
+				sandboxTokens(value).has('allow-scripts') &&
+				moduleClient.allows('allow-scripts')
+			)
+				return;
+			try {
+				const child = Reflect.apply(
+					contentDocument,
+					element,
+					[],
+				) as Document | null;
+				if (child && child.URL === 'about:blank') guardDocument(child);
+			} catch (error) {
+				// nothing shown yet
+			}
+		}, sandboxHooks);
+		// (the sandbox decides a frame's focus on 158 too, frameAllow)
+		if (focusKnown) domHooksModule.useAttributes(frameAllow, sandboxHooks);
 
 		domHooksModule.useAttributes(this.formHook, [
 			['FORM', 'action'],
