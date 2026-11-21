@@ -55,7 +55,12 @@ if (!existsSync(`${root}dist/serviceWorker.js`)) {
 }
 
 // Differences Firefox still has, by check name, with why
-const KNOWN = {};
+const KNOWN = {
+	'offline.html: fixture syncXhr reads as natively':
+		'no service worker, so no sync bridge: a synchronous XMLHttpRequest fails offline, in Chrome too',
+	'offline.html: fixture form reads as natively':
+		"a form submitted into a frame of a dialed document never loads there, in Chrome's offline.html too (the dialing checks below leave it out)",
+};
 
 let passed = 0;
 let failed = 0;
@@ -603,6 +608,199 @@ else {
 	await tab.close();
 }
 
+// ---- offline.html's sites, from file: ----
+
+// what a search page does (test/pages/offline-sites.html, which the
+// offline-html suite gives Chrome): suggestions for what is typed by fetch
+// and XMLHttpRequest, its storage, pushState and Back, a frame of its own, a
+// WebSocket and two workers, the same report as in Chrome
+const SITE_REPORT = {
+	localStorage: [null, 'kept'],
+	sessionStorage: 'session',
+	pushState: ['?pushed=1', 1, ''],
+	frame: [
+		'Offline sites frame',
+		'/pages/offline-sites-frame.html',
+		'?from=parent',
+		'Offline sites',
+	],
+	webSocket: ['/ws-echo', true],
+	worker: ['hello', 4, '/pages/offline-sites-worker.js'],
+	blobWorker: 42,
+	suggested: ['weather 0', 'weather in paris 1', 'web 2'],
+};
+async function offlineSite(tab) {
+	await submitOmni(tab, `${servers.fixture}pages/offline-sites.html`);
+	const report = await waitActive(tab, () =>
+		document.title === 'Offline sites' ? document.body.dataset.report : null,
+	);
+	await inActive(tab, () => {
+		const box = document.getElementById('box');
+		for (const value of ['w', 'we']) {
+			box.value = value;
+			box.dispatchEvent(new Event('input'));
+		}
+	}).catch(() => {});
+	const suggested = await waitActive(
+		tab,
+		() => {
+			const items = [...document.querySelectorAll('#suggestions li')];
+			return items.length === 3 && items.map((item) => item.textContent);
+		},
+		{ timeout: 20000 },
+	);
+	const seen = { ...(report ? JSON.parse(report) : null), suggested };
+	ok(
+		'offline.html: a site works as in Chrome: suggestions by fetch and XMLHttpRequest, storage, pushState and Back, its frame, a WebSocket and its workers',
+		JSON.stringify(seen) === JSON.stringify(SITE_REPORT),
+		short(seen, 2000),
+	);
+}
+
+// a link, the toolbar's Back, Forward and Reload, a GET and a POST form, a
+// location write of the page's script and the Navigation API, in a tab of
+// offline.html (the offline-html suite's pages)
+async function offlineHistory(tab) {
+	const one = `${servers.fixture}pages/offline-html.html`;
+	const two = `${servers.fixture}pages/offline-html-2.html`;
+	/** fn's value once the active frame's document is titled `title` */
+	const titled = (title, fn = () => location.href) =>
+		waitActive(
+			tab,
+			`() => document.title === ${JSON.stringify(title)} ? (${fn})() : null`,
+		);
+	await submitOmni(tab, one);
+	ok(
+		'offline.html: a fixture page with its stylesheet, image and script',
+		!!(await titled(
+			'Offline page one',
+			() =>
+				getComputedStyle(document.getElementById('heading')).color ===
+					'rgb(0, 128, 0)' &&
+				document.getElementById('picture').naturalWidth === 40 &&
+				document.body.dataset.script === '/pages/offline-html.html',
+		)),
+	);
+	await tab.activeIn(await tab.frameOf(ACTIVE), () =>
+		document.getElementById('next').click(),
+	);
+	ok(
+		'offline.html: a link goes to the next page',
+		!!(await titled('Offline page two')) && (await omni(tab)) === two,
+		await omni(tab),
+	);
+	await tab.click('#toolBack');
+	ok(
+		"offline.html: the toolbar's Back goes to the first page",
+		!!(await titled('Offline page one')) && (await omni(tab)) === one,
+		await omni(tab),
+	);
+	await tab.click('#toolForward');
+	ok(
+		"offline.html: the toolbar's Forward goes to the second page again",
+		!!(await titled('Offline page two')) && (await omni(tab)) === two,
+		await omni(tab),
+	);
+	await tab.click('#toolBack');
+	await titled('Offline page one', () => (window.beforeReload = true));
+	await tab.click('#toolReload');
+	ok(
+		"offline.html: the toolbar's Reload makes the page again",
+		!!(await titled('Offline page one', () => !window.beforeReload)),
+	);
+	await tab.activeIn(await tab.frameOf(ACTIVE), () =>
+		document.getElementById('searchButton').click(),
+	);
+	ok(
+		'offline.html: a GET form sends its fields in the query',
+		!!(await titled(
+			'Offline page two',
+			() => document.getElementById('query').textContent === 'first query',
+		)) && (await omni(tab)) === `${two}?q=first+query`,
+		await omni(tab),
+	);
+	// (Firefox makes it a replace in a document written by document.open)
+	const entries = await inActive(tab, () => [
+		navigation.entries().map((entry) => new URL(entry.url).pathname),
+		navigation.currentEntry.index,
+	]).catch((error) => String(error));
+	ok(
+		"offline.html: a form's submission makes an entry of its own, as in Chrome",
+		JSON.stringify(entries) ===
+			JSON.stringify([
+				['/pages/offline-html.html', '/pages/offline-html-2.html'],
+				1,
+			]),
+		short(entries),
+	);
+	// the Navigation API of the document's own session, as a single-page
+	// site uses it: a navigate() its navigate event intercepts, its entries,
+	// back() (a navigation to another document would be a frame of its own)
+	const navigated = await inActive(tab, async () => {
+		// (the page's URL as the inject answers it: this function's own
+		// location is the frame's, about:srcdoc)
+		const search = () => new URL(document.URL).search;
+		const seen = [];
+		navigation.addEventListener('navigate', (event) => {
+			seen.push(new URL(event.destination.url).search);
+			if (event.canIntercept) event.intercept({ handler: async () => {} });
+		});
+		const before = navigation.entries().length;
+		await navigation.navigate('?q=intercepted').finished;
+		const pushed = [
+			search(),
+			new URL(navigation.currentEntry.url).search,
+			navigation.entries().length - before,
+			navigation.canGoBack,
+		];
+		await navigation.back().finished;
+		return [...pushed, search(), seen];
+	}).catch((error) => String(error));
+	ok(
+		"offline.html: the Navigation API is the page's own session",
+		JSON.stringify(navigated) ===
+			JSON.stringify([
+				'?q=intercepted',
+				'?q=intercepted',
+				1,
+				true,
+				'?q=first+query',
+				['?q=intercepted', '?q=first+query'],
+			]),
+		short(navigated),
+	);
+	await tab.click('#toolBack');
+	await titled('Offline page one');
+	await tab
+		.activeIn(await tab.frameOf(ACTIVE), () =>
+			document.getElementById('postButton').click(),
+		)
+		.catch(() => {});
+	const posted = await titled('Offline posted', () => [
+		document.getElementById('method').textContent,
+		document.getElementById('body').textContent,
+	]);
+	ok(
+		'offline.html: a POST form sends its body',
+		posted?.[0] === 'POST' && posted?.[1] === 'q=posted+value',
+		short(posted),
+	);
+	await inActive(tab, () => {
+		const script = document.createElement('script');
+		script.textContent =
+			"location.href = '/pages/offline-html-2.html?q=script'";
+		document.head.append(script);
+	}).catch(() => {});
+	ok(
+		"offline.html: the page's script navigates it",
+		!!(await titled(
+			'Offline page two',
+			() => document.getElementById('query').textContent === 'script',
+		)) && (await omni(tab)) === `${two}?q=script`,
+		await omni(tab),
+	);
+}
+
 // ---- the landing: Tor, offline.html ----
 
 {
@@ -749,6 +947,32 @@ else {
 				!!found && found.value.cookie === nativeReport?.cookie,
 				short(found?.value?.cookie),
 			);
+			// (its tabs dial, as in Chrome: the rest of the fixture as natively)
+			ok(
+				"offline.html: the page's frame is a call page's srcdoc",
+				found?.url === 'about:srcdoc' &&
+					(await offline.eval(() => globalThis.STOMP_OFFLINE.dialing)),
+				found?.url,
+			);
+			for (const key of [
+				'location',
+				'localStorage',
+				'syncXhr',
+				'webSocket',
+				'iframe',
+				'worker',
+				'form',
+			]) {
+				const a = JSON.stringify(nativeReport?.[key]);
+				const b = JSON.stringify(found?.value[key]);
+				ok(
+					`offline.html: fixture ${key} reads as natively`,
+					a === b,
+					`native ${a}, offline ${b}`,
+				);
+			}
+			await offlineSite(offline);
+			await offlineHistory(offline);
 		}
 		const fileLoads = await offline
 			.eval(() => window.__pmFileLoads ?? null)

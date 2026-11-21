@@ -27,6 +27,41 @@ const OWN =
 	location.protocol === 'file:' && location.origin === 'null'
 		? 'file://'
 		: location.origin;
+/**
+ * Firefox reads a file: URL's origin as "null" where Chrome reads
+ * `file://`, so a route the inject made on a file: URL's origin (a called
+ * document's base URL's) named no route here. A call page's realm reads
+ * `file://` there, as in Chrome: a proxied page reads no file: URL, and the
+ * getter is a Proxy of the native one, whose source reads as native.
+ */
+export function fileOrigins(win) {
+	const descriptor = Object.getOwnPropertyDescriptor(
+		win.URL.prototype,
+		'origin',
+	);
+	const native = descriptor?.get;
+	if (
+		OWN !== 'file://' ||
+		!native ||
+		Reflect.apply(native, new win.URL('file:///'), []) !== 'null'
+	)
+		return;
+	const protocol = Object.getOwnPropertyDescriptor(
+		win.URL.prototype,
+		'protocol',
+	).get;
+	Object.defineProperty(win.URL.prototype, 'origin', {
+		...descriptor,
+		get: new Proxy(native, {
+			apply(target, self, args) {
+				const own = Reflect.apply(target, self, args);
+				return own === 'null' && Reflect.apply(protocol, self, []) === 'file:'
+					? OWN
+					: own;
+			},
+		}),
+	});
+}
 const HOST_CLIENT = 'pm-host';
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
 const NULL_BODY = new Set([101, 103, 204, 205, 304]);
@@ -1075,8 +1110,13 @@ export class WrittenFrame extends EventTarget {
 // window: its fetch goes to the worker, its document gets a port to the
 // worker (OFFLINE_WORKER) in place of a controller (no worker controls it,
 // so the inject copies its loads).
-// (Firefox reads this page's origin as "null", on which the controller
-// would make its routes and call pages, and keeps the written frames above.)
+// Firefox, which reads this page's origin (and a file: URL's) as "null",
+// dials too: the controller makes its routes and call pages on `file://`
+// there (src/controller/justCallStomp.ts ownOrigin), a call page's realm
+// reads a file: URL's origin as Chrome does (fileOrigins), and the call page
+// takes the parent Firefox lists as `file://UNIVERSAL_FILE_URI_ORIGIN`
+// (src/server/called.ts). A browser with no Navigation API keeps the
+// written frames above.
 
 /** global the inject takes its port to the worker from (src/transport/messages.ts OFFLINE_WORKER) */
 const OFFLINE_WORKER = '$stomp$offlineWorker';
@@ -1086,10 +1126,7 @@ const OFFLINE_CALL_PAGE = '$stomp$offlineCallPage';
 const CALL_TOKEN_HEADER = 'x-stomp-call-token';
 /** whether the demo dials here */
 export const dialing =
-	OWN !== 'null' &&
-	location.origin !== 'null' &&
-	'navigation' in globalThis &&
-	'NavigateEvent' in globalThis;
+	'navigation' in globalThis && 'NavigateEvent' in globalThis;
 /** the call page's path, once a controller dialed */
 let callPath = null;
 /** the call page as the worker serves it, its first script this page's prime */
@@ -1562,6 +1599,7 @@ function pageWorkers(win, page, creator) {
 
 /** a call page's window, from its first script: see the section's head */
 function primeCall(win) {
+	fileOrigins(win);
 	const element = win.frameElement;
 	const page = callPages.get(element) ?? toWorker(callPath);
 	// the documents of frames that went

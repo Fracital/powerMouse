@@ -610,8 +610,10 @@ available" on the button for three seconds.
 
 ### What it cannot do
 
-Measured in headless Chrome 157 and 158 only, from `file:` (the
-offline-html suite; a static host was tried by hand when it was written):
+Measured in headless Chrome 157 and 158 (the offline-html suite) and
+Firefox 160 (`npm run test:firefox`), from `file:`; a static host was tried
+by hand when it was written. Both dial (a browser with no Navigation API
+writes each document into a frame instead, with no history of the page's):
 
 - It reads its payload with `Uint8Array.fromBase64` and
   `DecompressionStream`, so an older browser stops at the start. A phone
@@ -625,9 +627,10 @@ offline-html suite; a static host was tried by hand when it was written):
   frame of the file's own origin (`file:` or the static host's), as with
   the same-origin controller. It is not a security boundary.
 - Not modelled yet: `response.url` and `responseURL` (read as `''`), a
-  page's own history (`pushState`, `history.length`, `popstate`), a header
-  CSP, saving a page's downloads (they are shown), nested proxied frames,
-  a page's Workers and SharedWorkers, EventSource, `sendBeacon`, emulated
+  header CSP, saving a page's downloads (they are shown), a form submitted
+  into a frame of the page, a font a script loads with `FontFace`, a
+  page's module Workers and SharedWorkers (and an importScripts() of a
+  script the bootstrap does not name), EventSource, `sendBeacon`, emulated
   service workers of pages, rewrite workers, streaming media, and the
   non-SIMD epoxy build. A held script runs after the markup after it.
 - Its profile (cookies, site storage, Settings, themes) is the browser's

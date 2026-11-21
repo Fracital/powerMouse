@@ -182,7 +182,9 @@ const callPageHTML = (
 	const shape = /^[0-9a-f]{${CALL_TOKEN_DIGITS}}$/;
 	const most = ${MAX_URL};
 	const ancestors = location.ancestorOrigins;
-	const above = ancestors && ancestors.length ? ancestors[0] : null;
+	const listed = ancestors && ancestors.length ? ancestors[0] : null;
+	// (Firefox lists a file: parent as this, and stamps its messages "null")
+	const above = listed === 'file://UNIVERSAL_FILE_URI_ORIGIN' ? 'null' : listed;
 	const here = ${at === null ? 'location.href' : JSON.stringify(at)};
 	const own = new URL(here).origin;
 	const scope = new URL('.', here).pathname;

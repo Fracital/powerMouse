@@ -133,6 +133,15 @@ const on = (origin: string, url: string) => {
 	const { pathname, search, hash } = new URL(url);
 	return `${origin}${pathname}${search}${hash}`;
 };
+/**
+ * This page's origin as a URL names it. A file: page's (offline.html's) is
+ * `file://`, as Chrome reads it; Firefox reads the opaque "null" there,
+ * on which a route or a call page would be no URL.
+ */
+const ownOrigin = () =>
+	location.protocol === 'file:' && location.origin === 'null'
+		? 'file://'
+		: location.origin;
 /** `url`'s origin, '' when it has none */
 const originOf = (url: string) => {
 	try {
@@ -716,7 +725,7 @@ export class CalledFrame {
 					const routed = new URL(String(told.routed));
 					const { controller } = this;
 					if (
-						(routed.origin === location.origin ||
+						(routed.origin === ownOrigin() ||
 							// (a file: page's, offline.html's: a file: URL's origin
 							// reads "null", its location's "file://")
 							(location.protocol === 'file:' && routed.protocol === 'file:') ||
@@ -887,7 +896,7 @@ export class CalledFrame {
 		// the call page is this page's own origin's, as the pool's
 		// navigations fall back (docs/content-slots.md).
 		const slots = controller.siteOrigins;
-		const origins = [location.origin, ...slots];
+		const origins = [ownOrigin(), ...slots];
 		const from = referrer ? originOf(referrer) : '';
 		const prefix = controller.directory.pathname;
 		const name = assetName(controller.config.assets, 'callPage');
@@ -896,7 +905,7 @@ export class CalledFrame {
 		// none once the call moved, where the worker it moved from handed it
 		// on)
 		let sent = referrer;
-		let at = location.origin;
+		let at = ownOrigin();
 		let routed!: string;
 		/** no site is shown from `at` while this page lives: the site's slot now, or this page's origin */
 		const leave = async (tries: number) => {
@@ -906,7 +915,7 @@ export class CalledFrame {
 			at =
 				other && other !== at && !controller.siteOriginLeftOut(other)
 					? other
-					: location.origin;
+					: ownOrigin();
 			routed = on(at, routed);
 		};
 		let fresh!: HTMLIFrameElement;
@@ -918,7 +927,7 @@ export class CalledFrame {
 				at =
 					slots.includes(from) && !controller.siteOriginLeftOut(from)
 						? from
-						: ((await until(controller.siteOrigin(url))) ?? location.origin);
+						: ((await until(controller.siteOrigin(url))) ?? ownOrigin());
 			routed = on(at, await until(controller.route(url)));
 			// a stop of the same route a moment ago is over for this call
 			const key = routed.split('#')[0];
@@ -937,7 +946,7 @@ export class CalledFrame {
 				// through its agent, and a slot whose agent gives none (it went)
 				// is left out.
 				let token: string | null = null;
-				if (at !== location.origin) {
+				if (at !== ownOrigin()) {
 					await until(
 						controller.siteViewport(
 							at,
@@ -980,7 +989,7 @@ export class CalledFrame {
 						pageLoad(fresh).then(
 							() => true,
 							(error) => {
-								if (at === location.origin) throw error;
+								if (at === ownOrigin()) throw error;
 								return false;
 							},
 						),
@@ -1007,13 +1016,13 @@ export class CalledFrame {
 							}),
 						);
 					}
-					if (!heard && at === location.origin)
+					if (!heard && at === ownOrigin())
 						throw new Error('The call page did not take the call');
 					if (heard && 'failed' in heard) {
 						// (a GET, which no refused or failed call sent twice could
 						// change: nothing else is called again)
 						if (
-							at === location.origin &&
+							at === ownOrigin() &&
 							refusals < REFUSED_RETRIES &&
 							(how.method ?? 'GET') === 'GET' &&
 							!how.body
@@ -1065,7 +1074,7 @@ export class CalledFrame {
 				if (
 					!(
 						to.pathname.startsWith(prefix) ||
-						(to.origin === location.origin && homed(to.pathname, prefix))
+						(to.origin === ownOrigin() && homed(to.pathname, prefix))
 					) ||
 					to.username ||
 					to.password

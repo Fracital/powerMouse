@@ -1287,6 +1287,18 @@ export function calledNavigation(
 			}
 			const formData = of(formOf) as FormData | null;
 			let kind: Kind = api?.reload ? 'reload' : type;
+			// Firefox replaces the entry on any form submission of a document
+			// written with document.open(), which every called document is;
+			// a loaded document's submission natively pushes one
+			const source = of(sourceOf) as Element | null;
+			if (
+				kind === 'replace' &&
+				!api &&
+				source !== null &&
+				/^(FORM|BUTTON|INPUT)$/.test(source.nodeName) &&
+				global.document.readyState === 'complete'
+			)
+				kind = 'push';
 			// a navigation to the document's own URL replaces its entry, as
 			// natively (unless navigate() asked for a push)
 			if (

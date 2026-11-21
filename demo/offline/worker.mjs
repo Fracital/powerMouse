@@ -192,19 +192,37 @@ function requestOf(given) {
 	if (!navigate && given.mode && given.mode !== 'same-origin')
 		init.mode = given.mode;
 	const request = new Request(given.url, init);
-	return dress(request, {
-		mode: given.mode || 'cors',
-		destination: given.destination || '',
-		referrer: given.referrer ?? '',
-		referrerPolicy: given.referrerPolicy || '',
-	});
+	return dress(
+		request,
+		{
+			mode: given.mode || 'cors',
+			destination: given.destination || '',
+			referrer: given.referrer ?? '',
+			referrerPolicy: given.referrerPolicy || '',
+		},
+		init.body,
+	);
 }
-function dress(request, facts) {
+// Firefox's Request has no `body` (its service worker's fetch event's
+// request has one), which the worker reads to know that a request has a
+// body to send: every POST went out empty there
+const NO_BODY = !('body' in Request.prototype);
+function dress(request, facts, body) {
 	for (const [name, value] of Object.entries(facts))
 		Object.defineProperty(request, name, { value, configurable: true });
+	if (NO_BODY && body !== undefined) {
+		let stream = null;
+		Object.defineProperty(request, 'body', {
+			get() {
+				stream ??= new Response(body).body;
+				return stream;
+			},
+			configurable: true,
+		});
+	}
 	Object.defineProperty(request, 'clone', {
 		value() {
-			return dress(Request.prototype.clone.call(this), facts);
+			return dress(Request.prototype.clone.call(this), facts, body);
 		},
 		configurable: true,
 	});

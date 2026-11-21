@@ -150,9 +150,9 @@ const PROXY_ORIGIN =
 //   line and in About's Dialing row, never a blank tab;
 // - a configured remote controller (STOMP_PROXY_ORIGIN) stays isolated: it
 //   does not dial yet;
-// - offline.html where its host cannot make the call pages itself
-//   (demo/offline/host.mjs dialing: Firefox, whose file: origin is opaque),
-//   which writes its documents into call pages of its own there;
+// - offline.html where its host does not dial (demo/offline/host.mjs
+//   dialing, the same check), which writes its documents into call pages
+//   of its own there;
 // - a server that runs the suites' classic path (STOMP_DIALING=0, test/
 //   run.mjs), where a suite asks for dialing with ?mode=just-call-stomp.
 // No address of the page turns dialing off.
