@@ -431,6 +431,22 @@ export async function demoBehind(headers) {
  * recorded from the call on; `raw()` lists the raw ones.
  */
 /**
+ * A download's bytes, or null when it failed. Read as a stream: a download's
+ * path() is the browser's file, which a browser this process is connected to
+ * (the run's shared one, test/run.mjs SHARED_BROWSER) does not hand out.
+ */
+export async function downloadBytes(download) {
+	try {
+		const chunks = [];
+		for await (const chunk of await download.createReadStream())
+			chunks.push(chunk);
+		return Buffer.concat(chunks);
+	} catch (error) {
+		return null;
+	}
+}
+
+/**
  * The CDP browserContextId of a Playwright context (Target.getTargetInfo of
  * one of its pages), or null while it has no page: what tells its targets
  * from the others of a browser's Target domain

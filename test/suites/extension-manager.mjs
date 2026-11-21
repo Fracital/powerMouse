@@ -45,6 +45,7 @@ import { crc32, deflateRawSync, deflateSync } from 'node:zlib';
 import {
 	activeFrame,
 	done,
+	downloadBytes,
 	FIXTURE,
 	HOST,
 	launch,
@@ -1472,7 +1473,7 @@ const names = downloads.map((download) => download.suggestedFilename()).sort();
 const crx = downloads.find((download) =>
 	download.suggestedFilename().endsWith('.crx'),
 );
-const crxBytes = crx ? readFileSync(await crx.path()) : null;
+const crxBytes = crx ? await downloadBytes(crx) : null;
 ok(
 	"Pack extension: Chrome's dialog, then Created the following files with the crx and its key, both saved",
 	packDialog.title === 'Pack extension' &&

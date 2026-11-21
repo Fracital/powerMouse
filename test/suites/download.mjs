@@ -6,9 +6,9 @@
 // propagation, one whose handler cancels it) and a blob: link, the
 // defaultPrevented the page reads on the way up included,
 // compared with the same page loaded natively; both demo modes.
-import { readFileSync } from 'node:fs';
 import {
 	done,
+	downloadBytes,
 	FIXTURE,
 	HOST,
 	launch,
@@ -26,9 +26,9 @@ function collect(page) {
 	page.on('download', async (download) => {
 		const entry = { name: download.suggestedFilename() };
 		saved.push(entry);
-		const path = await download.path().catch(() => null);
+		const bytes = await downloadBytes(download);
 		entry.failure = await download.failure();
-		entry.body = path ? readFileSync(path, 'utf8').slice(0, 200) : null;
+		entry.body = bytes ? bytes.toString('utf8').slice(0, 200) : null;
 	});
 	return saved;
 }
