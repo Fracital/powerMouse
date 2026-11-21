@@ -2,12 +2,10 @@
 // the circuits; the Wisp server is given nothing but TCP streams to Tor
 // relays' ORPorts (an IP and a port from arti's signed directory or its
 // compiled-in fallbacks), each carrying Tor's link TLS. A site's TLS is
-// rustls in the same wasm, end to end, and the exit resolves its name.
+// epoxy's, end to end, on a Tor stream (TorClient.connect, the Fracital
+// build's stream API: deploy/tor-js), and the exit resolves its name.
 // It runs in the SharedWorker every tab's transport shares (shared.mjs),
 // or in a tab's own transport worker where there is none (transport.mjs).
-//
-// A prototype: requests go through tor-js's own fetch (it has no stream API
-// yet, so epoxy cannot run on a Tor stream).
 import { FALLBACK_ADDRESSES } from './fallbacks.js';
 import {
 	ArtiSocket,
@@ -209,21 +207,9 @@ function consensusRelays(text) {
 }
 
 const CONSENSUS_KEYS = 'dir:consensus:';
-// how long a request waits for its answer's head on one circuit before it is
-// tried on another (tor's stream attach timeouts are 10 and 15 s; this one
-// covers the site's TLS handshake and its answer too)
-const STREAM_ANSWER_MS = 30000;
-const IDEMPOTENT = new Set(['GET', 'HEAD', 'OPTIONS']);
 // how long a Tor stream may take to open on one circuit before it is tried
 // on another (tor's stream attach timeouts are 10 and 15 s)
 const STREAM_OPEN_MS = 20000;
-
-/**
- * Whether this tor-js has a stream API (`connect`, deploy/tor-js's
- * patches), so Tor mode runs epoxy on Tor streams; the npm release has
- * only `fetch`
- */
-export const STREAMS = typeof TorClient.prototype.connect === 'function';
 
 /** whether the site key `site` is the host of `url` or a parent of it */
 export function siteMatches(site, url) {
@@ -287,6 +273,11 @@ export class TorService {
 		say = (level, text) => console[level](text),
 	} = {}) {
 		if (typeof wisp !== 'string') throw new TypeError('wisp: a URL');
+		// the npm release has only fetch
+		if (typeof TorClient.prototype.connect !== 'function')
+			throw new Error(
+				'this tor-js has no stream API (TorClient.connect): Tor mode needs the Fracital build (deploy/tor-js)',
+			);
 		this.#wisp = new WispConnection(wisp);
 		this.#storageName = storageName;
 		this.#say = say;
@@ -457,7 +448,6 @@ export class TorService {
 	 * circuit for the site (nothing was sent on it yet).
 	 */
 	async connect(host, port, site) {
-		if (!STREAMS) throw new Error('this tor-js has no stream API');
 		if (!Number.isInteger(port) || port < 1 || port > 65535)
 			throw new RangeError(`port ${port}`);
 		await this.init();
@@ -467,58 +457,5 @@ export class TorService {
 			this.newCircuit(site);
 			return this.#connectOnce(host, port, site);
 		}
-	}
-
-	/** one try on the site's circuit, given up when no answer comes in time */
-	async #fetchOnce(url, init, signal, site) {
-		const attempt = new AbortController();
-		const timer = setTimeout(
-			() => attempt.abort(new Error('no answer on this Tor circuit')),
-			STREAM_ANSWER_MS,
-		);
-		try {
-			return await this.#client.fetch(url, {
-				...init,
-				signal: signal
-					? AbortSignal.any([signal, attempt.signal])
-					: attempt.signal,
-				anonOptions: { isolationKey: this.#isolationKey(site) },
-			});
-		} finally {
-			clearTimeout(timer);
-		}
-	}
-
-	/**
-	 * `url` over a circuit of `site`'s (`init`: method, headers as an
-	 * object, a body tor-js sends): the answer's status, its headers as
-	 * pairs (each set-cookie its own) and its body
-	 */
-	async fetch(url, init, site, signal) {
-		await this.init();
-		let response;
-		try {
-			response = await this.#fetchOnce(url, init, signal, site);
-		} catch (error) {
-			// An exit that fails a stream keeps failing it for minutes on that
-			// circuit (tor-js "Circuit isolation"); tor tries another circuit
-			// after a stream waits 10 to 15 s. Once more on a new circuit for
-			// the site, for a request that can be sent twice.
-			if (signal?.aborted || !IDEMPOTENT.has(init.method.toUpperCase()))
-				throw error;
-			this.newCircuit(site);
-			response = await this.#fetchOnce(url, init, signal, site);
-		}
-		const headers = [];
-		for (const [name, value] of response.headers)
-			if (name !== 'set-cookie') headers.push([name, value]);
-		for (const cookie of response.headers.getSetCookie?.() ?? [])
-			headers.push(['set-cookie', cookie]);
-		return {
-			status: response.status,
-			statusText: response.statusText,
-			headers,
-			body: response.body,
-		};
 	}
 }

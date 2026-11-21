@@ -110,7 +110,7 @@ change in its `crates/tor-js`, "Remaining work"):
 1. **A stream API**: `connect(host, port, isolationKey)` returning a Tor
    `DataStream` as a pair of byte streams, beside its `fetch`. With it, epoxy
    runs on top (site TLS, HTTP/2, the request semantics STomp's transports
-   already get right); without it, the prototype uses tor-js's own `fetch`.
+   already get right). Done: deploy/tor-js's patch `0001`.
 2. **Bootstrap events**: arti's `bootstrap_events()` (percent and blocker),
    for a Tor Browser style progress bar. The prototype reads its log lines.
 3. **New identity**: drop the circuits of a key (arti's
@@ -120,7 +120,14 @@ change in its `crates/tor-js`, "Remaining work"):
 
 What `node_modules/tor-js` is, and how it was checked (2026-11-21):
 
-- **The package**: `tor-js@0.4.4` from the npm registry, pinned exactly in
+- **What we serve**: the Fracital build, `github:Fracital/tor-js#aca4f6df96b617464af61f9a243c6de48722c7f9`
+  in package.json (deploy/tor-js/publish.sh's dist branch): the release
+  below plus deploy/tor-js's patch, its wasm
+  `2e435140e9d3ac8b7ddf3304fc1fdb379b7c2c15b0b77b207381a1a1b6981136`,
+  which two clean builds give ("Built here too"). Its README and `build/`
+  say how to reproduce it without this repository. The rest of this
+  section is about the release it starts from.
+- **The release**: `tor-js@0.4.4` from the npm registry, pinned exactly in
   `package.json`, `package-lock.json` integrity
   `sha512-0biVOvwZrar+kt+y4GIW4haGYITgspZs1Sv/iJriUIDq3Hs0mM/nkwyO5Ygk+oGjqf7gVuBQhV0uF0RMmTb1UA==`,
   the same as the tarball's own hash computed here. `npm ci --ignore-scripts`
@@ -302,14 +309,12 @@ proxied page -> service worker -> transport worker
 - **Refused in Tor mode**: UDP (Tor has none: HTTP/3 off, as now, and the
   virtual Wisp server closes any UDP CONNECT), WebTransport (UDP) and
   WebRTC's UDP candidates. **WebSocket** is TCP, Tor carries it and Tor
-  Browser allows it: on Tor streams (deploy/tor-js's build) epoxy carries it
-  as in normal mode; with the npm release's fetch alone it is refused.
+  Browser allows it: on Tor streams epoxy carries it as in normal mode.
 - **Isolation of the wire format**: the transport takes the
   `$stomp$network` field and never sends it (`fieldSupport.partition`).
 
-The prototype has no stream API, so its `request()` is tor-js's `fetch`
-(arti's HTTP/1.1 client with rustls in the same wasm: still end to end, still
-DNS at the exit), and `connect()` refuses.
+Tor mode's `request()` and `connect()` are epoxy's on Tor streams (epoxy's
+TLS end to end, DNS at the exit; "Epoxy on Tor streams").
 
 ## Per-site circuits and New Identity
 
@@ -373,16 +378,16 @@ every tab of the origin shares: its descriptor's `sharedWorker`
 (TransportDescriptor.sharedWorker, a library hook: a dedicated worker cannot
 start a SharedWorker, so the controller starts it and gives the transport a
 port to it) is `demo/public/tor-client/shared.mjs`, which runs the client
-(`service.mjs`) and answers every tab's requests over its port, each
-response's body on a port of its own, a chunk for each pull
-(`remote.mjs`). Where no SharedWorker starts, or it does not answer in 15 s,
+(`service.mjs`) and opens every tab's Tor streams over its port, each
+stream on a port of its own (`remote.mjs`, `streamPort.mjs`). Where no SharedWorker starts, or it does not answer in 15 s,
 the tab runs a client of its own in its transport worker. The client ends
-with the origin's last page. The client is tor-js 0.4.4 (`node_modules/tor-js`, served at
-`/tor-client/tor-js/`), its socket provider a Wisp v1 client of its own over
+with the origin's last page. The client is tor-js 0.4.4 with deploy/tor-js's stream API
+(`node_modules/tor-js`, served at `/tor-client/tor-js/`), its socket provider a Wisp v1 client of its own over
 the demo's ordinary `/wisp/`, its storage IndexedDB `stomp-tor-client` (the
 app's origin; not the `tor` profile's, so it survives the
-profile), `request()` tor-js's `fetch` with an isolation key per top-level
-site (`$stomp$network`) and session nonce, `connect()` refused.
+profile), each stream on the circuits of an isolation key per top-level
+site (`$stomp$network`) and session nonce, epoxy on top ("Epoxy on Tor
+streams").
 The transport tells the page its bootstrap on a BroadcastChannel the page
 names in the descriptor (Tor Browser's phases: "Connecting to a relay",
 "Loading network status", "Loading authority certificates", "Loading relay
@@ -454,10 +459,10 @@ one's guards.
 deploy/tor-js builds tor-js 0.4.4 from source with one patch,
 `TorClient.connect(host, port, { isolationKey })`: a Tor stream as a pair
 of web streams, on the key's isolation group (deploy/tor-js/README.md).
-`demo/server.js` serves that build at `/tor-client/tor-js/` where it has
-been made (`deploy/tor-js/build.sh`), the npm release otherwise, and
-`service.mjs` tells them apart (`STREAMS`, `TorClient.prototype.connect`).
-With the stream API, Tor mode's transport is epoxy: one epoxy client for
+`deploy/tor-js/publish.sh` puts the build on Fracital/tor-js's `dist`
+branch, package.json pins it, and `demo/server.js` serves it at
+`/tor-client/tor-js/`: a deploy needs no container. Tor mode's transport is
+epoxy: one epoxy client for
 each top-level site (at most 32, the least lately used dropped with its
 connections), its function transport a Wisp v1 server in the transport
 worker (`wispServer.mjs`) whose every CONNECT is `connect(host, port, site)`
@@ -476,21 +481,16 @@ The real-network smoke on this build (2026-11-21, Chrome): check.torproject.org
 says `IsTor: true`, one.one.one.one's trace says `http=http/2`, and
 echo.websocket.org echoes a WebSocket message from a proxied page.
 Bootstrap took 4.0 s and the first site 1.7 s after it; another site took
-1.6 s, the first site again 1.6 s and its new circuit 1.6 s (on tor-js's
-fetch they took 2.1 to 3.1 s, each request a stream and a TLS handshake of
-its own). Firefox 160 loads check.torproject.org through it too.
+1.6 s, the first site again 1.6 s and its new circuit 1.6 s (on the
+release's own fetch, which the prototype used before, they took 2.1 to
+3.1 s, each request a stream and a TLS handshake of its own). Firefox 160 loads check.torproject.org through it too.
 
 What the client does not do yet:
 
 - **No HTTP/3, no WebTransport**: Tor carries no UDP.
-- **Without deploy/tor-js's build** (the npm release): no connection reuse,
-  HTTP/1.1 only and no WebSocket, through tor-js's own fetch.
 - **Progress and the menu items need the same origin**: in the isolated
   mode the page hears nothing from the proxy origin's worker; the status
   says "Tor route selected" and the items are not offered.
-- **A long wait for an answer's head** (over 30 s, a long poll) is cut and
-  tried again once, for GET, HEAD and OPTIONS, on tor-js's fetch only; on
-  Tor streams epoxy's own timeouts hold.
 - **A reload starts the client again** where it was the origin's only page
   (the SharedWorker ends with it): a warm bootstrap, 1 to 2 s. The carrier
   host's `extendedLifetime` (Chrome 157) would keep it across reloads.

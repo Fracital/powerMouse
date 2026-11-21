@@ -3,8 +3,7 @@
 // of the origin, so a second tab bootstraps nothing, its circuits are the
 // same client's (isolated per site as in one tab) and one client holds the
 // guard state. Each tab's transport (transport.mjs, remote.mjs) asks over
-// its port; a response's body comes back on a port of its own, a chunk for
-// each pull, and a Tor stream on a port of its own (streamPort.mjs).
+// its port, and each Tor stream goes on a port of its own (streamPort.mjs).
 import { TorService } from './service.mjs';
 import { serveStream } from './streamPort.mjs';
 
@@ -37,64 +36,6 @@ function serviceFor({ wisp, storageName }) {
 
 const message = (error) => String(error?.message ?? error);
 
-/** answer one fetch on its own port: the head, then a chunk at each pull */
-function serveFetch(service, { url, init, site, reply }) {
-	const abort = new AbortController();
-	let reader = null;
-	const done = () => {
-		reply.onmessage = null;
-		reply.close();
-	};
-	const fail = (error) => {
-		reply.postMessage({ type: 'error', message: message(error) });
-		done();
-	};
-	const pull = async () => {
-		try {
-			const { done: ended, value } = await reader.read();
-			if (ended) {
-				reply.postMessage({ type: 'end' });
-				done();
-				return;
-			}
-			// a copy: the chunk may be a view of the wasm's memory, which
-			// cannot be transferred
-			const chunk = value.slice();
-			reply.postMessage({ type: 'chunk', chunk }, [chunk.buffer]);
-		} catch (error) {
-			fail(error);
-		}
-	};
-	reply.onmessage = ({ data }) => {
-		if (data?.type === 'pull' && reader) pull();
-		else if (data?.type === 'cancel') {
-			abort.abort(new Error('the request was cancelled'));
-			reader?.cancel().catch(() => {});
-			done();
-		}
-	};
-	service.fetch(url, init, site, abort.signal).then(
-		({ status, statusText, headers, body }) => {
-			if (abort.signal.aborted) {
-				body?.cancel().catch(() => {});
-				return;
-			}
-			reader = body?.getReader() ?? null;
-			reply.postMessage({
-				type: 'head',
-				status,
-				statusText,
-				headers,
-				body: !!reader,
-			});
-			if (!reader) done();
-		},
-		(error) => {
-			if (!abort.signal.aborted) fail(error);
-		},
-	);
-}
-
 self.addEventListener('connect', ({ ports: [port] }) => {
 	let entry = null;
 	const answer = (id, settled) =>
@@ -114,7 +55,6 @@ self.addEventListener('connect', ({ ports: [port] }) => {
 		if (data?.type === 'init') answer(data.id, service.init());
 		else if (data?.type === 'admit')
 			answer(data.id, service.admit(String(data.target)));
-		else if (data?.type === 'fetch') serveFetch(service, data);
 		else if (data?.type === 'connect') {
 			const { stream } = data;
 			service

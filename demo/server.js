@@ -1003,21 +1003,15 @@ const transportPaths = () =>
 			};
 app.use('/epoxy/', transportFiles('epoxy-transport'));
 app.use('/libcurl/', transportFiles('libcurl-transport'));
-// The in-browser Tor client (docs/tor-over-wisp.md): tor-js's
-// module and arti's wasm, which demo/public/tor-client/service.mjs loads.
-// deploy/tor-js's build (its patches give the client a stream API, so Tor
-// mode runs epoxy on Tor streams) where it has been made, the npm release
-// (tor-js's own fetch) otherwise
-const torJsBuild = fileURLToPath(
-	new URL('../deploy/tor-js/out/dist/', import.meta.url),
-);
+// The in-browser Tor client (docs/tor-over-wisp.md): tor-js's module and
+// arti's wasm, which demo/public/tor-client/service.mjs loads. The package
+// is the Fracital build pinned in package.json (deploy/tor-js: the release
+// plus a stream API, so Tor mode runs epoxy on Tor streams)
 try {
 	app.use(
 		'/tor-client/tor-js/',
 		express.static(
-			existsSync(`${torJsBuild}tor_js_bg.wasm`)
-				? torJsBuild
-				: join(dirname(fileURLToPath(import.meta.resolve('tor-js'))), '../..'),
+			join(dirname(fileURLToPath(import.meta.resolve('tor-js'))), '../..'),
 			fresh,
 		),
 	);

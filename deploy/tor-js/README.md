@@ -41,11 +41,13 @@ same wasm, `PATCHED_WASM_SHA256` in `upstream.env`
 
 ## How the demo serves it
 
-`demo/server.js` serves `/tor-client/tor-js/` from `out/dist` when a build
-is there, and from `node_modules/tor-js` (the npm release) otherwise.
-`demo/public/tor-client/service.mjs` checks `TorClient.prototype.connect`
-(`STREAMS`): with it, epoxy runs on Tor streams, and without it, requests go
-through tor-js's fetch and WebSockets are refused.
+package.json pins the published build, `"tor-js":
+"github:Fracital/tor-js#<commit>"` ("Publish and pin"), and
+`demo/server.js` serves that package (`node_modules/tor-js`) at
+`/tor-client/tor-js/`, so a deploy needs no container. A tor-js without
+`TorClient.connect` (the npm release) fails Tor mode with a clear error
+(`demo/public/tor-client/service.mjs`). To try a local build, copy
+`out/dist` over `node_modules/tor-js/dist`.
 
 ## Publish and pin
 

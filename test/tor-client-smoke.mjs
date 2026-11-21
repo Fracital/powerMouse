@@ -233,14 +233,9 @@ try {
 	);
 	await second.close();
 
-	// with deploy/tor-js's build, epoxy on Tor streams: HTTP/2 (Cloudflare's
-	// trace says what the client spoke) and a WebSocket from the page
-	const streams_ = await page.evaluate(() => window.__pmTorClient?.streams);
-	if (!streams_)
-		console.log(
-			'SKIP HTTP/2 and WebSockets over Tor: the npm tor-js has no streams (deploy/tor-js/build.sh)',
-		);
-	else {
+	// epoxy on Tor streams: HTTP/2 (Cloudflare's trace says what the client
+	// spoke) and a WebSocket from the page
+	{
 		const h2Start = Date.now();
 		await submitOmni(page, 'https://one.one.one.one/cdn-cgi/trace');
 		const trace = await frameText(/http=/);
