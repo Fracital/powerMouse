@@ -3,6 +3,7 @@ import {
 	IMAGES_WAITING,
 	LOAD_CHANNEL,
 	LOAD_HEADER,
+	NAVIGATION_STAYED,
 	SW_REVIVE,
 	type LoadGrantMessage,
 } from '../../transport/messages';
@@ -158,6 +159,13 @@ function open(directory: string, answer?: string): boolean {
 							typeof status === 'number' ? status : 0,
 							typeof body === 'string' ? body : null,
 						);
+						return;
+					}
+					// the worker's word that the navigation this document started
+					// was answered with no document (a 204, a download): the
+					// host's load of the frame is over (Frame's `stayed`)
+					if (data === NAVIGATION_STAYED && first) {
+						(first as DocumentClient).postToHost({ [NAVIGATION_STAYED]: true });
 						return;
 					}
 					// the worker's word that an image of this document waits for

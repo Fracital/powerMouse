@@ -45,6 +45,7 @@ import {
 	ControllerInitMessage,
 	ControllerModulesMessage,
 	EXTENSION_CHANGES,
+	HARD_LOADED,
 	IMAGES_SEEN,
 	INIT_PAGE_MODULES,
 	INIT_REMOTE_TRANSPORT,
@@ -152,11 +153,15 @@ import {
 	blobResponses,
 	bundleRequested,
 	departingMixedContent,
+	hardLoadEnded,
 	imagesSeen,
+	navigationSent,
 	noteRequest,
+	setNavigationStayed,
 	siteArrived,
 	siteBetween,
 	siteDeparture,
+	stopNavigation,
 } from './rewrites';
 import { ApiError, serviceWorkers, type WorkerHost } from './serviceWorkers';
 import { contextArrived, contextDeparture } from './siteContext';
@@ -243,6 +248,13 @@ function siteOf(
  * stores (createServer); only the same id again replaces
  */
 const controllers = new Map<string, ControllerRef>();
+// a navigation answered with no document (a 204, a download): every
+// controller hears of it, and the one whose frame was sent there ends its
+// load (Frame's `stayed`)
+setNavigationStayed((routed) => {
+	for (const ref of controllers.values())
+		ref.rpc.call('navigationStayed', routed).catch(() => {});
+});
 
 // this thread rewrites a site's scripts whenever no rewrite worker does:
 // its instances keep what a large one needed for the next
@@ -463,7 +475,14 @@ function registerController(
 			},
 			route: async (url) => [(await server).route(url), []],
 			typed: async (routed) => {
+				navigationSent(routed);
 				noteHostNavigation((await server).realURL(routed));
+			},
+			stopNavigation: async ({ routed, early }) => {
+				stopNavigation(routed, early === true);
+			},
+			navigationSent: async (routed) => {
+				navigationSent(routed);
 			},
 			unroute: async (url) => {
 				const ready = await server;
@@ -572,6 +591,9 @@ function registerController(
 			},
 			historyStep: async (url) => {
 				if (typeof url === 'string') (await server).historyStepped(url);
+			},
+			hardReload: async (url) => {
+				if (typeof url === 'string') (await server).hardReloaded(url);
 			},
 			// the controller shook hands again (with this worker or another):
 			// this channel answers what is in flight on it, then closes
@@ -1730,6 +1752,8 @@ function handleMessage(event: ExtendableMessageEvent) {
 		abortRequest((data as Record<string, unknown>)[ABORT_REQUEST]);
 	} else if (IMAGES_SEEN in data) {
 		imagesSeen((data as Record<string, unknown>)[IMAGES_SEEN]);
+	} else if (HARD_LOADED in data) {
+		if (sender) hardLoadEnded(sender);
 	} else if (CONTROLLER_CLOSE in data) {
 		// only the tab that registered the controller may close it (a proxied
 		// page is a client too, and must not be able to kill its host's)

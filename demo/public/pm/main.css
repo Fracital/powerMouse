@@ -1237,7 +1237,7 @@ html.restoring .omnibox::placeholder {
 	}
 }
 
-/* back, forward and reload: Tango icons on the dark header */
+/* back, forward and reload (stop): Tango icons on the dark header */
 .toolbtn {
 	flex: 0 0 auto;
 	display: grid;
@@ -1254,6 +1254,13 @@ html.restoring .omnibox::placeholder {
 .toolbtn img {
 	display: block;
 	pointer-events: none;
+}
+
+/* Reload is Stop while the tab loads, its picture swapped at once (both
+   are loaded with the page) */
+.toolbtn.stopping .reloadIcon,
+.toolbtn:not(.stopping) .stopIcon {
+	display: none;
 }
 
 .toolbtn:hover:not(:disabled) {

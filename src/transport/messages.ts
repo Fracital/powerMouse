@@ -119,6 +119,13 @@ export interface ControllerClientMessage {
 /** a page tells the worker it aborted a request (the id it sent in ABORT_HEADER) */
 export const ABORT_REQUEST = '$stomp$abort';
 /**
+ * The worker tells a document (on its load channel) that the navigation it
+ * started was answered with no document (a 204, a download), and the
+ * document tells its host (Frame's `stayed`): the browser commits nothing,
+ * and the frame's load is over
+ */
+export const NAVIGATION_STAYED = '$stomp$navigationStayed';
+/**
  * A page tells the worker which of its images still loading it laid out in
  * its viewport (their URLs, as the page asked for them): Chrome raises such
  * an image's request to a fetch's urgency, so one still waiting for a
@@ -126,6 +133,12 @@ export const ABORT_REQUEST = '$stomp$abort';
  * (src/transport/socketPool.ts raise)
  */
 export const IMAGES_SEEN = '$stomp$seen';
+/**
+ * A document a hard reload made (Config hardLoad) tells the worker that its
+ * load event is over: Chrome's LOAD_BYPASS_CACHE ends there, and what it
+ * loads from then on takes the caches (src/server/rewrites.ts hardLoads)
+ */
+export const HARD_LOADED = '$stomp$hardLoaded';
 /**
  * The worker tells a document, on the channel the document opened for its
  * load grants (src/inject/dom/loadGrants.ts), that a request for one of its
@@ -1397,6 +1410,12 @@ export type SWbound = {
 	/** the host page was reloaded: the pages it restores are (HostReload) */
 	hostReload: [HostReload];
 	/**
+	 * the next navigation to this routed URL is a hard reload of a frame's
+	 * document (Frame.reload's `bypassCache`): it and what the document it
+	 * makes loads go past the caches, as Chrome's LOAD_BYPASS_CACHE
+	 */
+	hardReload: [string];
+	/**
 	 * the next navigation to this routed URL is a step of a frame's history
 	 * the controller takes with location.replace (src/controller/history.ts):
 	 * it takes the kept document, as a traversal does
@@ -1411,6 +1430,15 @@ export type SWbound = {
 	route: [string, string];
 	/** the host navigates a frame of its own to this routed URL now (a typed address): no document's hint is coming */
 	typed: [string];
+	/**
+	 * the host stopped the frame it sent to the routed URL `routed`
+	 * (Frame.stop): a navigation to it still waiting for its answer is
+	 * answered with a 204; `early`, one whose request has not come yet is
+	 * too when it comes, a moment later
+	 */
+	stopNavigation: [{ routed: string; early?: boolean }];
+	/** the host sends a frame to this routed URL again: a stop `early` of it is over */
+	navigationSent: [string];
 	/** the real URL a routed one stands for (the controller's codec); null for anything that is not a route */
 	unroute: [string, string | null];
 	/** drop every entry of the HTTP cache */
@@ -1623,6 +1651,8 @@ export type Controllerbound = {
 	pageModules: [MessagePort];
 	/** a proxied request completed; only sent when the host asked (config.requestLog) */
 	request: [RequestInfo];
+	/** a navigation to this routed URL was answered with no document (a 204, a download): the frame sent there stays (Frame's `stayed`) */
+	navigationStayed: [string];
 	/**
 	 * start a page's emulated service worker (docs/service-workers.md): a
 	 * dedicated Worker at `url` (its `sw:` route); answers with the port the

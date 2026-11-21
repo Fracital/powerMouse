@@ -29,6 +29,21 @@
 //              body, and the rest after `wait`; with `split`, the
 //              script's end tag comes in two writes (`</scr`, `ipt>`), 20 ms
 //              apart
+//     stop     after `head` ms (at most 8000) the head, then an early
+//              heading (its data-k the key), the rest (a late paragraph)
+//              after `wait`; under
+//              `k=<key>`, /stream/stop-log?k=<key> says whether the request
+//              was given up before its end was sent (the toolbar suite's
+//              Stop); with `answer=nothing` the answer after `head` is a
+//              204, with `answer=download` an attachment. With `hold`, wait
+//              for POST /stream/stop-release?k=<key> instead of a timer.
+//     link     a page whose one link (#go, its data-k the key) goes to
+//              `to`, a path under /stream/ (a page's own navigation, for
+//              the toolbar suite)
+//     lone     the head with no `</head>`, then 100 ms later one piece that
+//              ends the markup so far (`piece`: a lone element, an element
+//              in a div, text with no tag after it, an element then a void
+//              one), then after `wait` the rest, with no script
 
 /** the head's padding: the worker reads the encoding from the first 1024 bytes */
 const PAD = `<!-- ${'pad '.repeat(300)} -->`;
@@ -77,12 +92,41 @@ const CASES = {
 	],
 };
 
+// the lone case's piece that comes 100 ms after the head, and what comes
+// before the late paragraph
+const LONE = {
+	element: ['<h1 id="early">early</h1>', ''],
+	nested: ['<div id="box"><span id="early">early</span></div>', ''],
+	text: ['<p id="early">early text', ' and more</p>'],
+	void: ['<h1 id="early">early</h1><img id="pic" alt="pic">', ''],
+};
+
 // 日本語 and テキスト in Shift_JIS
 const NIHONGO = [0x93, 0xfa, 0x96, 0x7b, 0x8c, 0xea];
 const TEXT = [0x83, 0x65, 0x83, 0x4c, 0x83, 0x58, 0x83, 0x67];
 
+/** the stop case's requests by their key: `{ asked, headers, ended, closed }` */
+const stops = new Map();
+const heldStops = new Map();
+
 export function stream(req, res) {
 	const url = new URL(req.url, 'http://x');
+	if (url.pathname === '/stream/stop-release' && req.method === 'POST') {
+		const key = url.searchParams.get('k');
+		const release = heldStops.get(key);
+		heldStops.delete(key);
+		release?.();
+		res.writeHead(204).end();
+		return true;
+	}
+	if (url.pathname === '/stream/stop-log') {
+		res.writeHead(200, {
+			'content-type': 'application/json',
+			'cache-control': 'no-store',
+		});
+		res.end(JSON.stringify(stops.get(url.searchParams.get('k')) ?? null));
+		return true;
+	}
 	const name = /^\/stream\/(\w+)$/.exec(url.pathname)?.[1];
 	if (!name) return false;
 	const wait = Math.min(Number(url.searchParams.get('wait')) || 0, 8000);
@@ -117,11 +161,84 @@ export function stream(req, res) {
 		});
 		return true;
 	}
+	if (name === 'stop') {
+		const log = { asked: true, headers: false, ended: false, closed: false };
+		const key = (url.searchParams.get('k') ?? '').replace(/[^\w-]/g, '');
+		if (key) stops.set(key, log);
+		const timers = [];
+		const head = Math.min(Number(url.searchParams.get('head')) || 0, 8000);
+		const answer = url.searchParams.get('answer');
+		const send = () => {
+			log.headers = true;
+			if (answer === 'nothing' || answer === 'download') {
+				log.ended = true;
+				if (answer === 'nothing') res.writeHead(204).end();
+				else
+					res
+						.writeHead(200, {
+							'content-type': 'application/octet-stream',
+							'content-disposition': 'attachment; filename="stop.bin"',
+							'cache-control': 'no-store',
+						})
+						.end('stop');
+				return;
+			}
+			res.writeHead(200, {
+				'content-type': 'text/html; charset=utf-8',
+				'cache-control': 'no-store',
+			});
+			res.write(
+				`<!doctype html><html><head><meta charset="utf-8"><title>stream stop</title>${PAD}</head><body>`,
+			);
+			timers.push(
+				later(100, () =>
+					res.write(`<h1 id="early" data-k="${key}">early</h1>`),
+				),
+				later(wait, () => {
+					log.ended = true;
+					res.end(
+						`<p id="late">late</p><script>window.__done = true;</script></body></html>`,
+					);
+				}),
+			);
+		};
+		res.on('close', () => {
+			for (const timer of timers) clearTimeout(timer);
+			if (heldStops.get(key) === send) heldStops.delete(key);
+			if (!log.ended) log.closed = true;
+		});
+		if (key && url.searchParams.has('hold')) heldStops.set(key, send);
+		else timers.push(later(head, send));
+		return true;
+	}
+	if (name === 'link') {
+		const to = url.searchParams.get('to') ?? '';
+		const key = (url.searchParams.get('k') ?? '').replace(/[^\w-]/g, '');
+		res.writeHead(200, {
+			'content-type': 'text/html; charset=utf-8',
+			'cache-control': 'no-store',
+		});
+		res.end(
+			`<!doctype html><html><head><meta charset="utf-8"><title>stream link</title></head><body><a id="go" data-k="${key}" href="${to.startsWith('/stream/') ? to.replace(/[&"<>]/g, (c) => `&#${c.charCodeAt(0)};`) : '#'}">go</a></body></html>`,
+		);
+		return true;
+	}
 	if (name === 'store') {
 		res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
 		res.end(
 			`<!doctype html><html><head><meta charset="utf-8"><title>stream store</title>${PAD}<script>window.__store = [localStorage.getItem('stream-store'), localStorage.getItem('stream-none')];</script></head><body><h1 id="early">early</h1><script>window.__big = '${'x'.repeat(2.5 * 1024 * 1024)}';</script><script>window.__done = true;</script></body></html>`,
 		);
+		return true;
+	}
+	if (name === 'lone') {
+		const piece = LONE[url.searchParams.get('piece')];
+		if (!piece) return false;
+		res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+		res.write(
+			`<!doctype html><html><head><meta charset="utf-8"><title>stream lone</title>${PAD}`,
+		);
+		later(100, () => res.write(piece[0]));
+		later(wait, () => res.end(`${piece[1]}<p id="late">late</p>`));
 		return true;
 	}
 	if (name === 'trickle') {

@@ -976,6 +976,15 @@ export function startFixture(port = 8084) {
 				else res.setHeader(name, value);
 			const count = hits.get(file) || { requests: 0, notModified: 0 };
 			count.requests++;
+			// the cache headers of each request, a file's last 8 (demo-keys)
+			(count.asked ??= []).push({
+				cacheControl: req.headers['cache-control'] ?? null,
+				pragma: req.headers.pragma ?? null,
+				conditional: !!(
+					req.headers['if-none-match'] || req.headers['if-modified-since']
+				),
+			});
+			if (count.asked.length > 8) count.asked.shift();
 			hits.set(file, count);
 			// a file with an ETag answers a matching conditional request with 304
 			if (extra.etag && req.headers['if-none-match'] === extra.etag) {

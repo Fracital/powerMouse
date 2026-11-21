@@ -33,7 +33,12 @@
 //   worker cut the markup only once twice as much had come as when it
 //   last found the script unfinished, which passed the document's end),
 //   and so is one whose script's end tag comes in two pieces (the worker
-//   looks for it in what came last and the end of what came before).
+//   looks for it in what came last and the end of what came before);
+// - a piece that ends the markup so far is in the page as soon as it comes
+//   (a lone heading, one in a div, the text after the last tag, a void
+//   element after a heading), and the page loads whole: the client held
+//   back the last element or text of what came, which the parser could
+//   still add to, until more markup followed it.
 import {
 	done,
 	evaluateIsolated,
@@ -230,6 +235,58 @@ async function trickleCase(proxied, split = false) {
 	}
 }
 
+// the lone page once the piece is in (`arg`: the id that says so, with text
+// for any but an image)
+const loneMidway = (id) => {
+	const mark = document.getElementById(id);
+	if (!mark || (mark.localName !== 'img' && !mark.textContent)) return null;
+	return {
+		early: document.getElementById('early')?.textContent ?? null,
+		pic: !!document.getElementById('pic'),
+		late: !!document.getElementById('late'),
+		readyState: document.readyState,
+	};
+};
+
+async function loneCase(proxied, piece) {
+	const { page, find } = await open(
+		`${FIXTURE}stream/lone?wait=${WAIT}&piece=${piece}`,
+		proxied,
+	);
+	try {
+		const mid = await poll(
+			find,
+			loneMidway,
+			piece === 'void' ? 'pic' : 'early',
+			400,
+			25,
+		);
+		await poll(
+			find,
+			() =>
+				document.readyState === 'complete' && document.getElementById('late')
+					? true
+					: null,
+			undefined,
+			400,
+			50,
+		);
+		const frame = find();
+		const end = frame
+			? await evaluateIsolated(frame, () => ({
+					text: document.body.textContent,
+					elements: [...document.body.getElementsByTagName('*')]
+						.map((e) => e.localName + (e.id ? `#${e.id}` : ''))
+						.join(),
+				})).catch(() => null)
+			: null;
+		return { mid, end };
+	} finally {
+		await page.close();
+	}
+}
+const LONE = ['element', 'nested', 'text', 'void'];
+
 async function wipeCase(proxied) {
 	const { page, find } = await open(
 		`${FIXTURE}stream/wipe?wait=${WAIT}`,
@@ -353,7 +410,9 @@ const native = {
 	slowhead: await slowheadCase(false),
 	trickle: await trickleCase(false),
 	split: await trickleCase(false, true),
+	lone: {},
 };
+for (const piece of LONE) native.lone[piece] = await loneCase(false, piece);
 ok(
 	'natively: the heading is in while the rest is on its way, and the page loads whole',
 	native.paint.mid?.late === false &&
@@ -378,7 +437,9 @@ const proxied = {
 	slowhead: await slowheadCase(true),
 	trickle: await trickleCase(true),
 	split: await trickleCase(true, true),
+	lone: {},
 };
+for (const piece of LONE) proxied.lone[piece] = await loneCase(true, piece);
 ok(
 	'proxied: while the rest is on its way, the page holds its first part (its heading, its write) and not the rest, and is loading',
 	JSON.stringify(proxied.paint.mid) === JSON.stringify(native.paint.mid),
@@ -481,5 +542,21 @@ ok(
 		JSON.stringify(proxied.split.end) === JSON.stringify(native.split.end),
 	`${JSON.stringify(proxied.split.end)} natively ${JSON.stringify(native.split.end)}`,
 );
+
+for (const piece of LONE) {
+	const mine = proxied.lone[piece];
+	const theirs = native.lone[piece];
+	ok(
+		`proxied: a piece that ends the markup so far (${piece}) is in the page before the rest comes, as natively`,
+		theirs.mid?.late === false &&
+			JSON.stringify(mine.mid) === JSON.stringify(theirs.mid),
+		`${JSON.stringify(mine.mid)} natively ${JSON.stringify(theirs.mid)}`,
+	);
+	ok(
+		`proxied: the page whose piece ended the markup so far (${piece}) loads whole, as natively`,
+		!!theirs.end && JSON.stringify(mine.end) === JSON.stringify(theirs.end),
+		`${JSON.stringify(mine.end)} natively ${JSON.stringify(theirs.end)}`,
+	);
+}
 
 await done(browser);

@@ -278,8 +278,11 @@ holyWisp is started.
    the demo navigates a tab until the new document commits, the address
    bar, the tab's card and the star show where it is going, as a browser's
    do, whatever the document it leaves still reports; a navigation that
-   never commits (stopped by Reload or Back, failed, or still uncommitted
-   after 30 s) shows the page the tab stayed on again.
+   never commits (stopped by Stop, Reload or Back, answered with a 204 or a
+   download, which the frame's `stayed` event says, failed, or still
+   uncommitted after 30 s) shows the page the tab stayed on again. While the
+   tab loads, Reload is Chrome's Stop (`frame.stop()`), and Escape in the
+   page or on the toolbar stops the load too.
 7. **Tabs.** Each tab is its own `controller.createFrame()`; only the active
    frame is visible. The landing page doubles as the new-tab page: submitting
    there or clicking a quick link opens a new tab. Closing the last tab goes
@@ -288,7 +291,15 @@ holyWisp is started.
    GitHub's answer; `STOMP_REPO` names another repository).
    Its links, like Fork us on GitHub, open in the proxy, never in the real
    browser: a click in the current tab, Ctrl, Cmd, Shift or the middle
-   button in a new one. Download, left of Fork us on GitHub, saves
+   button in a new one. Chrome's tab keys are the demo's (`pm/main.js`,
+   "the browser's keys"): Ctrl+R and F5 reload the tab, Ctrl+Shift+R,
+   Shift+F5 and Ctrl+F5 hard-reload it (`frame.reload()` with
+   `bypassCache`), never the demo's own page. Ctrl+T, Ctrl+Shift+T and Ctrl+W
+   open, reopen and close the demo's tabs only where Chrome hands them to
+   the page: in fullscreen (the demo also asks for them with the Keyboard
+   Lock API) and in the installed app's window. In a Chrome tab Chrome
+   keeps them before any page sees them, so they act on Chrome's own tab.
+   Download, left of Fork us on GitHub, saves
    offline.html (below) with the page's wisp server written in.
 8. **Navigation bar** at the bottom of the screen, styled after the early
    Android bar: Back steps through the active tab's own history (the frame

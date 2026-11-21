@@ -14,6 +14,8 @@ import {
 	clientView,
 	noteActivation,
 	noteBrowserNavigation,
+	reloadWindow,
+	stopWindow,
 	traverse,
 } from './history';
 import { StompController } from './index';
@@ -179,14 +181,20 @@ function start(init: SiteAgentInit, port: MessagePort, host: string) {
 						noteBrowserNavigation(win);
 						return [true, []];
 					case 'reload':
-						noteBrowserNavigation(win);
-						win.location.reload();
+					case 'hardReload':
+						await reloadWindow(win, command === 'hardReload');
 						return [true, []];
+					case 'stop':
+						return [stopWindow(win), []];
 					default:
 						return [await traverse(win, command), []];
 				}
 			},
 			history: async ({ index, run, op }) => {
+				// the host's Stop: this slot's worker drops the navigation it
+				// sent the frame, which may still be on the host's document
+				if (op.kind === 'stop' && op.routed)
+					await controller?.stopNavigation(op.routed, true).catch(() => {});
 				const win = frameWindow(index, framesUp);
 				if (!win) return [null, []];
 				const name = helperNames(controller?.config).client;
@@ -244,6 +252,9 @@ function start(init: SiteAgentInit, port: MessagePort, host: string) {
 			},
 			request: (info) => {
 				hub.call('request', info).catch(() => {});
+			},
+			stayed: (routed) => {
+				hub.call('stayed', routed).catch(() => {});
 			},
 			permission: (info) => hub.call('permission', info),
 			passkeyFocused: (client) => hub.call('passkeyFocused', client),

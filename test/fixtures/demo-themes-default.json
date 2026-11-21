@@ -1,7 +1,7 @@
 {
 	"views": {
 		"landing": {
-			"digest": "1acf6cd90bfac3f2fb928fc15270f0885e394476aaf2e7893dc7f21ed12d55e4",
+			"digest": "9cd4f4b27153eaa5050dcc5a61bcd9afaa197c7b37c9a58a8ac9b2021ace7ca6",
 			"common": {
 				"::placeholderbackground-color": "rgba(0, 0, 0, 0)",
 				"::placeholderbackground-image": "none",
@@ -413,7 +413,7 @@
 			}
 		},
 		"browser": {
-			"digest": "3bcfaaea90a0b4773d4d2c1160162beccbae5234065db01a3714709958449262",
+			"digest": "dde3a6cd11606174e8da6fb93e0003078b76740048263df0295af2c1cc2b62c6",
 			"common": {
 				"::placeholderbackground-color": "rgba(0, 0, 0, 0)",
 				"::placeholderbackground-image": "none",
@@ -838,7 +838,7 @@
 			}
 		},
 		"shields": {
-			"digest": "bed003b783e4b1739b06e130157d697904fd8216c065f9aa84e12ee520428471",
+			"digest": "08de8508f976590bc0856ed4ae027f36ff17fa4c25e7136b33038de94ce6ff51",
 			"common": {
 				"::afterbackground-color": null,
 				"::afterbackground-image": null,

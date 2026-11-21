@@ -28,6 +28,7 @@
 // (an entry added, replaced or stepped to, a title) fires `entries` on the
 // Frame, for the host's own record of the tab.
 
+import { navigationAnswer } from '../navigationAnswer';
 import {
 	CALL_HEADER,
 	CALL_MESSAGE,
@@ -36,6 +37,7 @@ import {
 	type CalledSession,
 } from '../transport/messages';
 import { frameColorScheme } from './colorScheme';
+import { stopWindow } from './history';
 import type { Frame, StompController } from './index';
 
 /** what Chrome's navigation asks for (its Accept header) */
@@ -45,6 +47,39 @@ const NAVIGATION_ACCEPT =
 const KEPT_PREFIX = 'just-call:';
 /** how long a frame may take to show the call page */
 const PAGE_WAIT_MS = 10_000;
+/** how long the worker holds a stop for a call whose request did not come yet (EARLY_STOP_MS in src/server/rewrites.ts) */
+const EARLY_STOP_MS = 2000;
+/** how long a frame that saves a download is kept (hidden) once the browser has it */
+const SAVE_KEPT_MS = 10_000;
+/** how long it may take to read the download before that */
+const SAVE_WAIT_MS = 60_000;
+/** what a stopped load's waits reject with */
+const STOPPED = Symbol('stopped');
+
+/** the name a download is saved under: its Content-Disposition's, else the last part of its URL's path */
+function downloadName(disposition: string | null, url: string): string {
+	const star = /filename\*\s*=\s*([^']*)'[^']*'([^;]+)/i.exec(
+		disposition ?? '',
+	);
+	if (star)
+		try {
+			return decodeURIComponent(star[2].trim());
+		} catch (error) {
+			// not percent-encoded as it says: the plain name, if any
+		}
+	const plain = /filename\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^;]+))/i.exec(
+		disposition ?? '',
+	);
+	const named = plain ? (plain[1] ?? plain[2]).trim() : '';
+	if (named) return named.replace(/\\(.)/g, '$1');
+	try {
+		const last = new URL(url).pathname.split('/').pop();
+		if (last) return decodeURIComponent(last);
+	} catch (error) {
+		// no name to be had from it
+	}
+	return 'download';
+}
 
 export interface CalledEntry {
 	/** the page's real URL */
@@ -164,6 +199,10 @@ export class CalledFrame {
 	#routed = '';
 	/** the port to the document shown */
 	#port: MessagePort | null = null;
+	/** the load under way (#load): what stop() gives up, and the route it called, once it did */
+	#pending: { cancel: () => void; routed: string | null } | null = null;
+	/** the routes stop() told the worker to drop, until when (EARLY_STOP_MS) */
+	#stopped = new Map<string, number>();
 	readonly #key: string;
 	constructor(
 		public readonly frame: Frame,
@@ -256,6 +295,24 @@ export class CalledFrame {
 		}
 		await this.#load(to.url, { type: 'back_forward' });
 		return true;
+	}
+	/**
+	 * Stop the tab as Chrome's Stop does (Frame.stop): a load not called
+	 * yet is never called, and one whose answer has not come is given up
+	 * (its frame goes, and the worker drops its request, so the origin's
+	 * connection closes); the frame keeps the document it shows, which
+	 * stops loading as on its own window.stop()
+	 */
+	async stop(): Promise<void> {
+		this.#loads++;
+		const pending = this.#pending;
+		this.#pending = null;
+		pending?.cancel();
+		stopWindow(this.frame.element.contentWindow);
+		if (!pending?.routed) return;
+		// (its request may reach the worker after this)
+		this.#stopped.set(pending.routed.split('#')[0], Date.now() + EARLY_STOP_MS);
+		await this.controller.stopNavigation(pending.routed, true).catch(() => {});
 	}
 	/** the scroll of the entry being left */
 	#leave() {
@@ -352,6 +409,17 @@ export class CalledFrame {
 		const load = ++this.#loads;
 		const { frame, controller } = this;
 		const old = frame.element;
+		// the tab loads from now (the host's go(), a page's own navigation)
+		frame.dispatchEvent(new CustomEvent('dial', { detail: { url } }));
+		let cancel!: () => void;
+		const cancelled = new Promise<never>((_, reject) => {
+			cancel = () => reject(STOPPED);
+		});
+		cancelled.catch(() => {});
+		const pending = { cancel, routed: null as string | null };
+		this.#pending = pending;
+		const until = <T>(promise: Promise<T>) =>
+			Promise.race([promise, cancelled]);
 		// (the preference the document reads: its element's color-scheme,
 		// which the fresh element has too, from the same rules)
 		controller.reportViewport(
@@ -379,9 +447,18 @@ export class CalledFrame {
 		let answered: Record<string, any>;
 		let routed: string;
 		try {
-			await pageLoad(fresh);
-			routed = await controller.route(url);
-			await controller.measureGeometry();
+			await until(pageLoad(fresh));
+			routed = await until(controller.route(url));
+			await until(controller.measureGeometry());
+			// a stop of the same route a moment ago is over for this call
+			const key = routed.split('#')[0];
+			const stopped = this.#stopped.get(key);
+			if (stopped !== undefined) {
+				this.#stopped.delete(key);
+				if (Date.now() < stopped)
+					await until(controller.navigationSent(routed).catch(() => {}));
+			}
+			pending.routed = routed;
 			fresh.contentWindow!.postMessage(
 				{ [CALL_MESSAGE]: 1 },
 				new URL(page).origin,
@@ -408,16 +485,53 @@ export class CalledFrame {
 					},
 				},
 			});
-			answered = await answer;
+			answered = await until(answer);
 			if (answered.failed) throw new Error(answered.failed);
 		} catch (error) {
 			fresh.remove();
 			port.close();
+			if (this.#pending === pending) this.#pending = null;
+			// stopped: the frame keeps its document
+			if (error === STOPPED) return;
 			throw error;
 		}
+		if (this.#pending === pending) this.#pending = null;
 		if (load !== this.#loads) {
 			fresh.remove();
 			port.close();
+			return;
+		}
+		// an answer Chrome commits no document for (a 204, a download): the
+		// frame keeps its document and its entry, and the load is over
+		const kind = navigationAnswer(
+			Number(answered.answered?.status) || 200,
+			answered.answered?.type ?? null,
+			answered.answered?.disposition ?? null,
+		);
+		if (kind) {
+			if (kind === 'download') {
+				// (its frame, hidden, saves it, and stays until the browser has it)
+				const saved = next(port);
+				port.postMessage({
+					save: downloadName(
+						answered.answered?.disposition ?? null,
+						answered.answered?.url || url,
+					),
+				});
+				void Promise.race([
+					saved,
+					new Promise((resolve) => setTimeout(resolve, SAVE_WAIT_MS)),
+				]).then(() =>
+					setTimeout(() => {
+						fresh.remove();
+						port.close();
+					}, SAVE_KEPT_MS),
+				);
+			} else {
+				fresh.remove();
+				port.close();
+			}
+			frame.dispatchEvent(new Event('stayed'));
 			return;
 		}
 		// where the answer is from: the page's URL after its redirects, with

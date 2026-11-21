@@ -86,6 +86,13 @@ export interface Config {
 	 */
 	syncSeed?: SyncSeed;
 	/**
+	 * Set by the service worker in the shell of a document a hard reload
+	 * made (a frame's, or one of its frames'): what it loads goes past the
+	 * caches until its load event is over, which it tells the worker
+	 * (HARD_LOADED). Never handed on
+	 */
+	hardLoad?: boolean;
+	/**
 	 * HTTP cache in the service worker, on unless `false`: GET responses are
 	 * kept in a Cache API store and served or revalidated with ETag /
 	 * Last-Modified as Chrome's HTTP cache does (docs/http-cache.md).

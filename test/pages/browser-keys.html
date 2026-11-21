@@ -1,0 +1,30 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>browser keys</title>
+<!-- the demo's browser keys (demo-keys suite): every keydown the page gets,
+kept in sessionStorage so a reload still has them, and with ?cancel its
+listener cancels the reload keys, as a page that takes Ctrl+R for itself -->
+<input id="field" />
+<script>
+	window.__origin = performance.timeOrigin;
+	window.__search = location.search;
+	const cancel = new URLSearchParams(location.search).has('cancel');
+	addEventListener('keydown', (event) => {
+		const reload =
+			event.key === 'F5' ||
+			((event.ctrlKey || event.metaKey) && /^r$/i.test(event.key));
+		const before = event.defaultPrevented;
+		if (cancel && reload) event.preventDefault();
+		const keys = JSON.parse(sessionStorage.getItem('keys') || '[]');
+		keys.push({
+			key: event.key,
+			ctrl: event.ctrlKey,
+			shift: event.shiftKey,
+			trusted: event.isTrusted,
+			before,
+			after: event.defaultPrevented,
+			returnValue: event.returnValue,
+		});
+		sessionStorage.setItem('keys', JSON.stringify(keys));
+	});
+</script>

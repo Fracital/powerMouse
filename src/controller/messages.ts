@@ -162,8 +162,22 @@ export interface FrameInfo {
 	canGoForward: boolean | null;
 }
 
-/** `typed`: the frame's next document comes from the host (see noteBrowserNavigation) */
-export type FrameCommand = 'back' | 'forward' | 'reload' | 'typed';
+/**
+ * `typed`: the frame's next document comes from the host (see
+ * noteBrowserNavigation); `hardReload`: a reload past the caches
+ * (Frame.reload's `bypassCache`); `stop`: stop its document loading (Frame.stop)
+ */
+export type FrameCommand =
+	'back' | 'forward' | 'reload' | 'hardReload' | 'stop' | 'typed';
+
+/** Frame.reload's options */
+export interface ReloadOptions {
+	/**
+	 * a hard reload (Chrome's Ctrl+Shift+R): the document and what it loads
+	 * until its load event go past the caches, as LOAD_BYPASS_CACHE
+	 */
+	bypassCache?: boolean;
+}
 
 /** rpc id on the host <-> controller-frame postMessage channel */
 export const REMOTE_RPC = 'stomp-remote';
@@ -275,7 +289,7 @@ export type FrameBound = {
 			index: number;
 			command: FrameCommand;
 			origin?: string;
-			/** `typed`: the route the host navigates the frame to next */
+			/** `typed`: the route the host navigates the frame to next; `stop`: the one it sent the frame, not answered yet */
 			routed?: string;
 		},
 		boolean,
@@ -331,6 +345,8 @@ export type HostBound = {
 	carrier: [CarrierInfo];
 	/** a newer service worker took over from the inner controller's (StompController.onHandover) */
 	handover: [];
+	/** the worker answered a navigation to this routed URL with no document (a 204, a download): the frame sent there stays (RemoteFrame.stayedAt) */
+	stayed: [string];
 	/** a note of the inner controller's transport, for the host's console (transportLog.ts) */
 	transportNote: [TransportNote];
 	/** a host hook threw in a proxied realm, or a hook URL could not be fetched */

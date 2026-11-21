@@ -73,6 +73,7 @@ import {
 	openRequest,
 	passkeyManager,
 	REPORT_GRACE_MS,
+	stayedReport,
 } from './index';
 import {
 	EMBEDDER_REFUSED,
@@ -87,6 +88,7 @@ import {
 	StaleInfo,
 	STORAGE_BLOCKED,
 	TransportDescriptor,
+	type ReloadOptions,
 } from './messages';
 import { createShields, type Shields } from './shields';
 import type { SitePoolInit } from './sitePool';
@@ -604,6 +606,11 @@ export class RemoteController extends EventTarget {
 				handover: async () => {
 					for (const listener of [...this.#handovers]) listener();
 				},
+				// a navigation the worker answered with no document: the frame
+				// sent there stays where it is
+				stayed: async (routed) => {
+					for (const frame of this.frames) frame.stayedAt(routed);
+				},
 				// the controller frame's extensions' hub told a change
 				extensionChange: async (change) => {
 					this.extensions.changed(change);
@@ -686,6 +693,12 @@ export class RemoteController extends EventTarget {
 			const activated = activatedReport(event.data);
 			if (activated !== null) {
 				frame.historyTouched(activated, nested);
+				return;
+			}
+			// the navigation the frame's document started was answered with
+			// no document (a 204, a download): its load is over
+			if (stayedReport(event.data)) {
+				if (!nested) frame.stayedAt(null);
 				return;
 			}
 			// a document in a frame of the page says which client it is (its
@@ -1219,8 +1232,13 @@ export class RemoteFrame extends EventTarget {
 			this.#awaitingReport.add(done);
 		});
 	}
+	/** how many times the frame was stopped (stop): a navigation of go() not sent before is not sent */
+	#stops = 0;
+	/** the route go() sent the frame to, until the frame's next load or stop */
+	#sent: string | null = null;
 	/** navigate the frame; resolves when the new document first reports (see Frame.go) */
 	async go(url: string): Promise<void> {
+		const stops = this.#stops;
 		const reported = this.#nextReport();
 		// the extensions' tab id for its main frame's request
 		this.controller.expectNavigation(this, url);
@@ -1269,7 +1287,15 @@ export class RemoteFrame extends EventTarget {
 				.catch(() => {});
 		// where the frame is, for its first document's first script
 		await this.controller.measureGeometry();
+		// stopped while the route was made: the navigation is never sent
+		if (this.#stops !== stops) return;
 		const before = this.element.contentDocument;
+		this.#sent = routed;
+		const loaded = () => {
+			this.element.removeEventListener('load', loaded);
+			if (this.#sent === routed) this.#sent = null;
+		};
+		this.element.addEventListener('load', loaded);
 		this.element.src = routed;
 		this.#keepFocusAcrossCommit();
 		this.url = url;
@@ -1283,7 +1309,41 @@ export class RemoteFrame extends EventTarget {
 			() => this.#nextReport(),
 			before,
 			() => this.#keepFocusAcrossCommit(),
+			() => this.#stops === stops,
 		);
+	}
+	/**
+	 * @internal The worker answered the navigation to `routed` with no
+	 * document, or the frame's document said so of the one it started
+	 * (null): see Frame.stayedAt
+	 */
+	stayedAt(routed: string | null) {
+		if (routed !== null) {
+			const mine = this.#sent?.split('#')[0] === routed.split('#')[0];
+			if (!mine && !this.#runs.stayedAt(routed)) return;
+			if (mine) this.#sent = null;
+			for (const resolve of this.#awaitingReport) resolve();
+			this.#awaitingReport.clear();
+		}
+		this.dispatchEvent(new Event('stayed'));
+	}
+	/**
+	 * Stop the frame as a tab's Stop does (see Frame.stop), relayed through
+	 * the controller frame: the host set the frame's src, so the document's
+	 * own stop does not reach a navigation the host sent it, which the
+	 * worker answers with a 204 instead while it waits for its answer
+	 */
+	async stop(): Promise<void> {
+		this.#stops++;
+		const sent = this.#sent;
+		this.#sent = null;
+		for (const resolve of this.#awaitingReport) resolve();
+		this.#awaitingReport.clear();
+		if (this.controller.siteMode) await this.#runs.stop(sent);
+		else
+			await this.controller
+				.frameCommand(this.element, 'stop', sent ?? undefined)
+				.catch(() => false);
 	}
 	/**
 	 * A focused frame still showing a document of the host's origin (its
@@ -1440,12 +1500,17 @@ export class RemoteFrame extends EventTarget {
 			return;
 		void this.reported({ ...last }, announce, false);
 	}
-	/** reload the frame; resolves when the reloaded document first reports (false when there was nothing to reload) */
-	async reload(): Promise<boolean> {
+	/** reload the frame (past the caches with `bypassCache`, as Frame.reload); resolves when the reloaded document first reports (false when there was nothing to reload) */
+	async reload({ bypassCache = false }: ReloadOptions = {}): Promise<boolean> {
 		const reported = this.#nextReport();
 		const done =
-			(this.controller.siteMode ? await this.#runs.reload() : null) ??
-			(await this.controller.frameCommand(this.element, 'reload'));
+			(this.controller.siteMode
+				? await this.#runs.reload(bypassCache)
+				: null) ??
+			(await this.controller.frameCommand(
+				this.element,
+				bypassCache ? 'hardReload' : 'reload',
+			));
 		if (done) await reported;
 		return done;
 	}

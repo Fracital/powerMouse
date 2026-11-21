@@ -30,6 +30,14 @@
 //   parser merges the same way;
 // - a <frameset> replaces a body that holds nothing yet: nothing of the
 //   body is written before it holds an element or text that keeps it.
+//
+// The last child of an open element is the one node the parser may still
+// add to, and the tree does not say whether it will. Natively the piece is
+// painted as it is, up to its end, and so it is written here as far as the
+// parse can tell it is done (#done, #partly): a void element, a comment or
+// a raw text element (a piece never ends inside one) is whole, an element
+// is closed once the piece ended with its end tag, and a text is written as
+// it stands, what the parser adds to it after.
 
 import { trustedHTML } from '../trusted';
 
@@ -129,6 +137,9 @@ const FRAMESET_OK = ' script style link meta noscript template base title ';
 // elements whose text runs to their end tag (the parse's, scripting off:
 // not noscript), each between spaces
 const RAW_TEXT = ' script style title textarea xmp iframe noembed noframes ';
+// elements that never hold anything, each between spaces
+const VOID =
+	' area base br col embed hr img input keygen link meta param source track wbr ';
 /** complete nodes copied together, then the clock is read */
 const RUN = 64;
 
@@ -153,6 +164,14 @@ export default class PageStream {
 	#ended = false;
 	#kept = false;
 	/**
+	 * the names of the end tags the markup so far ends with (only white
+	 * space between them), each between spaces
+	 */
+	#closing = ' ';
+	/** a last text written as far as it went (#partly), and how far */
+	#partial: Node | null = null;
+	#partialLength = 0;
+	/**
 	 * `document`: the inert document the parse is made in, or with `whole`
 	 * the parse of all of the markup
 	 */
@@ -172,8 +191,10 @@ export default class PageStream {
 	/** more of the page's markup, which ends between whole tokens (`end`: the last of it) */
 	add(markup: string, end: boolean) {
 		if (this.#ended) return;
-		if (markup)
+		if (markup) {
+			this.#closing = endTags(markup, this.#closing);
 			Reflect.apply(documentWrite, this.#parse, [trustedHTML(markup)]);
+		}
 		if (end) {
 			Reflect.apply(documentClose, this.#parse, []);
 			this.#ended = true;
@@ -251,6 +272,11 @@ export default class PageStream {
 					this.#watch(child as Element)
 				)
 					this.#watch = null;
+				// (what of a text is written already is not again)
+				if (child === this.#partial) {
+					Reflect.apply(deleteData, child, [0, this.#partialLength]);
+					this.#partial = null;
+				}
 				Reflect.apply(appendChild, holder, [child]);
 				if (++run < RUN) continue;
 				out += flush();
@@ -277,8 +303,10 @@ export default class PageStream {
 					Reflect.apply(nodeType, child, []) === 1 &&
 					isNamed(child, 'head')
 				)
-			)
+			) {
+				out += this.#partly(child, parent);
 				break;
+			}
 			out += this.#start(child as Element);
 			open.push(child as Element);
 			if (now() > deadline) break;
@@ -342,6 +370,32 @@ export default class PageStream {
 	/** the nodes being copied (the holder's) are the head's children */
 	copyingHead = false;
 	/**
+	 * What of `child`, `parent`'s last child and a text, the parse has that
+	 * is not written yet, written now: the parser may still add to it (it
+	 * stays in the parse), and what it adds is written after. Natively the
+	 * text a piece ends with is painted before the rest comes
+	 */
+	#partly(child: Node, parent: Element): string {
+		if (
+			Reflect.apply(nodeType, child, []) !== 3 ||
+			Reflect.apply(nextSibling, child, []) !== null ||
+			!this.#keeps(child, parent)
+		)
+			return '';
+		const data = Reflect.apply(nodeValue, child, []) as string;
+		const from = child === this.#partial ? this.#partialLength : 0;
+		if (data.length <= from) return '';
+		this.#partial = child;
+		this.#partialLength = data.length;
+		const holder = this.#holder;
+		Reflect.apply(appendChild, holder, [
+			Reflect.apply(createTextNode, this.#parse, [
+				Reflect.apply(slice, data, [from]),
+			]),
+		]);
+		return this.#copied();
+	}
+	/**
 	 * The attributes a later <html> or <body> tag added to the root or the
 	 * body, as such a tag (the written document's parser adds them too)
 	 */
@@ -381,13 +435,28 @@ export default class PageStream {
 		// text is all the parser takes up to its end tag (a script's): each
 		// piece of the markup ends between whole tokens, so its end tag was
 		// in it. A script that ends a piece runs before the rest arrives, as
-		// natively
-		if (next === null)
-			return (
-				type === 1 &&
+		// natively. Nothing is ever added to a comment or a void element
+		if (next === null) {
+			if (type === 8) return true;
+			if (type !== 1) return false;
+			const name = Reflect.apply(localName, child, []) as string;
+			if (
 				Reflect.apply(namespaceURI, child, []) === HTML &&
-				RAW_TEXT.includes(` ${Reflect.apply(localName, child, []) as string} `)
+				(RAW_TEXT.includes(` ${name} `) || VOID.includes(` ${name} `))
+			)
+				return true;
+			// An element whose last child is a text is the parser's current
+			// node while it is open: whatever the parser inserted after that
+			// text went into it, and nothing did. Its end tag pops it then, so
+			// it is closed if the markup ended with that end tag (or with a run
+			// of end tags that holds it: `</span></div>`)
+			const last = Reflect.apply(lastChild, child, []) as Node | null;
+			return (
+				last !== null &&
+				Reflect.apply(nodeType, last, []) === 3 &&
+				this.#closing.includes(` ${toLower(name)} `)
 			);
+		}
 		if (type === 1 && isNamed(child, 'head')) return hasBody(this.#parse);
 		if (type === 1 && isNamed(child, 'body')) return false;
 		// foster parenting adds to a text right before an open table
@@ -472,6 +541,65 @@ function large(element: Element): boolean {
 	);
 }
 
+const lastChild = Reflect.getOwnPropertyDescriptor(
+	Node.prototype,
+	'lastChild',
+)!.get!;
+const deleteData = CharacterData.prototype.deleteData;
+const createTextNode = Document.prototype.createTextNode;
+const charCodeAt = String.prototype.charCodeAt;
+const lastIndexOf = String.prototype.lastIndexOf;
+const toLowerCase = String.prototype.toLowerCase;
+const toLower = (text: string) =>
+	Reflect.apply(toLowerCase, text, []) as string;
+
+// tab, line feed, form feed, carriage return, space: the tokenizer's white space
+const isSpace = (unit: number) =>
+	unit === 32 || unit === 9 || unit === 10 || unit === 12 || unit === 13;
+
+/**
+ * The names of the end tags `markup` ends with, with only white space
+ * between them (and after them), each between spaces, as ' span div '. A
+ * piece of the markup ends between whole tokens, but `</h1>` at its end may
+ * still be the end of another token (an unquoted attribute value's, a
+ * doctype's): the run counts only where nothing before it can be an
+ * unfinished tag, the last `<` or `>` before it a `>`. A piece of nothing
+ * but end tags and white space continues the run `before` it
+ */
+function endTags(markup: string, before: string): string {
+	let names = ' ';
+	let at = markup.length;
+	for (;;) {
+		while (at > 0 && isSpace(Reflect.apply(charCodeAt, markup, [at - 1]))) at--;
+		if (at === 0) return `${before}${Reflect.apply(slice, names, [1])}`;
+		if (Reflect.apply(charCodeAt, markup, [at - 1]) !== 62) break;
+		// `</name>`, white space allowed before the `>`
+		let end = at - 1;
+		while (end > 0 && isSpace(Reflect.apply(charCodeAt, markup, [end - 1])))
+			end--;
+		let start = end;
+		for (; start > 0; start--) {
+			const unit = Reflect.apply(charCodeAt, markup, [start - 1]) as number;
+			if (isSpace(unit) || unit === 47 || unit === 62) break;
+		}
+		const first = Reflect.apply(charCodeAt, markup, [start]) as number;
+		if (
+			start === end ||
+			start < 2 ||
+			Reflect.apply(charCodeAt, markup, [start - 1]) !== 47 ||
+			Reflect.apply(charCodeAt, markup, [start - 2]) !== 60 ||
+			!((first >= 65 && first <= 90) || (first >= 97 && first <= 122))
+		)
+			break;
+		names += `${toLower(Reflect.apply(slice, markup, [start, end]) as string)} `;
+		at = start - 2;
+	}
+	if (names === ' ') return names;
+	const open = Reflect.apply(lastIndexOf, markup, ['<', at - 1]) as number;
+	const close = Reflect.apply(lastIndexOf, markup, ['>', at - 1]) as number;
+	return open > close ? ' ' : names;
+}
+
 /** an element's markup without its end tag */
 const startTag = (markup: string, name: string) =>
 	markup.endsWith(`</${name}>`) ? markup.slice(0, -name.length - 3) : markup;
@@ -490,6 +618,10 @@ const responseOk = Reflect.getOwnPropertyDescriptor(
 const responseBody = Reflect.getOwnPropertyDescriptor(
 	Response.prototype,
 	'body',
+)!.get!;
+const readyState = Reflect.getOwnPropertyDescriptor(
+	Document.prototype,
+	'readyState',
 )!.get!;
 const NativeTextDecoder = TextDecoder;
 const decode = TextDecoder.prototype.decode;
@@ -580,7 +712,10 @@ export async function readMarkup(
 			}
 		}
 	} catch (error) {
-		console.warn('Stomp: the markup stream failed:', error);
+		// (a document stopped, by its own window.stop() or the tab's Stop,
+		// is complete and gave the read up: Chrome says nothing of that)
+		if (Reflect.apply(readyState, globalThis.document, []) !== 'complete')
+			console.warn('Stomp: the markup stream failed:', error);
 	}
 	if (!ended) feed('', null, null, true, null);
 }

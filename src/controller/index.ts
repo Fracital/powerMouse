@@ -92,6 +92,7 @@ import {
 	KEEPALIVE_MS,
 	NAVIGATE,
 	NavigateInfo,
+	NAVIGATION_STAYED,
 	NAVIGATION_TYPE,
 	OPEN_TAB,
 	PAGE_MODULES,
@@ -153,6 +154,9 @@ import {
 	framePath,
 	noteActivation,
 	noteBrowserNavigation,
+	reloadWindow,
+	stopWindow,
+	tellHardReloads,
 	tellSteps,
 	traverse,
 	type Direction,
@@ -174,7 +178,7 @@ import {
 import { probeIsolation } from './isolationProbe';
 import { justCallStomp, type CalledFrame } from './justCallStomp';
 import { mediaVerdict } from './mediaVerdict';
-import type { StaleInfo, TransportDescriptor } from './messages';
+import type { ReloadOptions, StaleInfo, TransportDescriptor } from './messages';
 import { DEFAULT_SANDBOX } from './remote';
 import RewriteWorkers, {
 	DEFAULT_REWRITE_TIMEOUT_MS,
@@ -243,7 +247,7 @@ export type {
 	PasskeyInfo,
 	PasskeyManager,
 } from '../passkeys/types';
-export type { TransportDescriptor, FrameInfo } from './messages';
+export type { TransportDescriptor, FrameInfo, ReloadOptions } from './messages';
 export type {
 	AdblockApplied,
 	AdblockList,
@@ -815,6 +819,15 @@ export function activatedReport(data: unknown): string | null {
 	return typeof token === 'string' ? token : null;
 }
 
+/** whether a proxied document says the navigation it started was answered with no document (NAVIGATION_STAYED) */
+export function stayedReport(data: unknown): boolean {
+	return (
+		typeof data === 'object' &&
+		data !== null &&
+		(data as Record<string, unknown>)[NAVIGATION_STAYED] === true
+	);
+}
+
 /** a hook error report posted by a proxied page, else null */
 export function hookErrorReport(data: unknown): HookErrorInfo | null {
 	if (typeof data !== 'object' || data === null) return null;
@@ -906,6 +919,8 @@ export async function arrival(
 	nextReport: () => Promise<void>,
 	before: Document | null,
 	sent: () => void = () => {},
+	/** false once the frame was stopped (Frame.stop): nothing is sent again */
+	live: () => boolean = () => true,
 ): Promise<void> {
 	let arrived = false;
 	const shown = () => {
@@ -919,7 +934,8 @@ export async function arrival(
 	try {
 		await Promise.race([settled, handover]);
 		if (!arrived) await Promise.race([settled, sleep(HANDOVER_GRACE_MS)]);
-		if (arrived || element.contentDocument !== before) return await reported;
+		if (arrived || element.contentDocument !== before || !live())
+			return await reported;
 		stop();
 		const again = nextReport();
 		element.src = 'about:blank';
@@ -936,6 +952,8 @@ export async function arrival(
 const ATTRIBUTION_WAIT_MS = 3000;
 /** the same for a subresource fetched before the page reported (head scripts, styles) */
 const SUBRESOURCE_WAIT_MS = 1500;
+/** how long the worker holds a frame's stop for a navigation whose request did not come yet (src/server/rewrites.ts) */
+const EARLY_STOP_MS = 2000;
 /** how long go() and reload() wait for the new document's first report before resolving anyway */
 export const NAVIGATION_WAIT_MS = 30000;
 /** how long after the frame's load event they wait for a report that may never come (a document nothing injected) */
@@ -1416,6 +1434,8 @@ export class StompController extends EventTarget {
 		// a step of a frame's history taken with location.replace is a
 		// history step all the same (history.ts)
 		tellSteps((url) => this.#call('historyStep', url));
+		// and a hard reload is the worker's to carry out past its caches
+		tellHardReloads((url) => this.#call('hardReload', url));
 
 		if (init.serviceworker instanceof ServiceWorkerRegistration) {
 			this.#registration = init.serviceworker;
@@ -1769,6 +1789,7 @@ export class StompController extends EventTarget {
 					},
 					arrive: (arrival) => this.siteArrive(arrival),
 					request: (info) => this.#reportRequest(info),
+					stayed: (routed) => this.#navigationStayed(routed),
 					permission: (info) => this.#askPermission(info),
 					passkeys: () => this.config.passkeys,
 					passkeyPrompt: (request, port) => this.#passkeyPrompt(request, port),
@@ -1796,6 +1817,12 @@ export class StompController extends EventTarget {
 				if (this.#sites) frame.siteActivated(activated, nested);
 				else if (apart) this.apartActivated(apart, activated, nested);
 				else noteActivation(frame.historyWindow(), activated, nested);
+				return;
+			}
+			// the navigation the frame's document started was answered with
+			// no document (a 204, a download): its load is over
+			if (stayedReport(event.data)) {
+				if (!nested) frame.stayedAt(null);
 				return;
 			}
 			// a document in a frame of the page tells the real top which client
@@ -2988,6 +3015,7 @@ export class StompController extends EventTarget {
 					} else worker.servePort(port, decorate, admit);
 				},
 				request: async (info) => this.#reportRequest(info),
+				navigationStayed: async (routed) => this.#navigationStayed(routed),
 			},
 			CONTROLLER_RPC,
 			(data, transfer) => postToPort(port, data, transfer),
@@ -3074,6 +3102,21 @@ export class StompController extends EventTarget {
 		this.serviceworker.postMessage({ [CONTROLLER_INIT]: message }, transfer);
 		// what the pages' client hints carry before any page reported it
 		if (!standby) this.#postClientHints();
+	}
+	/**
+	 * The worker answered a navigation to `routed` with no document (a 204,
+	 * a download): the frame sent there stays where it is (Frame's
+	 * `stayed`). The controller frame tells its host with `stayed`, whose
+	 * RemoteFrames are sent there
+	 */
+	#navigationStayed(routed: string) {
+		// a slot's agent: the hub has the frames
+		if (this.#init.agent) {
+			this.#init.agent.stayed?.(routed);
+			return;
+		}
+		for (const frame of this.frames) frame.stayedAt(routed);
+		this.dispatchEvent(new CustomEvent('stayed', { detail: routed }));
 	}
 	/** a proxied request completed: the host hears of it with its frame */
 	async #reportRequest(info: RequestInfo) {
@@ -3754,6 +3797,21 @@ export class StompController extends EventTarget {
 		await this.#call('typed', routed);
 	}
 	/**
+	 * @internal a frame was stopped (Frame.stop) while its navigation to the
+	 * route `routed` may still wait for its answer: the worker answers it
+	 * with a 204, which commits nothing; `early`, also when its request
+	 * comes only after this (the frame's own stop does not end a
+	 * navigation the host sent a frame of another origin). (A worker of a
+	 * build that has no such call refuses.)
+	 */
+	async stopNavigation(routed: string, early = false): Promise<void> {
+		await this.#call('stopNavigation', { routed, ...(early && { early }) });
+	}
+	/** @internal a frame is sent to the route `routed` again: the worker drops it no longer (stopNavigation `early`) */
+	async navigationSent(routed: string): Promise<void> {
+		await this.#call('navigationSent', routed);
+	}
+	/**
 	 * The real URL a routed one stands for (the inverse of `route()`, with
 	 * this controller's codec), or null for anything that is not a route: a
 	 * host reading a routed URL off a frame or a report never has to parse
@@ -4197,6 +4255,10 @@ export class Frame extends EventTarget {
 	#stepping: number | null = null;
 	/** the frame's next document is the host's (go): the run it leaves is not the page's navigation */
 	#hostNavigation = false;
+	/** how many times the frame was stopped (stop): a navigation of go(), reload() or a step not sent before is not sent */
+	#stops = 0;
+	/** the route go() or a step sent the frame to, until the frame's next load or stop */
+	#sent: string | null = null;
 	/** siteClock when this frame last changed the joint session history */
 	#touched = 0;
 	/** reports and what they tell the agents, in order */
@@ -4551,8 +4613,10 @@ export class Frame extends EventTarget {
 	}
 	/** the site pool: step the frame's history, within its run through the agent of its slot, else to another run */
 	async #siteStep(direction: Direction): Promise<boolean> {
+		const stops = this.#stops;
 		await this.#queue;
 		await this.#leaving;
+		if (this.#stops !== stops) return false;
 		const current = this.#runs[this.#at];
 		if (!current) return false;
 		let target = this.#target(direction);
@@ -4606,7 +4670,14 @@ export class Frame extends EventTarget {
 			const origin = (await this.controller.siteOrigin(to.url)) ?? to.origin;
 			url = `${origin}${routed.pathname}${routed.search}${routed.hash}`;
 		}
+		await this.#resume(url);
+		// stopped meanwhile: the step is not taken
+		if (this.#stops !== stops) {
+			this.#stepping = null;
+			return false;
+		}
 		this.#touched = ++siteClock;
+		this.#send(url);
 		win.location.replace(url);
 		await reported;
 		const landed = new URL(url).origin;
@@ -4755,6 +4826,7 @@ export class Frame extends EventTarget {
 	 */
 	async go(url: string): Promise<void> {
 		if (this.called) return this.called.go(url);
+		const stops = this.#stops;
 		const colorScheme = frameColorScheme(this.element);
 		this.controller.reportViewport(
 			this.element.clientWidth,
@@ -4802,10 +4874,110 @@ export class Frame extends EventTarget {
 				await this.#ask(run, { kind: 'typed' });
 			else this.#hostNavigation = true;
 		}
+		await this.#resume(routed);
+		// stopped while the route was made: the navigation is never sent
+		if (this.#stops !== stops) return;
 		const before = this.element.contentDocument;
+		this.#send(routed);
 		this.element.src = routed;
-		await this.#arrival(routed, reported, before);
+		await this.#arrival(routed, reported, before, stops);
 		if (origin) this.#bounced(origin);
+	}
+	/** the routes stop() told the worker to drop when their requests come, until when (its EARLY_STOP_MS) */
+	#stopped = new Map<string, number>();
+	/** the frame is sent to `routed` again: a stop the worker may still hold for it is over first */
+	async #resume(routed: string) {
+		const until = this.#stopped.get(routed.split('#')[0]);
+		if (until === undefined) return;
+		this.#stopped.delete(routed.split('#')[0]);
+		if (Date.now() < until)
+			await this.controller.navigationSent(routed).catch(() => {});
+	}
+	/** the frame is sent to `routed`: what stop() drops while it waits for its answer */
+	#send(routed: string) {
+		this.#sent = routed;
+		const loaded = () => {
+			this.element.removeEventListener('load', loaded);
+			if (this.#sent === routed) this.#sent = null;
+		};
+		this.element.addEventListener('load', loaded);
+	}
+	/**
+	 * @internal The worker answered the navigation to `routed` with no
+	 * document (a 204, a download), or the frame's document said so of the
+	 * one it started (null): the frame keeps its document, and its load is
+	 * over. go() and the others resolve, and the frame fires `stayed`
+	 */
+	stayedAt(routed: string | null) {
+		if (routed !== null) {
+			const sent = this.#sent;
+			if (!sent || sent.split('#')[0] !== routed.split('#')[0]) return;
+			this.#sent = null;
+			for (const resolve of this.#awaitingReport) resolve();
+			this.#awaitingReport.clear();
+		}
+		this.dispatchEvent(new Event('stayed'));
+	}
+	/**
+	 * Stop the frame as a tab's Stop does (Chrome's button, or Escape): a
+	 * navigation go(), reload(), back() or forward() has not sent yet is
+	 * never sent, the document stops loading as on its own window.stop()
+	 * (what it parsed stays; its requests in flight are given up, the
+	 * worker's of its markup with them), and a navigation the frame was
+	 * sent that still waits for its answer is answered by the service worker
+	 * with a 204, so the browser commits nothing for it and the frame keeps
+	 * its document. go() and the others resolve at once. A frame that loads
+	 * nothing is left as it is.
+	 */
+	async stop(): Promise<void> {
+		if (this.called) return this.called.stop();
+		this.#stops++;
+		const sent = this.#sent;
+		this.#sent = null;
+		for (const resolve of this.#awaitingReport) resolve();
+		this.#awaitingReport.clear();
+		const asked: Promise<unknown>[] = [];
+		const sentFrom = sent ? new URL(sent).origin : null;
+		// (a navigation to a slot of the site pool is its worker's, which its
+		// agent reaches. The document's own stop ends a navigation this page
+		// sent a frame of its origin; one of a slot's document goes on)
+		if (sent && sentFrom === location.origin) {
+			// (its request may come after this: the frame's stop ends the
+			// navigation, but the browser may have handed it to the worker)
+			this.#stopped.set(sent.split('#')[0], Date.now() + EARLY_STOP_MS);
+			asked.push(this.controller.stopNavigation(sent, true).catch(() => {}));
+		}
+		const run = this.#runs[this.#at];
+		if (this.controller.siteMode && run)
+			asked.push(
+				this.#ask(
+					run,
+					{
+						kind: 'stop',
+						...(sent && sentFrom === run.origin && { routed: sent }),
+					},
+					false,
+				),
+			);
+		else {
+			const apart = this.apartPath();
+			if (apart) asked.push(this.controller.apartCommand(apart, 'stop'));
+			else stopWindow(this.element.contentWindow);
+		}
+		if (
+			sent &&
+			sentFrom !== location.origin &&
+			(!this.controller.siteMode || sentFrom !== run?.origin)
+		)
+			asked.push(
+				this.controller
+					.siteHistory(sentFrom!, this.#index(), 0, {
+						kind: 'stop',
+						routed: sent,
+					})
+					.catch(() => null),
+			);
+		await Promise.all(asked);
 	}
 	/**
 	 * Wait for the navigation the frame was just sent on (`reported`), and
@@ -4821,6 +4993,7 @@ export class Frame extends EventTarget {
 		routed: string,
 		reported: Promise<void>,
 		before: Document | null,
+		stops: number,
 	): Promise<void> {
 		await arrival(
 			this.element,
@@ -4829,6 +5002,8 @@ export class Frame extends EventTarget {
 			(listener) => this.controller.onHandover(listener),
 			() => this.#nextReport(),
 			before,
+			undefined,
+			() => this.#stops === stops,
 		);
 	}
 	/**
@@ -4887,16 +5062,29 @@ export class Frame extends EventTarget {
 		if (this.apartPath()) return this.#apartHistory?.forward ?? null;
 		return canTraverse(this.historyWindow(), 'forward');
 	}
-	/** reload the frame; resolves when the reloaded document first reports (false when there was no document to reload) */
-	async reload(): Promise<boolean> {
+	/**
+	 * Reload the frame; resolves when the reloaded document first reports
+	 * (false when there was no document to reload). `bypassCache` is
+	 * Chrome's hard reload (Ctrl+Shift+R, LOAD_BYPASS_CACHE): the document
+	 * and what it loads until its load event are fetched past the HTTP
+	 * cache and the memory cache, with `Cache-Control: no-cache` and
+	 * `Pragma: no-cache`; nothing kept is cleared.
+	 */
+	async reload({ bypassCache = false }: ReloadOptions = {}): Promise<boolean> {
+		// (a called frame's reload is a reload: no hard reload there yet)
 		if (this.called) return this.called.reload();
 		const win = this.element.contentWindow;
 		if (!win) return false;
+		const stops = this.#stops;
 		const run = this.#runs[this.#at];
 		if (this.controller.siteMode && run) {
 			// another origin's location cannot be reloaded from here: its agent can
 			const reported = this.#nextReport();
-			const answer = await this.#ask(run, { kind: 'reload' }, false);
+			const answer = await this.#ask(
+				run,
+				{ kind: 'reload', hard: bypassCache },
+				false,
+			);
 			if (answer === null && run.origin !== location.origin) {
 				// the slot is left out since (its agent is gone): the document
 				// again, from this page's origin
@@ -4904,9 +5092,11 @@ export class Frame extends EventTarget {
 				if (!url) return false;
 				const routed = new URL(await this.controller.route(url));
 				const to = (await this.controller.siteOrigin(url)) ?? location.origin;
-				win.location.replace(
-					`${to}${routed.pathname}${routed.search}${routed.hash}`,
-				);
+				const address = `${to}${routed.pathname}${routed.search}${routed.hash}`;
+				await this.#resume(address);
+				if (this.#stops !== stops) return false;
+				this.#send(address);
+				win.location.replace(address);
 			} else if (!answer?.done) return false;
 			await reported;
 			return true;
@@ -4916,11 +5106,22 @@ export class Frame extends EventTarget {
 		// from its own cluster
 		const apart = this.apartPath();
 		if (apart) {
-			if ((await this.controller.apartCommand(apart, 'reload')) !== true)
+			const command = bypassCache ? 'hardReload' : 'reload';
+			if ((await this.controller.apartCommand(apart, command)) !== true)
 				return false;
 		} else {
-			noteBrowserNavigation(this.historyWindow());
-			win.location.reload();
+			// (the route it reloads, for stop(): the frame's own location,
+			// whose href no page can redefine)
+			let href: string | null = null;
+			try {
+				href = win.location.href;
+			} catch (error) {
+				// a document of another origin (Chrome's error page)
+			}
+			if (href) await this.#resume(href);
+			if (this.#stops !== stops) return false;
+			if (href) this.#send(href);
+			await reloadWindow(this.historyWindow() ?? win, bypassCache);
 		}
 		await reported;
 		return true;

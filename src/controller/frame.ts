@@ -33,6 +33,8 @@ import {
 	earlierWindows,
 	noteActivation,
 	noteBrowserNavigation,
+	reloadWindow,
+	stopWindow,
 	traverse,
 } from './history';
 import { StompController, type PermissionRequest } from './index';
@@ -435,6 +437,11 @@ else if (window === window.parent) {
 					controller.onHandover(() => {
 						rpc.call('handover', undefined);
 					});
+					// and every navigation its worker answered with no document,
+					// which a frame of the host's may have been sent on
+					controller.addEventListener('stayed', (event) => {
+						rpc.call('stayed', (event as CustomEvent<string>).detail);
+					});
 					// and `carrier`, with its event
 					controller.addEventListener('carrier', (event) => {
 						rpc.call('carrier', (event as CustomEvent<CarrierInfo>).detail);
@@ -610,6 +617,10 @@ else if (window === window.parent) {
 							[],
 						];
 					if (origin !== location.origin) return [null, []];
+					// the host's Stop: this origin's worker drops the navigation
+					// the host sent the frame
+					if (op.kind === 'stop' && op.routed)
+						await controller.stopNavigation(op.routed, true).catch(() => {});
 					// a run of this origin's (a site shown without the pool): the
 					// host's frame, which is this frame's sibling
 					let win: Window | undefined;
@@ -626,6 +637,11 @@ else if (window === window.parent) {
 					];
 				},
 				frameCommand: async ({ index, command, origin, routed }) => {
+					// the host's Stop: the navigation it sent the frame (the host
+					// set its src: the frame's own stop does not reach it) is
+					// dropped by this origin's worker while it waits for its answer
+					if (command === 'stop' && routed)
+						await controller?.stopNavigation(routed, true).catch(() => {});
 					const win = historyWindow(index);
 					if (!win) {
 						// a document of this origin out of this realm's reach: the
@@ -656,11 +672,11 @@ else if (window === window.parent) {
 						if (routed) await controller?.typed(routed).catch(() => {});
 						return [true, []];
 					}
-					if (command === 'reload') {
-						noteBrowserNavigation(win);
-						win.location.reload();
+					if (command === 'reload' || command === 'hardReload') {
+						await reloadWindow(win, command === 'hardReload');
 						return [true, []];
 					}
+					if (command === 'stop') return [stopWindow(win), []];
 					return [await traverse(win, command), []];
 				},
 			},

@@ -56,6 +56,67 @@ const torToggle = $('tor');
 const omni = $('omni');
 const mainForm = $('mainForm');
 
+// Escape is Chrome's Stop (IDC_STOP) where nothing of the browser's takes
+// it: the focus in the page (whose key it is first: one the page prevented
+// stops nothing) or on the toolbar, no menu, dialog, panel or the tab
+// manager open. In the address bar Escape first closes its list (the
+// omnibox module's), then reverts an edit, as Chrome's does, and only then
+// stops. Whether something was open is read before anything closes it
+// (this listener is the first), what to do once the key went everywhere
+let escapeFree = null; // the Escape keydown that found nothing open
+let escapeInLoad = null; // a page's Escape, forwarded, that went down while it loaded
+addEventListener(
+	'keydown',
+	(event) => {
+		if (event.key !== 'Escape') return;
+		escapeFree =
+			!browser.classList.contains('hidden') &&
+			!document.body.classList.contains('recents') &&
+			!popoverStack.length &&
+			!bookmarksOpen() &&
+			!requestsOpen() &&
+			!shieldsPageOpen() &&
+			!document.querySelector('[aria-modal="true"]:not([aria-hidden="true"])')
+				? event
+				: null;
+	},
+	true,
+);
+addEventListener('keydown', (event) => {
+	if (event.key !== 'Escape' || escapeFree !== event) return;
+	escapeFree = null;
+	const tab = activeTab;
+	if (
+		!tab ||
+		event.defaultPrevented ||
+		event.altKey ||
+		event.ctrlKey ||
+		event.metaKey ||
+		event.shiftKey
+	)
+		return;
+	const focused = document.activeElement;
+	if (focused === omni.url) {
+		const shown = barUrl(shownUrl(tab));
+		if (omni.url.value !== shown) {
+			event.preventDefault();
+			omni.url.value = shown;
+			omni.url.select();
+			return;
+		}
+	} else if (
+		focused !== tab.element &&
+		focused !== document.body &&
+		!(focused?.localName !== 'iframe' && focused?.closest('#browser .chrome'))
+	)
+		return;
+	const inLoad = escapeInLoad === event && focused === tab.element;
+	escapeInLoad = null;
+	if (!tab.loading && !inLoad) return;
+	event.preventDefault();
+	stopTab(tab, inLoad);
+});
+
 // Deployment config comes from /config.js (demo/server.js renders it from the
 // environment); anything missing falls back to the local-development defaults.
 const CFG = window.STOMP_CONFIG || {};
@@ -954,6 +1015,88 @@ function syncPasskeyButton() {
 	if (button) button.hidden = !activeTab?.passkeyOffer;
 }
 
+// ---- the browser's keys ------------------------------------------------------
+//
+// Chrome's own shortcuts for the tab, as powerMouse's: Ctrl+R and F5 reload
+// the tab, Ctrl+Shift+R, Shift+F5 and Ctrl+F5 reload it past the caches
+// (Frame.reload's bypassCache, Chrome's hard reload), Ctrl+T opens a new tab
+// with its address bar focused, Ctrl+Shift+T reopens the last tab closed
+// (then the one before it) and Ctrl+W closes the tab. A Mac's are Cmd's,
+// with no F5. The page's real reload never happens: in a text field too, as
+// in Chrome, where these keys are no editing keys.
+//
+// In a tab Chrome keeps Ctrl+T, Ctrl+Shift+T and Ctrl+W (and Ctrl+N) for
+// itself: no page gets them, so they open, reopen or close Chrome's own tab
+// and powerMouse never hears of them, and nothing here pretends otherwise.
+// In fullscreen a page gets them, and powerMouse also asks for them with
+// the Keyboard Lock API (lockBrowserKeys); in the installed app's window
+// Chrome reserves no shortcut at all (demo/README.md, The installed app).
+// There they reach this page first and are its tabs'.
+
+/** whether Chrome's shortcuts are Cmd's (a Mac's) rather than Ctrl's */
+const MAC = /Mac/i.test(navigator.platform);
+
+/** what runBrowserKey takes */
+const BROWSER_COMMANDS = new Set([
+	'reload',
+	'hardReload',
+	'newTab',
+	'restoreTab',
+	'closeTab',
+]);
+
+/**
+ * The browser's command `event` is (Chrome's accelerators), null for any
+ * other key. The letter is the one the keyboard's layout types, else (a
+ * layout with no Latin letters) the key's place, as Chrome falls back to.
+ * Its source runs in the proxied documents too (KEY_HOOK): it reads nothing
+ * but its arguments.
+ */
+function browserKeyOf(event, mac) {
+	if (event.altKey) return null;
+	const letter = /^[a-z]$/i.test(event.key)
+		? event.key.toLowerCase()
+		: /^Key[A-Z]$/.test(event.code)
+			? event.code.slice(3).toLowerCase()
+			: '';
+	const primary = mac
+		? event.metaKey && !event.ctrlKey
+		: event.ctrlKey && !event.metaKey;
+	if (primary) {
+		if (letter === 'r') return event.shiftKey ? 'hardReload' : 'reload';
+		if (letter === 't') return event.shiftKey ? 'restoreTab' : 'newTab';
+		if (letter === 'w' && !event.shiftKey) return 'closeTab';
+		return null;
+	}
+	if (mac || event.metaKey || event.key !== 'F5') return null;
+	return event.ctrlKey || event.shiftKey ? 'hardReload' : 'reload';
+}
+
+/**
+ * A browser key on this page (a press in a proxied page comes from KEY_HOOK
+ * once its page had it). A held key's repeats do nothing more, as one press
+ * of Reload is one reload
+ */
+function runBrowserKey(command, repeat = false) {
+	if (repeat) return;
+	const inTab = !browser.classList.contains('hidden') && activeTab;
+	if (command === 'reload' || command === 'hardReload') {
+		// (the home screen is the new tab page: nothing to reload)
+		if (inTab) reloadActiveTab({ bypassCache: command === 'hardReload' });
+	} else if (command === 'newTab') openNewTab();
+	else if (command === 'restoreTab') restoreClosedTab();
+	else if (command === 'closeTab' && inTab) closeTab(activeTab);
+}
+
+/** a browser key pressed on this page, or in a tab's frame before its first document */
+function onBrowserKey(event) {
+	const command = browserKeyOf(event, MAC);
+	if (!command) return;
+	event.preventDefault();
+	runBrowserKey(command, event.repeat);
+}
+addEventListener('keydown', onBrowserKey, true);
+
 // The demo's own keys (Ctrl+Shift+X, Escape, Alt+Left and Alt+Right) while
 // a proxied page has focus: its key events never reach this window, so a
 // host hook in every proxied document hands them over, as a browser's own
@@ -970,9 +1113,19 @@ const KEY_MESSAGE = '$stompDemo$key';
 // (or a key, for one focused from its start; a shortcut's modifier,
 // pressed first, gives the answer time to arrive before the shortcut's
 // own key). An ad frame the focus never reaches pays nothing.
+//
+// The browser's own keys (browserKeyOf) are this window's too. A reload key
+// reaches the page first, as Chrome's does, and a page that cancels it keeps
+// it: the frame's own reload is cancelled at once (it would reload the host
+// page, every tab with it), and the tab reloads once the page had the key
+// (stomp.holdDefault). Ctrl+T, Ctrl+Shift+T and Ctrl+W never reach a page in
+// a Chrome tab; one reaches a frame only in fullscreen (where this window
+// also holds those keys with the Keyboard Lock API, lockBrowserKeys) or in
+// the installed app's window, and it is the host's alone there too.
 const KEY_HOOK = `
 if (stomp.kind === 'document') {
 	const win = stomp.window;
+	const browserKeyOf = ${browserKeyOf};
 	let extensionKeys = null;
 	const askKeys = () => {
 		if (extensionKeys !== null) return;
@@ -987,6 +1140,23 @@ if (stomp.kind === 'document') {
 	win.addEventListener('focus', askKeys, { once: true });
 	win.addEventListener('keydown', (event) => {
 		askKeys();
+		const command = browserKeyOf(event, ${MAC});
+		if (command) {
+			const repeat = event.repeat;
+			const post = () => win.top.postMessage({ ${JSON.stringify(KEY_MESSAGE)}: { browser: command, repeat } }, '*');
+			if (command === 'reload' || command === 'hardReload') {
+				if (stomp.holdDefault) stomp.holdDefault(event, post);
+				else {
+					event.preventDefault();
+					post();
+				}
+				return;
+			}
+			event.preventDefault();
+			event.stopImmediatePropagation();
+			post();
+			return;
+		}
 		const shortcut = event.ctrlKey && event.shiftKey && !event.altKey && event.code === 'KeyX';
 		const arrow = event.altKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight');
 		const code = (event.ctrlKey ? '1' : '0') + (event.altKey ? '1' : '0') +
@@ -995,11 +1165,65 @@ if (stomp.kind === 'document') {
 		if (!shortcut && !arrow && !extension && event.key !== 'Escape') return;
 		if (shortcut || extension) event.preventDefault();
 		if (extension) event.stopImmediatePropagation();
-		win.top.postMessage({ ${JSON.stringify(KEY_MESSAGE)}: {
+		// (whether the document was still loading as the key went down: the
+		// browser's own Stop, which follows a key the page left alone, may
+		// have completed it by the time the host hears of the key)
+		const loading = win.document.readyState !== 'complete';
+		const post = () => win.top.postMessage({ ${JSON.stringify(KEY_MESSAGE)}: {
 			key: event.key, code: event.code, ctrlKey: event.ctrlKey,
 			shiftKey: event.shiftKey, altKey: event.altKey, metaKey: event.metaKey,
+			prevented: event.defaultPrevented, loading,
 		} }, '*');
+		// Escape is the browser's once the page is done with it, as Chrome's
+		// Stop takes it (a page that prevents it keeps it)
+		if (!shortcut && !arrow && !extension) win.setTimeout(post, 0);
+		else post();
 	}, true);
+}`;
+// A tab's page is loading from the start of a navigation the page makes
+// (Chrome's load starts there, not at the next document) and from the
+// first script of its document until the document is complete (or
+// stopped, which completes it): the document tells the host, so the
+// address bar's Reload is Stop meanwhile, whoever started the load (a link
+// of the page's as much as the bar). Each word carries an id of its own: a
+// document left while it loads completes too, and that is not the end of
+// the load after it. A navigation the page intercepts (the Navigation
+// API's) loads until its handlers are done, as in Chrome. A word of a
+// start carries when it was said (a navigation's, when it started), on
+// the host's clock, so one that comes after the tab's load was stopped or
+// ended counts for nothing (a document's word can come after the frame's
+// load event, which ended that load)
+const LOAD_MESSAGE = '$stompDemo$load';
+const LOAD_HOOK = `
+if (stomp.kind === 'document' && stomp.isTop) {
+	const win = stomp.window;
+	const doc = win.document;
+	const origin = win.performance.timeOrigin;
+	const tell = (state, id, at) => win.top.postMessage({ ${JSON.stringify(LOAD_MESSAGE)}: { state, id, at } }, '*');
+	if (doc.readyState !== 'complete') {
+		const id = String(Math.random());
+		tell('start', id, origin + win.performance.now());
+		const done = () => {
+			if (doc.readyState !== 'complete') return;
+			doc.removeEventListener('readystatechange', done);
+			tell('done', id);
+		};
+		doc.addEventListener('readystatechange', done);
+	}
+	const navigation = win.navigation;
+	if (navigation) navigation.addEventListener('navigate', (event) => {
+		if (event.downloadRequest !== null || (event.destination.sameDocument && !event.canIntercept)) return;
+		const at = origin + event.timeStamp;
+		// (once the page's own listeners had it: one may cancel it or intercept it)
+		win.setTimeout(() => {
+			if (event.defaultPrevented) return;
+			const transition = navigation.transition;
+			if (!transition && event.destination.sameDocument) return;
+			const id = String(Math.random());
+			tell('leave', id, at);
+			if (transition) transition.finished.then(() => tell('done', id), () => tell('done', id));
+		}, 0);
+	});
 }`;
 addEventListener('message', (event) => {
 	const key = event.data?.[KEY_MESSAGE];
@@ -1018,21 +1242,37 @@ addEventListener('message', (event) => {
 		port.postMessage({ keys: [...extShortcuts.keys()] });
 		return;
 	}
+	if (key.browser !== undefined) {
+		// the tab's page had the key (an extension's popup has no tab to act on)
+		if (
+			BROWSER_COMMANDS.has(key.browser) &&
+			activeTab &&
+			isFrameOf(activeTab.element, event.source)
+		)
+			runBrowserKey(key.browser, !!key.repeat);
+		return;
+	}
 	if (!(
 		tabs.some((tab) => isFrameOf(tab.element, event.source)) ||
 		isFrameOf(extPopup, event.source)
 	))
 		return;
-	dispatchEvent(
-		new KeyboardEvent('keydown', {
-			key: String(key.key),
-			code: String(key.code),
-			ctrlKey: !!key.ctrlKey,
-			shiftKey: !!key.shiftKey,
-			altKey: !!key.altKey,
-			metaKey: !!key.metaKey,
-		}),
-	);
+	const forwarded = new KeyboardEvent('keydown', {
+		key: String(key.key),
+		code: String(key.code),
+		ctrlKey: !!key.ctrlKey,
+		shiftKey: !!key.shiftKey,
+		altKey: !!key.altKey,
+		metaKey: !!key.metaKey,
+		cancelable: true,
+	});
+	// the page prevented it: what the browser does with an unhandled key
+	// (Escape's Stop) is not done
+	if (key.prevented) forwarded.preventDefault();
+	// Escape in a document that was loading: its load is stopped, though
+	// the document may have completed since
+	else if (key.key === 'Escape' && key.loading) escapeInLoad = forwarded;
+	dispatchEvent(forwarded);
 });
 /**
  * Whether `source` is the window of `element` (or of the iframe in it: the
@@ -1205,7 +1445,7 @@ const controllerCallbacks = {
 	hooks: {
 		init: {
 			pre: { source: ICON_HOOK },
-			post: { source: `${KEY_HOOK}\n${TOKEN_HOOK}` },
+			post: { source: `${KEY_HOOK}\n${LOAD_HOOK}\n${TOKEN_HOOK}` },
 		},
 	},
 	// per-site shields (the content blocker's UI): the state this page kept,
@@ -1402,13 +1642,20 @@ async function switchTransport(name) {
 
 // ---- tabs -----------------------------------------------------------------
 
-/** a new tab; `id` names a tab kept from before this page was loaded (restoreTabs) */
-function createTab(id = 0) {
+/**
+ * a new tab, at `at` among the tabs (the end by default); `id` names a tab
+ * kept from before this page was loaded (restoreTabs)
+ */
+function createTab(id = 0, at = tabs.length) {
 	const element = document.createElement('iframe');
 	element.className = 'frame hidden';
 	element.title = 'Proxied page';
 	element.allow = FRAME_ALLOW;
 	framesContainer.append(element);
+	// until its first document comes the frame shows its initial
+	// about:blank, of this page's origin, where no hook runs: a key pressed
+	// there is this page's (Ctrl+R would reload it, every tab with it)
+	element.contentWindow?.addEventListener('keydown', onBrowserKey, true);
 	const frame = OFFLINE
 		? OFFLINE.createFrame(controller, element, controllerCallbacks)
 		: controller.createFrame(element);
@@ -1434,8 +1681,13 @@ function createTab(id = 0) {
 		iconPort: null, // its document's port for fetching that icon (ICON_HOOK)
 		tokenPort: null, // a Discord page's port for its login token (TOKEN_HOOK)
 		passkeyOffer: null, // a passkey sign-in its site waits for (askPasskey)
+		loading: false, // a load is in progress: the bar's Reload is Stop (setLoading)
+		loadingDocument: null, // the id of the document whose load that is (LOAD_HOOK), null for the host's
+		settledAt: 0, // when its load last ended (Stop, the load event, a navigation that stayed), on the clock of LOAD_HOOK's words
 	};
 	const loaded = async () => {
+		// the document and its frames are loaded: the load is over
+		setLoading(tab, false);
 		// a RemoteFrame's url is polled: refresh before recording, or a redirect
 		// leaves both the requested and the final URL in the list
 		if (frame.refresh) await frame.refresh();
@@ -1450,11 +1702,25 @@ function createTab(id = 0) {
 		syncCardBar(tab);
 	};
 	element.addEventListener('load', loaded);
+	// a navigation answered with no document (a 204, a download): as in
+	// Chrome, nothing commits, the bar shows the page the tab stayed on and
+	// the load is over at once
+	frame.addEventListener('stayed', () => {
+		stopGoing(tab);
+		setLoading(tab, false);
+		if (tab === activeTab) setStatus('Ready');
+	});
 	if (JUST_CALL) {
 		// each document gets a frame of its own in the tab's element's place
 		frame.addEventListener('element', ({ detail }) => {
 			tab.element = detail;
 			detail.addEventListener('load', loaded);
+		});
+		// a dial starts (the bar's, or a page's own navigation, which the
+		// frame takes from it): the tab loads from now
+		frame.addEventListener('dial', () => {
+			setLoading(tab, true);
+			if (tab === activeTab) setStatus('Loading…');
 		});
 		// each change of the tab's history: the top URL's token follows
 		frame.addEventListener('entries', () => calledEntries(tab));
@@ -1465,7 +1731,7 @@ function createTab(id = 0) {
 		tab.calling.catch(() => {});
 	}
 	session.tab = Math.max(session.tab, tab.sid);
-	tabs.push(tab);
+	tabs.splice(Math.min(Math.max(at, 0), tabs.length), 0, tab);
 	keepTabs();
 	return tab;
 }
@@ -1552,6 +1818,7 @@ function activateTab(tab) {
 	// the live bar first: an expanding card's bar copy is a copy of it
 	syncOmnibox(true);
 	syncToolbar();
+	syncReload(true); // another tab's load: at once, under the pointer too
 	hideRecents(tab); // animates the card back to full screen if the manager is open
 }
 
@@ -1587,9 +1854,33 @@ function activeHostOf(tab) {
 	}
 }
 
+// The tabs closed, newest last, for Ctrl+Shift+T: each with the page it
+// showed and its place among the tabs, as Chrome's TabRestoreService keeps
+// them (its newest 25, and no tab that never left the new tab page). Its
+// history is the frame's own, which no page script can rebuild: a reopened
+// tab starts its history at the page it showed.
+const closedTabs = [];
+const CLOSED_KEPT = 25;
+
+/** the new tab page, its address bar focused: the tab manager's + and Ctrl+T */
+function openNewTab() {
+	showLanding();
+}
+
+/** reopen the tab closed last, where it was (Ctrl+Shift+T) */
+function restoreClosedTab() {
+	const closed = closedTabs.pop();
+	if (closed) navigate(closed.url, { newTab: true, at: closed.index });
+}
+
 function closeTab(tab, { stayInRecents = false } = {}) {
 	const index = tabs.indexOf(tab);
 	if (index === -1) return;
+	const shown = normalizeUrl(shownUrl(tab));
+	if (shown && shown !== 'about:blank') {
+		closedTabs.push({ url: shown, index });
+		if (closedTabs.length > CLOSED_KEPT) closedTabs.shift();
+	}
 	forgetSiteOnClose(tab);
 	tabs.splice(index, 1);
 	tab.element.remove();
@@ -1793,6 +2084,7 @@ function syncCardBar(tab) {
 	const tools = label.querySelectorAll('.toolbtn');
 	tools[0].classList.toggle('disabled', !canStep(tab, 'back'));
 	tools[1].classList.toggle('disabled', !canStep(tab, 'forward'));
+	tools[2].classList.toggle('stopping', tab.loading);
 	label.querySelector('.urlText').textContent = barUrl(shownUrl(tab));
 	syncStar(label.querySelector('.starbtn'), tab);
 }
@@ -1800,9 +2092,10 @@ function syncCardBar(tab) {
 /** the expanding card's bar copy shows exactly what the live bar does */
 function mirrorLiveBar(label) {
 	const tools = label.querySelectorAll('.toolbtn');
-	TOOL_IDS.forEach((id, i) =>
-		tools[i].classList.toggle('disabled', $(id).disabled),
-	);
+	TOOL_IDS.forEach((id, i) => {
+		tools[i].classList.toggle('disabled', $(id).disabled);
+		tools[i].classList.toggle('stopping', $(id).classList.contains('stopping'));
+	});
 	label.querySelector('.urlText').textContent = omni.url.value;
 	const star = label.querySelector('.starbtn');
 	const live = $('toolStar');
@@ -1856,7 +2149,9 @@ function createLabel(tab) {
 		tool.className = 'toolbtn';
 		tool.dataset.tool = id;
 		tool.setAttribute('aria-hidden', 'true');
-		tool.append($(id).querySelector('img').cloneNode());
+		// (Reload's two pictures: Stop shows while the tab loads)
+		for (const img of $(id).querySelectorAll('img'))
+			tool.append(img.cloneNode());
 		chrome.append(tool);
 	}
 	// the address box and, over its right end, the status chip and the star,
@@ -2347,7 +2642,7 @@ document.addEventListener('auxclick', proxyLink);
 /** a page was asked for before the controller was up (navigate) */
 let pressedEarly = false;
 
-async function navigate(input, { newTab = false } = {}) {
+async function navigate(input, { newTab = false, at } = {}) {
 	const typed = input.trim();
 	// an extension's page, as the bar shows it (chrome-extension://<id>/...)
 	// or as its extension serves it, opens as that page: no search for it
@@ -2375,7 +2670,7 @@ async function navigate(input, { newTab = false } = {}) {
 	// on the next frame: the manager goes at once, no card animating up to
 	// full screen while the bar is still hidden
 	if (document.body.classList.contains('recents')) teardownRecents();
-	if (newTab || !activeTab) activateTab(createTab());
+	if (newTab || !activeTab) activateTab(createTab(0, at));
 	else showBrowser();
 	const tab = activeTab;
 	// the page the tab is on: what the bar shows once this navigation is
@@ -2388,6 +2683,11 @@ async function navigate(input, { newTab = false } = {}) {
 	const going = { url, from };
 	tab.goingTo = going;
 	tab.stayedOn = null;
+	// a load starts, unless the URL is the page's own but for its fragment
+	// (a same-document navigation, which loads nothing)
+	const sameDocument =
+		url.includes('#') && from && url.split('#')[0] === from.split('#')[0];
+	if (!sameDocument) setLoading(tab, true);
 	// a fresh navigation: the blocked count starts over for this tab's page
 	blockedCounts.set(tab.frame, 0);
 	omni.url.value = barUrl(url);
@@ -2404,16 +2704,73 @@ async function navigate(input, { newTab = false } = {}) {
 		settleGoing(tab);
 		// the frame answered without moving (the leaving document reported, or
 		// nothing came): give the navigation the time a browser would, then
-		// show the page the tab stayed on
+		// show the page the tab stayed on, its load over (a download, a 204)
 		if (tab.goingTo === going)
 			setTimeout(() => {
-				if (tab.goingTo === going) stopGoing(tab);
+				if (tab.goingTo !== going) return;
+				stopGoing(tab);
+				setLoading(tab, false);
 			}, 30000);
 	} catch (error) {
-		if (tab.goingTo === going) stopGoing(tab);
+		if (tab.goingTo === going) {
+			stopGoing(tab);
+			setLoading(tab, false);
+		}
 		setStatus(`Error: ${error.message}`, true);
 	}
 }
+
+/**
+ * Whether a load is in progress in the tab: from a navigation's start (the
+ * bar's, Reload) or its document's first script (a page's own navigation,
+ * LOAD_HOOK) until its load event or Stop. The active tab's shows as the
+ * bar's Reload turned Stop, and its card's copy of the bar shows the same
+ */
+function setLoading(tab, loading, documentId = null) {
+	tab.loadingDocument = loading ? documentId : null;
+	if (!loading) tab.settledAt = performance.timeOrigin + performance.now();
+	if (tab.loading === loading) return;
+	tab.loading = loading;
+	if (tab === activeTab) syncReload();
+	syncCardBar(tab);
+}
+
+/**
+ * Chrome's Stop (the button, Escape): the tab's load ends where it got to.
+ * A navigation not committed yet never commits (the bar shows the page the
+ * tab stayed on again), and a document still arriving keeps what it has
+ * (Frame.stop). `anyway`: a load that may have ended a moment ago (a page's
+ * Escape, which the browser's own Stop may have reached first) is stopped
+ * too, so what the service worker still reads of it goes as well
+ */
+function stopTab(tab, anyway = false) {
+	if (!tab?.loading && !anyway) return;
+	stopGoing(tab);
+	setLoading(tab, false);
+	if (tab === activeTab) setStatus('Ready');
+	// (offline.html's written frame has no stop(): its document stops only
+	// on the browser's own Stop)
+	tab.frame.stop?.()?.catch(() => {});
+}
+
+// a tab's document says it started or finished loading (LOAD_HOOK): its
+// top document only, by its window
+addEventListener('message', (event) => {
+	const word = event.data?.[LOAD_MESSAGE];
+	const state = word?.state;
+	if (state !== 'start' && state !== 'leave' && state !== 'done') return;
+	const tab = tabs.find((t) => t.element.contentWindow === event.source);
+	if (!tab) return;
+	const id = String(word.id);
+	// a document or a navigation of the page's that started before the
+	// tab's load last ended (its word came late, after Stop or the load
+	// event): that load is over
+	if (state !== 'done' && !(Number(word.at) >= tab.settledAt)) return;
+	if (state !== 'done') {
+		setLoading(tab, true, id);
+		if (tab === activeTab) setStatus('Loading…');
+	} else if (tab.loadingDocument === id) setLoading(tab, false);
+});
 
 /** the URL a tab's address bar shows: where it is going, else where it is */
 const shownUrl = (tab) =>
@@ -2864,7 +3221,7 @@ function syncToolbar() {
 	const tab = activeTab;
 	$('toolBack').disabled = !canStep(tab, 'back');
 	$('toolForward').disabled = !canStep(tab, 'forward');
-	$('toolReload').disabled = !tab;
+	syncReload();
 	syncStar($('toolStar'), tab);
 	syncTokenButton();
 	syncShields();
@@ -3068,16 +3425,113 @@ const stepActive = async (direction) => {
 };
 $('toolBack').addEventListener('click', () => stepActive('back'));
 $('toolForward').addEventListener('click', () => stepActive('forward'));
-$('toolReload').addEventListener('click', () => {
-	if (!activeTab) return;
-	stopGoing(activeTab); // Reload stays on the page the tab shows
-	setStatus('Loading…');
-	// the page's blocked count starts over on a reload, as on a navigation
-	blockedCounts.set(activeTab.frame, 0);
-	activeTab.frame.reload();
+// Reload is Stop while the active tab loads, as Chrome's ReloadButton is:
+// its picture and its names change at once, but not under the pointer. A
+// load that ends while the pointer is on Stop leaves Stop there, disabled,
+// until the pointer leaves or STOP_TO_RELOAD_MS pass (a press already down
+// then lifts on nothing: a stop never turns into a reload), and a load
+// that starts within the double-click time of a press on Reload waits that
+// long (a double click is not Reload then Stop). A second press on Reload
+// within that time does nothing.
+//
+// Chrome's toolbar buttons take no focus from a press, and its Reload
+// keeps the keyboard's focus through a change of mode. Here a press on
+// Stop takes no focus either (so a hold never has the focus to drop), and
+// a load that ends while the focus is on Stop makes it Reload in that same
+// task, never held: a disabled button would leave the focus on the page's
+// body. A press that went down on Stop still reloads nothing on release.
+const reloadButton = $('toolReload');
+const RELOAD_LOOK = {
+	reload: 'Reload this page',
+	stop: 'Stop loading this page',
+};
+/** Chrome's: the platform's double-click time, and stop_to_reload_timer_delay_ */
+const DOUBLE_CLICK_MS = 500;
+const STOP_TO_RELOAD_MS = 1350;
+const reloadMode = {
+	visible: 'reload',
+	intended: 'reload',
+	held: false, // Stop shown, disabled, for a load that ended under the pointer
+	doubleClick: 0, // the double-click timer after a press on Reload
+	stopToReload: 0,
+	// the pointer is on the button (ReloadButton's IsMouseHovered), from its
+	// own events: :hover can still match for a moment after pointerleave,
+	// and a load that ended then held Stop under a pointer already gone
+	hovered: false,
+	pressedStop: false, // the press going on began on Stop
+};
+function showReloadMode(mode) {
+	reloadMode.visible = mode;
+	reloadButton.classList.toggle('stopping', mode === 'stop');
+	reloadButton.title = RELOAD_LOOK[mode];
+	reloadButton.setAttribute('aria-label', RELOAD_LOOK[mode]);
+}
+/** ReloadButton::ChangeMode: `force` changes it whatever the pointer does */
+function changeReloadMode(mode, force = false) {
+	reloadMode.intended = mode;
+	const hovered = reloadMode.hovered;
+	if (
+		force ||
+		!hovered ||
+		(mode === 'stop'
+			? !reloadMode.doubleClick
+			: reloadMode.visible !== 'stop' ||
+				document.activeElement === reloadButton)
+	) {
+		clearTimeout(reloadMode.doubleClick);
+		clearTimeout(reloadMode.stopToReload);
+		reloadMode.doubleClick = reloadMode.stopToReload = 0;
+		if (mode !== reloadMode.visible) showReloadMode(mode);
+		reloadMode.held = false;
+	} else if (reloadMode.visible !== 'reload') {
+		reloadMode.held = true;
+		if (!reloadMode.stopToReload)
+			reloadMode.stopToReload = setTimeout(() => {
+				reloadMode.stopToReload = 0;
+				changeReloadMode(reloadMode.intended, true);
+			}, STOP_TO_RELOAD_MS);
+	}
+	reloadButton.disabled = !activeTab || reloadMode.held;
+}
+/** the button for the active tab's load (`force`: another tab's, at once) */
+function syncReload(force = false) {
+	changeReloadMode(activeTab?.loading ? 'stop' : 'reload', force);
+}
+reloadButton.addEventListener('pointerenter', () => {
+	reloadMode.hovered = true;
+});
+reloadButton.addEventListener('mousedown', (event) => {
+	reloadMode.pressedStop = reloadMode.visible === 'stop';
+	if (reloadMode.pressedStop) event.preventDefault();
+});
+reloadButton.addEventListener('pointerleave', () => {
+	reloadMode.hovered = false;
+	changeReloadMode(reloadMode.intended, true);
+});
+reloadButton.addEventListener('click', (event) => {
+	const tab = activeTab;
+	const pressedStop = reloadMode.pressedStop;
+	reloadMode.pressedStop = false;
+	if (!tab) return;
+	// (a press that began on Stop, whose load ended before the release; a
+	// key's click, detail 0, is no press's)
+	if (pressedStop && event.detail > 0 && reloadMode.visible === 'reload')
+		return;
+	if (reloadMode.visible === 'stop') {
+		stopTab(tab);
+		// pressed: Reload at once, under the pointer too
+		changeReloadMode('reload', true);
+		return;
+	}
+	if (reloadMode.doubleClick) return;
+	reloadMode.doubleClick = setTimeout(() => {
+		reloadMode.doubleClick = 0;
+		changeReloadMode(reloadMode.intended);
+	}, DOUBLE_CLICK_MS);
+	reloadActiveTab({ bypassCache: event.shiftKey || event.ctrlKey });
 });
 $('recents').addEventListener('click', toggleRecents);
-$('newTab').addEventListener('click', showLanding);
+$('newTab').addEventListener('click', openNewTab);
 $('closeAll').addEventListener('click', () => {
 	for (const tab of [...tabs]) closeTab(tab, { stayInRecents: true });
 });
@@ -5404,14 +5858,24 @@ function applyAdblockConfigOnBoot() {
 		applyAdblockLists('Filter lists restored', false);
 }
 
-// re-serve the active tab, as the reload button does, so a shields or filter
-// change that only takes effect on a fresh load actually takes effect. A no-op
-// with no active tab (the shields pages open from a site, so there is one)
-function reloadActiveTab() {
-	if (!activeTab) return;
-	stopGoing(activeTab); // the reload stays on the page the tab shows
-	blockedCounts.set(activeTab.frame, 0); // the blocked count starts over
-	activeTab.frame.reload();
+// Reload the active tab: the reload button, Ctrl+R and F5 (past the caches
+// with `bypassCache`: Ctrl+Shift+R, Shift+F5, Ctrl+F5), and a shields or
+// filter change that only takes effect on a fresh load. A no-op with no
+// active tab (the shields pages open from a site, so there is one)
+function reloadActiveTab({ bypassCache = false } = {}) {
+	const tab = activeTab;
+	if (!tab) return;
+	stopGoing(tab); // the reload stays on the page the tab shows
+	setStatus('Loading…');
+	// the page's blocked count starts over on a reload, as on a navigation
+	blockedCounts.set(tab.frame, 0);
+	setLoading(tab, true);
+	tab.frame.reload({ bypassCache }).then(
+		(reloaded) => {
+			if (!reloaded) setLoading(tab, false);
+		},
+		() => setLoading(tab, false),
+	);
 }
 
 function shieldsShowBadge() {
@@ -6726,7 +7190,10 @@ function watchCarrier(target) {
 syncFullscreenItem();
 // Escape and the browser's own controls leave fullscreen without the menu
 if (fullscreen)
-	document.addEventListener(fullscreen.change, syncFullscreenItem);
+	document.addEventListener(fullscreen.change, () => {
+		syncFullscreenItem();
+		lockBrowserKeys();
+	});
 
 async function toggleFullscreen() {
 	try {
@@ -6735,6 +7202,22 @@ async function toggleFullscreen() {
 	} catch (error) {
 		console.warn('Fullscreen:', error.message);
 	}
+}
+
+// In fullscreen this page holds Ctrl+T and Ctrl+W (Ctrl+Shift+T with them)
+// with the Keyboard Lock API, which Chrome honours only for a top-level
+// page in fullscreen: the keys reach the page instead of Chrome, and are
+// powerMouse's (browserKeyOf). Escape stays Chrome's way out. Out of
+// fullscreen the lock is let go, and Chrome has its keys again.
+const LOCKED_KEYS = ['KeyT', 'KeyW'];
+function lockBrowserKeys() {
+	const keyboard = navigator.keyboard;
+	if (!keyboard?.lock || !fullscreen) return;
+	if (fullscreen.element())
+		keyboard.lock(LOCKED_KEYS).catch((error) => {
+			console.warn('Keyboard Lock:', error.message);
+		});
+	else keyboard.unlock();
 }
 
 const menuItems = () =>

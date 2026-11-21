@@ -62,7 +62,8 @@ const done = new Set<string>();
  * The call page. Its script takes one message, from its parent's window and
  * origin only, with the port everything else goes over: the call (the
  * route, and the request's method, body and referrer), then, once the host
- * has shown the frame, the word to write. It writes the answer into itself
+ * has shown the frame, the word to write (or, for an answer Chrome would
+ * download, the word to save it under a name, as a download). It writes the answer into itself
  * from its own realm, so the document keeps the call page's URL, its worker
  * and its realm; what the document's inject takes first (the port, the
  * tab's history) is left on the window under CALLED_KEY, and the page's URL
@@ -82,10 +83,19 @@ const CALL_PAGE_HTML = `<!doctype html><meta charset="utf-8"><script>(() => {
 			if (ask.call) {
 				try {
 					response = await fetch(ask.call.routed, ask.call.init);
-					port.postMessage({ answered: { url: response.headers.get(${JSON.stringify(CALLED_URL_HEADER)}), routed: response.url, status: response.status } });
+					port.postMessage({ answered: { url: response.headers.get(${JSON.stringify(CALLED_URL_HEADER)}), routed: response.url, status: response.status, type: response.headers.get('content-type'), disposition: response.headers.get('content-disposition') } });
 				} catch (error) {
 					port.postMessage({ failed: String((error && error.message) || error) });
 				}
+				return;
+			}
+			// an answer Chrome downloads: saved under the name the host gives
+			if (ask.save && response) {
+				const link = document.createElement('a');
+				link.href = URL.createObjectURL(await response.blob());
+				link.download = String(ask.save);
+				link.click();
+				port.postMessage({ saved: true });
 				return;
 			}
 			if (!ask.write || !response) return;

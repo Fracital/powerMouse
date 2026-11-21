@@ -58,6 +58,14 @@ export interface HookContext {
 	frameId?: string;
 	/** the realm's real global */
 	window: typeof globalThis;
+	/**
+	 * Documents only: cancels the browser's default action of `event` at
+	 * once and calls `then` after every listener of the page had the event,
+	 * unless one of them cancelled it, as the browser decides an action that
+	 * is its own (a reload key a host takes for its tab). The page reads
+	 * `defaultPrevented` and `returnValue` as its own calls left them.
+	 */
+	holdDefault?: (event: Event, then: () => void) => void;
 }
 
 /** a hook that threw, or a hook URL that could not be fetched (`phase: 'url'`) */

@@ -130,10 +130,31 @@ its Last-Modified, could not be refreshed by any reload. So the controller
 finds out how its host page was loaded (`src/controller/hostReload.ts`)
 and tells the worker once, and the top-level navigations of the next ten
 seconds take that mode: `no-cache` for the document after a reload,
-`reload` for the document and what it loads (for thirty seconds: the
-worker does not hear of the load event) after a hard one. The reload
+`reload` for the document and what it loads after a hard one. The reload
 button of a host that calls `frame.reload()` is a reload of the frame
 itself and needs none of this.
+
+## A hard reload of a frame
+
+No script can ask Chrome for a hard reload: `location.reload()` is a
+reload (the document confirmed, nothing else asked). So
+`frame.reload({ bypassCache: true })` tells the worker the routed URL of
+the frame's document first (`hardReload`, from the controller of the
+realm that reloads it: the host's, the controller frame's or a slot's
+agent's), and the next navigation to it within ten seconds is Chrome's
+LOAD_BYPASS_CACHE, measured in Chrome 157 against `Page.reload` with
+`ignoreCache`: the document, every frame it makes before its load event
+(a frame navigation whose Referer is a document still loading so) and
+what each of them loads are asked with `Cache-Control: no-cache` and
+`Pragma: no-cache`, without validators, past the HTTP cache and the
+worker's memory cache, and the answers are kept as usual. It lasts until
+the load event is over: the document's shell says it is a hard reload's
+(`Config.hardLoad`) and the document tells the worker once every load
+listener had the event (`HARD_LOADED`); a request after that takes the
+caches (natively a fetch 2 s after load is answered from the cache). A
+document that never says ends after thirty seconds. The host page's own
+hard reload (above) ends the same way. Nothing kept is cleared: Chrome's
+hard reload clears neither the cache nor the site's storage.
 
 A reload is the host's navigation entry. A hard reload reads the same
 there, but Chrome loads the frames a hard-reloaded document creates before

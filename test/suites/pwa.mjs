@@ -24,15 +24,14 @@
 //  - opened as an app window (PWA.install, PWA.openCurrentPageInApp) the
 //    page is display-mode standalone and offers no install, and a launch
 //    with a URL (PWA.launch) opens its page once (from the address or the
-//    launch queue, never both);
+//    launch queue, never both); there Ctrl+W, Ctrl+Shift+T and Ctrl+T
+//    reach the page, which Chrome keeps in a tab, and are powerMouse's;
 //  - a copy of the page in a frame, or at another path, links no manifest
 //    and registers no worker at the root.
 // Headless Chrome cannot show what needs a real window: Window Controls
 // Overlay (its app window is standalone, and DevTools' emulation of it
 // changes no display-mode), the title bar's colour, a launch into the open
-// window (launch_handler: PWA.launch opens a tab), the install dialog, and
-// which shortcuts Chrome keeps for itself (keys sent over the DevTools
-// protocol skip Chrome's own shortcuts, in a tab too).
+// window (launch_handler: PWA.launch opens a tab) and the install dialog.
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -515,6 +514,75 @@ ok(
 	standalone === true && (await installItem()).hidden,
 	JSON.stringify({ standalone, item: await installItem() }),
 );
+// In an app window Chrome reserves none of its shortcuts (demo/README.md
+// "The installed app", Keys): Ctrl+W, Ctrl+Shift+T and Ctrl+T reach the
+// page, which takes them as its own tabs' keys, and Chrome does nothing
+// (no tab of its own, the window stays). In a tab Chrome keeps Ctrl+T and
+// Ctrl+W before the page sees them (the demo-keys suite), keys sent over
+// the DevTools protocol included (Chrome 157, measured)
+/** one press of Ctrl (and `shift`) with a letter, as the keyboard sends it */
+async function pressCtrl(key, shift = false) {
+	const event = {
+		modifiers: shift ? 10 : 2,
+		key: shift ? key.toUpperCase() : key,
+		code: `Key${key.toUpperCase()}`,
+		windowsVirtualKeyCode: key.toUpperCase().charCodeAt(0),
+		nativeVirtualKeyCode: key.toUpperCase().charCodeAt(0),
+	};
+	await cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...event });
+	await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...event });
+}
+{
+	const shownPages = context.pages().length;
+	await page.goto(
+		`${PROXY}?launch=${encodeURIComponent(`web+stomp:${HIST_1}`)}`,
+	);
+	await ready(page);
+	const opened = (await frontTitle(page, 'HIST 1')) === 'HIST 1';
+	await page.focus('#omni input');
+	await pressCtrl('w');
+	const closed = await until(
+		page,
+		() => document.querySelectorAll('#frames .frame').length,
+		(n) => n === 0,
+		5000,
+	);
+	ok(
+		"in the app window Ctrl+W closes powerMouse's tab, and Chrome keeps its window",
+		standalone === true &&
+			opened &&
+			closed === 0 &&
+			!page.isClosed() &&
+			context.pages().length === shownPages,
+		JSON.stringify({
+			opened,
+			closed,
+			pages: context.pages().length - shownPages,
+		}),
+	);
+	await pressCtrl('t', true);
+	const reopened = await frontTitle(page, 'HIST 1');
+	ok(
+		'Ctrl+Shift+T reopens it',
+		reopened === 'HIST 1' && (await tabs(page)) === 1,
+		`${reopened} ${await tabs(page)} tabs`,
+	);
+	await page.focus('#omni input');
+	await pressCtrl('t');
+	const newTab = await until(
+		page,
+		() =>
+			!document.getElementById('landing').classList.contains('hidden') &&
+			document.activeElement === document.getElementById('mainForm').url,
+		Boolean,
+		5000,
+	);
+	ok(
+		"and Ctrl+T opens the new tab page with its address bar focused, no tab of Chrome's",
+		newTab === true && context.pages().length === shownPages,
+		JSON.stringify({ newTab, pages: context.pages().length - shownPages }),
+	);
+}
 await cdp.send('PWA.launch', {
 	manifestId: APP_ID,
 	url: `${APP_ID}?launch=${encodeURIComponent(`web+stomp:${HIST_2}`)}`,

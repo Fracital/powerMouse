@@ -34,6 +34,8 @@ import {
 	earlierWindows,
 	noteActivation,
 	noteBrowserNavigation,
+	reloadWindow,
+	stopWindow,
 	traverse,
 } from './history';
 import { markHostInput } from './hostActivation';
@@ -60,7 +62,8 @@ export interface ApartFrameInfo {
 	canGoForward: boolean | null;
 }
 
-export type ApartCommand = 'back' | 'forward' | 'reload' | 'typed';
+export type ApartCommand =
+	'back' | 'forward' | 'reload' | 'hardReload' | 'stop' | 'typed';
 
 type AgentBound = {
 	info: [number[], ApartFrameInfo | null];
@@ -286,11 +289,11 @@ function serve(init: ApartInit, port: MessagePort) {
 					noteBrowserNavigation(win);
 					return [true, []];
 				}
-				if (command === 'reload') {
-					noteBrowserNavigation(win);
-					win.location.reload();
+				if (command === 'reload' || command === 'hardReload') {
+					await reloadWindow(win, command === 'hardReload');
 					return [true, []];
 				}
+				if (command === 'stop') return [stopWindow(win), []];
 				return [await traverse(win, command), []];
 			},
 			activated: async ({ path, token, nested }) => {

@@ -57,6 +57,32 @@ export function tellSteps(teller: (url: string) => Promise<unknown>) {
 	stepTeller = teller;
 }
 
+/**
+ * Told the URL of a document about to be reloaded past the caches (a hard
+ * reload, Frame.reload's `bypassCache`): the controller of this realm tells
+ * its worker (`hardReload`, src/server/rewrites.ts), which gives the reload
+ * and what its document loads Chrome's LOAD_BYPASS_CACHE. No script can ask
+ * the browser for one: location.reload() is a reload that revalidates.
+ */
+let hardTeller: ((url: string) => Promise<unknown>) | null = null;
+
+/** set the realm's teller of hard reloads (one per realm: the newest controller's) */
+export function tellHardReloads(teller: (url: string) => Promise<unknown>) {
+	hardTeller = teller;
+}
+
+/**
+ * Reload `win` (a document of this realm's origin) as the browser's Reload
+ * does, past the caches when `hard`: its worker hears of it first (at most
+ * TELL_WAIT_MS), a realm without a controller reloads it as a reload
+ */
+export async function reloadWindow(win: Window, hard = false, run = 0) {
+	noteBrowserNavigation(win, run);
+	const told = hard ? hardTeller?.(win.location.href).catch(() => {}) : null;
+	if (told) await Promise.race([told, sleep(TELL_WAIT_MS)]);
+	win.location.reload();
+}
+
 export type Direction = 'back' | 'forward';
 
 type Native = (this: unknown, ...args: unknown[]) => unknown;
@@ -1063,6 +1089,30 @@ export function noteBrowserNavigation(win: Window | null | undefined, run = 0) {
 	historyOf(win, run).browserNavigation = true;
 }
 
+/**
+ * this realm's own window.stop, taken when the module loads: a [Global]
+ * interface's operations are the window's own properties, so the frame's
+ * page could have replaced its own (and would run on a Stop)
+ */
+const ownStop =
+	typeof window === 'undefined' ? undefined : (window.stop as () => void);
+
+/**
+ * Stop a frame's document loading, as its own window.stop() would (a tab's
+ * Stop): what it parsed stays, its requests in flight and a navigation it
+ * started are given up. False where this realm cannot reach the window (a
+ * document of another origin)
+ */
+export function stopWindow(win: Window | null | undefined): boolean {
+	if (!win || !ownStop) return false;
+	try {
+		Reflect.apply(ownStop, win, []);
+		return true;
+	} catch (error) {
+		return false;
+	}
+}
+
 /** what a document's client (the window's `name` global) says for its frame's history */
 export function clientView(win: Window, name: string): DocumentView | null {
 	const client = (win as unknown as Record<string, unknown>)[name] as
@@ -1136,7 +1186,9 @@ export type SiteHistoryOp =
 	| { kind: 'nested'; path: number[]; entry: ReportedEntry | null }
 	| { kind: 'activated'; token: string; nested: boolean }
 	| { kind: 'typed' }
-	| { kind: 'reload' }
+	| { kind: 'reload'; hard?: boolean }
+	/** the host's Stop (Frame.stop): the document stops loading, and the agent's worker drops a navigation to `routed` still waiting for its answer */
+	| { kind: 'stop'; routed?: string }
 	| { kind: 'back' }
 	| { kind: 'forward' }
 	| { kind: 'go'; delta: number }
@@ -1250,8 +1302,10 @@ export async function answerRun(
 				done = false;
 				break;
 			}
-			noteBrowserNavigation(win, run);
-			win.location.reload();
+			await reloadWindow(win, op.hard === true, run);
+			break;
+		case 'stop':
+			done = stopWindow(win);
 			break;
 		case 'back':
 		case 'forward':

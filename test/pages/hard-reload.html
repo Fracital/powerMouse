@@ -1,0 +1,23 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>hard reload</title>
+<!-- a document, its subresources and its frame, all kept an hour with validators: a
+reload revalidates the document alone, a hard reload fetches them all with
+no-cache (demo-keys suite; the fixture counts each file's requests and keeps
+what each asked) -->
+<link rel="stylesheet" href="hard-reload.css" />
+<script src="hard-reload.js"></script>
+<iframe src="hard-reload-frame.html"></iframe>
+<script>
+	window.__origin = performance.timeOrigin;
+	// a request after the load event: a hard reload is over by then
+	addEventListener('load', () =>
+		setTimeout(
+			() =>
+				fetch('hard-reload-late.json')
+					.then((response) => response.json())
+					.then((data) => (window.__late = data.late)),
+			300,
+		),
+	);
+</script>

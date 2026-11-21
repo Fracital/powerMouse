@@ -6,7 +6,7 @@
 // answer passes through untouched, as Chrome renders it itself.
 
 /** types Chrome downloads though they are text/* (net's kUnsupportedTextTypes) */
-const DOWNLOADED_TEXT = new Set([
+export const DOWNLOADED_TEXT = new Set([
 	'text/calendar',
 	'text/x-calendar',
 	'text/x-vcalendar',

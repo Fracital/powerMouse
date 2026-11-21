@@ -306,11 +306,48 @@ export class SiteRuns {
 		if (run && run.origin === origin) await this.#ask(run, { kind: 'typed' });
 		else this.#hostNavigation = true;
 	}
-	/** the host reloads the frame: whether the agent of its run did (null: no agent answered) */
-	async reload(): Promise<boolean | null> {
+	/** how many times the frame was stopped (stop): a step not taken before is not taken */
+	#stops = 0;
+	/** the address a step last sent the frame to (a stop of an answered one drops nothing) */
+	#sent: string | null = null;
+	/**
+	 * The host's Stop (RemoteFrame.stop): the agent of the frame's run stops
+	 * its document, and the worker of the slot the frame was sent to
+	 * (`routed`, go()'s, else a step's) drops that navigation while it
+	 * waits for its answer, through the slot's agent
+	 */
+	async stop(routed: string | null): Promise<void> {
+		this.#stops++;
+		const sent = routed ?? this.#sent;
+		this.#sent = null;
+		const run = this.#runs[this.#at];
+		const to = sent ? new URL(sent).origin : null;
+		const asked: Promise<unknown>[] = [];
+		if (run)
+			asked.push(
+				this.#ask(
+					run,
+					{ kind: 'stop', ...(sent && to === run.origin && { routed: sent }) },
+					false,
+				),
+			);
+		if (sent && to !== run?.origin)
+			asked.push(
+				this.host.ask(to!, 0, { kind: 'stop', routed: sent }).catch(() => null),
+			);
+		await Promise.all(asked);
+	}
+	/** whether a step sent the frame to `routed`, which the worker answered with no document (RemoteFrame.stayedAt) */
+	stayedAt(routed: string): boolean {
+		if (this.#sent?.split('#')[0] !== routed.split('#')[0]) return false;
+		this.#sent = null;
+		return true;
+	}
+	/** the host reloads the frame (past the caches when `hard`): whether the agent of its run did (null: no agent answered) */
+	async reload(hard = false): Promise<boolean | null> {
 		const run = this.#runs[this.#at];
 		if (!run) return null;
-		const answer = await this.#ask(run, { kind: 'reload' }, false);
+		const answer = await this.#ask(run, { kind: 'reload', hard }, false);
 		return answer ? answer.done : null;
 	}
 	/** whether the frame's history has a state Back or Forward goes to */
@@ -348,8 +385,10 @@ export class SiteRuns {
 	}
 	/** step the frame's history, within its run through the agent of its slot, else to another run */
 	async step(direction: Direction): Promise<boolean> {
+		const stops = this.#stops;
 		await this.#queue;
 		await this.#leaving;
+		if (this.#stops !== stops) return false;
 		const current = this.#runs[this.#at];
 		if (!current) return false;
 		let target = this.#target(direction);
@@ -393,7 +432,13 @@ export class SiteRuns {
 		let url = arrive?.url;
 		if (!url?.startsWith(`${to.origin}/`))
 			url = await this.host.address(to.url, to.origin);
+		// stopped meanwhile: the step is not taken
+		if (this.#stops !== stops) {
+			this.#stepping = null;
+			return false;
+		}
 		this.#touched = ++runClock;
+		this.#sent = url;
 		win.location.replace(url);
 		await reported;
 		return true;

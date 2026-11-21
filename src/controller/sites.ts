@@ -97,6 +97,8 @@ export type HubBound = {
 	blocker: [MessagePort];
 	/** a proxied request completed (the host's request log) */
 	request: [RequestInfo];
+	/** the slot's worker answered a navigation to this routed URL with no document (a 204, a download): the frame sent there stays */
+	stayed: [string];
 	/** a site asks for a permission (ControllerInit.onPermissionRequest) */
 	permission: [PermissionRequestInfo, boolean | null];
 	/** a site's passkey ceremony asks the user (ControllerInit.passkeys), with the port that says the page gave up */
@@ -172,7 +174,14 @@ export type FannedMethod =
 
 /** what the isolated RemoteController asks an agent of a frame's history (frame.ts frameCommand) */
 export type SiteHistoryCommand =
-	'back' | 'forward' | 'reload' | 'typed' | 'canBack' | 'canForward';
+	| 'back'
+	| 'forward'
+	| 'reload'
+	| 'hardReload'
+	| 'stop'
+	| 'typed'
+	| 'canBack'
+	| 'canForward';
 
 /** what a StompController running as an agent is told to do differently (ControllerInit.agent) */
 export interface SiteAgentHooks {
@@ -197,6 +206,8 @@ export interface SiteAgentHooks {
 	/** a port that asks the hub's worker's blocker, for a handshake (a slot's worker builds no engine) */
 	blocker: () => MessagePort;
 	request(info: RequestInfo): void;
+	/** HubBound.stayed */
+	stayed?(routed: string): void;
 	permission(info: PermissionRequestInfo): Promise<boolean | null>;
 	/** HubBound.passkeyFocused */
 	passkeyFocused(client: string): Promise<boolean>;
@@ -354,6 +365,8 @@ export interface HubHost {
 	/** a navigation from a slot's worker comes to the host's own worker (its slot is left out) */
 	arrive(arrival: SiteArrival): Promise<void>;
 	request(info: RequestInfo): void;
+	/** HubBound.stayed */
+	stayed(routed: string): void;
 	permission(info: PermissionRequestInfo): Promise<boolean | null>;
 	/** the host's passkeys, once its controller is ready (Config.passkeys) */
 	passkeys(): PasskeysConfig | undefined;
@@ -901,6 +914,7 @@ export class SiteHub {
 				jar: async (port) => host.jar(port),
 				blocker: async (port) => host.blocker(port),
 				request: async (info) => host.request(info),
+				stayed: async (routed) => host.stayed(routed),
 				permission: async (info) => [await host.permission(info), []],
 				passkeyPrompt: async ({ request, port }) => [
 					await host.passkeyPrompt(request, port),

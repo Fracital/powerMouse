@@ -59,6 +59,7 @@ import { IMPORT_MAP_ROUTE } from '../../sri';
 import StompURL from '../../StompURL';
 import {
 	CALLED_KEY,
+	HARD_LOADED,
 	HOOK_ERROR,
 	LOAD_HEADER,
 	OPEN_TAB,
@@ -95,6 +96,7 @@ import cloneRawNode, {
 	startedScripts,
 } from './cloneNode';
 import { activationPart, deferred, heldPart } from './deferred';
+import { heldClicks } from './heldClicks';
 import type { LegacyEncoder } from './legacyEncoding';
 import { initLoads, loadSource, type LoadSource } from './loadGrants';
 import { nativeConsoleError, type StandInEntry } from './modules/Context';
@@ -626,6 +628,26 @@ export default class DocumentClient extends Client {
 			setCacheMarkSource(() => this.cacheMark);
 		}
 		this.#setTimeout = this.global.setTimeout;
+		// a hard reload's document: once its load event is over (every
+		// listener of the page had it) its loads take the caches again. On
+		// the window, again after each document.open() (loadHTML's first)
+		if (init.hardLoad) {
+			const setTimeout = this.#setTimeout;
+			let told = false;
+			const ended = () => {
+				if (told) return;
+				told = true;
+				this.postToWorker({ [HARD_LOADED]: true });
+			};
+			const listen = () =>
+				this.global.addEventListener(
+					'load',
+					() => Reflect.apply(setTimeout, this.global, [ended, 0]),
+					{ once: true },
+				);
+			listen();
+			addDocumentOpenListener(this.global, listen);
+		}
 		this.#requestFrame = this.global.requestAnimationFrame;
 		this.#queueMicrotask = this.global.queueMicrotask;
 		this.#MutationObserver = this.global.MutationObserver;
@@ -3169,6 +3191,7 @@ export default class DocumentClient extends Client {
 			isTop: !nested,
 			nested,
 			kind: 'document',
+			holdDefault: (event, then) => heldClicks(this).hold(event, then),
 		};
 	}
 	protected override reportHookError(info: HookErrorInfo): void {

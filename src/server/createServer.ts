@@ -81,6 +81,8 @@ export interface StompServer {
 	hostReloaded(mode: HostReload): void;
 	/** the next navigation to this routed URL is a history step (rewrites.ts historySteps) */
 	historyStepped(url: string): void;
+	/** the next navigation to this routed URL is a hard reload (rewrites.ts hardReloads) */
+	hardReloaded(url: string): void;
 	/** the cookie jar, for the host's cookies API */
 	cookies: Cookies;
 	/**
@@ -611,7 +613,7 @@ export default async function createServer(
 	// a dedicated worker's requests are its document's tab's
 	dnr.ownerOf = dedicatedOwnerOf;
 	extensionRegistry.attachDnr(dnr);
-	const { route, setRules, hostReloaded, historyStepped } = registerRewrites(
+	const { route, setRules, ...told } = registerRewrites(
 		router,
 		init,
 		cookies,
@@ -687,8 +689,8 @@ export default async function createServer(
 			await renewCacheSecret();
 		},
 		setRules,
-		hostReloaded,
-		historyStepped,
+		// (the controller's word of reloads and history steps)
+		...told,
 		realURL,
 		codec: init.codec,
 		routeOf: (routed) => {

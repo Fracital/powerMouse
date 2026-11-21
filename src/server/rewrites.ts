@@ -73,6 +73,7 @@ import {
 	upgradedURL,
 	upgradesInsecureRequests,
 } from '../mixedContent';
+import { navigationAnswer } from '../navigationAnswer';
 import {
 	ephemeralKey,
 	kindPartition,
@@ -177,6 +178,7 @@ import {
 	LOAD_HEADER,
 	MARKUP_ROUTE,
 	MEMORY_MARKER,
+	NAVIGATION_STAYED,
 	OPAQUE_COPY_HEADER,
 	OPAQUE_HEADER,
 	OPAQUE_MARKER,
@@ -1199,6 +1201,8 @@ interface Note {
 	rewriteBy?: 'wasm' | 'js';
 	/** how many bytes the origin's body was, when the transform read it (SIZE_MARKER) */
 	bytes?: number;
+	/** the document is a hard reload's (hardLoads): its shell says so (Config hardLoad) */
+	hardLoad?: boolean;
 	/**
 	 * how many bytes the origin's body came as before the transport decoded
 	 * its Content-Encoding, once the body has ended (responseFacts.ts)
@@ -1242,11 +1246,16 @@ interface Rewriter {
 	storage?: StorageHosts;
 	/**
 	 * the host page was reloaded (src/controller/hostReload.ts): the cache
-	 * mode the pages it restores take, until when a navigation counts as
-	 * one, and the documents a hard reload made (by client id, with when
-	 * each stops loading past the caches)
+	 * mode the pages it restores take, and until when a navigation counts
+	 * as one
 	 */
-	hostReload?: { mode: HostReload; until: number; loads: Map<string, number> };
+	hostReload?: { mode: HostReload; until: number };
+	/**
+	 * the routed URLs (no fragment) of documents a frame reloads past the
+	 * caches (Frame.reload's `bypassCache`), with until when each counts:
+	 * the next navigation to one is that hard reload
+	 */
+	hardReloads?: Map<string, number>;
 	/**
 	 * the routed URLs (no fragment) of history steps the controller takes
 	 * with location.replace (src/controller/history.ts), with until when
@@ -1286,10 +1295,39 @@ const RESTORE_WINDOW_MS = 10_000;
 /** how long after the controller's word a navigation to its URL is the history step it told of */
 const HISTORY_STEP_MS = 10_000;
 /**
- * how long what a hard-reloaded document loads goes past the caches
- * (natively until its load event, which the worker does not hear of)
+ * how long what a hard-reloaded document loads goes past the caches at
+ * most: natively until its load event is over, which the document tells
+ * (HARD_LOADED, hardLoadEnded); this bounds a document that never says
  */
 const HARD_LOAD_MS = 30_000;
+
+/**
+ * The documents a hard reload made (the host's restored page, a frame's
+ * document, the frames each made as it loaded), by client id: their routed
+ * URL (no fragment), and until when each loads past the caches
+ */
+const hardLoads = new Map<string, { url: string; until: number }>();
+
+/** `client`, a document at `url` a hard reload made, loads past the caches from `now` on */
+function hardLoad(client: string, url: string, now: number) {
+	for (const [kept, load] of hardLoads)
+		if (load.until <= now) hardLoads.delete(kept);
+	hardLoads.set(client, { url: url.split('#')[0], until: now + HARD_LOAD_MS });
+}
+
+/** the load event of `client`, a document a hard reload made, is over: what it loads from now on takes the caches */
+export function hardLoadEnded(client: string) {
+	hardLoads.delete(client);
+}
+
+/** whether a frame's document at `referrer` is still loading as a hard reload's */
+function hardLoading(referrer: string, now: number) {
+	if (!referrer) return false;
+	const url = referrer.split('#')[0];
+	for (const load of hardLoads.values())
+		if (load.url === url && load.until > now) return true;
+	return false;
+}
 
 /** an extension cancelled the request: to the page a network error, as Chrome's ERR_BLOCKED_BY_CLIENT */
 function extensionRefusal(): Error {
@@ -1383,6 +1421,70 @@ const requestAborts = new WeakMap<Request, () => void>();
 /** the page posted that it aborted the request with this id */
 export function abortRequest(id: unknown) {
 	if (typeof id === 'string') pendingAborts.get(id)?.();
+}
+
+/**
+ * navigations waiting for their answer, by the routed URL the browser asked
+ * for (no fragment): how to stop each, for the host's Stop (stopNavigation)
+ */
+const navigationStops = new Map<string, Set<() => void>>();
+/** a routed URL as a navigation's request names it: without its fragment */
+const withoutFragment = (url: string) => {
+	const hash = url.indexOf('#');
+	return hash === -1 ? url : url.slice(0, hash);
+};
+/**
+ * stops that came before their navigation's request did, by routed URL:
+ * until when the request is answered with a 204 without being made
+ */
+const earlyStops = new Map<string, number>();
+/** how long a stop waits for its navigation's request (the frame's src was set a moment before; EARLY_STOP_MS in src/controller/index.ts) */
+const EARLY_STOP_MS = 2000;
+/**
+ * The host stopped the frame it sent to `routed` (Frame.stop): a navigation
+ * to it still waiting for its answer is given up, and answered with a 204,
+ * for which the browser commits nothing (the frame keeps the document it
+ * has, as after Chrome's Stop). One answered already is the document's
+ * load, which the frame's own stop ends. `early`: the browser goes on with
+ * the navigation whatever the frame's document does (the host set the src
+ * of a frame of another origin), so one whose request has not come yet is
+ * answered so when it comes, within EARLY_STOP_MS
+ */
+export function stopNavigation(routed: unknown, early = false) {
+	if (typeof routed !== 'string') return;
+	const url = withoutFragment(routed);
+	const stops = navigationStops.get(url);
+	if (stops) for (const stop of [...stops]) stop();
+	else if (early) earlyStops.set(url, Date.now() + EARLY_STOP_MS);
+}
+/** the host sends a frame to `routed` again: an early stop of it is over */
+export function navigationSent(routed: unknown) {
+	if (typeof routed === 'string') earlyStops.delete(withoutFragment(routed));
+}
+
+/**
+ * the document that told the worker it starts a navigation (its hint), by
+ * the navigation's request: the one the frame leaves, told when the answer
+ * leaves it where it is (NAVIGATION_STAYED)
+ */
+const leavingClients = new WeakMap<Request, string>();
+/** who hears of a navigation answered with no document (the worker's controllers: setNavigationStayed) */
+let navigationStayedListener: ((routed: string) => void) | null = null;
+/** what the worker does with a navigation answered with no document (src/server/serviceWorker.ts) */
+export function setNavigationStayed(listener: (routed: string) => void) {
+	navigationStayedListener = listener;
+}
+/**
+ * A navigation to `routed` was answered with no document (a 204, a
+ * download: navigationAnswer), so the browser commits none and the frame's
+ * load is over: the host hears of it (a frame it sent there, Frame's
+ * `stayed`), and so does the document that started it, which tells its
+ * host the same
+ */
+function navigationStayed(request: Request) {
+	navigationStayedListener?.(request.url);
+	const leaving = leavingClients.get(request);
+	if (leaving) tellLoadClient(leaving, NAVIGATION_STAYED);
 }
 
 /** this worker's names for its requests in the transport's queue (REQUEST_QUEUE) */
@@ -2203,6 +2305,9 @@ function genericForward(
 					url.url.href,
 					rewriter.config.navigationHintWait ?? NAVIGATION_HINT_WAIT_MS,
 				);
+			// (the document that leaves, when it is the one navigating)
+			if (hint?.client && hint.own && !hint.opens && !hint.framing)
+				leavingClients.set(serverRequest, hint.client);
 		}
 		const hinted =
 			initiated && initiated.origin !== 'null'
@@ -3648,19 +3753,56 @@ function genericForward(
 		// navigation, which takes the reload's mode: `no-cache` for the
 		// document after a reload, `reload` for the document and what it
 		// loads after a hard one, as natively.
+		const now = Date.now();
+		// (a document a hard reload makes: hardLoads)
+		let hardLoaded = false;
 		const restored = rewriter.hostReload;
-		if (restored && cacheMode === 'default') {
-			const now = Date.now();
-			if (navigation && topLevel && now < restored.until) {
-				cacheMode = shape.cache = restored.mode;
-				if (restored.mode === 'reload' && context?.clientId)
-					restored.loads.set(context.clientId, now + HARD_LOAD_MS);
-			} else if (
-				!navigation &&
-				context?.clientId &&
-				(restored.loads.get(context.clientId) ?? 0) > now
-			)
-				cacheMode = shape.cache = 'reload';
+		if (
+			restored &&
+			cacheMode === 'default' &&
+			navigation &&
+			topLevel &&
+			now < restored.until
+		) {
+			cacheMode = shape.cache = restored.mode;
+			hardLoaded = restored.mode === 'reload';
+		}
+		// A frame's document reloaded past the caches (Frame.reload's
+		// `bypassCache`, the controller's word): Chrome's LOAD_BYPASS_CACHE.
+		// The reload asks for the document with no-cache and Pragma, and so
+		// does every request of the document it makes until it loaded
+		if (
+			navigation &&
+			rewriter.hardReloads &&
+			(cacheMode === 'default' || cacheMode === 'no-cache')
+		) {
+			const reloaded = serverRequest.url.split('#')[0];
+			const until = rewriter.hardReloads.get(reloaded);
+			if (until !== undefined) {
+				rewriter.hardReloads.delete(reloaded);
+				if (until > now) {
+					cacheMode = shape.cache = 'reload';
+					hardLoaded = true;
+				}
+			}
+		}
+		// and so does a frame such a document makes before its load event,
+		// which comes from it (its Referer in the proxy's address space)
+		if (
+			navigation &&
+			!topLevel &&
+			cacheMode === 'default' &&
+			hardLoading(serverRequest.referrer, now)
+		) {
+			cacheMode = shape.cache = 'reload';
+			hardLoaded = true;
+		}
+		if (hardLoaded && context?.clientId)
+			hardLoad(context.clientId, serverRequest.url, now);
+		if (!navigation && cacheMode === 'default' && context?.clientId) {
+			const load = hardLoads.get(context.clientId);
+			if (load && load.until > now) cacheMode = shape.cache = 'reload';
+			else if (load) hardLoads.delete(context.clientId);
 		}
 		// `force-cache` and `only-if-cached` take an entry however stale; a
 		// navigation that asks for the latter (history, to a form's result)
@@ -4555,6 +4697,8 @@ function genericForward(
 		// the registration that controls the document this navigation makes:
 		// its shell says so before the page's first script
 		const note: Note = control ? { serviceWorker: control } : {};
+		// a document a hard reload made says when its load event is over
+		if (hardLoaded) note.hardLoad = true;
 		// what the transport said of the origin's answer, when the network
 		// gave it (responseFacts.ts; the cast: the compiler does not follow
 		// fetchUpstream's assignment)
@@ -5490,14 +5634,58 @@ function genericForward(
 		const release = client
 			? holdRequest(client, () => requestAborts.get(serverRequest)?.())
 			: undefined;
+		// a navigation the host may stop while it waits for its answer
+		// (stopNavigation): given up as the page's abort is, answered with
+		// no content
+		let stopped = false;
+		const navigation =
+			serverRequest.mode === 'navigate'
+				? withoutFragment(serverRequest.url)
+				: '';
+		const stop = () => {
+			stopped = true;
+			requestAborts.get(serverRequest)?.();
+		};
+		if (navigation) {
+			const until = earlyStops.get(navigation);
+			if (until !== undefined) {
+				earlyStops.delete(navigation);
+				if (Date.now() < until) {
+					release?.();
+					clearTimeout(timer);
+					return new Response(null, { status: 204 });
+				}
+			}
+			let stops = navigationStops.get(navigation);
+			if (!stops) navigationStops.set(navigation, (stops = new Set()));
+			stops.add(stop);
+		}
 		try {
 			const answer = await forward(serverRequest, resolved, context);
+			if (stopped) {
+				answer.body?.cancel().catch(() => {});
+				return new Response(null, { status: 204 });
+			}
+			if (
+				navigation &&
+				!timedOut &&
+				navigationAnswer(
+					answer.status,
+					answer.headers.get('content-type'),
+					answer.headers.get('content-disposition'),
+				)
+			)
+				navigationStayed(serverRequest);
 			if (!timedOut) return answer;
 			answer.body?.cancel().catch(() => {});
 			return timedOutAnswer();
 		} catch (error) {
 			if (error === ABORTED)
-				return timedOut ? timedOutAnswer() : Response.error();
+				return stopped
+					? new Response(null, { status: 204 })
+					: timedOut
+						? timedOutAnswer()
+						: Response.error();
 			if (
 				!DOCUMENT_DESTINATIONS.has(serverRequest.destination) ||
 				!(error instanceof Error) ||
@@ -5552,6 +5740,11 @@ function genericForward(
 			clearTimeout(timer);
 			release?.();
 			if (abortId) pendingAborts.delete(abortId);
+			if (navigation) {
+				const stops = navigationStops.get(navigation);
+				stops?.delete(stop);
+				if (stops?.size === 0) navigationStops.delete(navigation);
+			}
 		}
 	};
 }
@@ -8385,6 +8578,7 @@ export function registerRewrites(
 					fingerprintOn ||
 					fingerprintSeed !== undefined ||
 					note.apart ||
+					note.hardLoad ||
 					seed
 						? {
 								...rewriter.config,
@@ -8393,6 +8587,7 @@ export function registerRewrites(
 								...(fingerprintSeed !== undefined ? { fingerprintSeed } : {}),
 								...(note.apart ? { isolated: true } : {}),
 								...(seed ? { syncSeed: seed } : {}),
+								...(note.hardLoad ? { hardLoad: true } : {}),
 							}
 						: rewriter.config;
 				const extensionShell: ExtensionShell | null =
@@ -8922,11 +9117,14 @@ export function registerRewrites(
 			forgetRecentOutputs();
 		},
 		hostReloaded(mode: HostReload) {
-			rewriter.hostReload = {
-				mode,
-				until: Date.now() + RESTORE_WINDOW_MS,
-				loads: new Map(),
-			};
+			rewriter.hostReload = { mode, until: Date.now() + RESTORE_WINDOW_MS };
+		},
+		hardReloaded(url: string) {
+			const reloads = (rewriter.hardReloads ??= new Map());
+			const now = Date.now();
+			for (const [kept, until] of reloads)
+				if (until <= now) reloads.delete(kept);
+			reloads.set(url.split('#')[0], now + HISTORY_STEP_MS);
 		},
 		historyStepped(url: string) {
 			const steps = (rewriter.historySteps ??= new Map());
