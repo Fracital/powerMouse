@@ -651,6 +651,52 @@ else {
 	if (saved) {
 		const offline = await firefox.newTab();
 		const from = firefox.logs.length;
+		const since = Date.now();
+		// every load the file leaves to the browser that names a file: URL
+		// (a worker, a shared worker, a fetch): the page answers each of its
+		// own from the copies it carries, and anything else on file: is a
+		// path of the proxy's that no copy answered (file:///stomp/...),
+		// which Firefox refuses with a Security Error and Chrome with a
+		// SecurityError. Run before the file's scripts, so its own captures
+		// of these globals are these.
+		await firefox.send('script.addPreloadScript', {
+			contexts: [offline.context],
+			functionDeclaration: String(() => {
+				const seen = [];
+				Object.defineProperty(window, '__pmFileLoads', { value: seen });
+				const fileURL = (input) => {
+					try {
+						const url = new URL(
+							input instanceof Request ? input.url : String(input),
+							document.baseURI,
+						);
+						return url.protocol === 'file:' &&
+							url.href.split('#')[0] !== location.href.split('#')[0]
+							? url.href
+							: null;
+					} catch {
+						return null;
+					}
+				};
+				for (const name of ['Worker', 'SharedWorker']) {
+					const Native = window[name];
+					if (!Native) continue;
+					window[name] = new Proxy(Native, {
+						construct(target, args, newTarget) {
+							const url = fileURL(args[0]);
+							if (url) seen.push(`${name} ${url}`);
+							return Reflect.construct(target, args, newTarget);
+						},
+					});
+				}
+				const nativeFetch = window.fetch;
+				window.fetch = function fetch(input, init) {
+					const url = fileURL(input);
+					if (url) seen.push(`fetch ${url}`);
+					return Reflect.apply(nativeFetch, this, [input, init]);
+				};
+			}),
+		});
 		await offline.go(pathToFileURL(`${firefox.downloads}/${saved}`).href);
 		const status = await offline.until(
 			() => {
@@ -703,6 +749,24 @@ else {
 				short(found?.value?.cookie),
 			);
 		}
+		const fileLoads = await offline
+			.eval(() => window.__pmFileLoads ?? null)
+			.catch((error) => [`unread: ${error.message}`]);
+		ok(
+			'offline.html: no load of its own goes to the browser on file:',
+			Array.isArray(fileLoads) && !fileLoads.length,
+			short(fileLoads, 2000),
+		);
+		const security = (await firefox.platformMessages(since)).filter(
+			(message) =>
+				/security/i.test(message.category) ||
+				/^Security Error|may not load data from/.test(message.text),
+		);
+		ok(
+			'offline.html: no Security Error',
+			!security.length,
+			short(security, 2000),
+		);
 		await shot(offline, 'offline');
 		await offline.close();
 	}

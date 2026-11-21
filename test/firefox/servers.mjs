@@ -1,7 +1,8 @@
 // A demo server and a fixture site on free ports for test/firefox/, as
 // test/run.mjs starts them for a Chrome suite (its own holyWisp child, which
 // exits with it; loopback allowed for the fixture; the content blocker's
-// list servers refused and its list the fixture's; no default theme).
+// list servers refused and its list the fixture's; no default theme;
+// classic tabs).
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { fileURLToPath } from 'node:url';
@@ -60,6 +61,9 @@ export async function startServers({ env: extra = {}, slots = 4 } = {}) {
 		STOMP_DEFAULT_THEMES: '0',
 		STOMP_SITE_POOL: '0',
 		STOMP_SLOT_PORTS: contentPorts.length ? contentPorts.join(',') : '0',
+		// classic tabs, as test/run.mjs runs every suite but the demo's own:
+		// the dialing checks ask for it with ?mode=just-call-stomp
+		STOMP_DIALING: '0',
 		...(typeof extra === 'function' ? extra(port) : extra),
 	};
 	const asked = typeof extra === 'function' ? extra(port) : extra;

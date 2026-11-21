@@ -85,6 +85,11 @@ const FILES = [
 	['/stomp/core.wasm', join(dist, 'core.wasm')],
 	['/stomp/codec.wasm', join(dist, 'codec.wasm')],
 	['/stomp/extensionsRuntime.js', join(dist, 'extensionsRuntime.js')],
+	// the transport runs in the page here, but the controller's clock still
+	// starts from this script (src/controller/index.ts #startClock): with no
+	// copy the page left its URL, file:///stomp/transportWorker.js, to the
+	// browser, which refuses it (Firefox with a Security Error)
+	['/stomp/transportWorker.js', join(dist, 'transportWorker.js')],
 	...(adblock
 		? [
 				['/stomp/blocker.wasm', join(dist, 'blocker.wasm')],

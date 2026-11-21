@@ -101,7 +101,13 @@ export async function launchFirefox({ prefs = {}, onLog } = {}) {
 		],
 		{
 			stdio: ['ignore', 'ignore', 'pipe'],
-			env: { ...process.env, MOZ_CRASHREPORTER_DISABLE: '1' },
+			env: {
+				...process.env,
+				MOZ_CRASHREPORTER_DISABLE: '1',
+				// the parent's chrome context, where platformMessages() reads
+				// what the console service has heard
+				MOZ_REMOTE_ALLOW_SYSTEM_ACCESS: '1',
+			},
 		},
 	);
 	let stderr = '';
@@ -374,10 +380,30 @@ export async function launchFirefox({ prefs = {}, onLog } = {}) {
 		return tab;
 	};
 
+	/**
+	 * What the console service has heard about content since `since` (ms
+	 * since the epoch), read in the parent's chrome context: the platform's
+	 * own messages too (a Security Error, a blocked load), which a page's
+	 * console API and errors in log.entryAdded need not include. `{ category, error, text, source }` each.
+	 */
+	const platformMessages = async (since = 0) => {
+		const tree = await send('browsingContext.getTree', {
+			'moz:scope': 'chrome',
+			maxDepth: 0,
+		});
+		const answer = await send('script.evaluate', {
+			expression: `JSON.stringify(Services.console.getMessageArray().filter((m) => m instanceof Ci.nsIScriptError && !m.isFromChromeContext && m.timeStamp >= ${Number(since)}).map((m) => ({ category: m.category, error: !(m.flags & (Ci.nsIScriptError.warningFlag | Ci.nsIScriptError.infoFlag)), text: m.errorMessage, source: m.sourceName })))`,
+			target: { context: tree.contexts[0].context },
+			awaitPromise: false,
+		});
+		return JSON.parse(answer.result?.value ?? '[]');
+	};
+
 	return {
 		send,
 		on,
 		logs,
+		platformMessages,
 		profile,
 		downloads,
 		session,
