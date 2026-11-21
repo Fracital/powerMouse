@@ -662,6 +662,20 @@ export default class Client {
 		// this client's own window, not the bundle's: a popup or frame the
 		// opener injected (about:blank) runs the opener's bundle
 		const location = this.global.location;
+		// offline.html's worker of a route runs from a blob: URL of its
+		// host's, which names the route instead (demo/offline/host.mjs
+		// pageWorkers): the browser loads no file:// route
+		if (
+			!this.isDOM &&
+			this.fileRoutes &&
+			typeof named === 'string' &&
+			named.startsWith('file:')
+		)
+			return parseRoutedURL(
+				named,
+				this.codec,
+				`${this.originOf(location)}${this.directory}`,
+			).url;
 		if (ROUTE_PROTOCOLS.includes(location.protocol)) {
 			// a link's route (src/visited.ts) is this document's address only
 			// while its history entry is being made (the History module): the

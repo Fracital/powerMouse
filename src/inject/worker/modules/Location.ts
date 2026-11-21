@@ -43,7 +43,12 @@ export default class WorkerLocationModule extends Module<WorkerClient> {
 		const spoofed = (): URL => {
 			const real = String(Reflect.apply(nativeHref, nativeLocation, []));
 			const page = client.url.url;
-			if (real.startsWith('blob:')) {
+			// (offline.html's worker of a route runs from a blob: URL that
+			// names the route: Client.ts #decodeLocation)
+			if (
+				real.startsWith('blob:') &&
+				!(client.fileRoutes && client.namedBase?.startsWith('file:'))
+			) {
 				const slash = real.lastIndexOf('/');
 				return new URL(`blob:${page.origin}${real.slice(slash)}`);
 			}

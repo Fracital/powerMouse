@@ -81,6 +81,8 @@ const located = (path) => (text) => {
 const FILES = [
 	['/stomp/serviceWorker.js', join(dist, 'serviceWorker.js')],
 	['/stomp/injectDocument.js', join(dist, 'injectDocument.js')],
+	// a page's worker imports it (demo/offline/host.mjs pageWorkers)
+	['/stomp/injectWorker.js', join(dist, 'injectWorker.js')],
 	['/stomp/rewriterLib.js', join(dist, 'rewriterLib.js')],
 	['/stomp/core.wasm', join(dist, 'core.wasm')],
 	['/stomp/codec.wasm', join(dist, 'codec.wasm')],

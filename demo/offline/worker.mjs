@@ -160,7 +160,11 @@ self.fetch = function fetch(input, init) {
 	} catch {
 		return nativeFetch(input, init);
 	}
-	if (url.origin !== origin) return nativeFetch(input, init);
+	// (a blob: URL of this origin is one the browser holds or fails, as a
+	// service worker's read of one a realm minted fails: rewrites.ts
+	// handedBlobs)
+	if (url.origin !== origin || url.protocol === 'blob:')
+		return nativeFetch(input, init);
 	const id = ++asked;
 	return new Promise((resolve, reject) => {
 		assets.set(id, { resolve, reject });

@@ -1221,6 +1221,290 @@ async function calledFetch(request, init, client, win) {
 	return copy;
 }
 
+// A worker the page starts in a called document (dialing): no worker
+// controls it either, and on file: it can load nothing of the scope's. It
+// starts from a prelude of this page's, which is told the copies of the
+// scripts its bootstrap imports (the inject's bundle, the page's script as
+// the worker rewrote it) and a port its routed fetches go over, then
+// imports the bootstrap; the messages the page posts it meanwhile are
+// posted once it says it is ready, so its own listeners hear them.
+
+/** the key of the prelude's messages */
+const WORKER_KEY = '__pmOfflineWorker';
+const WORKER_PRELUDE = `(() => {
+	const key = ${JSON.stringify(WORKER_KEY)};
+	const nativeImport = self.importScripts;
+	const nativeFetch = self.fetch;
+	const listen = (event) => {
+		const told = event.data && event.data[key];
+		if (!told || typeof told !== 'object') return;
+		event.stopImmediatePropagation();
+		removeEventListener('message', listen);
+		const { copies, routes } = told;
+		// a worker of a route is at it, as natively, not at the prelude's
+		// blob: URL: the inject decodes the page's URL from it
+		// (src/inject/Client.ts takeNamedBase)
+		if (told.location) self[${JSON.stringify(WORKER_BASE)}] = told.location;
+		// (minted here: a worker of an opaque origin loads no blob: URL
+		// another realm minted, not even its creator's)
+		const own = (blob) =>
+			typeof blob === 'string' ? blob : URL.createObjectURL(blob);
+		for (const url of Object.keys(copies)) copies[url] = own(copies[url]);
+		const script = own(told.script);
+		const port = event.ports[0];
+		const waiting = new Map();
+		let asked = 0;
+		port.onmessage = ({ data }) => {
+			const wait = waiting.get(data.id);
+			waiting.delete(data.id);
+			if (!wait) return;
+			if (data.error) wait.reject(new TypeError('Failed to fetch'));
+			else
+				wait.resolve(
+					new Response(data.body, {
+						status: data.status,
+						statusText: data.statusText,
+						headers: data.headers,
+					}),
+				);
+		};
+		self.importScripts = function importScripts(...urls) {
+			return Reflect.apply(
+				nativeImport,
+				self,
+				urls.map((url) => copies[String(url)] || url),
+			);
+		};
+		self.fetch = function fetch(input, init) {
+			let request;
+			try {
+				request = new Request(input, init);
+			} catch (error) {
+				return Promise.reject(error);
+			}
+			if (!request.url.startsWith(routes))
+				return Reflect.apply(nativeFetch, self, [input, init]);
+			const id = ++asked;
+			const body =
+				request.method === 'GET' || request.method === 'HEAD'
+					? Promise.resolve(null)
+					: request.arrayBuffer();
+			return body.then(
+				(body) =>
+					new Promise((resolve, reject) => {
+						waiting.set(id, { resolve, reject });
+						port.postMessage({
+							id,
+							url: request.url,
+							method: request.method,
+							headers: [...request.headers],
+							body,
+							mode: request.mode,
+							credentials: request.credentials,
+							cache: request.cache,
+							redirect: request.redirect,
+							referrer: request.referrer,
+							referrerPolicy: request.referrerPolicy,
+						});
+					}),
+			);
+		};
+		Reflect.apply(nativeImport, self, [script]);
+		postMessage({ [key]: 'ready' });
+	};
+	addEventListener('message', listen);
+})();`;
+const removeListener = EventTarget.prototype.removeEventListener;
+
+/**
+ * The bytes of the page's script behind a private blob: URL a route names
+ * (src/server/rewrites.ts BLOB_ROUTE, its uuid), handed to the worker as a
+ * realm of the page's origin hands them where the worker cannot read them
+ * (blob~bytes): no inject hands them from a document no worker controls,
+ * and the emulated worker reads no blob: URL a frame minted. The private
+ * URL is of the bootstrap's minter, as `bootstrap` is; the realm that hands
+ * them is a client at the route, whose page URL is the page's blob: URL.
+ */
+async function handBlob(route, bootstrap) {
+	const uuid = /\/blob~(?:js|wjs|module|css)~([\da-f-]{36})\//.exec(route)?.[1];
+	if (!uuid || !bootstrap.startsWith('blob:')) return;
+	try {
+		const blob = await (
+			await nativeFetch(
+				`${bootstrap.slice(0, bootstrap.lastIndexOf('/') + 1)}${uuid}`,
+			)
+		).blob();
+		const client = nextClient();
+		emulated.client({ id: client, url: route, type: 'worker' });
+		await workerFetch(
+			new Request(
+				`${route.slice(0, route.indexOf('/blob~') + 1)}blob~bytes/${uuid}`,
+				{
+					method: 'POST',
+					body: blob,
+					headers: { 'content-type': blob.type },
+				},
+			),
+			client,
+		).catch(() => {});
+		emulated.client({ id: client, gone: true });
+	} catch {
+		// (revoked: the import fails, as natively)
+	}
+}
+
+/** the copy of the script at `url` (a route, or a blob: the inject made), with every route it names */
+async function workerCopies(url, client, creator) {
+	const routes = `${OWN}${scope}`;
+	const copies = {};
+	const fetchRoute = async (route, destination) => {
+		const file = fileOf(localPath(route));
+		if (file) return file.blob;
+		const response = await workerFetch(new Request(route), client, globalThis, {
+			mode: 'no-cors',
+			destination,
+		});
+		return new Blob([await response.arrayBuffer()], {
+			type: 'text/javascript',
+		});
+	};
+	const own = url.startsWith(routes);
+	const text = own
+		? await // (the worker's script is its creator's request)
+			(
+				await workerFetch(new Request(url), creator, globalThis, {
+					mode: 'same-origin',
+					destination: 'worker',
+				})
+			).text()
+		: await (await nativeFetch(url)).text();
+	const named = new RegExp(
+		`${routes.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}[^"'\`\\s\\\\)]+`,
+		'g',
+	);
+	await Promise.all(
+		// (a prefix the bootstrap names, or a load that fails, is left to
+		// fail as the worker's own import)
+		[...new Set(text.match(named) ?? [])].map(async (route) => {
+			await handBlob(route, url);
+			copies[route] = await fetchRoute(route, 'script').catch(() => route);
+		}),
+	);
+	const script = new Blob([text], { type: 'text/javascript' });
+	return { copies, script, routes, location: own ? url : null };
+}
+
+/** `win`'s Worker: a classic worker starts from the prelude (see above) */
+function pageWorkers(win, page, creator) {
+	const Native = win.Worker;
+	if (typeof Native !== 'function') return;
+	const post = Native.prototype.postMessage;
+	const starting = new WeakMap();
+	// (the frame's own, taken before the inject hooks it)
+	const createObjectURL = win.URL.createObjectURL;
+	const mint = (blob) => Reflect.apply(createObjectURL, win.URL, [blob]);
+	let preludeURL = null;
+	Object.defineProperty(Native.prototype, 'postMessage', {
+		value: function postMessage(...args) {
+			const queue = starting.get(this);
+			if (!queue) return Reflect.apply(post, this, args);
+			queue.push(args);
+		},
+		configurable: true,
+		writable: true,
+	});
+	win.Worker = new Proxy(Native, {
+		construct(target, [url, options], newTarget) {
+			if (options?.type === 'module')
+				return Reflect.construct(target, [url, options], newTarget);
+			preludeURL ??= mint(
+				new Blob([WORKER_PRELUDE], { type: 'text/javascript' }),
+			);
+			const worker = Reflect.construct(
+				target,
+				[preludeURL, options],
+				newTarget,
+			);
+			const queue = [];
+			starting.set(worker, queue);
+			const ready = (event) => {
+				if (event.data?.[WORKER_KEY] !== 'ready') return;
+				event.stopImmediatePropagation();
+				removeListener.call(worker, 'message', ready);
+				starting.delete(worker);
+				for (const args of queue) Reflect.apply(post, worker, args);
+			};
+			addListener.call(worker, 'message', ready);
+			// (a route the inject made is of the scope's origin, maybe by
+			// its path alone; the worker's client is at it, as natively)
+			const script = new URL(String(url), `${OWN}${scope}`).href;
+			const client = nextClient();
+			emulated.client({
+				id: client,
+				url: script.startsWith('blob:') ? page : script,
+				type: 'worker',
+			});
+			(async () => {
+				const told = await workerCopies(script, client, creator);
+				const channel = new MessageChannel();
+				channel.port1.onmessage = async ({ data }) => {
+					try {
+						const response = await workerFetch(
+							new Request(data.url, {
+								method: data.method,
+								headers: data.headers,
+								body: data.body,
+								credentials: data.credentials,
+								cache: data.cache,
+								redirect: data.redirect,
+								...(['cors', 'no-cors', 'same-origin'].includes(data.mode) && {
+									mode: data.mode,
+								}),
+							}),
+							client,
+							globalThis,
+							{
+								// (the worker's own address is the route, not the
+								// prelude's blob: URL its Request read)
+								referrer:
+									data.referrer &&
+									data.referrer !== 'about:client' &&
+									!data.referrer.startsWith('blob:')
+										? data.referrer
+										: script.startsWith('blob:')
+											? ''
+											: script,
+								referrerPolicy: data.referrerPolicy,
+							},
+						);
+						const body = await response.arrayBuffer();
+						channel.port1.postMessage(
+							{
+								id: data.id,
+								status: response.status,
+								statusText: response.statusText,
+								headers: [...response.headers],
+								body,
+							},
+							[body],
+						);
+					} catch {
+						channel.port1.postMessage({ id: data.id, error: true });
+					}
+				};
+				Reflect.apply(post, worker, [{ [WORKER_KEY]: told }, [channel.port2]]);
+			})().catch((error) =>
+				console.error(
+					'offline.html: a worker could not start',
+					String(url),
+					error,
+				),
+			);
+			return worker;
+		},
+	});
+}
+
 /** a call page's window, from its first script: see the section's head */
 function primeCall(win) {
 	const element = win.frameElement;
@@ -1245,6 +1529,7 @@ function primeCall(win) {
 			? calledFetch(request, init, client, win)
 			: null,
 	);
+	pageWorkers(win, page, client);
 	const watch = dialable(win);
 	// (the call page's own load, then the written document's)
 	let loads = 0;

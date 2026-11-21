@@ -9,7 +9,8 @@
 // through the wisp server. A site's own features (test/pages/offline-sites.html:
 // suggestions for what is typed by fetch and XMLHttpRequest, localStorage,
 // sessionStorage, pushState and Back, a frame of its own, a WebSocket to the
-// fixture's echo) give the same report offline as on the served demo.
+// fixture's echo, a worker of its script and one of a blob: URL) give the
+// same report offline as on the served demo.
 //
 // The demo server serves the file and its SHA-256 at /offline.html, and the
 // home page's Download, left of Fork us on GitHub, saves it with the page's
@@ -327,8 +328,8 @@ if (frame) {
 
 // ---- what a site does, offline as on the served demo: suggestions for
 // what is typed by fetch and XMLHttpRequest, localStorage and
-// sessionStorage, pushState and Back, a frame of its own and a WebSocket
-// (test/pages/offline-sites.html)
+// sessionStorage, pushState and Back, a frame of its own, a WebSocket and
+// two workers (test/pages/offline-sites.html)
 const SITE = `${FIXTURE}pages/offline-sites.html`;
 async function siteReport(on, any) {
 	await submitLanding(on, SITE);
@@ -366,6 +367,8 @@ const SITE_REPORT = {
 		'Offline sites',
 	],
 	webSocket: ['/ws-echo', true],
+	worker: ['hello', 4, '/pages/offline-sites-worker.js'],
+	blobWorker: 42,
 	suggested: ['weather 0', 'weather in paris 1', 'web 2'],
 };
 const offlineSite = await siteReport(page, false);
@@ -373,7 +376,7 @@ const servedDemo = await openDemo(browser);
 const servedSite = await siteReport(servedDemo, true);
 await servedDemo.close();
 ok(
-	'a site works offline as on the served demo: suggestions by fetch and XMLHttpRequest, storage, pushState and Back, its frame and a WebSocket',
+	'a site works offline as on the served demo: suggestions by fetch and XMLHttpRequest, storage, pushState and Back, its frame, a WebSocket and its workers',
 	JSON.stringify(offlineSite) === JSON.stringify(servedSite) &&
 		JSON.stringify(servedSite) === JSON.stringify(SITE_REPORT),
 	JSON.stringify({ offlineSite, servedSite }),
