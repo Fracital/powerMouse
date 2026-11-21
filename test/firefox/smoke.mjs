@@ -52,10 +52,7 @@ if (!existsSync(`${root}dist/serviceWorker.js`)) {
 }
 
 // Differences Firefox still has, by check name, with why
-const KNOWN = {
-	"offline.html: the page's document.cookie reads as in Chrome":
-		"a page offline.html writes into its frame has the opaque origin, and Firefox's bridge answers in a service worker's answer to a synchronous request (src/inject/dom/syncAnswer.ts), which no worker gives there, so the document.cookie write goes to the jar by a route made on that origin (src/inject/dom/modules/Cookies.ts routedPrefix), 'null/stomp/.../cookies/ordered', which is no URL and throws; in Chrome the same read gives the page's cookies",
-};
+const KNOWN = {};
 
 let passed = 0;
 let failed = 0;

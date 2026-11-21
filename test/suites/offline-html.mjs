@@ -6,7 +6,10 @@
 // link, back, forward, reload, a GET form, a POST form and a location write
 // of its script all work, and its document reads the pages' mode (Settings,
 // Page appearance) for prefers-color-scheme; nothing reaches the fixture but
-// through the wisp server.
+// through the wisp server. A site's own features (test/pages/offline-sites.html:
+// suggestions for what is typed by fetch and XMLHttpRequest, localStorage,
+// sessionStorage, pushState and Back, a frame of its own, a WebSocket to the
+// fixture's echo) give the same report offline as on the served demo.
 //
 // The demo server serves the file and its SHA-256 at /offline.html, and the
 // home page's Download, left of Fork us on GitHub, saves it with the page's
@@ -92,12 +95,15 @@ const ready = async (on = page) => {
 	return on.evaluate(() => document.getElementById('logMsg').textContent);
 };
 
-/** the newest document of the tab titled `title` (each document has a frame of its own) */
-async function documentTitled(title, timeout = 30000, on = page) {
+/**
+ * the newest document of the tab titled `title` (each document has a frame
+ * of its own); `any`: in a frame of any URL (the served demo's)
+ */
+async function documentTitled(title, timeout = 30000, on = page, any = false) {
 	for (const end = Date.now() + timeout; Date.now() < end;) {
 		const frames = on
 			.frames()
-			.filter((frame) => frame.url() === 'about:srcdoc')
+			.filter((frame) => any || frame.url() === 'about:srcdoc')
 			.reverse();
 		for (const frame of frames) {
 			const seen = await frame.evaluate(() => document.title).catch(() => '');
@@ -297,6 +303,60 @@ if (frame) {
 		await omni(page),
 	);
 }
+
+// ---- what a site does, offline as on the served demo: suggestions for
+// what is typed by fetch and XMLHttpRequest, localStorage and
+// sessionStorage, pushState and Back, a frame of its own and a WebSocket
+// (test/pages/offline-sites.html)
+const SITE = `${FIXTURE}pages/offline-sites.html`;
+async function siteReport(on, any) {
+	await submitLanding(on, SITE);
+	const frame = await documentTitled('Offline sites', 30000, on, any);
+	if (!frame) return null;
+	const report = await frame
+		.waitForFunction(() => document.body.dataset.report, null, {
+			timeout: 30000,
+		})
+		.then(async (handle) => JSON.parse(await handle.jsonValue()))
+		.catch(() => null);
+	await frame.click('#box');
+	await frame.type('#box', 'we', { delay: 50 });
+	const suggested = await frame
+		.waitForFunction(
+			() => {
+				const items = [...document.querySelectorAll('#suggestions li')];
+				return items.length === 3 && items.map((item) => item.textContent);
+			},
+			null,
+			{ timeout: 20000 },
+		)
+		.then((handle) => handle.jsonValue())
+		.catch(() => null);
+	return { ...report, suggested };
+}
+const SITE_REPORT = {
+	localStorage: [null, 'kept'],
+	sessionStorage: 'session',
+	pushState: ['?pushed=1', 1, ''],
+	frame: [
+		'Offline sites frame',
+		'/pages/offline-sites-frame.html',
+		'?from=parent',
+		'Offline sites',
+	],
+	webSocket: ['/ws-echo', true],
+	suggested: ['weather 0', 'weather in paris 1', 'web 2'],
+};
+const offlineSite = await siteReport(page, false);
+const servedDemo = await openDemo(browser);
+const servedSite = await siteReport(servedDemo, true);
+await servedDemo.close();
+ok(
+	'a site works offline as on the served demo: suggestions by fetch and XMLHttpRequest, storage, pushState and Back, its frame and a WebSocket',
+	JSON.stringify(offlineSite) === JSON.stringify(servedSite) &&
+		JSON.stringify(servedSite) === JSON.stringify(SITE_REPORT),
+	JSON.stringify({ offlineSite, servedSite }),
+);
 
 const fixtureOrigin = new URL(FIXTURE).origin;
 ok(
