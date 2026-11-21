@@ -128,6 +128,13 @@ moved: the frames stay in `#frames` and vibeOS lays each over its window's
 content box (`position: fixed`, followed on every animation frame), showing it only where
 no window or menu above covers it. The documents are never re-created.
 
+A minimized window is never `display: none`: it keeps its layout box, unseen
+(`visibility: hidden`), out of hit testing and `inert`, so a tab's frame in
+it keeps its scroll, its focused input and its selection, as a background
+tab's does in the demo's own view; a frame laid over a minimized window is
+inert too. The demo's universal `transition` stops at `#vibeos-root`, so a
+window follows a drag at once and goes at once when minimized.
+
 ## Deploying
 
 The deploy gate (`deploy/terp-deploy-gate.sh`) builds in a stage checkout and
@@ -142,6 +149,7 @@ checkout never needs `vendor/vibeOS`.
 - `npm test -- demo-vibeos`: lazy loading, the switch both ways, the state
   of a tab (its script's state, a typed input, its scroll, a running timer and
   a nested frame's timer, no second request for either document), dialed
-  tabs, new tabs, the menu, and the fallback without `moveBefore`.
+  tabs, new tabs, the menu, a minimized window, the neutral addresses, the
+  font, and the fallback without `moveBefore`.
 - vibeOS's own checks, in `vendor/vibeOS` (they need its devDependencies):
   `npm run check`, `npm run build`.

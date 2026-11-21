@@ -16,6 +16,9 @@
 - vibeOS shows in its own font, Open Sans, served from its directory with its
   licence (vibeOS no longer asks Google Fonts for it) and loaded before the
   desktop shows.
+- A minimized vibeOS window keeps its tab's scroll, focused input and
+  selection (hidden and inert, never `display: none`), and vibeOS's windows
+  no longer take the demo's 0.2 s transitions, which made a drag lag.
 
 ### Build
 

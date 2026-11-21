@@ -1640,6 +1640,13 @@ body.recents .frames .frame.gone,
 	z-index: 50;
 }
 
+/* the desktop's elements take none of the universal `transition` above (its
+   own rules, more specific, keep theirs): a window would follow a drag 0.2s
+   late, and one minimized would fade out instead of going at once */
+:where(#vibeos-root, #vibeos-root *) {
+	transition: none;
+}
+
 body.vibeos-overlay .browser {
 	display: flex !important;
 	visibility: hidden;

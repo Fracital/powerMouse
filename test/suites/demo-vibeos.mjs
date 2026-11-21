@@ -20,6 +20,9 @@
 //  - the menu of vibeOS's browser is the demo's own menu, the same items;
 //  - back in the demo's view the frames are the demo's tabs again, the
 //    focused window's tab on screen, and a second switch fetches nothing;
+//  - a minimized window is unseen and out of reach but laid out: its tab's
+//    frame keeps its scroll, its focused input and selection, and comes back
+//    the same;
 //  - without moveBefore (Firefox) the frames stay where they are and are
 //    laid over their windows, their documents just as alive.
 /* global tabs, activateTab -- pm/main.js's, read in the demo's page */
@@ -142,6 +145,108 @@ async function checkState(page, label, before, hitsBefore) {
 		now[0] === hitsBefore[0] && now[1] === hitsBefore[1],
 		`${hitsBefore} -> ${now}`,
 	);
+}
+
+/** the state tab's window minimized and restored (from the panel's entry) */
+async function checkMinimized(page, label, before, hitsBefore) {
+	const frame = await tagged(page, 'state');
+	await page.evaluate(() => {
+		const state = [...document.querySelectorAll('iframe')].find(
+			(f) => f.__vibeTest === 'state',
+		);
+		// its window: around it, or (laid over it) the one on top
+		const win =
+			state.closest('.vo-window') ??
+			document.querySelector('#vibeos-root .vo-window.vo-active');
+		win.dispatchEvent(new PointerEvent('pointerdown'));
+		window.__vibeWindow = win;
+	});
+	await frame.evaluate(() => {
+		const input = document.getElementById('typed');
+		// where it is: the page stays scrolled
+		input.focus({ preventScroll: true });
+		input.setSelectionRange(0, 5);
+	});
+	const inFrame = () =>
+		frame.evaluate(() => ({
+			y: Math.round(scrollY),
+			focused: document.activeElement?.id ?? null,
+			selection: [
+				document.getElementById('typed').selectionStart,
+				document.getElementById('typed').selectionEnd,
+			],
+		}));
+	const seen = () => {
+		const win = window.__vibeWindow;
+		const state = [...document.querySelectorAll('iframe')].find(
+			(f) => f.__vibeTest === 'state',
+		);
+		const box = state.getBoundingClientRect();
+		return {
+			minimized: win.hidden,
+			display: getComputedStyle(win).display,
+			visibility: getComputedStyle(state).visibility,
+			inert: win.inert || state.inert,
+			seen: state.checkVisibility({ visibilityProperty: true }),
+			laidOut: box.width > 0 && box.height > 0,
+			hit:
+				document.elementFromPoint(
+					box.left + box.width / 2,
+					box.top + box.height / 2,
+				) === state,
+		};
+	};
+	await page.evaluate(() =>
+		window.__vibeWindow.querySelector('.vo-window-minimize').click(),
+	);
+	const hidden = await until(
+		page,
+		seen,
+		(v) => v?.minimized && v.visibility === 'hidden' && !v.hit,
+		5000,
+	);
+	const whileHidden = await inFrame();
+	ok(
+		`${label}: a minimized window is laid out but unseen, inert and not hit`,
+		hidden?.minimized &&
+			hidden.display !== 'none' &&
+			hidden.visibility === 'hidden' &&
+			hidden.inert &&
+			!hidden.seen &&
+			hidden.laidOut &&
+			!hidden.hit,
+		JSON.stringify(hidden),
+	);
+	ok(
+		`${label}: its frame keeps its scroll, focused input and selection meanwhile`,
+		whileHidden.y === 1234 &&
+			whileHidden.focused === 'typed' &&
+			whileHidden.selection.join() === '0,5',
+		JSON.stringify(whileHidden),
+	);
+	await page.evaluate(() =>
+		document.querySelector('#vibeos-root .vo-task-entry').click(),
+	);
+	const shown = await until(
+		page,
+		seen,
+		(v) => v && !v.minimized && v.hit,
+		5000,
+	);
+	const afterwards = await inFrame();
+	ok(
+		`${label}: restored, the window is seen and in reach, its frame as it was`,
+		shown &&
+			!shown.minimized &&
+			!shown.inert &&
+			shown.seen &&
+			shown.hit &&
+			afterwards.y === 1234 &&
+			afterwards.focused === 'typed' &&
+			afterwards.selection.join() === '0,5',
+		`${JSON.stringify(shown)} ${JSON.stringify(afterwards)}`,
+	);
+	await checkState(page, `${label}, restored`, before, hitsBefore);
 }
 
 const menuIds = (page) =>
@@ -332,6 +437,17 @@ async function openTabs(page) {
 			font.shown &&
 			fontFiles.length >= 3,
 		`${JSON.stringify(font)} ${fontFiles.join(' ')}`,
+	);
+	const moving = await page.evaluate(() => {
+		const win = document.querySelector('#vibeos-root .vo-window.vo-active');
+		return [win, win.querySelector('.vo-window-title, .vibe-browser-panel')]
+			.filter(Boolean)
+			.map((node) => getComputedStyle(node).transitionDuration);
+	});
+	ok(
+		"vibeOS's windows take none of the demo's transitions: a drag is followed at once",
+		moving.length && moving.every((duration) => duration === '0s'),
+		moving.join(' '),
 	);
 	ok(
 		'no font, stylesheet or script was asked of another site',
@@ -590,6 +706,7 @@ async function openTabs(page) {
 			.querySelector('.vo-window-close')
 			.click(),
 	);
+	await checkMinimized(page, 'minimized', before, hitsBefore);
 	ok(
 		'no document the page loaded has an address that names vibeOS or its files',
 		named.length === 0 && vibeRequests.length > 0,
@@ -652,6 +769,12 @@ async function openTabs(page) {
 		'without moveBefore the frame stays put and is laid over its window, on top',
 		laid?.inFrames && laid.over && laid.hit,
 		JSON.stringify(laid),
+	);
+	await checkMinimized(
+		page,
+		'without moveBefore, minimized',
+		before,
+		hitsBefore,
 	);
 	await checkState(page, 'without moveBefore, into vibeOS', before, hitsBefore);
 	await page.click('#vibeos-root .vo-leave');
