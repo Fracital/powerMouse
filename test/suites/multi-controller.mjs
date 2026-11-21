@@ -26,6 +26,7 @@ import {
 	done,
 	evaluateIsolated,
 	FIXTURE,
+	isAppWorker,
 	launch,
 	ok,
 	PROXY,
@@ -668,7 +669,12 @@ const swCdp = await context.newCDPSession(page);
 await swCdp.send('ServiceWorker.enable');
 let swStopped = false;
 swCdp.on('ServiceWorker.workerVersionUpdated', ({ versions }) => {
-	if (versions.some((version) => version.runningStatus === 'stopped'))
+	if (
+		versions.some(
+			(version) =>
+				version.runningStatus === 'stopped' && !isAppWorker(version.scriptURL),
+		)
+	)
 		swStopped = true;
 });
 await swCdp.send('ServiceWorker.stopAllWorkers');

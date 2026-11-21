@@ -10,7 +10,16 @@
 // The service worker names the public suffix list its sites are answered from
 // once it holds the module (rust/suffix/src/pins.env).
 import { readFileSync } from 'node:fs';
-import { done, FIXTURE, launch, ok, openDemo, PROXY, sleep } from '../lib.mjs';
+import {
+	done,
+	FIXTURE,
+	isAppWorker,
+	launch,
+	ok,
+	openDemo,
+	PROXY,
+	sleep,
+} from '../lib.mjs';
 
 const browser = await launch();
 const page = await openDemo(browser, PROXY);
@@ -297,7 +306,13 @@ ok(
 	await cdp.send('ServiceWorker.enable');
 	let stopped = false;
 	cdp.on('ServiceWorker.workerVersionUpdated', ({ versions }) => {
-		if (versions.some((version) => version.runningStatus === 'stopped'))
+		if (
+			versions.some(
+				(version) =>
+					version.runningStatus === 'stopped' &&
+					!isAppWorker(version.scriptURL),
+			)
+		)
 			stopped = true;
 	});
 	await cdp.send('ServiceWorker.stopAllWorkers');

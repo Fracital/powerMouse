@@ -81,8 +81,13 @@ async function until(fn, ms) {
 /** in a frame of the real proxy origin: its service worker registrations and the codec key in its IndexedDB */
 const realState = () =>
 	(async () => {
-		const registrations = (await navigator.serviceWorker.getRegistrations())
-			.length;
+		// The app worker registers at the root. Its scope is visible even
+		// before the browser exposes any of its script URLs.
+		const registrations = (
+			await navigator.serviceWorker.getRegistrations()
+		).filter(
+			(registration) => new URL(registration.scope).pathname !== '/',
+		).length;
 		const key = await new Promise((resolve) => {
 			const open = indexedDB.open('stompConfig');
 			open.onerror = () => resolve(null);

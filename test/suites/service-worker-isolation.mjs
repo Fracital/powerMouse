@@ -11,6 +11,7 @@ import {
 	done,
 	FIXTURE,
 	HOST,
+	isAppWorker,
 	launch,
 	ok,
 	openDemo,
@@ -111,9 +112,19 @@ for (const [mode, base] of [
 			report.stomp === null,
 		JSON.stringify(report),
 	);
+	// (the demo's app worker is the host page's own, at its root)
+	const app = await page.evaluate(async () => {
+		const registration = await navigator.serviceWorker.getRegistration('/');
+		const worker =
+			registration?.active ?? registration?.waiting ?? registration?.installing;
+		return { scope: registration?.scope, script: worker?.scriptURL };
+	});
+	const real = [...scopes].filter(
+		(scope) => !(isAppWorker(app.script) && scope === app.scope),
+	);
 	ok(
 		`${mode}: the only real registration is STomp's own`,
-		scopes.size > 0 && [...scopes].every((scope) => scope.endsWith('/stomp/')),
+		real.length > 0 && real.every((scope) => scope.endsWith('/stomp/')),
 		JSON.stringify([...scopes]),
 	);
 	ok(

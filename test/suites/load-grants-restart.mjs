@@ -17,6 +17,7 @@ import {
 	done,
 	FIXTURE,
 	HOST,
+	isAppWorker,
 	launch,
 	ok,
 	openDemo,
@@ -104,7 +105,13 @@ for (const [mode, base] of [
 	await cdp.send('ServiceWorker.enable');
 	let stops = 0;
 	cdp.on('ServiceWorker.workerVersionUpdated', ({ versions }) => {
-		if (versions.some((version) => version.runningStatus === 'stopped'))
+		if (
+			versions.some(
+				(version) =>
+					version.runningStatus === 'stopped' &&
+					!isAppWorker(version.scriptURL),
+			)
+		)
 			stops++;
 	});
 	const stop = async () => {

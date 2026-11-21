@@ -60,6 +60,15 @@ export const OUT = fileURLToPath(new URL('./out/', import.meta.url));
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
+ * The demo's app worker (demo/README.md "The installed app"): the worker of
+ * the demo page's own origin at its root, which the page registers once it
+ * is up. It is the host's, not the proxy's: a check of STomp's workers or
+ * registrations leaves it out by its script's URL.
+ */
+export const isAppWorker = (scriptURL) =>
+	/^https?:\/\/[^/]+\/app-worker\.js$/.test(scriptURL ?? '');
+
+/**
  * This run's own tag (letters and digits), for the keys a suite files what
  * the fixture saw under (its /sop/log, /coi/log, /hdr/log): those stores
  * are the runner process's, one for every suite of it, and a suite that

@@ -6,6 +6,23 @@
 		<meta name="description" content="STomp web proxy demo" />
 		<link type="image/x-icon" rel="shortcut icon" href="/favicon.ico" />
 		<title>powerMouse</title>
+		<!-- the app window's title bar: pm/theme.js keeps it the theme's -->
+		<meta name="theme-color" content="#000000" />
+		<script>
+			// powerMouse as an installed app (manifest.webmanifest, the root's
+			// app-worker.js): only on the site's own page at its root, the top
+			// one. A copy of the page in a frame or under another path (a host
+			// that ships this page inside its own) is no app: a manifest there
+			// makes nothing installable, and a root worker would be the host's.
+			if (window === window.top && /^\/(index\.html)?$/.test(location.pathname))
+				document.head.append(
+					Object.assign(document.createElement('link'), {
+						id: 'pmAppManifest',
+						rel: 'manifest',
+						href: '/manifest.webmanifest',
+					}),
+				);
+		</script>
 		<link rel="stylesheet" href="/pm/main.css" />
 		<link rel="stylesheet" href="/pm/extensions-page.css" />
 		<!-- the chosen theme (docs/themes.md), on the root before the first paint -->
@@ -384,9 +401,9 @@
 		></div>
 
 		<!-- the menu: the Shields panel's popover with Fullscreen (hidden where
-		     the page cannot be made fullscreen), Extensions, Settings (the
-		     theme) and About, which opens the build information in the
-		     settings-page dialog below -->
+		     the page cannot be made fullscreen), Extensions, Install
+		     powerMouse, Settings (the theme) and About, which opens the build
+		     information in the settings-page dialog below -->
 		<div id="menuScrim" class="popoverScrim hidden"></div>
 		<div
 			id="pmMenu"
@@ -408,6 +425,14 @@
 				type="button"
 				role="menuitem"
 				tabindex="-1"
+			></button>
+			<button
+				id="menuInstall"
+				class="pmMenuItem"
+				type="button"
+				role="menuitem"
+				tabindex="-1"
+				hidden
 			></button>
 			<button
 				id="menuSettings"

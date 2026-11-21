@@ -21,6 +21,7 @@ import {
 	done,
 	FIXTURE,
 	HOST,
+	isAppWorker,
 	launch,
 	ok,
 	openDemo,
@@ -174,7 +175,13 @@ for (const [mode, base] of [
 	await cdp.send('ServiceWorker.enable');
 	let stops = 0;
 	cdp.on('ServiceWorker.workerVersionUpdated', ({ versions }) => {
-		if (versions.some((version) => version.runningStatus === 'stopped'))
+		if (
+			versions.some(
+				(version) =>
+					version.runningStatus === 'stopped' &&
+					!isAppWorker(version.scriptURL),
+			)
+		)
 			stops++;
 	});
 	/** stop the worker and wait until it is down */
@@ -417,7 +424,13 @@ for (const [mode, base] of [
 	await cdp.send('ServiceWorker.enable');
 	let stops = 0;
 	cdp.on('ServiceWorker.workerVersionUpdated', ({ versions }) => {
-		if (versions.some((version) => version.runningStatus === 'stopped'))
+		if (
+			versions.some(
+				(version) =>
+					version.runningStatus === 'stopped' &&
+					!isAppWorker(version.scriptURL),
+			)
+		)
 			stops++;
 	});
 	for (const [name, ask, wanted] of SYNC_ASKS.slice(0, 2)) {

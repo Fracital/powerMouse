@@ -30,6 +30,7 @@ import {
 	done,
 	FIXTURE,
 	HOST,
+	isAppWorker,
 	ok,
 	PORT,
 	PROXY,
@@ -290,7 +291,9 @@ const results = await Promise.all(
 				if (message.method !== 'ServiceWorker.workerVersionUpdated') return;
 				for (const version of message.params.versions) {
 					// the proxy's, not a worker of the browser's own extensions
+					// or the demo's app worker
 					if (!version.scriptURL.startsWith('http')) continue;
+					if (isAppWorker(version.scriptURL)) continue;
 					if (statuses.get(version.versionId) === version.runningStatus)
 						continue;
 					statuses.set(version.versionId, version.runningStatus);

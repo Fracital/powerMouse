@@ -359,6 +359,8 @@ holyWisp is started.
     has no Themes. **Settings** opens the same dialog on the theme picker
     (view `settings`): Default, Light, Dark, Follow system and the themes
     installed from the Chrome Web Store (docs/themes.md).
+    **Install powerMouse…**, before Settings, is there while Chrome offers
+    to install the page ([The installed app](#the-installed-app)).
     **About** opens the Shields settings pages' dialog
     (`#shieldsPage`, view `about`): the version, build id, commit and build
     date from `/api/status` (`build`, the server's copy of
@@ -403,6 +405,66 @@ authenticator.
 Chrome gives a token and a refusal, as Chrome does under DevTools'
 `FedCm.enable`.
 
+## The installed app
+
+Chrome installs the page as an app named powerMouse, which opens in a
+window of its own (Chrome 157):
+
+- **The manifest.** `public/manifest.webmanifest`: id, start_url and scope
+  `/`, display `standalone` with `window-controls-overlay` first in
+  `display_override`, the icons in `public/pm/icons/` (`app-192.png`,
+  `app-512.png`, and `app-maskable-512.png` with the logo inside the
+  maskable safe zone), and shortcuts for New tab, Extensions and Settings.
+  `display_override` has no `tabbed`: Chrome's tab strip would be a second
+  row of tabs over the page's own, each Chrome tab a separate page with
+  its own controller. `launch_handler` is `focus-existing`: a launch
+  never reloads the window and its tabs. A shortcut, a `web+stomp:` link
+  (`protocol_handlers`) and a URL shared to the app (`share_target`)
+  arrive as `?launch=` (or `?url=` and `?text=`) on the page's address or
+  through `launchQueue`, and `pm/main.js` opens the home screen, the
+  Extensions page, Settings or a tab at the address, then takes the
+  query off the address. A link is `web+stomp:<address>`, with or
+  without `//`.
+- **The app worker.** `public/app-worker.js`, registered with scope `/`
+  once the proxy is up (Chrome and its kin only: elsewhere nothing installs
+  the page). STomp's worker keeps `/stomp/`, and a narrower scope always
+  wins, so no proxied page, frame or request reaches it. Its static routes
+  (`InstallEvent.addRoutes`) send every request but the load of `/` to the
+  network without starting it; that load goes out by navigation preload
+  and, when the network is down, the worker answers with a page that says
+  powerMouse is offline, in the theme last shown, and loads the app again
+  once the site answers. Chrome 157 finds the page installable without the
+  worker as well (`Page.getInstallabilityErrors` is empty either way).
+- **Where.** `index.html` links the manifest only on the top page at the
+  site's root (`/` or `/index.html`), and `pm/main.js` registers the app
+  worker only where the manifest is: a copy of the page in a frame or
+  under another path (a host that ships this page inside its own) is no
+  app, and a root worker there would be the host's.
+- **The window.** The menu has Install powerMouse… while Chrome offers the
+  app (`beforeinstallprompt`), never in the app's own window (display-mode
+  `standalone`, `window-controls-overlay` or `minimal-ui`). With Window
+  Controls Overlay the browser view's bar is the title bar: its free space
+  and a gap beside the window's controls drag the window, its buttons and
+  the address box do not, and the home screen has a strip of the title
+  bar's height to drag by. `<meta name="theme-color">`, the colour of the
+  title bar and of the window controls' strip, is the theme's
+  (`pm/theme.js`): the toolbar's in the browser view, the page's on the
+  home screen.
+- **Keys.** In an app window Chrome reserves none of its shortcuts
+  (`BrowserCommandController::IsReservedCommandOrKey`,
+  `BrowserView::PreHandleKeyboardEvent`): Ctrl+T, Ctrl+W, Ctrl+N,
+  Ctrl+Shift+T, Ctrl+Shift+N, Ctrl+Tab and the rest reach the page first,
+  and Chrome acts on one only when the page does not call
+  `preventDefault()`. In a tab Chrome takes the reserved ones (close tab
+  or window, new tab, window or incognito window, reopen closed tab, next
+  and previous tab, quit) before the page sees them, except in
+  fullscreen, where only the fullscreen key and quit stay Chrome's.
+
+`test/suites/pwa.mjs` checks the manifest, Chrome's reading of it, the
+app worker, the menu item, theme-color, the launches, the offline page,
+the app window (`PWA.install`, `PWA.openCurrentPageInApp`) and the copies
+elsewhere; its header lists what headless Chrome cannot show.
+
 ## Transports
 
 The transport switch has epoxy (the default) and libcurl, remembered in
@@ -433,6 +495,8 @@ demo/
 ├── public/
 │   ├── index.html      landing + browser chrome markup
 │   ├── favicon.ico
+│   ├── manifest.webmanifest, app-worker.js
+│   │                   the installed app (The installed app, above)
 │   └── pm/
 │       ├── main.css    Powermouse-derived styling
 │       ├── main.js     controller wiring and UI behaviour
@@ -441,7 +505,9 @@ demo/
 │       │               the Extensions page, after chrome://extensions
 │       ├── dev.js      live reload client, npm run dev only
 │       ├── noise.png, header-background.png, logo.png
-│       └── icons/      the bar's, the menu's and the bookmarks' icons
+│       └── icons/      the bar's, the menu's and the bookmarks' icons,
+│                       and the app's (app-192.png, app-512.png,
+│                       app-maskable-512.png)
 └── README.md
 ```
 

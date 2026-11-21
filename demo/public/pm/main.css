@@ -1141,6 +1141,46 @@ html.restoring .omnibox::placeholder {
 	min-width: 120px;
 }
 
+/* The installed app's window with Window Controls Overlay (the manifest's
+   display_override): no title bar, the window's controls over a corner of
+   the page, and the title bar's area beside them the page's
+   (env(titlebar-area-*)). The browser view's bar takes the title bar's
+   place, as Chrome's tab strip does: its free space drags the window, its
+   controls do not, and none of them runs under the window's controls,
+   which keep a gap to drag by beside them. The home screen gets a strip of
+   the title bar's height to drag by. */
+@media (display-mode: window-controls-overlay) {
+	.chrome {
+		min-height: env(titlebar-area-height, 0px);
+		padding-left: calc(env(titlebar-area-x, 0px) + 8px);
+		padding-right: calc(
+			100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 32px
+		);
+		-webkit-app-region: drag;
+		app-region: drag;
+	}
+	.chrome > * {
+		-webkit-app-region: no-drag;
+		app-region: no-drag;
+	}
+	#landing.wrapper {
+		padding-top: calc(env(titlebar-area-height, 0px) + 8px);
+	}
+	#landing.wrapper::before {
+		content: '';
+		position: absolute;
+		top: 0;
+		left: 0;
+		right: 0;
+		height: env(titlebar-area-height, 0px);
+		-webkit-app-region: drag;
+		app-region: drag;
+	}
+	.listing {
+		height: calc(100vh - 203px - env(titlebar-area-height, 0px));
+	}
+}
+
 /* back, forward and reload: Tango icons on the dark header */
 .toolbtn {
 	flex: 0 0 auto;

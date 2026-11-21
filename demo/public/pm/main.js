@@ -6242,6 +6242,131 @@ menuAbout.addEventListener('click', () => {
 	openShieldsPage('about');
 });
 
+// ---- the installed app ---------------------------------------------------------
+// powerMouse installs as an app with a window of its own (demo/README.md
+// "The installed app"). Only this site's own page is the app: index.html
+// links the manifest only on the top page at the site's root, and so the
+// app worker (app-worker.js, scope /, the page shown when the network is
+// down) is registered only where the manifest is, once the proxy is up,
+// and only in Chrome and its kin: elsewhere nothing installs it, and it
+// would only stand in front of this page's own requests. The menu offers
+// Install powerMouse while Chrome offers the app (beforeinstallprompt), as
+// Chrome's menu has Install <app>, and never in the app's own window.
+// The manifest's shortcuts, its web+stomp: links and a URL shared to the
+// app come as ?launch= and ?url= on the page's address, at a launch or
+// later (launchQueue, the manifest's focus-existing): the window and its
+// tabs stay, and the address shows none of it.
+const APP = !!$('pmAppManifest');
+const appWindow = matchMedia(
+	'(display-mode: standalone), (display-mode: window-controls-overlay), (display-mode: minimal-ui)',
+);
+const menuInstall = $('menuInstall');
+Object.assign(SHIELD_ICONS, {
+	// Chrome's install icon: a screen with an arrow down into it
+	install:
+		'<path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M9 5H5.5A1.5 1.5 0 0 0 4 6.5v9A1.5 1.5 0 0 0 5.5 17h13a1.5 1.5 0 0 0 1.5-1.5V13M9 20h6M12 17v3M16 4v7m-3-3 3 3 3-3"/>',
+});
+// Older embedded copies of the shell have no install menu item.
+if (menuInstall)
+	menuInstall.innerHTML = `${shieldIcon('install')}<span>Install powerMouse…</span>`;
+/** Chrome's offer to install the app, kept for the menu's item */
+let installOffer = null;
+function syncInstallItem() {
+	if (menuInstall) menuInstall.hidden = !installOffer || appWindow.matches;
+}
+addEventListener('beforeinstallprompt', (event) => {
+	if (!APP || !menuInstall) return;
+	event.preventDefault(); // offered from the menu, not by Chrome on its own
+	installOffer = event;
+	syncInstallItem();
+});
+addEventListener('appinstalled', () => {
+	installOffer = null;
+	syncInstallItem();
+});
+appWindow.addEventListener('change', syncInstallItem);
+menuInstall?.addEventListener('click', async () => {
+	menuPopover.close();
+	const offer = installOffer;
+	if (!offer) return;
+	// an offer prompts once: Chrome makes a new one if this is turned down
+	installOffer = null;
+	syncInstallItem();
+	try {
+		await offer.prompt();
+	} catch (error) {
+		console.warn('Install:', error.message);
+	}
+});
+
+function registerAppWorker() {
+	if (!APP || !('BeforeInstallPromptEvent' in window)) return;
+	navigator.serviceWorker
+		?.register('/app-worker.js', { scope: '/', updateViaCache: 'none' })
+		.catch((error) => console.warn('App worker:', error.message));
+}
+
+/** what a launch at `href` asks for: a shortcut, a web+stomp: link, a share */
+function launchApp(href) {
+	let query;
+	try {
+		query = new URL(href).searchParams;
+	} catch {
+		return;
+	}
+	const asked = query.get('launch') ?? '';
+	if (/^web\+stomp:/i.test(asked)) {
+		const target = asked.replace(/^web\+stomp:(\/\/)?/i, '');
+		if (target) navigate(target, { newTab: true });
+		return;
+	}
+	// a new tab is the home screen, as the tab manager's + has it
+	if (asked === 'new-tab')
+		return landing.classList.contains('hidden') ||
+			document.body.classList.contains('recents')
+			? showLanding()
+			: mainForm.url.focus();
+	if (asked === 'settings') return openShieldsPage('settings');
+	if (asked === 'extensions')
+		return booted.then(
+			() => openExtensionsPage(),
+			() => {},
+		);
+	// a share: its URL, else the first URL in its text, else the text
+	const text = query.get('text') ?? '';
+	const shared =
+		query.get('url') || /\bhttps?:\/\/\S+/i.exec(text)?.[0] || text.trim();
+	if (shared) navigate(shared, { newTab: true });
+}
+const LAUNCH_KEYS = ['launch', 'url', 'text', 'title'];
+const launchedAt = location.href;
+/** the launch this load is (a shortcut opening the app's window), once */
+function launchFromAddress() {
+	const query = new URLSearchParams(location.search);
+	if (!APP || !LAUNCH_KEYS.some((key) => query.has(key))) return;
+	for (const key of LAUNCH_KEYS) query.delete(key);
+	const rest = query.toString();
+	history.replaceState(
+		history.state,
+		'',
+		`${location.pathname}${rest ? `?${rest}` : ''}${location.hash}`,
+	);
+	launchApp(launchedAt);
+}
+/**
+ * the launches into the open window; the first one names this load, which
+ * launchFromAddress has taken already
+ */
+function watchLaunches() {
+	if (!APP || !('launchQueue' in window)) return;
+	let first = true;
+	window.launchQueue.setConsumer(({ targetURL }) => {
+		const skip = first && targetURL === launchedAt;
+		first = false;
+		if (targetURL && !skip) launchApp(targetURL);
+	});
+}
+
 // ---- extensions ------------------------------------------------------------------
 // Chrome extensions (docs/extensions.md) on the bar after the address box,
 // as Chrome 157 has them: the pinned buttons in their order (Chrome pins an
@@ -7675,6 +7800,17 @@ if (opening) {
 document.documentElement.classList.remove('opening');
 
 const booted = boot();
+// a launch of the installed app (a shortcut, a link, a share), and its
+// worker once the proxy is up and the page idle
+launchFromAddress();
+watchLaunches();
+booted
+	.catch(() => {})
+	.then(() =>
+		(globalThis.requestIdleCallback ?? setTimeout)(registerAppWorker, {
+			timeout: 3000,
+		}),
+	);
 booted
 	.then(async () => {
 		// a kept, non-default filter-list config is applied once the controller
