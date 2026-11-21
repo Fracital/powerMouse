@@ -15,8 +15,8 @@
 //   RERUN=0 npm test           no second run, alone, for a suite that failed
 //   DIAL_DEFAULT=1 npm test    every suite on the demo's default (dialing),
 //                              not only the demo's own (dials() below)
-//   STOMP_SHARED_BROWSER=0 npm test
-//                              a Chrome for each suite, not one for the run
+//   STOMP_SHARED_BROWSER=1 npm test
+//                              one Chrome for the run, not one for each suite
 //                              (SHARED_BROWSER below)
 //
 // Needs a built dist/ (`npm run build`) and Chrome (CHROME env, default
@@ -446,15 +446,16 @@ process.on('SIGINT', () => {
 // renderer processes of their own. Each Chrome is a browser process, a GPU,
 // network, storage and utility process and their memory before the first
 // page (about 90 MB PSS and ten processes), so eight suites at once ran some
-// eighty processes before any page. STOMP_SHARED_BROWSER=0 gives every suite
-// its own again. A suite that reads or changes something of the whole
+// eighty processes before any page. It is off until the suites that fail
+// beside others in one browser are found (CT reran 26 of them a run, against
+// 6 with a Chrome each): STOMP_SHARED_BROWSER=1 turns it on. A suite that reads or changes something of the whole
 // browser keeps its own (OWN_BROWSER), as does a measurement (isMeasurement),
 // whose numbers are the browser's alone; a suite that failed runs again with
 // its own (RERUN), so a failure that only sharing makes shows as flaky. The
 // server is replaced after SHARED_BROWSER_SUITES suites, so whatever a
 // browser gathers over hours of suites is not every later suite's, and when
 // it dies, for the next suite; the suites still on the old one finish there.
-const SHARED_BROWSER = process.env.STOMP_SHARED_BROWSER !== '0';
+const SHARED_BROWSER = process.env.STOMP_SHARED_BROWSER === '1';
 const SHARED_BROWSER_SUITES = 40;
 const OWN_BROWSER = new Set([
 	// ends every SharedWorker of the browser (Target.closeTarget): every
