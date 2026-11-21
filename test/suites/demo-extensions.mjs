@@ -346,8 +346,8 @@ const popupState = (page) =>
 // ---- the isolated host, desktop ------------------------------------------------
 // The home card's Extensions tab mirrors the left Bookmarks tab, and
 // opens the same page as Manage extensions with its own keyboard focus.
-// The tab is twice as long, Customize (the theme settings) under
-// Extensions, or beside it where a short window has no room.
+// Customize (the theme settings) sits beside it in the same tab, one
+// border and one background with no line between the two.
 const home = await openDemo(browser, HOST);
 for (const viewport of [
 	{ width: 1280, height: 800 },
@@ -369,10 +369,15 @@ for (const viewport of [
 			};
 		};
 		const commits = document.querySelector('.commits');
+		// the status line's text, not its padded box
+		const range = document.createRange();
+		range.selectNodeContents(document.getElementById('logMsg'));
+		const text = range.getBoundingClientRect();
 		return {
 			card: rect('.listing'),
 			bookmarks: rect('#bookmarksTab'),
 			dock: rect('.extensionsDock'),
+			status: { top: text.top, bottom: text.bottom },
 			extensions: rect('#extensionsTab'),
 			customize: rect('#customizeTab'),
 			commitsHead:
@@ -385,6 +390,14 @@ for (const viewport of [
 				.filter((box) => box.width && box.height)
 				.map(({ left, right, top, bottom }) => ({ left, right, top, bottom })),
 			footer: rect('.lbottom'),
+			seam: [
+				getComputedStyle(document.querySelector('#extensionsTab')),
+				getComputedStyle(document.querySelector('#customizeTab')),
+			].map((style) => [
+				style.borderLeftWidth,
+				style.borderRightWidth,
+				style.backgroundColor,
+			]),
 			label: document
 				.querySelector('#extensionsTab')
 				.getAttribute('aria-label'),
@@ -406,25 +419,29 @@ for (const viewport of [
 		edge.label === 'Extensions' &&
 			Math.abs(edge.card.right - edge.dock.right - 1) <= 1 &&
 			Math.abs(edge.bookmarks.left - edge.card.left - 1) <= 1 &&
-			Math.abs(edge.bookmarks.top - edge.extensions.top) <= 1 &&
-			Math.abs(edge.bookmarks.bottom - edge.extensions.bottom) <= 1,
+			Math.abs(edge.bookmarks.top - edge.dock.top) <= 1 &&
+			Math.abs(edge.bookmarks.bottom - edge.dock.bottom) <= 1,
 		JSON.stringify(edge),
 	);
 	ok(
-		`${at}: Customize shares the tab, under Extensions or beside it`,
+		`${at}: Customize sits beside Extensions in the same tab, with no line or fill of their own between them`,
 		edge.customizeLabel === 'Customize' &&
 			!!edge.customize &&
-			((Math.abs(edge.customize.top - edge.extensions.bottom) <= 1 &&
-				Math.abs(edge.customize.right - edge.extensions.right) <= 1) ||
-				(Math.abs(edge.customize.left - edge.extensions.right) <= 1 &&
-					Math.abs(edge.customize.top - edge.extensions.top) <= 1)) &&
+			Math.abs(edge.customize.left - edge.extensions.right) <= 0.5 &&
+			Math.abs(edge.customize.top - edge.extensions.top) <= 0.5 &&
+			Math.abs(edge.customize.bottom - edge.extensions.bottom) <= 0.5 &&
+			Math.abs(edge.extensions.left - edge.dock.left - 1) <= 1 &&
 			Math.abs(edge.dock.right - edge.customize.right) <= 1 &&
-			Math.abs(edge.dock.bottom - edge.customize.bottom) <= 1,
+			edge.seam.every(
+				([left, right, fill]) =>
+					left === '0px' && right === '0px' && fill === 'rgba(0, 0, 0, 0)',
+			),
 		JSON.stringify(edge),
 	);
 	ok(
-		`${at}: the Extensions and Customize tab sits clear of the commits, the tiles and the footer`,
-		(!edge.commitsHead || edge.dock.bottom <= edge.commitsHead.top) &&
+		`${at}: the Extensions and Customize tab sits clear of the status line, the commits, the tiles and the footer`,
+		edge.dock.top >= edge.status.bottom &&
+			(!edge.commitsHead || edge.dock.bottom <= edge.commitsHead.top) &&
 			!edge.tiles.some((tile) => overlaps(tile, edge.dock)) &&
 			!overlaps(edge.footer, edge.dock),
 		JSON.stringify(edge),

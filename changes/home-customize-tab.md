@@ -4,8 +4,8 @@
   its label, as Download carries its icon, painted in the button's text
   colour in every theme (custom ones too); a narrow button has it above
   the label.
-- The home card's Extensions tab is twice as long, with a Customize button
-  (a palette) under the puzzle piece that opens the theme settings, the
-  menu's Settings. A short window has Customize beside Extensions instead,
-  so the tab stays clear of the tiles and the footer. The commits start
-  below the longer tab (demo-extensions suite).
+- The home card's Extensions tab is twice as wide and as tall as Bookmarks,
+  with a Customize button (a palette) beside the puzzle piece that opens
+  the theme settings, the menu's Settings. The two read as one tab: one
+  border and one background, no line between them (demo-extensions
+  suite).

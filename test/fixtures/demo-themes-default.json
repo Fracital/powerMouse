@@ -1,7 +1,7 @@
 {
 	"views": {
 		"landing": {
-			"digest": "bc8fa9e2a3fe36c52b9ab850dabc4dead679198fcb151b4a24d36059c9600f69",
+			"digest": "aa2465f529836c89de2db6770c74aabf4f1a5616f35fa0edcf36cc294d752c0e",
 			"common": {
 				"::placeholderbackground-color": "rgba(0, 0, 0, 0)",
 				"::placeholderbackground-image": "none",
@@ -172,27 +172,11 @@
 					"color": "rgb(0, 0, 0)",
 					"outline-color": "rgb(0, 0, 0)"
 				},
-				"button#extensionsTab": {
-					"::placeholdercolor": "rgb(0, 0, 0)",
+				"div#landing>div.listing:1>div.inputWrapper:0>div.extensionsDock:1": {
 					"background-color": "rgb(143, 89, 2)",
 					"border-bottom-color": "rgb(182, 182, 182)",
 					"border-left-color": "rgb(182, 182, 182)",
-					"border-right-color": "rgb(0, 0, 0)",
-					"border-top-color": "rgb(182, 182, 182)",
-					"caret-color": "rgb(0, 0, 0)",
-					"color": "rgb(0, 0, 0)",
-					"outline-color": "rgb(0, 0, 0)"
-				},
-				"button#customizeTab": {
-					"::placeholdercolor": "rgb(0, 0, 0)",
-					"background-color": "rgb(143, 89, 2)",
-					"border-bottom-color": "rgb(182, 182, 182)",
-					"border-left-color": "rgb(182, 182, 182)",
-					"border-right-color": "rgb(0, 0, 0)",
-					"border-top-color": "rgb(0, 0, 0)",
-					"caret-color": "rgb(0, 0, 0)",
-					"color": "rgb(0, 0, 0)",
-					"outline-color": "rgb(0, 0, 0)"
+					"border-top-color": "rgb(182, 182, 182)"
 				},
 				"div#landing>div.listing:1>div.inputWrapper:0>section.commits>div.commitsHead": {
 					"::placeholdercolor": "rgb(154, 154, 154)",
@@ -424,7 +408,7 @@
 			}
 		},
 		"browser": {
-			"digest": "933fa8872dfce8b6ad3ddb483cbbb05bf64724696cb165bccbf82f9303296f14",
+			"digest": "8aad17412772ea69ba6b09ae11cad65bea44c86239ac78708bc72cae23249045",
 			"common": {
 				"::placeholderbackground-color": "rgba(0, 0, 0, 0)",
 				"::placeholderbackground-image": "none",
@@ -595,27 +579,11 @@
 					"color": "rgb(0, 0, 0)",
 					"outline-color": "rgb(0, 0, 0)"
 				},
-				"button#extensionsTab": {
-					"::placeholdercolor": "rgb(0, 0, 0)",
+				"div#landing>div.listing:1>div.inputWrapper:0>div.extensionsDock:1": {
 					"background-color": "rgb(143, 89, 2)",
 					"border-bottom-color": "rgb(182, 182, 182)",
 					"border-left-color": "rgb(182, 182, 182)",
-					"border-right-color": "rgb(0, 0, 0)",
-					"border-top-color": "rgb(182, 182, 182)",
-					"caret-color": "rgb(0, 0, 0)",
-					"color": "rgb(0, 0, 0)",
-					"outline-color": "rgb(0, 0, 0)"
-				},
-				"button#customizeTab": {
-					"::placeholdercolor": "rgb(0, 0, 0)",
-					"background-color": "rgb(143, 89, 2)",
-					"border-bottom-color": "rgb(182, 182, 182)",
-					"border-left-color": "rgb(182, 182, 182)",
-					"border-right-color": "rgb(0, 0, 0)",
-					"border-top-color": "rgb(0, 0, 0)",
-					"caret-color": "rgb(0, 0, 0)",
-					"color": "rgb(0, 0, 0)",
-					"outline-color": "rgb(0, 0, 0)"
+					"border-top-color": "rgb(182, 182, 182)"
 				},
 				"div#landing>div.listing:1>div.inputWrapper:0>section.commits>div.commitsHead": {
 					"::placeholdercolor": "rgb(154, 154, 154)",
@@ -860,7 +828,7 @@
 			}
 		},
 		"shields": {
-			"digest": "1e22cecb7ba6e0bf0fb99bfef19cf985e00bdab4bf2d4bef9c5dc00883e3d7c4",
+			"digest": "8af457b909d7c661ffb351f96633a9248fe6acf8d09d26c89cd3b444de8bd2f7",
 			"common": {
 				"::afterbackground-color": null,
 				"::afterbackground-image": null,
@@ -1043,27 +1011,12 @@
 					"color": "rgb(0, 0, 0)",
 					"outline-color": "rgb(0, 0, 0)"
 				},
-				"button#extensionsTab": {
-					"::placeholdercolor": "rgb(0, 0, 0)",
+				"div#landing>div.listing:1>div.inputWrapper:0>div.extensionsDock:1": {
 					"background-color": "rgb(143, 89, 2)",
 					"border-bottom-color": "rgb(182, 182, 182)",
 					"border-left-color": "rgb(182, 182, 182)",
-					"border-right-color": "rgb(0, 0, 0)",
-					"border-top-color": "rgb(182, 182, 182)",
-					"caret-color": "rgb(0, 0, 0)",
-					"color": "rgb(0, 0, 0)",
-					"outline-color": "rgb(0, 0, 0)"
-				},
-				"button#customizeTab": {
-					"::placeholdercolor": "rgb(0, 0, 0)",
-					"background-color": "rgb(143, 89, 2)",
-					"border-bottom-color": "rgb(182, 182, 182)",
-					"border-left-color": "rgb(182, 182, 182)",
-					"border-right-color": "rgb(0, 0, 0)",
-					"border-top-color": "rgb(0, 0, 0)",
-					"caret-color": "rgb(0, 0, 0)",
-					"color": "rgb(0, 0, 0)",
-					"outline-color": "rgb(0, 0, 0)"
+					"border-right-color": "rgb(255, 255, 255)",
+					"border-top-color": "rgb(182, 182, 182)"
 				},
 				"div#landing>div.listing:1>div.inputWrapper:0>section.commits>div.commitsHead": {
 					"::placeholdercolor": "rgb(154, 154, 154)",

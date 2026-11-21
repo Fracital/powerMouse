@@ -2336,7 +2336,7 @@ input:focus-visible {
 	position: absolute;
 	left: 25px;
 	right: 25px;
-	top: 232px; /* below the Extensions and Customize tab */
+	top: 188px; /* below the bookmarks tab */
 	bottom: 137px;
 	display: flex;
 	flex-direction: column;
@@ -2501,7 +2501,7 @@ input:focus-visible {
 		height: calc(100vh - 197px);
 	}
 	.commits {
-		top: 296px;
+		top: 256px;
 		bottom: 232px; /* the tiles wrap to two rows, the footer to three lines */
 	}
 	.commitSha {
@@ -2666,8 +2666,6 @@ input:focus-visible {
 .navbtn:focus-visible,
 .starbtn:focus-visible,
 .bookmarksTab:focus-visible,
-.extensionsTab:focus-visible,
-.customizeTab:focus-visible,
 .bookmarks button:focus-visible,
 .tokenbtn:focus-visible,
 .shieldsbtn:focus-visible,
@@ -2721,32 +2719,33 @@ input:focus-visible {
 
 /* the home page's two tabs hang off the card's edges, flush against its
    border. They sit opposite one another in the band between the status
-   line and the commits, level at the top: Bookmarks on the left, one
-   button, and on the right a tab twice as long, Extensions over Customize */
+   line and the commits, level and as tall: Bookmarks on the left, and on
+   the right one tab of two buttons side by side, Extensions and Customize,
+   one border and one background with no line between them */
 .bookmarksTab,
 .extensionsDock {
 	position: absolute;
 	z-index: 1; /* under .urlFill (2): the suggestions drop over it */
 	top: 132px;
+	box-sizing: border-box;
+	height: 44px;
+	/* one solid line in the card's own border colour */
+	border: 1px solid var(--pm-border);
+	background: var(--pm-handle); /* Tango Chocolate */
 }
 
 .bookmarksTab,
 .extensionsTab,
 .customizeTab {
-	width: 60px;
-	height: 44px;
 	display: grid;
 	place-items: center;
 	padding: 0;
-	/* one solid line in the card's own border colour */
-	border: 1px solid var(--pm-border);
-	border-radius: 10px;
-	background: var(--pm-handle); /* Tango Chocolate */
 	cursor: pointer;
 }
 
 .bookmarksTab {
 	left: 0;
+	width: 60px;
 	border-left: 0;
 	border-radius: 0 10px 10px 0;
 }
@@ -2754,28 +2753,28 @@ input:focus-visible {
 .extensionsDock {
 	right: 0;
 	display: flex;
-	flex-direction: column;
+	border-right: 0;
+	border-radius: 10px 0 0 10px;
 }
 
-/* the Extensions button's bottom line parts the two */
+/* each half is only the dock's fill: hover and press tint it, no edge */
 .extensionsTab,
 .customizeTab {
-	border-right: 0;
+	width: 54px;
+	height: 100%;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
 }
 
+/* (the dock's corner, inside its line) */
 .extensionsTab {
-	border-radius: 10px 0 0 0;
+	border-radius: 9px 0 0 9px;
 }
 
-.customizeTab {
-	border-top: 0;
-	border-radius: 0 0 0 10px;
-}
-
-/* a ring over its neighbour, not under it */
+/* the ring inside the half it is on, never over its neighbour */
 .extensionsDock button:focus-visible {
-	position: relative;
-	z-index: 1;
+	outline-offset: -3px;
 }
 
 .bookmarksTab:hover,
@@ -3080,12 +3079,14 @@ input:focus-visible {
 	.bookmarksTab,
 	.extensionsDock {
 		top: 206px;
+		height: 40px;
 	}
-	.bookmarksTab,
+	.bookmarksTab {
+		width: 52px;
+	}
 	.extensionsTab,
 	.customizeTab {
-		width: 52px;
-		height: 40px;
+		width: 46px;
 	}
 	.bookmarksTab img,
 	.extensionsTab img,
@@ -3100,47 +3101,20 @@ input:focus-visible {
 	.bookmarksTab,
 	.extensionsDock {
 		top: 126px;
+		height: 34px;
 	}
-	.bookmarksTab,
+	.bookmarksTab {
+		width: 52px;
+	}
 	.extensionsTab,
 	.customizeTab {
-		width: 52px;
-		height: 34px;
+		width: 46px;
 	}
 	.bookmarksTab img,
 	.extensionsTab img,
 	.customizeTab img {
 		width: 24px;
 		height: 24px;
-	}
-}
-
-/* a short window has no room for the tab twice as tall above the tiles and
-   the footer: Customize goes beside Extensions, the tab as tall as
-   Bookmarks, and the commits start where they did under one button */
-@media only screen and (min-width: 768px) and (max-height: 560px),
-	only screen and (max-width: 767px) and (max-height: 640px) {
-	.extensionsDock {
-		flex-direction: row;
-	}
-	.extensionsTab {
-		border-right: 1px solid var(--pm-border);
-		border-radius: 10px 0 0 10px;
-	}
-	.customizeTab {
-		border-top: 1px solid var(--pm-border);
-		border-left: 0;
-		border-radius: 0;
-	}
-}
-@media only screen and (min-width: 768px) and (max-height: 560px) {
-	.commits {
-		top: 188px;
-	}
-}
-@media only screen and (max-width: 767px) and (max-height: 640px) {
-	.commits {
-		top: 256px;
 	}
 }
 
