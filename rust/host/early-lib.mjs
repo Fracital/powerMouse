@@ -40,7 +40,54 @@ export const CHROME_CHANGED = new Map([
 			why: 'an optional chain is no assignment target; the preparser of V8 before Chrome 157 took one ending in a private name inside a function it compiles lazily, and Chrome 157 refuses it there as its full parse does',
 		},
 	],
+	...callTargets(),
 ]);
+
+/**
+ * A call is no assignment target. V8 before Chrome 158 compiled one and threw
+ * a ReferenceError when it ran; Chrome 158 refuses it as a SyntaxError in
+ * strict code (a strict script, a module, a class body) and keeps the
+ * runtime error in sloppy code, which the web still has
+ */
+function callTargets() {
+	const why =
+		'a call is no assignment target: V8 before Chrome 158 threw a ReferenceError when it ran one, Chrome 158 refuses it at compile time in strict code and keeps the runtime error in sloppy code';
+	const inClass = [
+		'class A extends B { constructor() { super() = 1 } }',
+		'class A extends B { constructor() { super()++ } }',
+	];
+	const inStrict = [
+		'a()++',
+		'++a()',
+		'a()--',
+		'(a())++',
+		'a.b()++',
+		'a() = 1',
+		'a.b() = 1',
+		'(a()) = 1',
+		'a()() = 1',
+		'a() += 1',
+		'a() -= 1',
+		'a() **= 1',
+		'for (a() in b);',
+		'for (a() of b);',
+		'for ((a()) in b);',
+		'for (a.b() in c);',
+		'for (a() = 0;;);',
+		'a() = b() = 1',
+		'async() = 1',
+		'async()++',
+		'for (async() in a);',
+		'eval() = 1',
+		'eval()++',
+		'async function f() { for await (a() of b); }',
+		'for (async() of a);',
+	];
+	return [
+		...inClass.map((text) => [text, { since: 158, recorded: '---', why }]),
+		...inStrict.map((text) => [text, { since: 158, recorded: '+--', why }]),
+	];
+}
 
 /** a case's marks in Chrome `major` (CHROME_CHANGED), the file's otherwise */
 export function recordedIn(entry, major) {
