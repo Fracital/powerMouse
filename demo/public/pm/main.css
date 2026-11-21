@@ -1626,10 +1626,6 @@ body.recents .frames .frame.gone,
 	place-items: center;
 }
 
-.recentsVibe[hidden] {
-	display: none;
-}
-
 .recentsVibe svg {
 	width: 26px;
 	height: 26px;

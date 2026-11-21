@@ -18,6 +18,7 @@
 //    focused window's tab on screen, and a second switch fetches nothing;
 //  - without moveBefore (Firefox) the frames stay where they are and are
 //    laid over their windows, their documents just as alive.
+/* global tabs, activateTab -- pm/main.js's, read in the demo's page */
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {

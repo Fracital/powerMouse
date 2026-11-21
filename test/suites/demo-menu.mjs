@@ -21,7 +21,7 @@
 //    Enter chooses, and no key reaches the tab manager behind it;
 //  - phone widths (390 and 320 px): the bar keeps the address box at 120px
 //    or more, with no horizontal scroll, and the menu and About fit.
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
 	done,
@@ -34,6 +34,20 @@ import {
 } from '../lib.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
+// where the build has vibeOS (demo-vibeos) the menu has its item too, before
+// Settings
+const VIBEOS = existsSync(`${root}dist/vibeos/embed.js`);
+const withVibe = (items) =>
+	VIBEOS
+		? items.flatMap((item) => (item === 'Settings' ? ['vibeOS', item] : [item]))
+		: items;
+const MENU = withVibe([
+	'Fullscreen',
+	'Extensions',
+	'Themes',
+	'Settings',
+	'About',
+]);
 const PAGE = `${FIXTURE}pages/bookmark-a.html`;
 
 const browser = await launch();
@@ -266,14 +280,7 @@ ok(
 	'the menu opens fading in, with Fullscreen, Extensions, Themes, Settings and About, on its first item',
 	menu.open &&
 		menu.fading &&
-		JSON.stringify(menu.items) ===
-			JSON.stringify([
-				'Fullscreen',
-				'Extensions',
-				'Themes',
-				'Settings',
-				'About',
-			]) &&
+		JSON.stringify(menu.items) === JSON.stringify(MENU) &&
 		menu.focused === 'Fullscreen' &&
 		menu.toolExpanded === 'true',
 	JSON.stringify(menu),
@@ -476,25 +483,19 @@ ok(
 	menu.open && menu.focused === 'Fullscreen',
 	JSON.stringify(menu),
 );
-await page.keyboard.press('ArrowDown');
-const second = (await menuState(page)).focused;
-await page.keyboard.press('ArrowDown');
-const third = (await menuState(page)).focused;
-await page.keyboard.press('ArrowDown');
-const fourth = (await menuState(page)).focused;
-await page.keyboard.press('ArrowDown');
-const fifth = (await menuState(page)).focused;
+const visited = [];
+for (let i = 1; i < MENU.length; i++) {
+	await page.keyboard.press('ArrowDown');
+	visited.push((await menuState(page)).focused);
+}
 await page.keyboard.press('ArrowDown');
 const wrapped = (await menuState(page)).focused;
 await page.keyboard.press('ArrowUp');
 ok(
 	'the arrows move between the items, round the ends',
-	second === 'Extensions' &&
-		third === 'Themes' &&
-		fourth === 'Settings' &&
-		fifth === 'About' &&
+	JSON.stringify(visited) === JSON.stringify(MENU.slice(1)) &&
 		wrapped === 'Fullscreen',
-	JSON.stringify({ second, third, fourth, fifth, wrapped }),
+	JSON.stringify({ visited, wrapped }),
 );
 await page.keyboard.press('Enter');
 let dialog = await until(
@@ -604,7 +605,9 @@ const actions = await page.evaluate(() =>
 const plus = await shownSoon(page, '#newTab');
 ok(
 	'the tab manager has no menu button, only its new-tab button',
-	JSON.stringify(actions) === JSON.stringify(['newTab']) &&
+	// (and, where the build has vibeOS, its switch, demo-vibeos)
+	JSON.stringify(actions.filter((id) => id !== 'vibeSwitch')) ===
+		JSON.stringify(['newTab']) &&
 		plus?.visible &&
 		!(await page.evaluate(() =>
 			[
@@ -755,8 +758,7 @@ await painted(without);
 menu = await menuState(without);
 ok(
 	'without the Fullscreen API the menu offers Extensions, Themes, Settings and About',
-	JSON.stringify(menu.items) ===
-		JSON.stringify(['Extensions', 'Themes', 'Settings', 'About']) &&
+	JSON.stringify(menu.items) === JSON.stringify(MENU.slice(1)) &&
 		menu.focused === 'Extensions',
 	JSON.stringify(menu),
 );

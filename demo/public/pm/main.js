@@ -7852,27 +7852,33 @@ Object.assign(SHIELD_ICONS, {
 	desktop:
 		'<path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M4.5 4h15A1.5 1.5 0 0 1 21 5.5v10a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 15.5v-10A1.5 1.5 0 0 1 4.5 4M9 20h6M12 17v3M7 8h6v5H7z"/>',
 });
-const vibeSwitch = $('vibeSwitch');
+// the tab manager's button and the menu's item exist only where the server
+// has vibeOS: elsewhere the page is as it was without it
 const menuVibe = element('button', 'pmMenuItem');
-menuVibe.id = 'menuVibe';
-menuVibe.type = 'button';
-menuVibe.tabIndex = -1;
-menuVibe.setAttribute('role', 'menuitem');
-menuVibe.hidden = !VIBEOS;
-menuSettings.before(menuVibe);
 /** the menu's vibeOS item says which way it switches */
 function syncVibeItem() {
 	menuVibe.innerHTML = `${shieldIcon('desktop')}<span>${vibeShown() ? 'Leave vibeOS' : 'vibeOS'}</span>`;
 }
-syncVibeItem();
-menuVibe.addEventListener('click', () => {
-	menuPopover.close();
-	toggleVibe();
-});
 if (VIBEOS) {
-	vibeSwitch.hidden = false;
+	menuVibe.id = 'menuVibe';
+	menuVibe.type = 'button';
+	menuVibe.tabIndex = -1;
+	menuVibe.setAttribute('role', 'menuitem');
+	menuSettings.before(menuVibe);
+	syncVibeItem();
+	menuVibe.addEventListener('click', () => {
+		menuPopover.close();
+		toggleVibe();
+	});
+	// beside the new-tab button: every tab in a window of vibeOS's desktop
+	const vibeSwitch = element('button', 'recentsMore recentsVibe');
+	vibeSwitch.id = 'vibeSwitch';
+	vibeSwitch.type = 'button';
+	vibeSwitch.title = 'vibeOS';
+	vibeSwitch.setAttribute('aria-label', 'Switch to vibeOS');
 	vibeSwitch.innerHTML = shieldIcon('desktop');
 	vibeSwitch.addEventListener('click', () => enterVibe());
+	$('newTab').before(vibeSwitch);
 }
 
 // ---- the installed app ---------------------------------------------------------

@@ -266,6 +266,9 @@ const dump = (page) =>
 			// /api/commits: none offline (CI), so neither they nor the note
 			// that says why are part of the fixture
 			if (el.closest('#commitList, #commitsNote')) continue;
+			// vibeOS's switches exist only where the build has vibeOS
+			// (demo-vibeos), so the fixture is the same with or without it
+			if (el.closest('#vibeSwitch, #menuVibe, #vibeos-root')) continue;
 			const cs = getComputedStyle(el);
 			if (cs.display === 'none') continue;
 			const row = {};
