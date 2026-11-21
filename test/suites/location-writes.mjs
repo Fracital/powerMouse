@@ -22,6 +22,7 @@ import {
 	done,
 	FIXTURE,
 	HOST,
+	hostPage,
 	launch,
 	ok,
 	openDemo,
@@ -245,8 +246,8 @@ for (const [mode, base] of [
 			`${mode}: ${name} navigates the top proxied page on its routed URL, not the host`,
 			landed.length > 0 &&
 				landed.every(([, url]) => ROUTED.test(url)) &&
-				// the host keeps its page (its hash follows the frame)
-				page.url().split('#')[0] === hostURL.split('#')[0] &&
+				// the host keeps its page (its token follows the frame)
+				hostPage(page.url()) === hostPage(hostURL) &&
 				leaked.length === 0,
 			JSON.stringify({ landed, host: page.url(), leaked }),
 		);

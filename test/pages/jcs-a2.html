@@ -1,0 +1,24 @@
+<!doctype html>
+<html data-step="a2">
+	<head>
+		<title>JCS A2</title>
+		<script src="jcs-probe.js"></script>
+	</head>
+	<body>
+		<button id="push">push</button>
+		<a id="hash" href="#part">hash</a>
+		<a id="cross" href="#">cross</a>
+		<div id="part" style="margin-top: 1500px">part</div>
+		<script>
+			document.getElementById('push').onclick = () => {
+				history.pushState({ pushed: 1 }, '', 'jcs-a2.html?pushed');
+				window.__jcsReport('push');
+			};
+			// B1's URL is only ever made here, at run time, so its marker
+			// ("visit" + "7Q") is in no response body: a copy of it in the
+			// profile is a copy of the URL
+			document.getElementById('cross').href =
+				`http://localhost:${location.port}/pages/jcs-b1.html?k=${'visit'}${'7Q'}`;
+		</script>
+	</body>
+</html>

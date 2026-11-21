@@ -1,0 +1,75 @@
+<!doctype html>
+<html>
+	<head>
+		<title>JCS shape host</title>
+	</head>
+	<body>
+		<script>
+			// The bare shape of "just call stomp", with no proxy: every document
+			// is written into a fresh blank frame of this page's origin, the host
+			// keeps the session history, and the frame's own history calls are
+			// kept by the host (a written document's URL is this page's, so the
+			// page's pushState of its own URL would throw or name this page).
+			// The audit runs its walk on it (test/suites/just-call-stomp-audit.mjs,
+			// mode `shape`) to see what the browser itself records of the shape.
+			let current = null;
+			const entries = [];
+			let index = -1;
+			async function go(url, push = true) {
+				const target = new URL(url, location.href);
+				// the fixture serves the same pages on every host name
+				const html = await (
+					await fetch(
+						`/pages/${target.pathname.split('/').pop()}${target.search}`,
+					)
+				).text();
+				current?.remove();
+				const frame = document.createElement('iframe');
+				frame.className = 'frame';
+				frame.width = 1000;
+				frame.height = 600;
+				document.body.append(frame);
+				const win = frame.contentWindow;
+				const doc = frame.contentDocument;
+				doc.open();
+				// the host's stand-ins for the page's history calls
+				win.history.pushState = (state, unused, next) => {
+					entries.splice(index + 1);
+					entries.push(new URL(next, target).href);
+					index++;
+				};
+				win.history.replaceState = (state, unused, next) => {
+					entries[index] = new URL(next, target).href;
+				};
+				doc.write(html.replace('<head>', `<head><base href="${target.href}">`));
+				doc.close();
+				doc.addEventListener(
+					'click',
+					(event) => {
+						const link = event.target.closest?.('a[href]');
+						if (!link) return;
+						const next = new URL(link.href);
+						event.preventDefault();
+						if (
+							next.hash &&
+							next.href.split('#')[0] === target.href.split('#')[0]
+						)
+							// a fragment of the written document: the browser's own
+							// fragment navigation, for :target and the scroll
+							win.location.hash = next.hash;
+						else go(next.href);
+					},
+					true,
+				);
+				current = frame;
+				if (push) {
+					entries.splice(index + 1);
+					entries.push(target.href);
+					index++;
+				}
+			}
+			window.__shapeGo = go;
+			window.__shapeEntries = () => ({ entries, index });
+		</script>
+	</body>
+</html>

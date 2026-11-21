@@ -24,6 +24,7 @@ import AnchorModule from './modules/Anchor';
 import AnimationFramesModule from './modules/AnimationFrames';
 import AudioModule from './modules/Audio';
 import BlobDocumentsModule from './modules/BlobDocuments';
+import CalledModule from './modules/Called';
 import CanvasTaintModule from './modules/CanvasTaint';
 import ClientHintsModule from './modules/ClientHints';
 import ContentSecurityModule from './modules/ContentSecurity';
@@ -216,6 +217,9 @@ export function addClientModules(client: DocumentClient) {
 	client.addModule(CSSReadbackModule);
 	// last: the Navigate module's own observer keeps the native constructor
 	client.addModule(MutationObserverModule);
+	// just call stomp: after History and Visited, whose hooks and listener it
+	// wraps and follows
+	if (client.called) client.addModule(CalledModule);
 }
 
 const createDOMClient = createClientFactory(DocumentClient, addClientModules);

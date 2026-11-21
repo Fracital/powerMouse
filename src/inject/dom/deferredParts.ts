@@ -169,6 +169,7 @@ import { ancestorOriginsList } from './ancestorOriginsList';
 import { animatedHref } from './animatedHref';
 import { attributeViewMethods } from './attributeViewMethods';
 import { relayBeacon } from './beaconRelay';
+import { calledHooks } from './calledHooks';
 import {
 	identityFlow,
 	loginStatus,
@@ -478,6 +479,9 @@ export const parts = {
 	// window.open(), at a document's first call (./windowOpen.ts;
 	// modules/DOMHooks.ts)
 	windowOpen,
+	// a called document's hooks, as its client applies (./calledHooks.ts;
+	// modules/Called.ts): only such a document evaluates them
+	calledHooks,
 };
 
 export type DeferredParts = typeof parts;

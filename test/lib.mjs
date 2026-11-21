@@ -834,6 +834,21 @@ export const submitLanding = (page, url) =>
 		form.requestSubmit();
 	}, url);
 
+/**
+ * the demo's own document at `url`: its address without the fragment and
+ * without the token of the entry on show (`?3`, pm/main.js writeAddress),
+ * which a tab's navigation changes in place
+ */
+export const hostPage = (url) => {
+	const parsed = new URL(url);
+	const query = parsed.search
+		.slice(1)
+		.split('&')
+		.filter((part) => part && !/^\d+=?$/.test(part))
+		.join('&');
+	return `${parsed.origin}${parsed.pathname}${query ? `?${query}` : ''}`;
+};
+
 /** type a URL into the omnibox (navigates the active tab) */
 export const submitOmni = (page, url) =>
 	page.evaluate((u) => {

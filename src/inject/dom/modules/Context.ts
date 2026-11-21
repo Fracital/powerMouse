@@ -1993,6 +1993,8 @@ export default class ContextModule extends Module<DocumentClient> {
 				catchRequiredArguments(args.length, 1, 'Window', 'postMessage', realm);
 				if (stomp?.nativePostMessage)
 					return moduleClient.postToWindow!(receiver as object, args);
+				// (just call stomp: a frame on its call page, not called yet)
+				if (!stomp && moduleClient.callPageWindow?.(receiver)) return undefined;
 				if (moduleClient.postToRestricted!(receiver, args)) return undefined;
 				return Reflect.apply(target, receiver, args);
 			});

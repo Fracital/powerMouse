@@ -172,6 +172,7 @@ import {
 	keptHelperNames,
 } from './id';
 import { probeIsolation } from './isolationProbe';
+import { justCallStomp, type CalledFrame } from './justCallStomp';
 import { mediaVerdict } from './mediaVerdict';
 import type { StaleInfo, TransportDescriptor } from './messages';
 import { DEFAULT_SANDBOX } from './remote';
@@ -207,6 +208,8 @@ export type { ProxyTransport } from '@mercuryworkshop/proxy-transports';
 export type { Config, ConfigCodec } from '../config';
 
 export { RemoteController, RemoteFrame, DEFAULT_SANDBOX } from './remote';
+export { justCallStomp, CalledFrame } from './justCallStomp';
+export type { CalledEntry, JustCallStompOptions } from './justCallStomp';
 export { Extensions } from './extensions';
 export { ExtensionError } from '../extensions/types';
 export type {
@@ -1363,6 +1366,8 @@ export class StompController extends EventTarget {
 	 * it registers without `register()` or the omnibox module (`omnibox`)
 	 */
 	static readonly DEFAULT_ASSETS: Readonly<Required<Assets>> = DEFAULT_ASSETS;
+	/** just call stomp (./justCallStomp.ts), for a classic-script host */
+	static readonly justCallStomp = justCallStomp;
 	/**
 	 * Register the STomp service worker served from `directory` (the
 	 * constructor's default when omitted: the directory of the current script)
@@ -3976,6 +3981,10 @@ export class StompController extends EventTarget {
 					: null,
 		};
 	}
+	/** @internal watch a frame element's geometry (one a frame adopted) */
+	watchGeometry(element: HTMLIFrameElement) {
+		this.#geometry.observe(element);
+	}
 	createFrame(element: HTMLIFrameElement = document.createElement('iframe')) {
 		const frame = new Frame(this, element, this.#sandbox);
 		this.frames.push(frame);
@@ -4237,8 +4246,13 @@ export class Frame extends EventTarget {
 					`${allow}${allow && !allow.endsWith(';') ? '; ' : allow ? ' ' : ''}cross-origin-isolated 'self' ${slots.join(' ')}`,
 				);
 		}
-		// a document of the frame tells of its first user activation here,
-		// at once (the message it would post can come too late)
+		this.#tellActivation(element);
+	}
+	/**
+	 * a document of the frame tells of its first user activation here, at
+	 * once (the message it would post can come too late)
+	 */
+	#tellActivation(element: HTMLIFrameElement) {
 		Reflect.defineProperty(element, ACTIVATED, {
 			value: (token: unknown) =>
 				this.controller.siteMode
@@ -4246,6 +4260,17 @@ export class Frame extends EventTarget {
 					: noteActivation(this.historyWindow(), String(token)),
 			configurable: true,
 		});
+	}
+	/**
+	 * @internal just call stomp (./justCallStomp.ts): the frame's tab of
+	 * blank frames, once called; its steps are the frame's
+	 */
+	called: CalledFrame | null = null;
+	/** @internal just call stomp: a fresh element has the old one's place, and is the frame's from now on */
+	adopt(element: HTMLIFrameElement) {
+		this.element = element;
+		this.#tellActivation(element);
+		this.controller.watchGeometry(element);
 	}
 	/**
 	 * @internal the site pool: a top document of the frame reported, from
@@ -4717,6 +4742,7 @@ export class Frame extends EventTarget {
 	 * Listen for the frame's `load` before calling when you need that event.
 	 */
 	async go(url: string): Promise<void> {
+		if (this.called) return this.called.go(url);
 		const colorScheme = frameColorScheme(this.element);
 		this.controller.reportViewport(
 			this.element.clientWidth,
@@ -4810,10 +4836,12 @@ export class Frame extends EventTarget {
 	 * show its own "nothing to go back to" state.
 	 */
 	async back(): Promise<boolean> {
+		if (this.called) return this.called.step(-1);
 		if (this.controller.siteMode) return this.#siteStep('back');
 		return this.#step('back');
 	}
 	async forward(): Promise<boolean> {
+		if (this.called) return this.called.step(1);
 		if (this.controller.siteMode) return this.#siteStep('forward');
 		return this.#step('forward');
 	}
@@ -4827,6 +4855,7 @@ export class Frame extends EventTarget {
 	}
 	/** whether the frame's history (nested frames included) has an entry before/after the current one; null when the browser cannot tell */
 	get canGoBack(): boolean | null {
+		if (this.called) return this.called.canStep(-1);
 		if (this.controller.siteMode)
 			return (
 				this.#target('back') !== null ||
@@ -4837,6 +4866,7 @@ export class Frame extends EventTarget {
 		return canTraverse(this.historyWindow(), 'back');
 	}
 	get canGoForward(): boolean | null {
+		if (this.called) return this.called.canStep(1);
 		if (this.controller.siteMode)
 			return (
 				this.#target('forward') !== null ||
@@ -4847,6 +4877,7 @@ export class Frame extends EventTarget {
 	}
 	/** reload the frame; resolves when the reloaded document first reports (false when there was no document to reload) */
 	async reload(): Promise<boolean> {
+		if (this.called) return this.called.reload();
 		const win = this.element.contentWindow;
 		if (!win) return false;
 		const run = this.#runs[this.#at];

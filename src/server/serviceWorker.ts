@@ -99,6 +99,7 @@ import { allowApartAgent, apartClient } from './apartAgent';
 import { knownOriginOf, knownTopSiteOf, recordBlobOrigin } from './blobOrigins';
 import { Blocker, heardBlockerBytes } from './blocker';
 import { memoryCache } from './cache';
+import { answerOf, calledEvent, callPage, isCall } from './called';
 import { legacyFileSystemCleared } from './clearSiteData';
 import {
 	hintsDocument,
@@ -2878,7 +2879,36 @@ function srcdocClaim(event: FetchEvent, pathname: string): boolean {
 }
 
 self.addEventListener('fetch', (event: FetchEvent) => {
+	// just call stomp: answered as the navigation it stands for (./called.ts)
+	if (isCall(event.request)) {
+		event.respondWith(answerCall(event));
+		return;
+	}
+	dispatch(event);
+});
+
+async function answerCall(event: FetchEvent): Promise<Response> {
+	const realURL = (url: string) => {
+		const ready = controllerFor(new URL(url).pathname)?.ready;
+		try {
+			return ready ? ready.realURL(url) : null;
+		} catch (error) {
+			return null;
+		}
+	};
+	const called = await calledEvent(event, (url) => {
+		const real = realURL(url);
+		return real ? new URL(real).origin : null;
+	});
+	if (!called)
+		return new Response(null, { status: 403, statusText: 'Forbidden' });
+	dispatch(called);
+	return answerOf(called, realURL);
+}
+
+function dispatch(event: FetchEvent) {
 	const { pathname, search } = new URL(event.request.url);
+	if (callPage(event, pathname)) return;
 	// the host's own (SYNC_RELAY_ROUTE), which no controller's address is
 	if (
 		pathname.startsWith(
@@ -2921,7 +2951,7 @@ self.addEventListener('fetch', (event: FetchEvent) => {
 	// the site pool: a slot's navigation whose agent is gone
 	else if (event.request.mode === 'navigate' && addressShaped(pathname))
 		event.respondWith(unclaimed(event.request, pathname));
-});
+}
 
 /**
  * A navigation's answer, whose body this worker goes on writing once it is

@@ -58,10 +58,12 @@ import {
 import { IMPORT_MAP_ROUTE } from '../../sri';
 import StompURL from '../../StompURL';
 import {
+	CALLED_KEY,
 	HOOK_ERROR,
 	LOAD_HEADER,
 	OPEN_TAB,
 	SHELL_END,
+	type CalledSession,
 } from '../../transport/messages';
 import { queryOf } from '../../urlShape';
 import { BUILD, coreModuleKey } from '../../version';
@@ -571,8 +573,35 @@ export default class DocumentClient extends Client {
 		() => string,
 		() => Document | null,
 	];
+	/**
+	 * Just call stomp: what the host said of the document it wrote into a
+	 * blank frame (src/controller/justCallStomp.ts), taken off the window
+	 * before any page script; undefined for every other document
+	 */
+	readonly called?: {
+		port: MessagePort;
+		session: CalledSession;
+		/** the referrer policy of its answer's header */
+		policy?: string;
+	};
+	/**
+	 * Just call stomp: a frame of this called document the page sent to
+	 * `url` (`routed`) is called instead (calledHooks.ts). The src the frame
+	 * element is to get, true when it is to keep the one it has, false when
+	 * the frame is to be sent to the route as in every other document
+	 */
+	callFrame?: (
+		element: Element,
+		url: string,
+		routed: string,
+	) => string | boolean;
 	constructor(init: ParsedConfig, global: typeof globalThis) {
 		super(init, global);
+		const called = Reflect.getOwnPropertyDescriptor(global, CALLED_KEY)?.value;
+		if (called) {
+			Reflect.deleteProperty(global, CALLED_KEY);
+			this.called = called;
+		}
 		// (before any hook: its markers are its own, MutationObserver.ts useMarker)
 		useMarker(this.names.access);
 		const documentProto = this.global.Document.prototype;

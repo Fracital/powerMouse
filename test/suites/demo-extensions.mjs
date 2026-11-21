@@ -1864,16 +1864,21 @@ const pageBuild = JSON.parse(
 const olderBuild = `${pageBuild.slice(0, -1)}${pageBuild.endsWith('0') ? '1' : '0'}`;
 // (the page's own copy of the controller, from a path the worker does not
 // answer: a route never sees what the worker answers)
-await same.route(PROXY, async (route) => {
-	const response = await route.fetch();
-	route.fulfill({
-		response,
-		body: (await response.text()).replace(
-			/\/stomp\/Controller\.js(\?[^"']*)?/,
-			'/stale-build/Controller.js',
-		),
-	});
-});
+// (the page's address may name its tab by a token, `?3`: the route takes
+// the page at any query)
+await same.route(
+	(url) => `${url.origin}${url.pathname}` === PROXY,
+	async (route) => {
+		const response = await route.fetch();
+		route.fulfill({
+			response,
+			body: (await response.text()).replace(
+				/\/stomp\/Controller\.js(\?[^"']*)?/,
+				'/stale-build/Controller.js',
+			),
+		});
+	},
+);
 await same.route('**/stale-build/Controller.js', (route) =>
 	route.fulfill({
 		contentType: 'text/javascript',

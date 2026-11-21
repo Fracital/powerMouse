@@ -28,13 +28,31 @@
 		<!-- the chosen theme (docs/themes.md), on the root before the first paint -->
 		<script src="/pm/theme.js"></script>
 		<script>
-			// a page named in the fragment (a reload, a restored session, a link
-			// to a tab) opens in the browser view from the first paint: the home
+			// a page named in the address (a token this browser tab wrote, `?3`,
+			// at a reload or a restored session; an old link's or an embedder's
+			// fragment) opens in the browser view from the first paint: the home
 			// screen below is never drawn before it (pm/main.js takes it over),
 			// and the address bar is never empty with its placeholder: it shows
 			// the page's address (the script after it) or nothing until
-			// pm/main.js has read the fragment (.restoring)
-			if (location.hash.length > 1)
+			// pm/main.js has read the address (.restoring). A token this tab
+			// never wrote opens home.
+			window.__pmOpened = (() => {
+				const tokens = location.search
+					.slice(1)
+					.split('&')
+					.filter((part) => /^\d+=?$/.test(part));
+				const token = tokens.length
+					? tokens[tokens.length - 1].replace('=', '')
+					: '';
+				try {
+					const session = JSON.parse(
+						sessionStorage.getItem('stomp-demo:session'),
+					);
+					if (token && session?.tokens?.[token]) return token;
+				} catch {}
+				return location.hash.length > 1 ? location.hash : '';
+			})();
+			if (window.__pmOpened)
 				document.documentElement.classList.add('opening', 'restoring');
 		</script>
 		<script src="/config.js"></script>
@@ -225,14 +243,18 @@
 						placeholder="Search or enter a web address"
 					/>
 					<script>
-						// a page named in the fragment: the bar has its address from
-						// the first paint, as the bar showed it when the fragment was
-						// written (pm/main.js keepBarText), where Chrome's tab opened
-						// on an address never shows the empty bar
+						// a page named in the address: the bar has its address from
+						// the first paint, as the bar showed it when the token (or
+						// fragment) was written (pm/main.js keepBarText), where
+						// Chrome's tab opened on an address never shows the empty bar
 						if (document.documentElement.classList.contains('restoring'))
 							try {
-								const kept = JSON.parse(localStorage.getItem('stomp-demo:bar'));
-								const page = kept.find((entry) => entry[0] === location.hash);
+								const kept = JSON.parse(
+									sessionStorage.getItem('stomp-demo:bar'),
+								);
+								const page = kept.find(
+									(entry) => entry[0] === window.__pmOpened,
+								);
 								if (page)
 									document.querySelector('#omni .omnibox').value = page[1];
 							} catch {}

@@ -72,7 +72,13 @@ const PROXY_ORIGIN =
 		: location.hostname === 'localhost'
 			? location.origin.replace('localhost', '127.0.0.1')
 			: null;
-let ISOLATED = !!PROXY_ORIGIN && PROXY_ORIGIN !== location.origin;
+// Just call stomp (?mode=just-call-stomp, StompController.justCallStomp):
+// every proxied document is written into a fresh frame of one constant page
+// the worker serves (its call page), and no frame is navigated to a site;
+// in the same-origin mode and without the site pool
+const JUST_CALL =
+	new URLSearchParams(location.search).get('mode') === 'just-call-stomp';
+let ISOLATED = !JUST_CALL && !!PROXY_ORIGIN && PROXY_ORIGIN !== location.origin;
 // The Tor choice is for STomp's proxied traffic, not the host page. A
 // separate Wisp relay must route TCP through Tor; with no relay, a saved Tor
 // choice is an error rather than a silent direct connection.
@@ -143,7 +149,7 @@ const SITE_POOL = (() => {
 	const ports = CFG.sitePool;
 	if (!Array.isArray(ports) || !ports.length) return null;
 	const query = new URLSearchParams(location.search);
-	if (query.has('nopool')) return null;
+	if (query.has('nopool') || JUST_CALL) return null;
 	const proxy = ISOLATED ? new URL(PROXY_ORIGIN) : location;
 	return ports.map((port) => `${proxy.protocol}//${proxy.hostname}:${port}`);
 })();
@@ -1383,7 +1389,8 @@ async function switchTransport(name) {
 
 // ---- tabs -----------------------------------------------------------------
 
-function createTab() {
+/** a new tab; `id` names a tab kept from before this page was loaded (restoreTabs) */
+function createTab(id = 0) {
 	const element = document.createElement('iframe');
 	element.className = 'frame hidden';
 	element.title = 'Proxied page';
@@ -1398,6 +1405,8 @@ function createTab() {
 	const tab = {
 		frame,
 		element,
+		// the tab's id in this browser tab's session (the top URL's tokens)
+		sid: id || ++session.tab,
 		url: '',
 		history: [],
 		index: -1,
@@ -1411,7 +1420,7 @@ function createTab() {
 		tokenPort: null, // a Discord page's port for its login token (TOKEN_HOOK)
 		passkeyOffer: null, // a passkey sign-in its site waits for (askPasskey)
 	};
-	element.addEventListener('load', async () => {
+	const loaded = async () => {
 		// a RemoteFrame's url is polled: refresh before recording, or a redirect
 		// leaves both the requested and the final URL in the list
 		if (frame.refresh) await frame.refresh();
@@ -1424,8 +1433,25 @@ function createTab() {
 			syncOmnibox();
 		}
 		syncCardBar(tab);
-	});
+	};
+	element.addEventListener('load', loaded);
+	if (JUST_CALL) {
+		// each document gets a frame of its own in the tab's element's place
+		frame.addEventListener('element', ({ detail }) => {
+			tab.element = detail;
+			detail.addEventListener('load', loaded);
+		});
+		// each change of the tab's history: the top URL's token follows
+		frame.addEventListener('entries', () => calledEntries(tab));
+		// (a tab kept from before this page was reloaded shows again)
+		tab.calling = StompController.justCallStomp(frame, undefined, {
+			key: `tab-${tab.sid}`,
+		});
+		tab.calling.catch(() => {});
+	}
+	session.tab = Math.max(session.tab, tab.sid);
 	tabs.push(tab);
+	keepTabs();
 	return tab;
 }
 
@@ -1459,6 +1485,7 @@ function recordUrl(tab) {
 	tab.history.length = tab.index + 1;
 	tab.history.push(url);
 	tab.index = tab.history.length - 1;
+	keepTabs();
 }
 
 /**
@@ -1497,6 +1524,7 @@ const goForward = (tab) => step(tab, 'forward');
 function activateTab(tab) {
 	if (tab !== activeTab) extTabChanged();
 	activeTab = tab;
+	keepTabs();
 	// the tab chrome.tabs.query({ active: true }) answers, and whose badges
 	// the extensions' buttons show
 	if (controller) controller.activeTab = tab.frame;
@@ -1557,6 +1585,7 @@ function closeTab(tab, { stayInRecents = false } = {}) {
 	if (frames !== -1) controller.frames.splice(frames, 1);
 	if (tab === activeTab) activeTab = tabs[Math.max(0, index - 1)] || null;
 	if (!activeTab) controller.activeTab = null;
+	keepTabs();
 	if (stayInRecents) {
 		recentsIndex = Math.min(recentsIndex, Math.max(0, tabs.length - 1));
 		if (tabs.length) renderRecents();
@@ -1642,8 +1671,9 @@ function showLanding() {
 	document.body.classList.remove('browsing');
 	hideRecents();
 	if (dockRects) slideFrom(homeTiles, dockRects);
-	hashWrites++;
-	history.replaceState(null, '', location.pathname);
+	// home names no page: the address keeps only the page's own flags
+	addressWrites++;
+	history.replaceState(null, '', addressFor(''));
 	mainForm.url.focus();
 }
 
@@ -2355,7 +2385,7 @@ async function navigate(input, { newTab = false } = {}) {
 	setStatus('Loading…');
 	try {
 		await tab.frame.go(url);
-		writeHash(url);
+		void writeAddress(tab);
 		settleGoing(tab);
 		// the frame answered without moving (the leaving document reported, or
 		// nothing came): give the navigation the time a browser would, then
@@ -2395,7 +2425,7 @@ function stopGoing(tab) {
 	syncCardBar(tab);
 }
 
-// keep the omnibox and hash in sync with the active tab (pushState included)
+// keep the omnibox and the top URL in sync with the active tab (pushState included)
 function syncOmnibox(force = false) {
 	if (!activeTab || browser.classList.contains('hidden')) return;
 	const url = shownUrl(activeTab);
@@ -2403,70 +2433,383 @@ function syncOmnibox(force = false) {
 	if (!activeTab.goingTo) activeTab.url = url;
 	recordUrl(activeTab);
 	syncToolbar();
+	void writeAddress(activeTab);
 	if (!force && document.activeElement === omni.url) return;
 	const shown = barUrl(url);
 	if (omni.url.value !== shown) omni.url.value = shown;
-	writeHash(url);
 }
 
-// The fragment names the active tab's page by its route (`html/<sealed>`,
-// what follows the controller's address), not by its URL: the host's own
-// address, its history entries and a bookmark of it show no more of the
-// page than the proxy's routes do.
-let hashWrites = 0;
-let hashed = { url: '', hash: '' };
-async function writeHash(url) {
-	const write = ++hashWrites;
-	if (hashed.url !== url)
+// ---- the top URL ------------------------------------------------------------
+//
+// The page's own address names no page a tab shows. Each entry of the
+// session history the demo shows gets a token, the bare query `?1`, `?2`,
+// and on (a counter of this browser tab's), after the page's own flags
+// (`?nopool&3`); what a token stands for (the tab, its entry, the page's
+// URL and title) is kept in sessionStorage alone, which a reload and the
+// browser's session restore keep and which goes with the browser tab. The
+// browser's history, its tab list and back list, and an extension's tabs
+// and history see the demo's address and a number. A token this browser
+// tab never wrote (a copied link, another window) opens home.
+//
+// A proxied frame's navigation already makes an entry of the browser's
+// joint session history, and that entry shares the page's own with the
+// entry before it, so every entry of a frame's walk shows the newest token:
+// the page only replaces its address (writeAddress), and history.length
+// grows no more than the frame's navigations make it. A dialed tab
+// (?mode=just-call-stomp) is never navigated, so each new entry of its
+// history is a pushState here (calledEntries), and Back and Forward come
+// back as popstate events that step the tab to the token's entry.
+//
+// A page framed by its embedder (SystemYA's /ui/ frame), or one whose
+// STOMP_CONFIG.addressFragment is 'sealed', also writes the sealed route of
+// the page on show as its fragment (`#html/<sealed>`), as it always did: the
+// embedder reads it and decides what its own address shows.
+const ADDRESS_FRAGMENT =
+	(CFG.addressFragment ?? (window.parent !== window ? 'sealed' : 'token')) ===
+	'sealed';
+const SESSION_KEY = 'stomp-demo:session';
+const TOKENS_KEPT = 256;
+
+/** the query's parts that are no token: the page's flags (nopool, mode=...) */
+const queryFlags = () =>
+	location.search
+		.slice(1)
+		.split('&')
+		.filter((part) => part && !/^\d+=?$/.test(part));
+
+/** the token of the page's address, '' for none */
+function addressToken() {
+	const parts = location.search
+		.slice(1)
+		.split('&')
+		.filter((part) => /^\d+=?$/.test(part));
+	return parts.length ? parts[parts.length - 1].replace('=', '') : '';
+}
+
+/** the page's address at `token` ('' for home), with its flags and `hash` */
+function addressFor(token, hash = '') {
+	const query = [...queryFlags(), ...(token ? [String(token)] : [])].join('&');
+	return `${location.pathname}${query ? `?${query}` : ''}${hash}`;
+}
+
+/**
+ * This browser tab's session: the last token and tab id given out, what
+ * each token stands for (`{ tab, index, entry?, key?, url, title }`: the
+ * tab, its entry by place and, in a dialed tab, by the CalledEntry's id and
+ * key), and the tabs open (`{ id, url }`) with the one on show
+ */
+const session = (() => {
+	try {
+		const kept = JSON.parse(sessionStorage.getItem(SESSION_KEY));
+		if (kept && typeof kept.tokens === 'object' && Array.isArray(kept.tabs))
+			return kept;
+	} catch {}
+	return { next: 0, tab: 0, tokens: {}, tabs: [], active: 0 };
+})();
+let sessionKept = '';
+function keepSession() {
+	const numbers = Object.keys(session.tokens)
+		.map(Number)
+		.sort((a, b) => a - b);
+	for (const old of numbers.slice(0, -TOKENS_KEPT)) delete session.tokens[old];
+	const text = JSON.stringify(session);
+	if (text === sessionKept) return;
+	sessionKept = text;
+	try {
+		sessionStorage.setItem(SESSION_KEY, text);
+	} catch {}
+}
+
+/** the tabs open and the one on show, for a load at a token (restoreTabs) */
+function keepTabs() {
+	session.tabs = tabs.map((tab) => ({
+		id: tab.sid,
+		url: normalizeUrl(tab.frame.url || tab.url || ''),
+	}));
+	session.active = activeTab?.sid ?? 0;
+	keepSession();
+}
+
+/** a new token for an entry of `tab` */
+function mintToken(tab, fields) {
+	const token = String(++session.next);
+	session.tokens[token] = { tab: tab.sid, ...fields };
+	keepSession();
+	return token;
+}
+
+/** the newest token of `tab` whose record `matches` */
+function tokenWhere(tab, matches) {
+	let found = '';
+	for (const [token, record] of Object.entries(session.tokens))
+		if (
+			record.tab === tab.sid &&
+			matches(record) &&
+			Number(token) > Number(found)
+		)
+			found = token;
+	return found;
+}
+
+/** the CalledEntry a dialed tab shows */
+const calledEntry = (tab) => tab.frame.called?.entries[tab.frame.called.index];
+
+/**
+ * The token of the entry `tab` shows: the address's own while it names
+ * that entry, else the one that entry had, else a new one. Null while the
+ * tab shows no committed page.
+ */
+function entryToken(tab) {
+	const shown = session.tokens[addressToken()];
+	const title = tabTitle(tab);
+	const entry = calledEntry(tab);
+	if (tab.frame.called) {
+		if (!entry) return null;
+		const fields = {
+			index: tab.frame.called.index,
+			entry: entry.id,
+			key: entry.key,
+			url: entry.url,
+			title: entry.title || title,
+		};
+		const token = tokenWhere(tab, (record) => record.entry === entry.id);
+		if (!token) return mintToken(tab, fields);
+		Object.assign(session.tokens[token], fields);
+		return token;
+	}
+	if (tab.goingTo) return null; // the document the navigation leaves
+	const url = normalizeUrl(tab.frame.url || '');
+	if (!url) return null;
+	const fields = { index: tab.index, url, title };
+	const token =
+		(shown?.tab === tab.sid && shown.url === url && addressToken()) ||
+		tokenWhere(
+			tab,
+			(record) => record.url === url && record.index === tab.index,
+		);
+	if (!token) return mintToken(tab, fields);
+	Object.assign(session.tokens[token], fields);
+	return token;
+}
+
+// the sealed route of the page on show, for an address with the fragment
+let sealed = { url: '', hash: '' };
+async function sealedHash(url) {
+	if (sealed.url !== url)
 		try {
 			const route = new URL(await controller.route(url));
-			hashed = {
+			sealed = {
 				url,
 				hash: `#${route.pathname.split('/').slice(-2).join('/')}${route.hash}`,
 			};
 		} catch {
-			return;
+			return '';
 		}
-	if (write !== hashWrites || browser.classList.contains('hidden')) return;
-	if (location.hash !== hashed.hash)
-		history.replaceState(null, '', hashed.hash);
-	keepBarText(location.hash, barUrl(url));
+	return sealed.hash;
 }
 
-// What the address bar showed for each fragment written, so a load at one
-// (a reload, a restored session, the link in a new tab) has the page's
-// address in the bar from the first paint (index.html), before the
-// controller can read the fragment. Kept beside the history (omnibox:visits)
-// in this browser alone, the newest BAR_KEPT fragments only.
+// a popstate is stepping a tab to its token's entry: the address is there
+// already, and stays until the tab is
+let stepping = '';
+let addressWrites = 0;
+/**
+ * Put the token of the entry the active tab shows in the page's address,
+ * by replacing the address's entry, or by a new entry (`push`, a dialed
+ * tab's new entry while the address names one)
+ */
+async function writeAddress(tab, { push = false } = {}) {
+	const write = ++addressWrites;
+	const current = () =>
+		write === addressWrites &&
+		tab === activeTab &&
+		!stepping &&
+		!browser.classList.contains('hidden');
+	if (!tab || !current()) return;
+	const token = entryToken(tab);
+	if (!token) return;
+	const record = session.tokens[token];
+	const hash = ADDRESS_FRAGMENT ? await sealedHash(record.url) : '';
+	if (!current()) return;
+	const address = addressFor(token, hash);
+	if (`${location.pathname}${location.search}${location.hash}` !== address) {
+		// (an address whose token names nothing is replaced)
+		if (push && session.tokens[addressToken()] && addressToken() !== token)
+			history.pushState(null, '', address);
+		else history.replaceState(null, '', address);
+	}
+	const text = barUrl(record.url);
+	keepBarText(token, text);
+	if (hash) keepBarText(hash, text);
+}
+
+/** a dialed tab's history changed (CalledFrame's `entries`) */
+function calledEntries(tab) {
+	keepTabs();
+	const entry = calledEntry(tab);
+	if (!entry || tab !== activeTab || stepping) return;
+	const known = tokenWhere(tab, (record) => record.entry === entry.id);
+	const shown = session.tokens[addressToken()];
+	if (known) {
+		if (known === addressToken()) return void writeAddress(tab);
+		// a step of the tab's own (its Back button, the page's history.go):
+		// the address goes to that entry's token where this page has it
+		return traverseTo(tab, known);
+	}
+	// the entry the address names, replaced (its key stays): the token names
+	// the new one
+	if (shown && shown.tab === tab.sid && shown.key === entry.key) {
+		shown.entry = entry.id;
+		return void writeAddress(tab);
+	}
+	void writeAddress(tab, { push: true });
+}
+
+/** move the address to the nearest entry of this document at `token`, else write it */
+function traverseTo(tab, token) {
+	const navigation = window.navigation;
+	const at = navigation?.currentEntry?.index ?? -1;
+	const found = (navigation?.entries() ?? [])
+		.filter(
+			(entry) =>
+				entry.sameDocument &&
+				entry.index !== at &&
+				tokenOf(entry.url) === token,
+		)
+		.sort((a, b) => Math.abs(a.index - at) - Math.abs(b.index - at))[0];
+	if (!found) return void writeAddress(tab);
+	navigation.traverseTo(found.key).finished.catch(() => {});
+}
+
+/** the token of an address of this page */
+function tokenOf(url) {
+	try {
+		const parts = new URL(url).search
+			.slice(1)
+			.split('&')
+			.filter((part) => /^\d+=?$/.test(part));
+		return parts.length ? parts[parts.length - 1].replace('=', '') : '';
+	} catch {
+		return '';
+	}
+}
+
+// Back and Forward between the page's own entries (a dialed tab's, which
+// this page pushed): the tab of the token on show, stepped to its entry
+addEventListener('popstate', () => {
+	const token = addressToken();
+	const record = token ? session.tokens[token] : null;
+	if (!token && !location.hash && !browser.classList.contains('hidden'))
+		return showLanding();
+	const tab = record && tabs.find((open) => open.sid === record.tab);
+	if (!tab) {
+		// An entry from a closed tab, or a token removed from this session:
+		// the browser may still step to it, but there is no page to restore.
+		if (token) showLanding();
+		return;
+	}
+	stepping = token;
+	if (tab !== activeTab) activateTab(tab);
+	const called = tab.frame.called;
+	const index = called
+		? called.entries.findIndex((entry) => entry.id === record.entry)
+		: -1;
+	if (!called || index === -1 || index === called.index) {
+		stepping = '';
+		return void writeAddress(tab);
+	}
+	const run = () => called.step(index - called.index).catch(() => false);
+	tab.pending = tab.pending.then(run, run);
+	tab.pending.then(() => {
+		if (stepping === token) stepping = '';
+		if (tab === activeTab) syncToolbar();
+	});
+});
+
+/**
+ * A load at a token this browser tab wrote (a reload, a restored session,
+ * Back to an entry of the page before it): the tabs that were open, the
+ * token's tab on show at the token's entry
+ */
+function restoreTabs(token, record) {
+	const kept = session.tabs.filter((tab) => tab && tab.id);
+	if (!kept.some((tab) => tab.id === record.tab))
+		kept.push({ id: record.tab, url: record.url });
+	let shown = null;
+	if (JUST_CALL) stepping = token; // the kept tabs show their entries first
+	for (const { id, url } of kept) {
+		const tab = createTab(id);
+		if (id === record.tab) shown = tab;
+		else if (!JUST_CALL && url) {
+			tab.url = url;
+			tab.frame.go(url).catch(() => {});
+		}
+	}
+	activateTab(shown);
+	if (!JUST_CALL) return void navigate(record.url);
+	shown.calling
+		.then(async (called) => {
+			const index = called.entries.findIndex(
+				(entry) => entry.id === record.entry,
+			);
+			if (index !== -1 && index !== called.index)
+				await called.step(index - called.index);
+			return called.entries.length > 0;
+		})
+		.catch(() => false)
+		.then((shows) => {
+			if (stepping === token) stepping = '';
+			if (shows) return void writeAddress(shown);
+			// a tab that kept nothing goes to the token's page, in its entry
+			delete session.tokens[token];
+			navigate(record.url);
+		});
+}
+
+// the token the page was loaded at, and what this browser tab kept of it;
+// a token it never wrote (a copied link, another window) is dropped, and
+// the page opens home
+const openedToken = addressToken();
+const openedRecord = (openedToken && session.tokens[openedToken]) || null;
+if (openedToken && !openedRecord)
+	history.replaceState(null, '', addressFor('', location.hash));
+
+// What the address bar showed at each token (and fragment) written, so a
+// load at one (a reload, a restored session) has the page's address in the
+// bar from the first paint (index.html), before the controller is up. Kept
+// in sessionStorage with the tokens, the newest BAR_KEPT only; it was once
+// in localStorage, which a page's address never goes to now.
 const BAR_KEY = 'stomp-demo:bar';
 const BAR_KEPT = 32;
-let barKept = { hash: '', text: '' };
-function keepBarText(hash, text) {
-	if (!hash || (barKept.hash === hash && barKept.text === text)) return;
-	barKept = { hash, text };
+try {
+	localStorage.removeItem(BAR_KEY);
+} catch {}
+let barKept = { key: '', text: '' };
+function keepBarText(key, text) {
+	if (!key || (barKept.key === key && barKept.text === text)) return;
+	barKept = { key, text };
 	editBarTexts((kept) => [
-		...kept.filter((entry) => entry[0] !== hash).slice(1 - BAR_KEPT),
-		[hash, text],
+		...kept.filter((entry) => entry[0] !== key).slice(1 - BAR_KEPT),
+		[key, text],
 	]);
 }
 function editBarTexts(edit) {
 	try {
-		const kept = JSON.parse(localStorage.getItem(BAR_KEY));
-		localStorage.setItem(
+		const kept = JSON.parse(sessionStorage.getItem(BAR_KEY));
+		sessionStorage.setItem(
 			BAR_KEY,
 			JSON.stringify(edit(Array.isArray(kept) ? kept : [])),
 		);
 	} catch {}
 }
-/** forget the fragments whose bar showed `text` (a page forgotten from the history), or the fragment `hash` */
-function forgetBarText({ text, hash }) {
-	barKept = { hash: '', text: '' };
+/** forget the tokens whose bar showed `text` (a page forgotten from the history), or the token or fragment `key` */
+function forgetBarText({ text, key }) {
+	barKept = { key: '', text: '' };
 	editBarTexts((kept) =>
-		kept.filter((entry) => entry[0] !== hash && entry[1] !== text),
+		kept.filter((entry) => entry[0] !== key && entry[1] !== text),
 	);
 }
 
-/** the page the fragment names, '' for none */
+/** the page the fragment names (an old link, an embedder's), '' for none */
 async function readHash() {
 	const text = location.hash.slice(1);
 	if (/^html[^/]*\/[^/]+$/.test(text.split('#')[0]))
@@ -7786,13 +8129,13 @@ PMTheme.addEventListener('change', () => {
 	}
 });
 
-// A page named in the fragment (a reload, a restored session, a link to a
-// tab) is in the browser view from the first paint (index.html's .opening),
-// never after a frame of the home screen: the view's classes take that over
-// here, and the tab comes as soon as the controller can read the fragment,
-// in the view a press before Ready shows (navigate)
+// A page named in the address (a reload or a restored session at a token,
+// an old link's or an embedder's fragment) is in the browser view from the
+// first paint (index.html's .opening), never after a frame of the home
+// screen: the view's classes take that over here, and the tab comes as soon
+// as the controller is up, in the view a press before Ready shows (navigate)
 const opening = document.documentElement.classList.contains('opening');
-const openedAt = location.hash;
+const openedAt = openedRecord ? openedToken : location.hash;
 if (opening) {
 	showBrowser();
 	syncToolbar(); // no tab yet: nothing to go back to
@@ -7822,11 +8165,18 @@ booted
 			() => seedDefaultThemes().catch(() => {}),
 			{ timeout: 3000 },
 		);
-		// restore a proxied URL from the fragment after a refresh (unless a
-		// page was asked for while the controller came up, or the user went
-		// home, which leaves no fragment)
-		const restore = await readHash();
-		if (restore && !activeTab && !pressedEarly)
+		// the tabs again at the token the page was loaded at (a reload, a
+		// restored session), else the page a fragment names; unless a page
+		// was asked for while the controller came up, or the user went home,
+		// which leaves neither
+		const kept =
+			!!openedRecord &&
+			addressToken() === openedToken &&
+			!activeTab &&
+			!pressedEarly;
+		const restore = kept ? openedRecord.url : await readHash();
+		if (kept) restoreTabs(openedToken, openedRecord);
+		else if (restore && !activeTab && !pressedEarly)
 			navigate(restore, { newTab: true });
 		else if (
 			opening &&
@@ -7838,7 +8188,7 @@ booted
 		else if (browser.classList.contains('hidden')) mainForm.url.focus();
 		if (opening && !restore) {
 			// the address index.html put in the bar was of a page it cannot open
-			forgetBarText({ hash: openedAt });
+			forgetBarText({ key: openedAt });
 			if (!activeTab && !pressedEarly) omni.url.value = '';
 		}
 		document.documentElement.classList.remove('restoring');

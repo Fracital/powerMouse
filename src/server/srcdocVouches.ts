@@ -68,6 +68,15 @@ export function vouch(token: string, vouched: Vouched) {
 }
 
 /**
+ * Just call stomp (./called.ts): a blank frame's client called for a
+ * document of `origin`, which it shows at the top of its tab (first-party):
+ * it is bound as a vouched one is, with no token
+ */
+export function bindCalled(clientId: string, origin: string) {
+	settle(clientId, { origin, top: null });
+}
+
+/**
  * An about:srcdoc client presented `token`: it is of the origin vouched
  * for it. An empty token says none vouches for it.
  */

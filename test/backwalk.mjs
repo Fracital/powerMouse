@@ -190,9 +190,9 @@ export async function browserBack() {
 	const n = await page.evaluate(() => history.length);
 	await page.goBack().catch(() => {});
 	await sleep(1500);
-	// PRE, the demo, the frame's navigation: the hash updates added nothing
+	// PRE, the demo, the frame's navigation: the token updates added nothing
 	ok(
-		'3: demo adds no browser history entries of its own (hash is replaceState)',
+		'3: demo adds no browser history entries of its own (its token is replaceState)',
 		n === 3,
 		`history.length=${n}`,
 	);

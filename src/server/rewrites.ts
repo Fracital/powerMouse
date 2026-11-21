@@ -252,6 +252,7 @@ import {
 	type CacheHit,
 } from './cache';
 import { cacheMarkOf, renewCacheSecret } from './cacheMarks';
+import { isCallPage } from './called';
 import {
 	decodeDocument,
 	decodeScript,
@@ -1973,12 +1974,15 @@ function genericForward(
 					// an about:srcdoc document a routed ancestor vouched for is of
 					// that ancestor's origin and partition (srcdocVouches); waited
 					// for only when no Referer says whose the request is (Chrome
-					// reports the client's URL as empty until it has parsed)
+					// reports the client's URL as empty until it has parsed); and a
+					// call page's written document (./called.ts), by its call
 					if (
 						!client &&
 						found &&
 						found.type === 'window' &&
-						(found.url === '' || found.url.startsWith('about:srcdoc'))
+						(found.url === '' ||
+							found.url.startsWith('about:srcdoc') ||
+							isCallPage(found.url))
 					) {
 						const bound = await boundClient(id, !referrer);
 						if (bound) {

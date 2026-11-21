@@ -226,11 +226,22 @@ holyWisp is started.
    the demo's server never sees what was typed. Clicking the empty box
    shows the other tabs and the latest and most visited sites.
 5. **Navigate** with `frame.go(url)` on the active tab. Input goes through `SearchBuilder`, so
-   anything that doesn't look like a host becomes a search. The proxied page
-   is mirrored into `location.hash` by its route (`#html/<sealed>`, from
-   `controller.route()`, read back with `controller.unroute()`), so a refresh
-   restores the page and the host's address does not name it; a fragment
-   holding the URL itself (an older bookmark) still opens. Focus moves
+   anything that doesn't look like a host becomes a search. The page's own
+   address names no proxied page: each entry a tab shows is a token, the
+   bare query `?1`, `?2`, and on, after the page's flags (`?nopool&3`), and
+   what a token stands for (the tab, its entry, the URL and title) is kept in
+   sessionStorage alone (`stomp-demo:session`, with the address bar's text
+   under `stomp-demo:bar`). A reload or a restored session at a token brings
+   the tabs back, the token's tab on show at its entry; a token the browser
+   tab never wrote (a copied link, another window) opens home. A frame's
+   navigation already adds a browser history entry, so the demo only
+   replaces its address then; a dialed tab (`?mode=just-call-stomp`) is never
+   navigated, so each new entry of it is a `pushState`, and Back and Forward
+   step the tab. A demo framed by its embedder (SystemYA's `/ui/`), or one
+   whose `STOMP_CONFIG.addressFragment` is `'sealed'`, also writes the
+   page's route as its fragment (`#html/<sealed>`, from `controller.route()`)
+   for the embedder to read; a fragment, or one holding the URL itself (an
+   older bookmark), still opens. Focus moves
    from the address bar into the tab's frame, as a browser gives the page it
    navigates to focus (`document.hasFocus()`, the keys typed next).
 6. **Keep the address bar honest.** `frame.url` reads the real location of the

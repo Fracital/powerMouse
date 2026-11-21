@@ -418,6 +418,9 @@ ok(
 // ---- launches --------------------------------------------------------------------------
 const tabs = (target) =>
 	target.evaluate(() => document.querySelectorAll('#frames .frame').length);
+// the address keeps no launch: at most the token of the page on show (`?3`,
+// demo/README.md "Navigate")
+const tokenOnly = (search) => /^(\?\d+)?$/.test(search);
 for (const [launchName, view] of [
 	['settings', 'settings'],
 	['extensions', 'extensions'],
@@ -454,7 +457,7 @@ ok(
 	'a share opens the URL in its text',
 	(await frontTitle(page, 'HIST 2')) === 'HIST 2' &&
 		(await tabs(page)) === 1 &&
-		(await page.evaluate(() => location.search)) === '',
+		tokenOnly(await page.evaluate(() => location.search)),
 	`${await tabs(page)} tabs ${await page.evaluate(() => location.href)}`,
 );
 
@@ -534,7 +537,7 @@ ok(
 	other &&
 		(await frontTitle(other, 'HIST 2')) === 'HIST 2' &&
 		(await tabs(other)) === 1 &&
-		(await other.evaluate(() => location.search)) === '',
+		tokenOnly(await other.evaluate(() => location.search)),
 	other ? `${await tabs(other)} tabs ${other.url()}` : 'no page',
 );
 await context.close();

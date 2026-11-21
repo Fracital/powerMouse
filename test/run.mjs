@@ -75,6 +75,8 @@ const SUITE_TIMEOUT_MINUTES = {
 	'top-navigation': 15,
 	// about six minutes alone here, one page at a time
 	'wpt-indexeddb': 20,
+	// a persistent profile with an extension for each of four modes
+	'just-call-stomp-audit': 20,
 };
 // what a suite's demo server needs beyond the defaults
 const SUITE_ENV = {
@@ -267,7 +269,12 @@ const inGroup = (name) =>
 // Trusted Types enforcement (csp-trusted-types) is the next slice. The browser
 // enforces none of the page's script, style or Trusted Types policy, so
 // STomp's own inject is never blocked by it.
-const PENDING_SUITES = new Map([]);
+const PENDING_SUITES = new Map([
+	[
+		'just-call-stomp-audit',
+		'a measurement for the just-call-stomp experiment, run by name',
+	],
+]);
 
 const wanted = process.argv.slice(2);
 const suites = readdirSync(suitesDir)

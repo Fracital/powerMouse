@@ -1,19 +1,19 @@
 // Opening a site in the demo shows its tab on the very next frame, every way
 // a site opens: the home box (Enter), a quick-link tile, a bookmark in the
 // home sidebar, a link in the tab manager's dock, a second site from home,
-// and a page the fragment names (a reload, the link opened in a new tab).
+// and a page the address names (a reload at its token).
 //  - the first frame painted after the press is the browser view with the
 //    tab's frame shown: no frame of the home screen, the tab manager or the
 //    bookmarks sidebar in between;
 //  - nothing moves on the way: no CSS animation and no transition but a
 //    colour's (the sidebar sliding out, the scrim fading, a card growing to
 //    full screen were all over the opening page);
-//  - a page the fragment names is in the browser view from the document's
+//  - a page the address names is in the browser view from the document's
 //    first frame on, the home screen never drawn, and its tab comes once the
 //    controller is up; the address bar has the page's address from that
 //    first frame (no frame with the empty bar's placeholder, no jump to it
-//    later), and a browser that kept nothing for the fragment shows a blank
-//    bar, never the placeholder, until it goes home.
+//    later), and the address where nothing knows its token (a new tab,
+//    another browser) shows home from the first frame.
 // Each frame is read in a requestAnimationFrame callback, which runs after
 // the press's task and before that frame's paint: the checks are on frame
 // order, never on milliseconds, so a loaded machine only makes them slower.
@@ -213,9 +213,9 @@ async function close(page) {
 // the home box: typed, then Enter
 {
 	const page = await demo();
-	// a load with no fragment: both address boxes show their placeholder
+	// a load with no token: both address boxes show their placeholder
 	ok(
-		'with no fragment, the address boxes have their placeholders',
+		'with no token, the address boxes have their placeholders',
 		await page.evaluate(() =>
 			['#mainForm input', '#omni input'].every((selector) => {
 				const input = document.querySelector(selector);
@@ -246,23 +246,14 @@ async function close(page) {
 	await page.keyboard.press('Enter');
 	checkOpened('a second site from home', await framesAfter(page));
 
-	// the fragment names the tab's page: a reload opens it with no frame of
-	// home, from the document's first frame
-	await page.waitForFunction(() => location.hash.length > 1, null, {
+	// the address names the tab's page by a token: a reload opens it with no
+	// frame of home, from the document's first frame
+	await page.waitForFunction(() => /^\?\d+$/.test(location.search), null, {
 		timeout: 30000,
 	});
 	const deepLink = page.url();
 	for (const [name, open] of [
 		['a reload', async () => (await page.reload(), page)],
-		[
-			'the link in a new tab',
-			async () => {
-				const tab = await page.context().newPage();
-				tab.on('pageerror', (error) => errors.push(error.message));
-				await tab.goto(deepLink);
-				return tab;
-			},
-		],
 	]) {
 		const shown = await open();
 		await shown.waitForFunction(
@@ -274,7 +265,7 @@ async function close(page) {
 		const frames = await shown.evaluate(() => window.__frames);
 		const home = frames.find((f) => f.home || !f.browser);
 		ok(
-			`${name} at the tab's fragment: no frame shows home`,
+			`${name} at the tab's token: no frame shows home`,
 			frames.length > 0 && !home,
 			home
 				? `frame ${frames.indexOf(home)} of ${frames.length}: ${describe(home)}`
@@ -305,7 +296,7 @@ async function close(page) {
 				`frame ${frames.indexOf(notPage)} of ${frames.length}: ${JSON.stringify(notPage.bar)}${notPage.placeholder ? ' with the placeholder' : ''}`,
 		);
 		ok(
-			`${name}: the bar's placeholder is back once the fragment is read`,
+			`${name}: the bar's placeholder is back once the address is read`,
 			await shown.evaluate(() => {
 				const input = document.querySelector('#omni input');
 				const colour = getComputedStyle(input, '::placeholder').color;
@@ -317,32 +308,41 @@ async function close(page) {
 		);
 	}
 
-	// the link in a browser that kept nothing (its own storage, so its own
-	// codec too): the fragment names no page it can open, and the bar is
-	// blank, never the placeholder, until home shows
-	{
-		const context = await browser.newContext({
-			viewport: { width: 1280, height: 800 },
-		});
-		await context.addInitScript(recorder);
+	// the address in a new tab, and in a browser that kept nothing: no
+	// sessionStorage knows the token, so home shows from the first frame,
+	// never the browser view, and the address loses its token
+	for (const [name, context] of [
+		['the address in a new tab', page.context()],
+		[
+			'the address in another browser',
+			await browser.newContext({ viewport: { width: 1280, height: 800 } }),
+		],
+	]) {
+		if (context !== page.context()) await context.addInitScript(recorder);
 		const fresh = await context.newPage();
 		fresh.on('pageerror', (error) => errors.push(error.message));
 		await fresh.goto(deepLink);
 		await fresh.waitForFunction(
-			() => window.__frames?.some((f) => f.home),
+			() => window.__frames?.length > 10 && window.controller?.isReady,
 			null,
 			{ timeout: 60000 },
 		);
 		const frames = await fresh.evaluate(() => window.__frames);
-		const placeholder = frames.find((f) => f.placeholder);
+		const notHome = frames.find((f) => !f.home || f.browser);
 		ok(
-			'the link with nothing kept: no frame shows the empty bar with its placeholder',
-			frames.length > 0 && !placeholder,
-			placeholder
-				? `frame ${frames.indexOf(placeholder)} of ${frames.length}`
+			`${name}: every frame shows home`,
+			frames.length > 0 && !notHome,
+			notHome
+				? `frame ${frames.indexOf(notHome)} of ${frames.length}: ${describe(notHome)}`
 				: `${frames.length} frames`,
 		);
-		await context.close();
+		ok(
+			`${name}: the address loses its token`,
+			(await fresh.evaluate(() => location.search)) === '',
+			fresh.url(),
+		);
+		if (context === page.context()) await fresh.close();
+		else await context.close();
 	}
 	await close(page);
 }

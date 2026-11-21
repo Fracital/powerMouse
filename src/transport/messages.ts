@@ -1058,6 +1058,44 @@ export interface SrcdocMessage {
 	directory: string;
 	token: string;
 }
+/**
+ * Just call stomp (src/controller/justCallStomp.ts): the one page every
+ * called frame loads, under the scope (the worker serves it and controls
+ * it): the same for every site, it names none. The host hands it a URL by
+ * a message (CALL_MESSAGE) and the page calls stomp in itself.
+ */
+export const CALL_PAGE = 'blank.html';
+/**
+ * Just call stomp: the header of the fetch the call page makes for the
+ * document it is to show, which the worker answers as it answers that
+ * frame's navigation to the route (the same request upstream, rewrite and
+ * shell), without the frame navigating. Its value is how the document was
+ * reached: `navigate`, `reload` or `back_forward`.
+ */
+export const CALL_HEADER = 'x-stomp-call';
+/** Just call stomp: the header of the worker's answer to a call that names the page's real URL (after its redirects) */
+export const CALLED_URL_HEADER = 'x-stomp-called-url';
+/** just call stomp: the referrer policy of the call's navigation (its document's, or its link's), which the worker reads in place of the fetch's */
+export const CALL_POLICY_HEADER = 'x-stomp-call-policy';
+/** Just call stomp: the key of the host's one message to a call page, which carries the port the rest goes over */
+export const CALL_MESSAGE = '$stomp$call';
+/** Just call stomp: what the call page leaves on its window for the document it writes, taken before any page script */
+export const CALLED_KEY = '$stomp$called';
+
+/** Just call stomp: what a called document's inject is told of its tab's session history */
+export interface CalledSession {
+	/** the entries, the shown one at `index` */
+	entries: { url: string; key: string; id: string; document: number }[];
+	index: number;
+	/** the shown entry's state */
+	state: unknown;
+	/** how the document was reached */
+	type: 'navigate' | 'reload' | 'back_forward';
+	/** the replace of a navigation (NavigationActivation's `replace`) */
+	replaced?: boolean;
+	/** the document's route, the referrer of the requests of its frames' calls */
+	routed?: string;
+}
 
 export interface InlineDocumentMessage {
 	directory: string;

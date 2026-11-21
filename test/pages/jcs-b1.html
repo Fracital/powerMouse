@@ -1,0 +1,18 @@
+<!doctype html>
+<html data-step="b1">
+	<head>
+		<title>JCS B1</title>
+		<script src="jcs-probe.js"></script>
+	</head>
+	<body>
+		<p>b1</p>
+		<script>
+			// a frame the page makes itself, of the walk's first site
+			const kid = document.createElement('iframe');
+			kid.width = 80;
+			kid.height = 40;
+			kid.src = `http://127.0.0.1:${location.port}/pages/jcs-child.html?b1`;
+			document.body.append(kid);
+		</script>
+	</body>
+</html>

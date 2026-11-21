@@ -8,6 +8,7 @@ import {
 	done,
 	FIXTURE,
 	HOST,
+	hostPage,
 	launch,
 	ok,
 	PROXY,
@@ -103,9 +104,9 @@ export async function runMode(mode) {
 		const wantTabs = NEW_TAB.includes(id) ? 1 : 0;
 		ok(
 			`${mode}: ${id} ${wantTabs ? 'opens a host tab' : 'stays in the frame'}`,
-			// the demo mirrors the active tab in the hash; the host document
-			// itself must never change
-			page.url().split('#')[0] === base &&
+			// the demo's address follows the active tab (its token); the host
+			// document itself must never change
+			hostPage(page.url()) === hostPage(base) &&
 				title === expected &&
 				!opened &&
 				newTabs === wantTabs &&

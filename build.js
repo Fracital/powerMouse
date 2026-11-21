@@ -622,6 +622,8 @@ const DEFERRED_FILES = new Set(
 		'src/inject/dom/activationPart.ts',
 		'src/inject/dom/ancestorOriginsList.ts',
 		'src/inject/dom/attributeViewMethods.ts',
+		'src/inject/dom/calledHooks.ts',
+		'src/inject/dom/calledFrames.ts',
 		'src/inject/dom/beaconRelay.ts',
 		'src/inject/dom/credentialFlows.ts',
 		'src/inject/dom/credentialStore.ts',

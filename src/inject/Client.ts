@@ -485,6 +485,10 @@ export default class Client {
 	unreportedEntry?: (entry: object) => boolean;
 	/** @internal set by the EntryTiming module: whether the page sees `entry`, an entry that is not a load's, made ready for it first */
 	admitEntry?: (entry: object) => boolean;
+	/** @internal just call stomp (dom/calledHooks.ts): the page's name for an entry named `name` (the call page's navigation entry), else undefined */
+	calledName?: (name: string) => string | undefined;
+	/** @internal just call stomp (dom/calledFrames.ts): whether `receiver` is a frame's call page, which no message of the page's may reach (its call is the host's) */
+	callPageWindow?: (receiver: unknown) => boolean;
 	/** @internal set by the Context module: post `args` to the window behind a restricted stand-in this context holds, from this realm; false when `target` is not one */
 	postToRestricted?: (target: unknown, args: unknown[]) => boolean;
 	/** @internal set by the Context module: the window behind a restricted stand-in this context took, else undefined */
@@ -838,6 +842,10 @@ export default class Client {
 	 * script, whose location had no query (sop-escapes csp/an object
 	 * document, under load, when the bundle came late).
 	 */
+	/** @internal just call stomp: the document's URL is `href` now (an entry of its session history, src/inject/dom/modules/Called.ts) */
+	rename(href: string) {
+		this.#namedBase = href;
+	}
 	takeNamedBase(global: object = this.global) {
 		const own = Reflect.getOwnPropertyDescriptor(global, WORKER_BASE);
 		Reflect.deleteProperty(global, WORKER_BASE);

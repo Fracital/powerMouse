@@ -400,7 +400,8 @@ export default class UnrouteModule extends Module<Client> {
 		const pageName = (entry: PerformanceEntry): string | null =>
 			client.unreportedEntry?.(entry)
 				? null
-				: unrouteURL(client, String(nativeName(entry)));
+				: (client.calledName?.(String(nativeName(entry))) ??
+					unrouteURL(client, String(nativeName(entry))));
 
 		Reflect.defineProperty(PerformanceEntry.prototype, 'name', {
 			...nameDescriptor,
@@ -408,7 +409,11 @@ export default class UnrouteModule extends Module<Client> {
 				nameDescriptor.get!,
 				(target, that: PerformanceEntry, args) => {
 					const name = Reflect.apply(target, that, args);
-					return unrouteURL(client, String(name)) ?? name;
+					return (
+						client.calledName?.(String(name)) ??
+						unrouteURL(client, String(name)) ??
+						name
+					);
 				},
 			),
 		});
@@ -426,7 +431,10 @@ export default class UnrouteModule extends Module<Client> {
 				(target, that, args) => {
 					const json: { name?: unknown } = Reflect.apply(target, that, args);
 					if (json && typeof json.name === 'string')
-						json.name = unrouteURL(client, json.name) ?? json.name;
+						json.name =
+							client.calledName?.(json.name) ??
+							unrouteURL(client, json.name) ??
+							json.name;
 					return json;
 				},
 			);

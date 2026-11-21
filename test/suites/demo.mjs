@@ -1,5 +1,5 @@
 // The demo end to end: landing, a proxied page, the address bar, Back, Home,
-// and a reload that restores the proxied page from the URL fragment.
+// and a reload that restores the proxied page from the address's token.
 import { execFileSync } from 'node:child_process';
 import {
 	activeFrame,
@@ -103,26 +103,20 @@ ok(
 	(await omni(page)).startsWith('https://en.wikipedia.org/wiki/'),
 	await omni(page),
 );
-// the fragment is the page's route, sealed: it names the page only to the
-// controller
-const hashed = await page.evaluate(async () => {
-	const text = location.hash.slice(1);
-	// the routes' origin: the proxy's, which in isolated mode is not the host's
-	const origin = new URL(await window.controller.route('https://example.com/'))
-		.origin;
-	return {
-		text,
-		real: await window.controller.unroute(
-			`${origin}${window.controller.config.directory}${text}`,
-		),
-	};
-});
+// the address names no page: a token (`?N`), whose page only this browser
+// tab's sessionStorage knows
+const addressed = await page.evaluate(() => ({
+	search: location.search,
+	hash: location.hash,
+	kept: JSON.parse(sessionStorage.getItem('stomp-demo:session') ?? 'null')
+		?.tokens?.[location.search.slice(1)]?.url,
+}));
 ok(
-	'hash tracks url, sealed',
-	/^html\/[\w-]+(#|$)/.test(hashed.text) &&
-		!/wikipedia|wiki/i.test(hashed.text) &&
-		String(hashed.real).startsWith('https://en.wikipedia.org/wiki/'),
-	JSON.stringify(hashed),
+	'the address is a token, its page kept in sessionStorage',
+	/^\?\d+$/.test(addressed.search) &&
+		!addressed.hash &&
+		String(addressed.kept).startsWith('https://en.wikipedia.org/wiki/'),
+	JSON.stringify(addressed),
 );
 await screenshot(page, 'browsing');
 
@@ -172,10 +166,10 @@ ok(
 	!(await page.$eval('#landing', (e) => e.classList.contains('hidden'))),
 );
 
-// a reload restores the proxied page from the fragment
+// a reload restores the proxied page from the token
 await page.fill('#mainForm input[name=url]', 'example.org');
 await page.click('#mainForm button');
-await page.waitForFunction(() => location.hash.length > 1, null, {
+await page.waitForFunction(() => /^\?\d+$/.test(location.search), null, {
 	timeout: 30000,
 });
 await page.reload();

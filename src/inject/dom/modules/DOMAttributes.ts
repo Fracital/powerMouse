@@ -1414,6 +1414,16 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					// initial about:blank is this document's origin, and fires no
 					// navigate event of its own (IFrame)
 					forgetDestination(moduleClient, element);
+					// just call stomp: the frame of a called document is called
+					// too, its src the call page's (calledHooks.ts)
+					const called =
+						!judged &&
+						!opaque &&
+						moduleClient.callFrame?.(element, resource.url.href, routed);
+					if (called) {
+						if (typeof called === 'string') element.setAttribute('src', called);
+						return;
+					}
 					const shown = frameOrigin(element);
 					if (
 						shown !== undefined &&
