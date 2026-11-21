@@ -10,6 +10,27 @@
 
 const KEY = '__pmOffline';
 const { origin, scope } = JSON.parse(self.name);
+
+// A file: URL's origin is `file://` in Chrome and the opaque `null` in
+// Firefox, which the worker's location then shares, and the routes made on
+// it (`file:///stomp/...`) would never be its own: there a file: URL reads
+// the origin the page gives
+const nativeOrigin = Object.getOwnPropertyDescriptor(
+	URL.prototype,
+	'origin',
+).get;
+if (
+	origin === 'file://' &&
+	Reflect.apply(nativeOrigin, new URL('file:///'), []) === 'null'
+)
+	Object.defineProperty(URL.prototype, 'origin', {
+		get() {
+			const own = Reflect.apply(nativeOrigin, this, []);
+			return own === 'null' && this.protocol === 'file:' ? origin : own;
+		},
+		configurable: true,
+		enumerable: true,
+	});
 const workerURL = new URL(`${origin}${scope}serviceWorker.js`);
 const post = (message, transfer = []) =>
 	self.postMessage({ [KEY]: message }, transfer);

@@ -18,8 +18,15 @@
 const KEY = '__pmOffline';
 /** the origin the transports' modules are named on (an import map maps each to its copy): no site resolves it */
 export const ORIGIN = 'https://powermouse.invalid';
-/** this page's origin as its documents read it (`file://` on file:) */
-const OWN = location.origin;
+/**
+ * this page's origin as its documents read it (`file://` on file:, where
+ * Chrome reads `file://` and Firefox the opaque `null`, which no URL is
+ * made on)
+ */
+const OWN =
+	location.protocol === 'file:' && location.origin === 'null'
+		? 'file://'
+		: location.origin;
 const HOST_CLIENT = 'pm-host';
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
 const NULL_BODY = new Set([101, 103, 204, 205, 304]);
