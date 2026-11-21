@@ -32,6 +32,17 @@ git clone -q --branch dist --single-branch "$REMOTE_PREFIX/tor-js.git" "$repo" 2
 find "$repo" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
 
 cp -r out/dist "$repo/dist"
+# only the wasm-file entry and the wasm it loads (demo/public/tor-client/
+# service.mjs): the other entries carry the wasm again as base64 (6.8 MB
+# each, and anon-rpc-worker.js another copy) or fetch it from tor-js's CDN,
+# and the source maps are 14 MB of them
+rm -rf "$repo/dist/entryPoints/wasm-base64" "$repo/dist/entryPoints/wasm-cdn" \
+	"$repo/dist/anon-rpc-worker.js" "$repo/dist/singleton.d.ts"
+rm -f "$repo"/dist/entryPoints/*/singleton.*
+find "$repo/dist" -name '*.map' -delete
+for f in dist/tor_js_bg.wasm dist/entryPoints/wasm-file/index.js dist/entryPoints/wasm-file/index.d.ts; do
+	[[ -e $repo/$f ]] || { echo "$f is not in the build's dist" >&2; exit 1; }
+done
 cp out/LICENSE-MIT out/LICENSE-APACHE "$repo/"
 # how it was built, so the hash can be checked without this repository
 mkdir -p "$repo/build/patches"
@@ -51,6 +62,17 @@ manifest.description += ', with a stream API (Fracital build: deploy/tor-js)';
 delete manifest.scripts;
 delete manifest.devDependencies;
 manifest.files = ['dist', 'LICENSE-MIT', 'LICENSE-APACHE', 'README.md', 'UPSTREAM'];
+// every name resolves to the wasm-file entry (what dist/ keeps): nothing
+// reaches the CDN loader, and `import.meta.resolve('tor-js')` is a file of
+// dist/entryPoints/ as before (demo/server.js serves its dist/)
+const entry = {
+	types: './dist/entryPoints/wasm-file/index.d.ts',
+	import: './dist/entryPoints/wasm-file/index.js',
+};
+manifest.main = entry.import.slice(2);
+manifest.types = entry.types.slice(2);
+manifest.exports = { '.': entry, './wasm-file': entry };
+delete manifest.imports;
 manifest.repository = { type: 'git', url: 'git+https://github.com/Fracital/tor-js.git' };
 writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
 EOF

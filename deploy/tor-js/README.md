@@ -63,9 +63,13 @@ holds an installable package named `tor-js` (tor-js's manifest with version
 Dockerfile, build.sh, upstream.env, README and patches), so its README can
 say how to reproduce both hashes without this repository. It prints the
 commit to pin: `"tor-js": "github:Fracital/tor-js#<commit>"` in
-package.json, as EpoxyTransport is pinned. The package's default export
-(`wasm-cdn`) still loads the release's wasm from tor-js's CDN; STomp loads
-`wasm-file`, which takes `dist/tor_js_bg.wasm` from our own server.
+package.json, as EpoxyTransport is pinned. Its `dist/` keeps only the
+`wasm-file` entry, which takes `dist/tor_js_bg.wasm` from our own server
+(or whatever `setWasmUrl` names), and its types: the release's other
+entries (`wasm-base64`, `wasm-cdn`, the singletons, `anon-rpc-worker.js`)
+and every source map are left out, which takes the package from 41 MB to
+about 5 MB, and every export, the default one too, is `wasm-file`, so
+nothing resolves to the CDN loader.
 
 ## Changing a patch
 
