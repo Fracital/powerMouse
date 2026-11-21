@@ -1682,10 +1682,20 @@ async function liveCommits() {
 	const head = githubCommit(headSha, git('log', '-1', '--format=%s'), null);
 	head.commit.author.date = git('log', '-1', '--format=%aI');
 	head.commit.committer.date = git('log', '-1', '--format=%cI');
-	const now = Date.now();
-	const fresh = (sha, message, ago) =>
-		githubCommit(sha, message, new Date(now - ago).toISOString());
-	const first = fresh('a1'.repeat(20), 'Pushed first', 120000);
+	// the checkout's own log, as the server reads it: on CI that can be one
+	// synthetic commit (a shallow or borrowed history), so the rows expected
+	// are what it really holds, and each fake commit is dated after HEAD's
+	// commit date, which orders the merged list
+	const localShas = git('log', '-30', '--format=%H').split('\n');
+	const headCommitted = Date.parse(head.commit.committer.date);
+	const pushDate = (ago = 0) =>
+		new Date(Math.max(Date.now() - ago, headCommitted + 1000)).toISOString();
+	/** the short shas the page should list, GitHub's own commits first */
+	const expected = (...pushed) =>
+		[...pushed.map((commit) => commit.sha), ...localShas]
+			.slice(0, 30)
+			.map((sha) => sha.slice(0, 7));
+	const first = githubCommit('a1'.repeat(20), 'Pushed first', pushDate(120000));
 	fake.state.list = [first, head];
 	fake.state.etag = '"a"';
 	const temp = mkdtempSync(join(tmpdir(), 'stomp-live-commits-'));
@@ -1784,13 +1794,15 @@ async function liveCommits() {
 				shown[1]?.sha === short(headSha) &&
 				!shown[1].pending &&
 				!shown[1].title &&
-				shown.length === 30 &&
+				JSON.stringify(shown.map((row) => row.sha)) ===
+					JSON.stringify(expected(first)) &&
 				shown.slice(1).every((row) => !row.pending) &&
 				fake.requests[0]?.status === 200 &&
 				fake.requests.every((r) => r.auth === null),
 			JSON.stringify({
 				shown: shown.slice(0, 3),
 				count: shown.length,
+				expected: expected(first),
 				requests: fake.requests.slice(0, 3),
 			}),
 		);
@@ -1856,11 +1868,7 @@ async function liveCommits() {
 			window.__liveMark = 'kept';
 			window.__headRow = document.querySelectorAll('#commitList li')[1];
 		});
-		const second = githubCommit(
-			'b2'.repeat(20),
-			'Pushed second',
-			new Date().toISOString(),
-		);
+		const second = githubCommit('b2'.repeat(20), 'Pushed second', pushDate());
 		const askedBefore = [a, b, c].map(({ asked }) => asked.length);
 		fake.state.list = [second, first, head];
 		fake.state.etag = '"b"';
@@ -1885,7 +1893,7 @@ async function liveCommits() {
 			return {
 				mark: window.__liveMark,
 				sameHead: list.children[2] === window.__headRow,
-				count: list.children.length,
+				shas: [...list.children].map((li) => li.dataset.sha),
 				overflow: list.scrollHeight - list.clientHeight,
 				cut: shown.filter(
 					(li) => li.getBoundingClientRect().bottom > bottom + 1,
@@ -1902,7 +1910,8 @@ async function liveCommits() {
 				arrived[0][1].sha === short(first.sha) &&
 				after.mark === 'kept' &&
 				after.sameHead &&
-				after.count === 30 &&
+				JSON.stringify(after.shas) ===
+					JSON.stringify(expected(second, first)) &&
 				JSON.stringify(askedAfter) === JSON.stringify(askedBefore),
 			JSON.stringify({
 				tookMs,
@@ -1994,11 +2003,7 @@ async function liveCommits() {
 		const d = await open((page) =>
 			page.route('**/api/commits/stream', (route) => route.abort()),
 		);
-		const third = githubCommit(
-			'c3'.repeat(20),
-			'Pushed third',
-			new Date().toISOString(),
-		);
+		const third = githubCommit('c3'.repeat(20), 'Pushed third', pushDate());
 		fake.state.list = [third, second, first, head];
 		fake.state.etag = '"c"';
 		const polled = await eventually(
