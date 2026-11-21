@@ -4,13 +4,16 @@
 #   Fracital/EpoxyTransport   branch dist   <- out/epoxy-transport
 # Prints the EpoxyTransport commit to pin in package.json. Nothing here needs a
 # Rust toolchain; the repos only distribute what build.sh produced.
+# PUSH=0 makes both commits and pushes neither: the clones are kept and the
+# push commands printed, so the commits (and the pin) are the ones pushed later.
 set -euo pipefail
 cd "$(dirname "$0")"
 [[ -d out/epoxy-tls && -d out/epoxy-transport ]] || { echo "run build.sh first" >&2; exit 1; }
 
 REMOTE_PREFIX=${REMOTE_PREFIX:-github2:Fracital}
+PUSH=${PUSH:-1}
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
+[[ $PUSH == 0 ]] || trap 'rm -rf "$work"' EXIT
 
 publish() {
 	local repo=$1 src=$2 msg=$3
@@ -24,7 +27,11 @@ publish() {
 		echo "$repo: dist unchanged" >&2
 	else
 		git -C "$work/$repo" commit -q -m "$msg"
-		git -C "$work/$repo" push -q -u origin dist
+		if [[ $PUSH == 0 ]]; then
+			echo "$repo: not pushed; to push: git -C $work/$repo push -u origin dist" >&2
+		else
+			git -C "$work/$repo" push -q -u origin dist
+		fi
 	fi
 	git -C "$work/$repo" rev-parse HEAD
 }
