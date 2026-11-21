@@ -42,6 +42,7 @@ import {
 	INIT_PAGE_MODULES,
 	INIT_REMOTE_TRANSPORT,
 	INLINE_DOCUMENT,
+	OFFLINE_WORKER,
 	PAGE_MODULES,
 	SRCDOC_CLAIM,
 	SRCDOC_VOUCH,
@@ -545,6 +546,8 @@ export default class Client {
 	#windowFetch?: typeof fetch;
 	#portPostMessage?: PostMessage;
 	#serviceWorkerPostMessage?: PostMessage;
+	/** offline.html's port to its emulated service worker (OFFLINE_WORKER), where no worker controls this document */
+	#offlineWorker: MessagePort | null = null;
 	#workerPostMessage?: PostMessage;
 	/**
 	 * The location of the context (or page)
@@ -883,6 +886,10 @@ export default class Client {
 	}
 	constructor(init: ParsedConfig, global: typeof globalThis) {
 		this.takeNamedBase(global);
+		const offline = Reflect.getOwnPropertyDescriptor(global, OFFLINE_WORKER);
+		Reflect.deleteProperty(global, OFFLINE_WORKER);
+		if (offline?.value instanceof global.MessagePort)
+			this.#offlineWorker = offline.value;
 		this.names = helperNames(init);
 		this.#customNames = !!(init as { names?: unknown }).names;
 		this.hooks = init.hooks;
@@ -1353,15 +1360,48 @@ export default class Client {
 		transfer: Transferable[] = [],
 		throws = false,
 	): boolean {
-		const controller = this.#container()?.controller;
-		if (!controller || !this.#serviceWorkerPostMessage) return false;
 		try {
-			this.#serviceWorkerPostMessage.call(controller, message, transfer);
-			return true;
+			return this.#post(message, transfer);
 		} catch (error) {
 			if (throws) throw error;
 			return false;
 		}
+	}
+	/**
+	 * post to the service worker: the one that controls this document, else
+	 * offline.html's (OFFLINE_WORKER); whether there was one
+	 */
+	#post(message: object, transfer: Transferable[]): boolean {
+		const controller = this.#container()?.controller;
+		if (controller && this.#serviceWorkerPostMessage) {
+			this.#serviceWorkerPostMessage.call(controller, message, transfer);
+			return true;
+		}
+		const port = this.#offlineWorker ?? this.#offlineAbove();
+		if (!port || !this.#portPostMessage) return false;
+		this.#portPostMessage.call(port, message, transfer);
+		return true;
+	}
+	/** offline.html's port of the nearest document above this one that has it (a frame the page made) */
+	#offlineAbove(): MessagePort | null {
+		if (!this.isDOM) return null;
+		let below: unknown = this.global;
+		let parent = (this as unknown as { parent?: unknown }).parent;
+		for (let depth = 0; depth < 16; depth++) {
+			try {
+				if (!parent || parent === below) return null;
+				const next = (parent as Record<string, Client | undefined>)[
+					this.names.client
+				];
+				if (!next) return null;
+				if (next.#offlineWorker) return next.#offlineWorker;
+				below = next.global;
+				parent = (next as unknown as { parent?: unknown }).parent;
+			} catch (error) {
+				return null;
+			}
+		}
+		return null;
 	}
 	/**
 	 * The routed URL of an inline document (src/server/inline.ts) for markup
@@ -1473,14 +1513,8 @@ export default class Client {
 	 * worker stops waiting for the origin and reports the request as aborted.
 	 */
 	abortRequest(id: string) {
-		const controller = this.#container()?.controller;
-		if (!controller || !this.#serviceWorkerPostMessage) return;
 		try {
-			this.#serviceWorkerPostMessage.call(
-				controller,
-				{ [ABORT_REQUEST]: id },
-				[],
-			);
+			this.#post({ [ABORT_REQUEST]: id }, []);
 		} catch (error) {
 			// the worker is gone: nothing to tell
 		}
@@ -1493,23 +1527,26 @@ export default class Client {
 	requestTransportPort(worker?: string): MessagePort {
 		const controller = this.#container()?.controller;
 
-		if (!controller || !this.#serviceWorkerPostMessage) {
+		if (
+			(!controller || !this.#serviceWorkerPostMessage) &&
+			!this.#offlineWorker
+		) {
 			// a document no service worker controls (an about:blank frame or
 			// popup, a document written into one): the nearest one a worker
 			// controls asks for it, as its beacons and fetches go
 			const via = this.transportClient();
 			if (via && via !== this) return via.requestTransportPort(worker);
-			throw new Error(
-				'Stomp: no service worker controller available to obtain a transport',
-			);
+			if (!this.#offlineAbove())
+				throw new Error(
+					'Stomp: no service worker controller available to obtain a transport',
+				);
 		}
 
 		// made with the browser's own MessageChannel and getters: a page that
 		// redefined them would be handed this context's transport
 		const [mine, theirs] = privateChannel();
 
-		this.#serviceWorkerPostMessage.call(
-			controller,
+		this.#post(
 			{
 				[INIT_REMOTE_TRANSPORT]: {
 					directory: this.directory,

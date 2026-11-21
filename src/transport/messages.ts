@@ -712,6 +712,14 @@ export interface NavigateInfo {
  */
 export const WORKER_BASE = '$stomp$workerBase';
 /**
+ * global set by offline.html's host (demo/offline/host.mjs) on the window
+ * of each call page it makes: a MessagePort to the service worker it
+ * emulates in the page, which no document's container has for its
+ * controller (a document there is controlled by none, so its loads are
+ * copied). The client takes it before any page script runs.
+ */
+export const OFFLINE_WORKER = '$stomp$offlineWorker';
+/**
  * global set by the same bootstrap: the storage partition of the context
  * that started it (src/partition.ts), which a routed worker reads from its
  * route instead
