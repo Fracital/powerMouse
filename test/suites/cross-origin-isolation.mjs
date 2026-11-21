@@ -21,6 +21,7 @@ import {
 	done,
 	FIXTURE,
 	HOST,
+	inPool,
 	launch,
 	ok,
 	openDemo,
@@ -188,27 +189,32 @@ const normal = (value) =>
 const browser = await launch();
 const natives = {};
 
-for (const [name, kind] of Object.entries(KINDS)) {
-	if (only && !name.includes(only)) continue;
+// two kinds at once, and each kind's two modes at once: every page is in a
+// browser context of its own, and every load of a page has a key of its own
+// for the fixture's logs (pageURL)
+await inPool(Object.entries(KINDS), 2, async ([name, kind]) => {
+	if (only && !name.includes(only)) return;
 	const want = (natives[name] = await native(kind));
 	ok(
 		`natively, a page with ${name} ran every case`,
 		want !== null && Object.keys(want).length > 0,
 		normal(want?.['self/crossOriginIsolated']),
 	);
-	for (const [mode, base] of [
-		['same-origin', PROXY],
-		['isolated', HOST],
-	]) {
-		const got = await proxied(base, kind);
-		ok(
-			`${mode}: a page with ${name} ran every case`,
-			got !== null,
-			normal(got?.['self/crossOriginIsolated']),
-		);
-		compare(`${mode}: ${name}`, want, got);
-	}
-}
+	await Promise.all(
+		[
+			['same-origin', PROXY],
+			['isolated', HOST],
+		].map(async ([mode, base]) => {
+			const got = await proxied(base, kind);
+			ok(
+				`${mode}: a page with ${name} ran every case`,
+				got !== null,
+				normal(got?.['self/crossOriginIsolated']),
+			);
+			compare(`${mode}: ${name}`, want, got);
+		}),
+	);
+});
 
 // what the battery relies on, so a change in the browser shows here first
 if (!only) {
