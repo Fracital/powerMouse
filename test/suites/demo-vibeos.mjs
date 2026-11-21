@@ -24,9 +24,14 @@
 //    frame keeps its scroll, its focused input and selection, and comes back
 //    the same;
 //  - without moveBefore (Firefox) the frames stay where they are and are
-//    laid over their windows, their documents just as alive.
-/* global tabs, activateTab -- pm/main.js's, read in the demo's page */
-import { existsSync } from 'node:fs';
+//    laid over their windows, their documents just as alive;
+//  - the emulator is not served: vibeOS fetches v86 through the proxy
+//    (vibeHost.fetch) from its pinned sources, runs nothing whose SHA-256
+//    is not the pinned one, and boots from Cache Storage with no request at
+//    all once it has the files; with the network (no SKIP_NETWORK) a fresh
+//    page fetches them through the proxy, never from the page itself.
+/* global tabs, activateTab, vibeHost -- pm/main.js's, read in the demo's page */
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
 	done,
@@ -794,6 +799,207 @@ async function openTabs(page) {
 	);
 	await checkState(page, 'without moveBefore, back', before, hitsBefore);
 	await page.close();
+}
+
+// ---- the emulator ------------------------------------------------------------
+{
+	ok(
+		'dist/vibeos/ carries no emulator (v86 and its relay are fetched when used)',
+		!existsSync(`${root}dist/vibeos/scripts`),
+	);
+	// the pinned sources vibeOS names, and the files it pins (the same bytes
+	// its own site serves from scripts/v86/)
+	const vibe = `${root}vendor/vibeOS/`;
+	const source = readFileSync(`${vibe}src/dom/v86files.ts`, 'utf8');
+	const base = (name) =>
+		new RegExp(`const ${name} = '([^']+)'`).exec(source)[1];
+	const v86 = `${vibe}scripts/v86/`;
+	const PINNED = [
+		[`${base('release')}libv86.js`, `${v86}libv86.js`],
+		[`${base('release')}v86.wasm`, `${v86}v86.wasm`],
+		[`${base('bios')}seabios.bin`, `${v86}bios/seabios.bin`],
+		[`${base('bios')}vgabios.bin`, `${v86}bios/vgabios.bin`],
+		[`${base('images')}freedos722.img`, `${v86}images/freedos722.img`],
+	];
+	const CORE = PINNED[0][0];
+	const CACHE = /const cacheName = '([^']+)'/.exec(source)[1];
+	const own = [new URL(HOST).origin, new URL(FIXTURE).origin];
+
+	/** a page with vibeOS's fetch recorded (and answered by `answer` when set) */
+	async function emulatorPage() {
+		const direct = [];
+		const page = await openDemo(browser, HOST, {}, (p) =>
+			p.on('request', (request) => {
+				const url = new URL(request.url());
+				if (/^(https?|wss?):$/.test(url.protocol) && !own.includes(url.origin))
+					direct.push(url.href);
+			}),
+		);
+		page.on('pageerror', (error) => errors.push(error.message));
+		await page.evaluate(() => {
+			window.__v86Asked = [];
+			const real = vibeHost.fetch;
+			vibeHost.fetch = (url, init) => {
+				window.__v86Asked.push(url);
+				return window.__v86Answer
+					? window.__v86Answer(url, init)
+					: real(url, init);
+			};
+		});
+		await submitLanding(page, OTHER);
+		await waitActive(page, () => document.title === 'Bookmark A');
+		await page.click('#toolMenu');
+		await page.click('#menuVibe');
+		await until(
+			page,
+			() => document.body.classList.contains('vibeos'),
+			Boolean,
+		);
+		return { page, direct };
+	}
+	const openEmulator = (page) =>
+		page.evaluate(() =>
+			[...document.querySelectorAll('#vibeos-root .vo-menu-item')]
+				.find((item) => item.textContent.trim() === 'Emulator')
+				.click(),
+		);
+	const status = (page, want, timeout) =>
+		until(
+			page,
+			() =>
+				document.querySelector('#vibeos-root .vibe-emulator-status')
+					?.textContent ?? '',
+			want,
+			timeout,
+		);
+	const cached = (page) =>
+		page.evaluate(async (name) => {
+			const cache = await caches.open(name);
+			return (await cache.keys()).map((request) => request.url).sort();
+		}, CACHE);
+
+	// in Cache Storage already, the core tampered with: it is not run, and
+	// its source (answering the same) does not get it run either
+	const { page, direct } = await emulatorPage();
+	await page.evaluate(
+		async ({ name, files, core }) => {
+			const cache = await caches.open(name);
+			for (const [url, data] of files)
+				await cache.put(
+					url,
+					new Response(
+						url === core
+							? 'window.__tampered = true;'
+							: Uint8Array.fromBase64(data),
+					),
+				);
+			window.__v86Answer = async (url) =>
+				url === core
+					? new Response('window.__tampered = true;')
+					: new Response(null, { status: 503 });
+		},
+		{
+			name: CACHE,
+			core: CORE,
+			files: PINNED.map(([url, file]) => [
+				url,
+				readFileSync(file).toString('base64'),
+			]),
+		},
+	);
+	await openEmulator(page);
+	const refused = await status(page, (text) => /^Cannot start/.test(text));
+	const after = await page.evaluate(() => ({
+		tampered: window.__tampered ?? false,
+		asked: window.__v86Asked,
+		v86: typeof window.V86,
+	}));
+	ok(
+		'a core whose SHA-256 is not the pinned one is never run',
+		/libv86\.js is not the pinned file/.test(refused) &&
+			!after.tampered &&
+			after.v86 === 'undefined' &&
+			after.asked.includes(CORE),
+		`${refused} ${JSON.stringify(after)}`,
+	);
+	ok(
+		'the tampered entry is dropped from Cache Storage',
+		!(await cached(page)).includes(CORE),
+	);
+	// the pinned core in the cache: FreeDOS boots with nothing fetched
+	await page.evaluate(
+		async ({ name, url, data }) => {
+			await (
+				await caches.open(name)
+			).put(url, new Response(Uint8Array.fromBase64(data)));
+			window.__v86Asked = [];
+			window.__v86Answer = async () => new Response(null, { status: 503 });
+		},
+		{
+			name: CACHE,
+			url: CORE,
+			data: readFileSync(PINNED[0][1]).toString('base64'),
+		},
+	);
+	await page.evaluate(() =>
+		[...document.querySelectorAll('#vibeos-root .vibe-emulator-menu-item')]
+			.find((item) => item.textContent.trim() === 'Run')
+			.click(),
+	);
+	const booted = await status(
+		page,
+		(text) => text === 'Running FreeDOS',
+		60000,
+	);
+	const local = await page.evaluate(() => ({
+		asked: window.__v86Asked,
+		v86: typeof window.V86,
+	}));
+	ok(
+		'with the pinned files in Cache Storage the emulator boots and fetches nothing',
+		booted === 'Running FreeDOS' &&
+			local.v86 === 'function' &&
+			local.asked.length === 0,
+		`${booted} ${JSON.stringify(local)}`,
+	);
+	ok(
+		'the page asked no other site for anything',
+		direct.length === 0,
+		direct.join(' '),
+	);
+	await page.close();
+
+	if (process.env.SKIP_NETWORK === '1')
+		console.log("SKIP the emulator's first fetch (SKIP_NETWORK=1)");
+	else {
+		// a fresh page: the files come through the proxy, verified, and stay
+		const { page, direct } = await emulatorPage();
+		await openEmulator(page);
+		const running = await status(
+			page,
+			(text) => text === 'Running FreeDOS' || /^Cannot/.test(text),
+			120000,
+		);
+		const asked = await page.evaluate(() => window.__v86Asked);
+		ok(
+			"a fresh page fetches the emulator's pinned files through the proxy and boots",
+			running === 'Running FreeDOS' &&
+				JSON.stringify([...asked].sort()) ===
+					JSON.stringify(PINNED.map(([url]) => url).sort()),
+			`${running} ${JSON.stringify(asked)}`,
+		);
+		ok(
+			'it keeps them in Cache Storage',
+			JSON.stringify(await cached(page)) ===
+				JSON.stringify(PINNED.map(([url]) => url).sort()),
+		);
+		ok(
+			'the page itself asked no other site for anything',
+			direct.length === 0,
+			direct.join(' '),
+		);
+		await page.close();
+	}
 }
 
 await done(browser, errors);

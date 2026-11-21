@@ -14,7 +14,12 @@ export const VIBEOS_SOURCE = 'vendor/vibeOS';
 export const VIBEOS_OUT = 'dist/vibeos';
 
 // vibeOS's static files, as its own site serves them, next to embed.js (the
-// server serves dist/vibeos/ under a neutral directory of its own)
+// server serves dist/vibeos/ under a neutral directory of its own). Not its
+// emulator (scripts/v86/, and scripts/net/, the libcurl relay its disks
+// stream through on its own site): embedded, vibeOS fetches v86 from its
+// pinned upstream sources through the proxy (vibeHost.fetch in pm/main.js)
+// when an emulator first opens, checks each file's SHA-256 and keeps it in
+// Cache Storage (its src/dom/v86files.ts)
 const STATIC = [
 	['tango', 'tango'],
 	['appfiles', 'appfiles'],
@@ -23,8 +28,6 @@ const STATIC = [
 	['public/stomp-bookmarks', 'stomp-bookmarks'],
 	['public/licenses', 'licenses'],
 	['public/fonts', 'fonts'],
-	['scripts/v86', 'scripts/v86'],
-	['scripts/net', 'scripts/net'],
 	['LICENSE.md', 'LICENSE.md'],
 ];
 
@@ -96,7 +99,7 @@ export async function buildVibeOS() {
 			plugins: [rebased],
 			logLevel: 'warning',
 		});
-		// copy-on-write where the file system has it: the files are some 55 MB
+		// copy-on-write where the file system has it: the files are some 23 MB
 		for (const [from, to] of STATIC)
 			await cp(`${VIBEOS_SOURCE}/${from}`, `${VIBEOS_OUT}/${to}`, {
 				recursive: true,

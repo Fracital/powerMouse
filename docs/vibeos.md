@@ -43,7 +43,8 @@ demo without vibeOS; the `demo-vibeos` suite says SKIP there.
 
 `dist/vibeos/` holds the desktop's module and stylesheet (`embed.js`,
 `embed.css`) and the files vibeOS serves on its own site (its icons, wallpapers,
-games, cursors, the v86 emulator) next to them. The npm package leaves it
+games, cursors and fonts) next to them, about 14 MB. Not its emulator: v86
+is fetched when it is used (The emulator, below). The npm package leaves it
 out (`package.json` `files`). The server serves it from there and offers the
 switch (`config.js` `vibeos`) only while `dist/vibeos/embed.js` exists; it
 never reads `vendor/`.
@@ -135,6 +136,28 @@ tab's does in the demo's own view; a frame laid over a minimized window is
 inert too. The demo's universal `transition` stops at `#vibeos-root`, so a
 window follows a drag at once and goes at once when minimized.
 
+## The emulator
+
+vibeOS's emulator (v86) is not in `dist/vibeos/` and the server never serves
+it; nor is the libcurl relay vibeOS's own site streams its online disks
+through. The first time an emulator opens, vibeOS fetches what that launch
+needs from pinned sources, all on jsDelivr: v86 0.5.473's `libv86.js` and
+`v86.wasm` as npm publishes them, the BIOS of the commit that release was
+built from, and the disk images at a commit of vibeOS's own (copy.sh's
+copies change under their names). It asks through the proxy, never from the
+page: the page hands vibeOS its network (`vibeHost.fetch`, a request on the
+controller's transport, the one its tabs use), and the
+page itself makes no request to another site. Each file is used only when
+its size and SHA-256 are the ones vibeOS pins (its `src/dom/v86files.ts`):
+the core runs from a `blob:` URL, the wasm is instantiated from the checked
+bytes, the BIOS and disks are handed over as buffers. Each is kept in Cache
+Storage under its source's URL and checked again when read, so a later
+launch is local and makes no request. The online systems stream their disks
+from copy.sh through the proxy too. The guest's own network uses the page's
+Wisp server, and has none in Tor mode. No frame is involved, so no address
+changes. A remote controller (an isolated host) has no transport in the
+page, and there the emulator says it cannot start.
+
 ## Deploying
 
 The deploy gate (`deploy/terp-deploy-gate.sh`) builds in a stage checkout and
@@ -150,6 +173,9 @@ checkout never needs `vendor/vibeOS`.
   of a tab (its script's state, a typed input, its scroll, a running timer and
   a nested frame's timer, no second request for either document), dialed
   tabs, new tabs, the menu, a minimized window, the neutral addresses, the
-  font, and the fallback without `moveBefore`.
+  font, the fallback without `moveBefore`, and the emulator: none in
+  `dist/vibeos/`, a tampered core never run, a boot from Cache Storage with
+  no request and, with the network (no `SKIP_NETWORK`), a fresh page's
+  fetch of the pinned files through the proxy.
 - vibeOS's own checks, in `vendor/vibeOS` (they need its devDependencies):
   `npm run check`, `npm run build`.

@@ -7809,6 +7809,36 @@ const vibeHost = {
 			if (frame.localName === 'iframe') framesContainer.moveBefore(frame, null);
 	},
 	openMenu: (anchor) => openMenu(anchor),
+	// the network as the proxy reaches it: what vibeOS fetches that it does
+	// not carry (its emulator, from pinned sources, which it checks by hash)
+	// goes through the proxy's transport, never from this page to another
+	// site
+	fetch: async (url, { method = 'GET', headers = {}, signal } = {}) => {
+		await booted;
+		if (!controller) throw new Error('the proxy did not start');
+		// (a remote controller's transport is in its frame, on the proxy
+		// origin: an isolated host has none here)
+		if (!controller.transport)
+			throw new Error('the proxy has no transport in this page');
+		const answer = await controller.transport.request(
+			new URL(url),
+			method,
+			null,
+			Object.entries(headers),
+			signal,
+		);
+		const empty = [101, 103, 204, 205, 304].includes(answer.status);
+		return new Response(empty ? null : answer.body, {
+			status: answer.status,
+			statusText: answer.statusText,
+			headers: answer.headers,
+		});
+	},
+	// the guest network of vibeOS's emulator: the proxy's own relay, and
+	// none in Tor mode, whose traffic goes to Tor relays only
+	get relay() {
+		return TOR_REQUESTED ? null : directWispURL();
+	},
 	// an installed web app's window: a frame of the proxy's that is no tab
 	mountWebview: async (element, url) => {
 		await booted;
