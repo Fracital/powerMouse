@@ -30,12 +30,19 @@
 // cancels every navigation its page starts and hands it to the frame's
 // CalledFrame here over the port, which gives the next document a fresh
 // frame in the element's place (a clean realm, as a navigation's), and
-// keeps the tab's session history: the entries, their states and scroll
-// positions, with pushState and fragment entries of a document stepped
-// within it (a popstate). The history is kept in this page's sessionStorage,
-// so a reload of the host shows the tab where it was, and every change of it
-// (an entry added, replaced or stepped to, a title) fires `entries` on the
-// Frame, for the host's own record of the tab.
+// keeps the tab's session history: the entries, their states, Navigation
+// API states and scroll positions, with pushState and fragment entries of a
+// document stepped within it. A step is a traversal as Chrome makes one:
+// the document whose entry changes hears its `navigate` event first
+// (src/inject/dom/calledNavigation.ts), which a page's own step within its
+// document may cancel (the browser's Back, the user's, it cannot), then the
+// document steps (`pop`) or the entry's document is loaded; the document
+// left hears `pageswap` before it goes. A document is told only the entries
+// of its own origin around its own, and how long the history is. The
+// history is kept in this page's sessionStorage, so a reload of the host
+// shows the tab where it was, and every change of it (an entry added,
+// replaced or stepped to, a title) fires `entries` on the Frame, for the
+// host's own record of the tab.
 //
 // Under the site pool (ControllerInit.sitePool, docs/site-pool.md; the
 // content slots of docs/content-slots.md) every slot's worker serves the
@@ -76,6 +83,10 @@ const SAVE_KEPT_MS = 10_000;
 const SAVE_WAIT_MS = 60_000;
 /** what a stopped load's waits reject with */
 const STOPPED = Symbol('stopped');
+/** how long a document has to fire a traversal's navigate event (a document that went never answers) */
+const ASK_MS = 2_000;
+/** how long the document a navigation leaves has for its pageswap */
+const SWAP_MS = 500;
 
 /** the name a download is saved under: its Content-Disposition's, else the last part of its URL's path */
 function downloadName(disposition: string | null, url: string): string {
@@ -143,9 +154,10 @@ export interface CalledEntry {
 	scroll: [number, number];
 	/** the entries of one document share a number: a step between them is the document's own */
 	document: number;
-	/** the Navigation API's key and id of the entry */
+	/** the Navigation API's key and id of the entry, and its state (navigate(), reload(), updateCurrentEntry()) */
 	key: string;
 	id: string;
+	navState?: unknown;
 	/** the route of the document it was reached from (its request's referrer), which a reload and a step name again */
 	referrer: string;
 }
@@ -164,11 +176,24 @@ type How = {
 	referrer?: string;
 	/** the navigation's referrer policy (its link's, else its document's) */
 	policy?: string;
+	/** the new entry's Navigation API state */
+	navState?: unknown;
+	/** a step's: the entry the tab showed before it (NavigationActivation's `from`) */
+	left?: CalledEntry;
 };
 
 /** what a called document tells its host (calledHooks.ts) */
 type Told = {
-	op: 'navigate' | 'push' | 'replace' | 'step' | 'scroll' | 'token';
+	op:
+		| 'navigate'
+		| 'push'
+		| 'replace'
+		| 'step'
+		| 'scroll'
+		| 'token'
+		| 'update'
+		| 'traversing'
+		| 'swapped';
 	url?: string;
 	/** a token's: the route of the call a frame of the document is to make */
 	routed?: string;
@@ -184,11 +209,29 @@ type Told = {
 	entries?: [string, string | File][] | null;
 	enctype?: string | null;
 	policy?: string;
+	/** a push's and a replace's: the entry's key and id, as the document made them (calledNavigation.ts) */
+	key?: string;
+	entryId?: string;
+	/** the entry's Navigation API state (a push, a replace, an update, a navigation) */
+	navState?: unknown;
+	/** a traversing's and a swapped's: the request it answers, and whether the traversal goes on */
+	req?: string;
+	ok?: boolean;
 };
 
 /** the longest URL a message on a call's port names */
 const MAX_URL = 32_768;
-const OPS = ['navigate', 'push', 'replace', 'step', 'scroll', 'token'];
+const OPS = [
+	'navigate',
+	'push',
+	'replace',
+	'step',
+	'scroll',
+	'token',
+	'update',
+	'traversing',
+	'swapped',
+];
 const isText = (value: unknown, limit = MAX_URL): value is string =>
 	typeof value === 'string' && value.length <= limit;
 const isScroll = (value: unknown): value is [number, number] =>
@@ -217,6 +260,10 @@ export function toldOf(data: unknown): Told | null {
 		optional('reload', (value) => typeof value === 'boolean') &&
 		optional('enctype', (value) => value === null || isText(value, 256)) &&
 		optional('policy', (value) => isText(value, 256)) &&
+		optional('key', (value) => isText(value, 64)) &&
+		optional('entryId', (value) => isText(value, 64)) &&
+		optional('req', (value) => isText(value, 64)) &&
+		optional('ok', (value) => typeof value === 'boolean') &&
 		optional(
 			'entries',
 			(value) =>
@@ -238,7 +285,9 @@ export function toldOf(data: unknown): Told | null {
 		(told.op === 'step' && told.delta === undefined) ||
 		(told.op === 'scroll' && told.scroll === undefined) ||
 		(told.op === 'token' &&
-			(told.routed === undefined || told.id === undefined))
+			(told.routed === undefined || told.id === undefined)) ||
+		((told.op === 'traversing' || told.op === 'swapped') &&
+			told.req === undefined)
 	)
 		return null;
 	return told as Told;
@@ -303,6 +352,11 @@ export function callAnswerOf(data: unknown): CallAnswer | null {
 }
 
 const randomId = () => crypto.randomUUID();
+/** whether two pages' URLs are of one origin (an opaque one is of none) */
+const sameOrigin = (a: string, b: string) => {
+	const origin = originOf(a);
+	return !!origin && origin !== 'null' && origin === originOf(b);
+};
 
 /** a submission's body as its form encodes it (the navigate event gives only the entries) */
 async function encoded(
@@ -424,6 +478,10 @@ export class CalledFrame {
 	#pending: { cancel: () => void; routed: string | null } | null = null;
 	/** the routes stop() told the worker to drop, until when (EARLY_STOP_MS) */
 	#stopped = new Map<string, number>();
+	/** the document's answers to a traversal's navigate event and to its pageswap, by request */
+	#answers = new Map<string, (told: Told | null) => void>();
+	/** the steps asked for, one at a time as the browser's */
+	#queue: Promise<unknown> = Promise.resolve();
 	readonly #key: string;
 	constructor(
 		public readonly frame: Frame,
@@ -502,21 +560,86 @@ export class CalledFrame {
 		const to = this.index + delta;
 		return to >= 0 && to < this.entries.length;
 	}
-	/** a step through the tab's history; false when there is no entry there */
-	async step(delta: number): Promise<boolean> {
-		if (!delta || !this.canStep(delta)) return false;
+	/**
+	 * A step through the tab's history, of the browser's own Back or
+	 * Forward (`user`, the default: no document can cancel it) or of a
+	 * page's script; false when there is no entry there or the document
+	 * cancelled it
+	 */
+	step(delta: number, { user = true } = {}): Promise<boolean> {
+		if (!delta) return Promise.resolve(false);
+		const run = () => this.#step(delta, user);
+		const done = this.#queue.then(run, run);
+		this.#queue = done.catch(() => false);
+		return done;
+	}
+	async #step(delta: number, user: boolean): Promise<boolean> {
+		if (!this.canStep(delta)) return false;
+		const port = this.#port;
+		const left = this.entries[this.index];
+		const to = this.entries[this.index + delta];
+		const same = to.document === this.#document && !!port;
+		const req = randomId();
+		// the document whose entry changes hears the traversal's navigate
+		// event first, and may cancel a step within it that no user asked
+		// for; a step to another origin's entry is never told to it, as
+		// natively
+		if (port && left && sameOrigin(left.url, to.url)) {
+			const answer = await this.#ask(
+				port,
+				req,
+				{
+					traverse: {
+						req,
+						key: to.key,
+						cancelable: same && !user,
+						user,
+					},
+				},
+				ASK_MS,
+			);
+			if (port !== this.#port || this.entries[this.index] !== left)
+				return false;
+			if (answer?.ok === false) {
+				port.postMessage({ abort: { req, key: to.key } });
+				return false;
+			}
+		}
 		this.#leave();
 		this.index += delta;
-		const to = this.entries[this.index];
-		if (to.document === this.#document && this.#port) {
+		if (same) {
 			this.#keep();
-			this.#port.postMessage({
-				pop: { index: this.index, state: to.state, scroll: to.scroll },
+			port!.postMessage({
+				pop: {
+					req,
+					key: to.key,
+					state: to.state,
+					scroll: to.scroll,
+					joint: { length: this.entries.length, index: this.index },
+				},
 			});
 			return true;
 		}
-		await this.#load(to.url, { type: 'back_forward' });
+		await this.#load(to.url, { type: 'back_forward', left });
 		return true;
+	}
+	/** ask the document shown over `port`, and wait for its answer (null after `wait`) */
+	#ask(
+		port: MessagePort,
+		req: string,
+		message: object,
+		wait: number,
+	): Promise<Told | null> {
+		return new Promise((resolve) => {
+			const done = (told: Told | null) => {
+				clearTimeout(timer);
+				this.#answers.delete(req);
+				resolve(told);
+			};
+			const timer = setTimeout(() => done(null), wait);
+			this.#answers.set(req, done);
+			port.postMessage(message);
+		});
 	}
 	/**
 	 * Stop the tab as Chrome's Stop does (Frame.stop): a load not called
@@ -536,6 +659,10 @@ export class CalledFrame {
 		// (its request may reach the worker after this)
 		this.#stopped.set(pending.routed.split('#')[0], Date.now() + EARLY_STOP_MS);
 		await this.controller.stopNavigation(pending.routed, true).catch(() => {});
+	}
+	/** an entry as a document is told it */
+	#named(entry?: CalledEntry) {
+		return entry ? { url: entry.url, key: entry.key, id: entry.id } : null;
 	}
 	/** the scroll of the entry being left: the document's, as it last told */
 	#leave() {
@@ -586,9 +713,24 @@ export class CalledFrame {
 					port.postMessage({ token: { id: told.id, value: token } });
 				break;
 			}
+			case 'traversing':
+			case 'swapped':
+				this.#answers.get(told.req!)?.(told);
+				break;
+			case 'update':
+				if (entry) {
+					entry.navState = told.navState;
+					this.#keep();
+				}
+				break;
 			case 'push':
 			case 'replace': {
 				const next = this.#entry(String(told.url), told.state, this.#document);
+				// (the key and id the document gave the entry, which its
+				// Navigation API names it by)
+				if (told.key) next.key = told.key;
+				if (told.entryId) next.id = told.entryId;
+				if (told.navState !== undefined) next.navState = told.navState;
 				if (entry) {
 					next.title = entry.title;
 					next.referrer = entry.referrer;
@@ -606,11 +748,14 @@ export class CalledFrame {
 				break;
 			}
 			case 'step':
-				void this.step(Number(told.delta) || 0);
+				// (a page's own: history.back(), navigation.traverseTo())
+				void this.step(Number(told.delta) || 0, { user: false });
 				break;
 			case 'navigate': {
 				if (told.scroll) this.#scroll = told.scroll;
 				if (told.reload) {
+					if (entry && told.navState !== undefined)
+						entry.navState = told.navState;
 					void this.reload();
 					break;
 				}
@@ -622,6 +767,7 @@ export class CalledFrame {
 					replace: told.replace,
 					referrer: this.#routed,
 					policy: told.policy,
+					navState: told.navState,
 					...(body && { method: 'POST', ...body }),
 				});
 				break;
@@ -630,19 +776,51 @@ export class CalledFrame {
 	}
 	/** what the document about to be written is told of the tab */
 	#session(how: How): CalledSession {
-		const scroll = this.entries[this.index]?.scroll;
+		const shown = this.entries[this.index];
+		const scroll = shown?.scroll;
+		// the run of entries of the document's own origin around its own,
+		// as its navigation.entries() lists them: never another origin's URL
+		let first = this.index;
+		let last = this.index;
+		if (shown) {
+			while (first > 0 && sameOrigin(this.entries[first - 1].url, shown.url))
+				first--;
+			while (
+				last < this.entries.length - 1 &&
+				sameOrigin(this.entries[last + 1].url, shown.url)
+			)
+				last++;
+		}
+		const named = (entry?: CalledEntry) =>
+			entry && shown && sameOrigin(entry.url, shown.url)
+				? {
+						url: entry.url,
+						key: entry.key,
+						id: entry.id,
+						document: entry.document,
+					}
+				: null;
 		return {
 			// a step's: the entry's scroll, which the document restores
 			...(how.type === 'back_forward' &&
 				scroll?.some(Boolean) && { scroll: [scroll[0], scroll[1]] }),
-			entries: this.entries.map(({ url, key, id, document }) => ({
-				url,
-				key,
-				id,
-				document,
-			})),
-			index: this.index,
-			state: this.entries[this.index]?.state ?? null,
+			entries: shown
+				? this.entries
+						.slice(first, last + 1)
+						.map(({ url, key, id, document, navState }) => ({
+							url,
+							key,
+							id,
+							document,
+							...(navState !== undefined && { navState }),
+						}))
+				: [],
+			index: this.index - first,
+			// (history.length, and where the document is in it)
+			joint: { length: this.entries.length, index: this.index },
+			// NavigationActivation's `from`: the entry left, of this origin
+			from: named(how.left),
+			state: shown?.state ?? null,
 			type: how.type,
 			replaced: !!how.replace,
 			routed: this.#routed,
@@ -847,6 +1025,7 @@ export class CalledFrame {
 			over();
 			// stopped: the frame keeps its document
 			if (error === STOPPED) return;
+			if (load === this.#loads) this.#port?.postMessage({ failed: true });
 			throw error;
 		}
 		over();
@@ -879,6 +1058,8 @@ export class CalledFrame {
 				fresh.remove();
 				port.close();
 			}
+			// (the document's navigation it handed here failed: navigateerror)
+			this.#port?.postMessage({ failed: true });
 			frame.dispatchEvent(new Event('stayed'));
 			return;
 		}
@@ -904,13 +1085,58 @@ export class CalledFrame {
 		// the answer is in: the tab's entries change, and its document (a
 		// step left its entry before it moved)
 		if (how.type !== 'back_forward') this.#leave();
-		if (how.type === 'navigate') {
-			const next = this.#entry(shown, null, ++this.#documents);
+		const left = how.left ?? this.entries[this.index];
+		// a navigation's new entry (a replacement keeps the key of the entry
+		// it replaces)
+		const next =
+			how.type === 'navigate'
+				? this.#entry(shown, null, ++this.#documents)
+				: null;
+		if (next && how.replace && this.index >= 0)
+			next.key = this.entries[this.index].key;
+		// the document left hears pageswap first (its activation names the
+		// entries only of a navigation within its origin), and the frame's
+		// document is not swapped before it has, or a short while has gone
+		const oldPort = this.#port;
+		if (oldPort && left) {
+			const req = randomId();
+			const within = sameOrigin(left.url, shown);
+			const type =
+				how.type === 'back_forward'
+					? 'traverse'
+					: how.type === 'reload'
+						? 'reload'
+						: how.replace
+							? 'replace'
+							: 'push';
+			await this.#ask(
+				oldPort,
+				req,
+				{
+					swap: {
+						req,
+						type,
+						activation: within
+							? {
+									entry: this.#named(next ?? this.entries[this.index]),
+									from: this.#named(left),
+								}
+							: null,
+					},
+				},
+				SWAP_MS,
+			);
+			if (load !== this.#loads) {
+				fresh.remove();
+				port.close();
+				return;
+			}
+		}
+		if (next) {
 			next.referrer = referrer;
-			if (how.replace && this.index >= 0) {
-				next.key = this.entries[this.index].key;
-				this.entries[this.index] = next;
-			} else this.entries.splice(++this.index, Infinity, next);
+			if (how.navState !== undefined) next.navState = how.navState;
+			if (how.replace && this.index >= 0) this.entries[this.index] = next;
+			else this.entries.splice(++this.index, Infinity, next);
 		} else this.entries[this.index].url = shown;
 		const entry = this.entries[this.index];
 		this.#document = entry.document;
@@ -930,7 +1156,9 @@ export class CalledFrame {
 			const told = toldOf(data);
 			if (told) void this.#told(told, port);
 		};
-		port.postMessage({ write: { url: shown, session: this.#session(how) } });
+		port.postMessage({
+			write: { url: shown, session: this.#session({ ...how, left }) },
+		});
 		// the frame the user was in keeps the focus, as a navigation's does
 		if (focused) fresh.focus();
 	}
@@ -958,6 +1186,13 @@ export async function justCallStomp(
 	if (frame.controller.config.dialing !== true)
 		throw new Error(
 			'Stomp: justCallStomp() needs a controller made with `dialing: true`',
+		);
+	// a dialed document's history and navigation are the Navigation API's
+	// (calledNavigation.ts), which is not emulated where the browser lacks it
+	if (!('navigation' in globalThis) || !('NavigateEvent' in globalThis))
+		throw new DOMException(
+			'Stomp: dialing needs the Navigation API, which this browser lacks',
+			'NotSupportedError',
 		);
 	let tab = called.get(frame);
 	if (!tab) {

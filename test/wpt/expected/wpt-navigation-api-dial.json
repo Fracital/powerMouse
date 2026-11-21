@@ -1,0 +1,787 @@
+{
+	"/navigation-api/currententrychange-event/constructor.html": {
+		"all properties are reflected back": "FAIL: Failed to construct 'NavigationCurrentEntryChangeEvent': Failed to read the 'from' property from 'NavigationCurrentEntryChangeEventInit': Failed to convert value to 'NavigationHistoryEntry'.",
+		"defaults are as expected": "FAIL: Failed to construct 'NavigationCurrentEntryChangeEvent': Failed to read the 'from' property from 'NavigationCurrentEntryChangeEventInit': Failed to convert value to 'NavigationHistoryEntry'."
+	},
+	"/navigation-api/currententrychange-event/navigation-back-forward-cross-doc.html": {
+		"currententrychange does not fire for cross-document navigation.back() and navigation.forward()": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/currententrychange-event/navigation-navigate-cross-doc.html": {
+		"currententrychange does not fire for cross-document navigation.navigate()": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/currententrychange-event/navigation-navigate-intercept.html": {
+		"currententrychange fires for navigation.navigate() intercepted by intercept()": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/currententrychange-event/navigation-navigate-replace-cross-doc.html": {
+		"currententrychange does not fire for cross-document navigation.navigate() with replace": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/currententrychange-event/navigation-navigate-replace-intercept.html": {
+		"currententrychange fires for navigation.navigate() with replace intercepted by intercept()": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/currententrychange-event/navigation-reload-cross-doc.html": {
+		"currententrychange does not fire for cross-document navigation.reload()": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/currententrychange-event/navigation-reload-intercept.html": {
+		"currententrychange fires for navigation.reload() intercepted by intercept()": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/currententrychange-event/properties.html": {
+		"NavigationCurrentEntryChangeEvent's properties": "FAIL: assert_true: expected true got false"
+	},
+	"/navigation-api/focus-reset/autofocus.html?delayed-checkpoint": {
+		"(harness)": "ERROR: Error: assert_equals: Non-navigation API autofocus was processed expected Element node <button autofocus=\"\" id=\"initialAutofocusTarget\">Initial ... but got Element node <body><button autofocus=\"\" id=\"",
+		"An element with autofocus, present before navigation, gets focused": "NOTRUN: ",
+		"Two elements with autofocus, present before navigation; the first gets focused": "NOTRUN: ",
+		"An element with autofocus, present before navigation but disabled before finished, does not get focused": "NOTRUN: ",
+		"An element with autofocus, present before navigation but with its autofocus attribute removed before finished, does not get focused": "NOTRUN: ",
+		"Two elements with autofocus, present before navigation, but the first gets disabled; the second gets focused": "NOTRUN: ",
+		"An element with autofocus, introduced between committed and finished, gets focused": "NOTRUN: ",
+		"An element with autofocus, introduced after finished, does not get focused": "NOTRUN: "
+	},
+	"/navigation-api/focus-reset/autofocus.html?same-checkpoint": {
+		"(harness)": "ERROR: Error: assert_equals: Non-navigation API autofocus was processed expected Element node <button autofocus=\"\" id=\"initialAutofocusTarget\">Initial ... but got Element node <body><button autofocus=\"\" id=\"",
+		"An element with autofocus, present before navigation, gets focused": "NOTRUN: ",
+		"Two elements with autofocus, present before navigation; the first gets focused": "NOTRUN: ",
+		"An element with autofocus, present before navigation but disabled before finished, does not get focused": "NOTRUN: ",
+		"An element with autofocus, present before navigation but with its autofocus attribute removed before finished, does not get focused": "NOTRUN: ",
+		"Two elements with autofocus, present before navigation, but the first gets disabled; the second gets focused": "NOTRUN: ",
+		"An element with autofocus, introduced between committed and finished, gets focused": "NOTRUN: ",
+		"An element with autofocus, introduced after finished, does not get focused": "NOTRUN: "
+	},
+	"/navigation-api/focus-reset/change-focus-again-in-blur-during-intercept.html": {
+		"change-focus-again-in-blur-during-intercept": "FAIL: assert_true: Document has focus expected true got false"
+	},
+	"/navigation-api/focus-reset/change-focus-back-to-origial-during-intercept.html": {
+		"change-focus-back-to-origial-during-intercept": "FAIL: assert_equals: focus() worked expected Element node <button></button> but got Element node <body> <script> promise_test(async t => { let intercept..."
+	},
+	"/navigation-api/focus-reset/change-focus-during-intercept.html": {
+		"change-focus-during-intercept": "FAIL: assert_equals: focus() worked expected Element node <button></button> but got Element node <body> <script> promise_test(async t => { let intercept..."
+	},
+	"/navigation-api/focus-reset/change-focus-then-remove-during-intercept.html": {
+		"change-focus-then-remove-during-intercept": "FAIL: assert_equals: focus() worked expected Element node <button></button> but got Element node <body> <script> promise_test(async t => { let intercept..."
+	},
+	"/navigation-api/focus-reset/focus-reset-timing.html": {
+		"Focus should be reset before navigatesuccess": "FAIL: assert_equals: focus() worked expected Element node <button></button> but got Element node <body> <script> promise_test(async t => { navigation.ad...",
+		"Focus should be reset before navigateerror": "FAIL: assert_equals: focus() worked expected Element node <button></button> but got Element node <body> <script> promise_test(async t => { navigation.ad..."
+	},
+	"/navigation-api/navigate-event/cross-origin-traversal-does-not-fire-navigate.html": {
+		"A cross-origin traversal does not fire the navigate event": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigate-event/cross-origin-traversal-redirect.html": {
+		"A traversal that redirects from same-origin to cross-origin fires the navigate event": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'href' from 'Location': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-"
+	},
+	"/navigation-api/navigate-event/cross-window/click-crossdocument-crossorigin.html": {
+		"(harness)": "TIMEOUT: ",
+		"clicking on an <a> element that navigates cross-document targeting a cross-origin window": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigate-event/cross-window/click-crossdocument-sameorigin.html": {
+		"clicking on an <a> element that navigates cross-document targeting a same-origin window": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigate-event/cross-window/click-samedocument-crossorigin.html": {
+		"(harness)": "TIMEOUT: ",
+		"clicking on an <a> element that navigates same-document targeting a cross-origin window": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigate-event/cross-window/click-samedocument-crosssite.html": {
+		"(harness)": "TIMEOUT: ",
+		"clicking on an <a> element that navigates same-document targeting a cross-site window": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigate-event/cross-window/click-samedocument-sameorigin.html": {
+		"(harness)": "ERROR: Uncaught Error: Outside directory",
+		"clicking on an <a> element that navigates same-document targeting a same-origin window": "FAIL: assert_true: hashChange expected true got false"
+	},
+	"/navigation-api/navigate-event/cross-window/location-crossdocument-crossorigin.html": {
+		"(harness)": "TIMEOUT: ",
+		"using location.href to navigate cross-document targeting a cross-origin window": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigate-event/cross-window/location-crossdocument-sameorigin.html": {
+		"(harness)": "TIMEOUT: ",
+		"using location.href to navigate cross-document targeting a same-origin window": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigate-event/cross-window/location-samedocument-crossorigin.html": {
+		"(harness)": "TIMEOUT: ",
+		"using location.href to navigate same-document targeting a cross-origin window": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigate-event/cross-window/location-samedocument-crosssite.html": {
+		"(harness)": "TIMEOUT: ",
+		"using location.href to navigate same-document targeting a cross-site window": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigate-event/cross-window/location-samedocument-sameorigin.html": {
+		"(harness)": "TIMEOUT: ",
+		"using location.href to navigate same-document targeting a same-origin window": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigate-event/cross-window/open-crossdocument-crossorigin.html": {
+		"(harness)": "TIMEOUT: ",
+		"using window.open() to navigate cross-document targeting a cross-origin window": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigate-event/cross-window/open-crossdocument-sameorigin.html": {
+		"(harness)": "ERROR: Uncaught Error: Outside directory"
+	},
+	"/navigation-api/navigate-event/cross-window/open-samedocument-crossorigin.html": {
+		"(harness)": "TIMEOUT: ",
+		"using window.open() to navigate same-document targeting a cross-origin window": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigate-event/cross-window/open-samedocument-crosssite.html": {
+		"(harness)": "TIMEOUT: ",
+		"using window.open() to navigate same-document targeting a cross-site window": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigate-event/cross-window/open-samedocument-sameorigin.html": {
+		"(harness)": "ERROR: Uncaught Error: Outside directory",
+		"using window.open() to navigate same-document targeting a same-origin window": "FAIL: assert_true: hashChange expected true got false"
+	},
+	"/navigation-api/navigate-event/cross-window/submit-crossdocument-crossorigin.html": {
+		"(harness)": "TIMEOUT: ",
+		"submitting a <form> element that navigates cross-document targeting a cross-origin window": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigate-event/cross-window/submit-crossdocument-sameorigin.html": {
+		"(harness)": "ERROR: Uncaught Error: Outside directory"
+	},
+	"/navigation-api/navigate-event/cross-window/submit-samedocument-crossorigin.html": {
+		"(harness)": "TIMEOUT: ",
+		"submitting a <form> element that navigates same-document targeting a cross-origin window": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigate-event/cross-window/submit-samedocument-crosssite.html": {
+		"(harness)": "TIMEOUT: ",
+		"submitting a <form> element that navigates same-document targeting a cross-site window": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigate-event/cross-window/submit-samedocument-sameorigin.html": {
+		"(harness)": "ERROR: Uncaught Error: Outside directory",
+		"submitting a <form> element that navigates same-document targeting a same-origin window": "FAIL: assert_true: hashChange expected true got false"
+	},
+	"/navigation-api/navigate-event/event-constructor.html": {
+		"all properties are reflected back": "FAIL: Failed to construct 'NavigateEvent': Failed to read the 'destination' property from 'NavigateEventInit': Failed to convert value to 'NavigationDestination'.",
+		"defaults are as expected": "FAIL: Failed to construct 'NavigateEvent': Failed to read the 'destination' property from 'NavigateEventInit': Failed to convert value to 'NavigationDestination'.",
+		"hasUAVisualTransition is default false": "FAIL: Failed to construct 'NavigateEvent': Failed to read the 'destination' property from 'NavigateEventInit': Failed to convert value to 'NavigationDestination'."
+	},
+	"/navigation-api/navigate-event/intercept-detach-multiple.html": {
+		"event.intercept() throws if used on an event from a detached iframe": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigate-event/intercept-detach.html": {
+		"event.intercept() throws if used on an event from a detached iframe": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigate-event/intercept-handler-throws.html": {
+		"event.intercept() should abort if the handler throws": "FAIL: assert_true: expected true got false"
+	},
+	"/navigation-api/navigate-event/intercept-multiple-times-reject.html": {
+		"event.intercept() is called multiple times and one of the promises rejects": "FAIL: assert_true: expected true got false"
+	},
+	"/navigation-api/navigate-event/intercept-no-beforeunload.html": {
+		"navigate() whose navigate event is intercepted does not fire beforeunload": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to set a named property 'onbeforeunload' on 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a c"
+	},
+	"/navigation-api/navigate-event/intercept-on-synthetic-event.html": {
+		"event.intercept() throws if invoked on a synthetic event": "FAIL: Failed to construct 'NavigateEvent': Failed to read the 'destination' property from 'NavigateEventInit': Failed to convert value to 'NavigationDestination'."
+	},
+	"/navigation-api/navigate-event/intercept-popstate-no-handler.html": {
+		"event.intercept() should provide popstate with a valid state object": "FAIL: assert_false: expected false got true"
+	},
+	"/navigation-api/navigate-event/intercept-reject.html": {
+		"event.intercept() should abort if the given promise rejects": "FAIL: assert_true: expected true got false"
+	},
+	"/navigation-api/navigate-event/navigate-anchor-download.html": {
+		"(harness)": "TIMEOUT: ",
+		"<a> fires navigate and populates downloadRequest with ''": "TIMEOUT: Test timed out",
+		"<a> fires navigate and populates downloadRequest with 'filename'": "TIMEOUT: Test timed out",
+		"<area> fires navigate and populates downloadRequest with ''": "TIMEOUT: Test timed out",
+		"<area> fires navigate and populates downloadRequest with 'filename'": "FAIL: assert_true: expected true got false"
+	},
+	"/navigation-api/navigate-event/navigate-anchor-with-target.html": {
+		"<a> with a target fires navigate event in target window but not source": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigate-event/navigate-destination-after-detach.html": {
+		"navigate event destination after iframe detach": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigate-event/navigate-destination-dynamic-index.html": {
+		"navigate event destination.index should be dynamic": "FAIL: assert_equals: expected -1 but got 0"
+	},
+	"/navigation-api/navigate-event/navigate-destination-getState-reload.html": {
+		"navigate event destination.getState() on location.reload()": "FAIL: assert_not_equals: got disallowed value undefined"
+	},
+	"/navigation-api/navigate-event/navigate-form-get-sourceElement.html": {
+		"(harness)": "TIMEOUT: timeout: no report within 30 s",
+		"<form> submission with GET method and submitter passed into requestSubmit": "MISSING: the harness ended TIMEOUT before this subtest",
+		"<form> submission with GET method and submitter is clicked": "MISSING: the harness ended TIMEOUT before this subtest"
+	},
+	"/navigation-api/navigate-event/navigate-form-get.html": {
+		"<form> submission with GET method fires navigate event but with formData null": "FAIL: assert_true: expected true got false"
+	},
+	"/navigation-api/navigate-event/navigate-form-reload.html": {
+		"reloading a page created from form submission results in formData of null, not the original form data": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigate-event/navigate-form-requestSubmit.html": {
+		"(harness)": "TIMEOUT: timeout: no report within 30 s",
+		"<form> requestSubmit() sets sourceElement": "MISSING: the harness ended TIMEOUT before this subtest"
+	},
+	"/navigation-api/navigate-event/navigate-form-traverse.html": {
+		"reloading a page created from form submission results in formData of null, not the original form data": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigate-event/navigate-form-userInitiated.html": {
+		"(harness)": "TIMEOUT: timeout: no report within 30 s"
+	},
+	"/navigation-api/navigate-event/navigate-form-with-target.html": {
+		"<form> submission with a target fires navigate event in target window but not source": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigate-event/navigate-form.html": {
+		"(harness)": "TIMEOUT: timeout: no report within 30 s",
+		"<form> submission fires navigate event": "MISSING: the harness ended TIMEOUT before this subtest"
+	},
+	"/navigation-api/navigate-event/navigate-history-back-cross-document.html": {
+		"navigate event for history.back() - cross-document": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigate-event/navigate-history-go-0.html": {
+		"history.go(0) fires the navigate event": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigate-event/navigate-history-traversal-during-onnavigate-should-reject.html": {
+		"(harness)": "TIMEOUT: ",
+		"Test that await navigation.back().finished during onnavigate should reject": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigate-event/navigate-history-traversal-during-onnavigate.html": {
+		"(harness)": "TIMEOUT: "
+	},
+	"/navigation-api/navigate-event/navigate-iframe-location.html": {
+		"location API on another window fires navigate event in the target window only": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigate-event/navigate-multiple-history-pushState.html": {
+		"(harness)": "TIMEOUT: ",
+		"history.pushState() called multiple times gives correct event order": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigate-event/navigate-multiple-location.html": {
+		"location.href set multiple times gives correct event order": "FAIL: assert_array_equals: lengths differ, expected array [\"navigate #1\", \"navigateerror #1\", \"navigate #3\", \"navigateerror #3\", \"navigate #2\", \"navigatesuccess #2\"] length 6, got [\"navigate #1\", \"navigatee"
+	},
+	"/navigation-api/navigate-event/navigate-multiple-navigation-navigate.html": {
+		"navigation.navigate() multiple times gives correct event order": "FAIL: assert_array_equals: lengths differ, expected array [\"navigate #1\", \"navigateerror #1\", \"navigate #3\", \"navigateerror #3\", \"navigate #2\", \"navigatesuccess #2\"] length 6, got [\"navigate #1\", \"navigatee"
+	},
+	"/navigation-api/navigate-event/navigate-multiple-nested-navigateerror.html": {
+		"aborting a navigation repeatedly aborts navigations started from navigateerror handlers": "FAIL: assert_array_equals: lengths differ, expected array [\"navigate #1\", \"navigateerror #1\", \"navigate #3\", \"navigateerror #3\", \"navigate #4\", \"navigateerror #4\", \"navigate #5\", \"navigateerror #5\", \"naviga"
+	},
+	"/navigation-api/navigate-event/navigate-navigation-back-cross-document.html": {
+		"navigate event for navigation.back() - cross-document": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigate-event/navigate-navigation-back-same-document-in-iframe.html": {
+		"navigate event for navigation.back() - same-document in an iframe": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigate-event/navigate-navigation-navigate-cross-site-preventDefault.html": {
+		"(harness)": "TIMEOUT: ",
+		"preventDefault() cancels a cross-site navigation.navigate()": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigate-event/navigate-to-javascript.html": {
+		"navigate event does not fire for javascript: URL navigations": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigate-event/navigate-to-srcdoc.html": {
+		"navigate event fires appropriately (and can be canceled) for adding the srcdoc attribute": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigate-event/navigate-window-open.html": {
+		"window.open() fires navigate event in target window but not source": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigate-event/navigatesuccess-cross-document.html": {
+		"navigatesuccess does not fire for a cross-document navigation": "FAIL: Failed to set a named property 'search' on 'Location': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigate-event/navigation-back-same-document-preventDefault.html": {
+		"navigation.back() same-document preventDefault": "FAIL: assert_equals: expected \"http://localhost:PORT/navigation-api/navigate-event/navigation-back-same-document-preventDefault.html#\" but got \"\""
+	},
+	"/navigation-api/navigate-event/signal-abort-detach-in-onnavigate.html": {
+		"window detach inside a navigate event signals event.signal": "FAIL: assert_unreached: Should have rejected: undefined Reached unreachable code"
+	},
+	"/navigation-api/navigate-event/signal-abort-window-stop-after-intercept.html": {
+		"window.stop() cancels the navigate event's intercept() and signals event.signal": "FAIL: assert_true: expected true got false"
+	},
+	"/navigation-api/navigate-event/signal-abort-window-stop-in-onnavigate.html": {
+		"(harness)": "TIMEOUT: timeout: no report within 30 s",
+		"window.stop() signals event.signal inside a navigate event handler": "MISSING: the harness ended TIMEOUT before this subtest"
+	},
+	"/navigation-api/navigate-event/signal-abort-window-stop.html": {
+		"window.stop() signals event.signal": "FAIL: assert_true: expected true got false"
+	},
+	"/navigation-api/navigate-event/sourceElement-cross-origin.sub.html": {
+		"NavigateEvent.sourceElement should be null for cross-origin same-document initiators": "FAIL: assert_true: sourceElement must be null for cross-origin initiators (it was A) expected true got false"
+	},
+	"/navigation-api/navigation-activation/activation-initial-about-blank.html": {
+		"navigation.activation interaction with initial about:blank": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-activation/activation-push.html": {
+		"navigation.activation after push": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-activation/activation-reload.html": {
+		"navigation.activation after reload": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-activation/activation-replace.html": {
+		"navigation.activation after replace": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-activation/activation-same-document-then-cross-document.html": {
+		"navigation.activation same-document then cross-document": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-activation/activation-traverse-then-clobber.html": {
+		"navigation.activation - traverse, then push same-document": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-activation/activation-traverse.html": {
+		"navigation.activation after traverse": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-history-entry/entries-across-origins.html": {
+		"navigation.entries() should only contain entries that are both same-origin and contiguous": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigation-history-entry/entries-after-blank-navigation-from-cross-origin.html": {
+		"(harness)": "TIMEOUT: "
+	},
+	"/navigation-api/navigation-history-entry/entries-after-blank-navigation.html": {
+		"entries() after navigation to about:blank": "FAIL: assert_equals: expected 2 but got 1"
+	},
+	"/navigation-api/navigation-history-entry/entries-after-blob-navigation.html": {
+		"entries() after navigation to a blob: URL": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigation-history-entry/entries-after-javascript-url-navigation.html": {
+		"entries() after navigation to a javascript: URL": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigation-history-entry/entries-after-navigations-in-multiple-windows.html": {
+		"navigation.entries() behavior when multiple windows navigate.": "FAIL: assert_equals: expected 2 but got 1"
+	},
+	"/navigation-api/navigation-history-entry/entries-after-server-redirect-replace.html": {
+		"A navigation to a redirected page ends up on the page redirected to": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-history-entry/entries-after-server-redirect.html": {
+		"A navigation to a redirected page ends up on the page redirected to": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-history-entry/entries-after-srcdoc-navigation.html": {
+		"entries() after setting a srcdoc attribute": "FAIL: assert_equals: expected 2 but got 1"
+	},
+	"/navigation-api/navigation-history-entry/entries-mainframe-with-iframe.html": {
+		"navigation.entries() for main frame excludes iframe history entries": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-history-entry/entry-after-detach.html": {
+		"NavigationHistoryEntry properties after detach": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigation-history-entry/index-not-in-entries.html": {
+		"entry.index should return -1 when not in navigation.entries()": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigation-history-entry/key-id-location-reload-intercept.html": {
+		"NavigationHistoryEntry's key and id after location.reload() intercepted by intercept()": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-history-entry/key-id-location-reload.html": {
+		"NavigationHistoryEntry's key and id after location.reload()": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigation-history-entry/key-id-location-replace-cross-origin.html": {
+		"NavigationHistoryEntry's key and id after location.replace()": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigation-history-entry/key-id-location-replace.html": {
+		"NavigationHistoryEntry's key and id after location.replace()": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigation-history-entry/no-referrer-dynamic-url-censored.html": {
+		"The url of a document is censored by a no-referrer policy dynamically": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-history-entry/opaque-origin-data-url.html": {
+		"entries() and currentEntry after navigation to a data: URL (which has an opaque origin)": "FAIL: assert_equals: expected 0 but got 1"
+	},
+	"/navigation-api/navigation-history-entry/opaque-origin.html": {
+		"(harness)": "TIMEOUT: ",
+		"navigation.currentEntry/entries()/canGoBack/canGoForward in an opaque origin iframe": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigation-history-entry/sameDocument-after-navigate.html": {
+		"entry.sameDocument after cross-document navigation": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigation-methods/back-main-frame-nearest-after-subframe-navigation.html": {
+		"navigation.back() in the main frame lands on the nearest joint entry when a subframe navigated after it": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-methods/forward-to-pruned-entry.html": {
+		"(harness)": "TIMEOUT: ",
+		"If forward pruning clobbers the target of a traverse, abort": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigation-methods/navigate-base-url.html": {
+		"navigate() must resolve URLs relative to navigation object's base URL": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigation-methods/navigate-from-initial-about-blank-src.html": {
+		"(harness)": "TIMEOUT: ",
+		"navigate() from <iframe> with src=\"\" but still on initial about:blank works": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigation-methods/navigate-from-initial-about-blank.html": {
+		"navigate() from <iframe> still on initial about:blank works": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigation-methods/navigate-history-push-same-url-cross-document.html": {
+		"navigate() to the current URL with history: 'push' and allow it to go cross document": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-methods/navigate-history-state-replace.html": {
+		"history.state should be nulled by navigate()": "FAIL: assert_equals: expected (object) null but got (string) \"state1\""
+	},
+	"/navigation-api/navigation-methods/navigate-history-state.html": {
+		"history.state should be nulled by navigate()": "FAIL: assert_equals: expected (object) null but got (string) \"state1\""
+	},
+	"/navigation-api/navigation-methods/navigate-relative-url-utf8.html?encoding=windows-1252": {
+		"navigate() should resolve URLs assuming UTF-8, ignoring the document's encoding": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigation-methods/navigate-relative-url-utf8.html?encoding=x-cp1251": {
+		"navigate() should resolve URLs assuming UTF-8, ignoring the document's encoding": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigation-methods/navigate-relative-url-utf8.html?encoding=utf8": {
+		"navigate() should resolve URLs assuming UTF-8, ignoring the document's encoding": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigation-methods/navigate-relative-url.html": {
+		"navigate() should resolve urls relative to navigation object, not the caller": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigation-methods/navigate-replace-cross-document.html": {
+		"navigate() with history: 'replace' option": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigation-methods/navigate-replace-cross-site.html": {
+		"(harness)": "TIMEOUT: ",
+		"navigate() with history: 'replace' from a same-origin iframe to another site": "TIMEOUT: Test timed out",
+		"navigate() with history: 'replace' from a cross-site iframe to this site": "NOTRUN: ",
+		"navigate() with history: 'replace' from a cross-site popup to this site": "NOTRUN: "
+	},
+	"/navigation-api/navigation-methods/navigate-same-document.html": {
+		"navigate() navigates same-document and fires onnavigate (async)": "FAIL: assert_equals: expected Element node <div id=\"d\"></div> but got null",
+		"navigate() navigates same-document and fires onnavigate (sync)": "FAIL: assert_equals: expected Element node <div id=\"d\"></div> but got null"
+	},
+	"/navigation-api/navigation-methods/reload-base-url.html": {
+		"reload() must ignore the Navigation object's base URL": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigation-methods/reload-info.html": {
+		"reload() variant with only info": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigation-methods/reload-navigation-timing.html": {
+		"reload() appears as a reload to navigation timing APIs": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-methods/reload-no-args.html": {
+		"reload() variant with no state or info": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigation-methods/reload-state-and-info.html": {
+		"reload() variant with info and new state": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigation-methods/reload-state-undefined.html": {
+		"reload() variant with info and state: undefined counts the same as not present (because of Web IDL dictionary semantics), so preserves the state": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigation-methods/return-value/back-204-205-download.html": {
+		"back() promises to 204s never settle": "FAIL: assert_true: expected true got false",
+		"back() promises to 205s never settle": "FAIL: assert_true: expected true got false",
+		"back() promises to Content-Disposition: attachment responses never settle": "FAIL: assert_true: expected true got false"
+	},
+	"/navigation-api/navigation-methods/return-value/back-already-detached.html": {
+		"back() in a detached window": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-methods/return-value/back-beforeunload.html": {
+		"back() inside onbeforeunload": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-methods/return-value/back-forward-initial-about-blank.html": {
+		"back() and forward() in initial about:blank document": "FAIL: assert_equals: result object must be from the right realm expected object \"[object Object]\" but got object \"[object Object]\""
+	},
+	"/navigation-api/navigation-methods/return-value/back-forward-opaque-origin.html": {
+		"(harness)": "TIMEOUT: ",
+		"navigation.back()/forward() in an opaque origin iframe": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigation-methods/return-value/back-forward-out-of-bounds.html": {
+		"back() and forward() out of bounds": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-methods/return-value/forward-already-detached.html": {
+		"forward() in a detached window": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-methods/return-value/forward-beforeunload.html": {
+		"forward() inside onbeforeunload": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-methods/return-value/navigate-204-205-download.html": {
+		"navigate() promises to 204s never settle": "FAIL: assert_equals: expected \"http://localhost:PORT/common/blank.html\" but got \"http://localhost:PORT/navigation-api/navigation-methods/return-value/navigate-204-205-download.html\"",
+		"navigate() promises to 205s never settle": "FAIL: assert_equals: expected \"http://localhost:PORT/common/blank.html\" but got \"http://localhost:PORT/navigation-api/navigation-methods/return-value/navigate-204-205-download.html\"",
+		"navigate() promises to Content-Disposition: attachment responses never settle": "FAIL: assert_equals: expected \"http://localhost:PORT/common/blank.html\" but got \"http://localhost:PORT/common/blank.html?pipe=header(Content-Disposition,attachment)\""
+	},
+	"/navigation-api/navigation-methods/return-value/navigate-already-detached.html": {
+		"navigate() in a detached window": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'DOMException' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a "
+	},
+	"/navigation-api/navigation-methods/return-value/navigate-beforeunload.html": {
+		"navigate() inside onbeforeunload": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-methods/return-value/navigate-cross-document.html": {
+		"cross-document navigate() promises never settle": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-methods/return-value/navigate-detach-in-onnavigate.html": {
+		"navigate() promise rejections when detaching an iframe inside onnavigate": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'DOMException' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a "
+	},
+	"/navigation-api/navigation-methods/return-value/navigate-detach-in-serialization.html": {
+		"navigate() promise rejections when detaching an iframe inside state serialization": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'DOMException' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a "
+	},
+	"/navigation-api/navigation-methods/return-value/navigate-opaque-origin.html": {
+		"(harness)": "TIMEOUT: ",
+		"navigation.navigate() in an opaque origin iframe": "FAIL: assert_unreached: committed must not reject Reached unreachable code"
+	},
+	"/navigation-api/navigation-methods/return-value/navigate-pagehide.html": {
+		"navigate() inside onpagehide": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-methods/return-value/navigate-rejection-order-beforeunload-unserializablestate.html": {
+		"navigate() with an unserializable state inside onbeforeunload \"DataCloneError\", not \"InvalidStateError\"": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-methods/return-value/navigate-rejection-order-detached-unserializablestate.html": {
+		"navigate() with unserializable state in a detached iframe throws \"DataCloneError\", not \"InvalidStateError\"": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'DOMException' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a "
+	},
+	"/navigation-api/navigation-methods/return-value/navigate-rejection-order-invalidurl-beforeunload.html": {
+		"navigate() with an invalid URL inside onbeforeunload throws \"SyntaxError\", not \"InvalidStateError\"": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-methods/return-value/navigate-rejection-order-invalidurl-detached.html": {
+		"navigate() with an invalid URL in a detached iframe throws \"SyntaxError\", not \"InvalidStateError\"": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'DOMException' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a "
+	},
+	"/navigation-api/navigation-methods/return-value/navigate-rejection-order-invalidurl-pagehide.html": {
+		"navigate() with an invalid URL inside onpagehide throws \"SyntaxError\", not \"InvalidStateError\"": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-methods/return-value/navigate-rejection-order-pagehide-unserializablestate.html": {
+		"navigate() with an unserializable state inside onpagehide throws \"DataCloneError\", not \"InvalidStateError\"": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-methods/return-value/reload-already-detached.html": {
+		"reload() in a detached window": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'DOMException' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a "
+	},
+	"/navigation-api/navigation-methods/return-value/reload-beforeunload.html": {
+		"reload() inside onbeforeunload": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-methods/return-value/reload-detach-in-onnavigate.html": {
+		"reload() promise rejections when detaching an iframe inside onnavigate": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'DOMException' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a "
+	},
+	"/navigation-api/navigation-methods/return-value/reload-detach-in-serialization.html": {
+		"reload() promise rejections when detaching an iframe inside state serialization": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'DOMException' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a "
+	},
+	"/navigation-api/navigation-methods/return-value/reload-pagehide.html": {
+		"reload() inside onpagehide": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-methods/return-value/reload-rejection-order-beforeunload-unserializablestate.html": {
+		"reload() with an unserializable state inside onbeforeunload throws \"DataCloneError\", not \"InvalidStateError\"": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-methods/return-value/reload-rejection-order-detached-unserializablestate.html": {
+		"reload() with unserializable state in a detached iframe throws \"DataCloneError\", not \"InvalidStateError\"": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'DOMException' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a "
+	},
+	"/navigation-api/navigation-methods/return-value/reload-rejection-order-pagehide-unserializablestate.html": {
+		"reload() with an unserializable state inside onpagehide throws \"DataCloneError\", not \"InvalidStateError\"": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-methods/return-value/reload.html": {
+		"reload() promises never settle (without intercept())": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-methods/return-value/traverseTo-already-detached.html": {
+		"traverseTo() in a detached window": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'DOMException' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a "
+	},
+	"/navigation-api/navigation-methods/return-value/traverseTo-beforeunload.html": {
+		"traverseTo() inside onbeforeunload": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-methods/return-value/traverseTo-cross-document-preventDefault.html": {
+		"traverseTo() promise never settle when preventDefault()ing the navigate event (cross-document)": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-methods/return-value/traverseTo-detach-cross-document-before-navigate-event.html": {
+		"traverseTo() promise rejections when detaching an iframe before onnavigate (cross-document)": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-methods/return-value/traverseTo-detach-cross-document.html": {
+		"traverseTo() promise rejections when detaching an iframe inside onnavigate (cross-document)": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-methods/return-value/traverseTo-detach-same-document-before-navigate-event.html": {
+		"traverseTo() promise rejections when detaching an iframe before onnavigate (same-document)": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-methods/return-value/traverseTo-detach-same-document.html": {
+		"traverseTo() promise rejections when detaching an iframe inside onnavigate (same-document)": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigation-methods/sandboxing-navigate-parent.html": {
+		"A sandboxed iframe can use its sibling's navigation object to call navigate(), as long as allow-same-origin is present": "FAIL: Failed to read a named property 'navigateParent' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigation-methods/sandboxing-navigate-sibling.html": {
+		"A sandboxed iframe can use its parent's navigation object to call navigate(), as long as allow-same-origin is present": "FAIL: Failed to read a named property 'navigateSibling' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigation-methods/traverseTo-cross-document.html": {
+		"cross-document traverseTo(), back(), and forward()": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigation-methods/traverseTo-detach-between-navigate-and-navigatesuccess.html": {
+		"Detach a window between when a traverseTo() fires navigate and navigatesuccess": "FAIL: Failed to read a named property 'DOMException' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/navigation-methods/traverseTo-navigates-multiple-iframes.html": {
+		"(harness)": "TIMEOUT: "
+	},
+	"/navigation-api/ordering-and-transition/anchor-download-aborts-previous-navigation.html": {
+		"<a download> aborts previous navigations": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/ordering-and-transition/anchor-download-intercept-reject.html?no-currententrychange": {
+		"(harness)": "ERROR: Uncaught SecurityError: Failed to execute 'intercept' on 'NavigateEvent': A navigation with URL 'blob:http://localhost:PORT/UUID' cannot be intercepted by in a window with origin 'http://localhost:POR",
+		"event and promise ordering for <a download> intercepted by passing a rejected promise to intercept()": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/ordering-and-transition/anchor-download-intercept-reject.html?currententrychange": {
+		"(harness)": "ERROR: Uncaught SecurityError: Failed to execute 'intercept' on 'NavigateEvent': A navigation with URL 'blob:http://localhost:PORT/UUID' cannot be intercepted by in a window with origin 'http://localhost:POR",
+		"event and promise ordering for <a download> intercepted by passing a rejected promise to intercept()": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/ordering-and-transition/anchor-download-intercept.html?no-currententrychange": {
+		"(harness)": "ERROR: Uncaught SecurityError: Failed to execute 'intercept' on 'NavigateEvent': A navigation with URL 'blob:http://localhost:PORT/UUID' cannot be intercepted by in a window with origin 'http://localhost:POR",
+		"event and promise ordering for <a download> intercepted by intercept()": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/ordering-and-transition/anchor-download-intercept.html?currententrychange": {
+		"(harness)": "ERROR: Uncaught SecurityError: Failed to execute 'intercept' on 'NavigateEvent': A navigation with URL 'blob:http://localhost:PORT/UUID' cannot be intercepted by in a window with origin 'http://localhost:POR",
+		"event and promise ordering for <a download> intercepted by intercept()": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/ordering-and-transition/anchor-download.html": {
+		"<a download> fires navigate, but not navigatesuccess or navigateerror when not intercepted by intercept()": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/ordering-and-transition/back-cross-document-event-order-with-pagehide.html": {
+		"back() event ordering for cross-document traversal": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/ordering-and-transition/back-same-document-intercept-reject.html?no-currententrychange": {
+		"event and promise ordering for same-document navigation.back() intercepted by passing a rejected promise to intercept()": "FAIL: assert_array_equals: lengths differ, expected array [\"promise microtask\", \"navigate\", \"handler run\", \"committed fulfilled\", \"AbortSignal abort\", \"navigateerror\", \"finished rejected\", \"transition.finis"
+	},
+	"/navigation-api/ordering-and-transition/back-same-document-intercept-reject.html?currententrychange": {
+		"event and promise ordering for same-document navigation.back() intercepted by passing a rejected promise to intercept()": "FAIL: assert_array_equals: lengths differ, expected array [\"promise microtask\", \"navigate\", \"currententrychange\", \"handler run\", \"committed fulfilled\", \"AbortSignal abort\", \"navigateerror\", \"finished reject"
+	},
+	"/navigation-api/ordering-and-transition/location-href-intercept-reject.html?no-currententrychange": {
+		"event and promise ordering for location.href setter intercepted by passing a rejected promise to intercept()": "FAIL: assert_array_equals: lengths differ, expected array [\"navigate\", \"handler run\", \"AbortSignal abort\", \"navigateerror\", \"promise microtask\", \"transition.finished rejected\"] length 6, got [\"navigate\", \"h"
+	},
+	"/navigation-api/ordering-and-transition/location-href-intercept-reject.html?currententrychange": {
+		"event and promise ordering for location.href setter intercepted by passing a rejected promise to intercept()": "FAIL: assert_array_equals: lengths differ, expected array [\"navigate\", \"currententrychange\", \"handler run\", \"AbortSignal abort\", \"navigateerror\", \"promise microtask\", \"transition.finished rejected\"] length "
+	},
+	"/navigation-api/ordering-and-transition/navigate-204-205-download-then-same-document.html": {
+		"(harness)": "TIMEOUT: ",
+		"event and promise ordering when navigate() is to a 204s and then to a same-document navigation": "TIMEOUT: Test timed out",
+		"event and promise ordering when navigate() is to a 205s and then to a same-document navigation": "NOTRUN: ",
+		"event and promise ordering when navigate() is to a Content-Disposition: attachment responses and then to a same-document navigation": "NOTRUN: "
+	},
+	"/navigation-api/ordering-and-transition/navigate-cross-document-event-order-with-pagehide.html": {
+		"navigate() event ordering for cross-document navigation": "FAIL: Failed to set a named property 'onpagehide' on 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/ordering-and-transition/navigate-intercept-stop.html?no-currententrychange": {
+		"(harness)": "TIMEOUT: ",
+		"event and promise ordering for navigation.navigate() intercepted by intercept() but then stopped using window.stop()": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/ordering-and-transition/navigate-intercept-stop.html?currententrychange": {
+		"(harness)": "TIMEOUT: ",
+		"event and promise ordering for navigation.navigate() intercepted by intercept() but then stopped using window.stop()": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/ordering-and-transition/navigate-same-document-intercept-reject.html?no-currententrychange": {
+		"event and promise ordering for same-document navigation.navigate() intercepted by passing a rejected promise to intercept()": "FAIL: assert_array_equals: lengths differ, expected array [\"navigate\", \"handler run\", \"AbortSignal abort\", \"navigateerror\", \"committed fulfilled\", \"transition.committed fulfilled\", \"promise microtask\", \"fin"
+	},
+	"/navigation-api/ordering-and-transition/navigate-same-document-intercept-reject.html?currententrychange": {
+		"event and promise ordering for same-document navigation.navigate() intercepted by passing a rejected promise to intercept()": "FAIL: assert_array_equals: lengths differ, expected array [\"navigate\", \"currententrychange\", \"handler run\", \"AbortSignal abort\", \"navigateerror\", \"committed fulfilled\", \"transition.committed fulfilled\", \"pr"
+	},
+	"/navigation-api/ordering-and-transition/reload-intercept-reject.html?no-currententrychange": {
+		"event and promise ordering for navigation.reload() intercepted by intercept()": "FAIL: assert_array_equals: lengths differ, expected array [\"navigate\", \"handler run\", \"AbortSignal abort\", \"navigateerror\", \"committed fulfilled\", \"transition.committed fulfilled\", \"promise microtask\", \"fin"
+	},
+	"/navigation-api/ordering-and-transition/reload-intercept-reject.html?currententrychange": {
+		"event and promise ordering for navigation.reload() intercepted by intercept()": "FAIL: assert_array_equals: lengths differ, expected array [\"navigate\", \"currententrychange\", \"handler run\", \"AbortSignal abort\", \"navigateerror\", \"committed fulfilled\", \"transition.committed fulfilled\", \"pr"
+	},
+	"/navigation-api/ordering-and-transition/transition-cross-document.html": {
+		"cross-document reload() must leave transition null": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr",
+		"cross-document navigate() must leave transition null": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr",
+		"cross-document back() must leave transition null": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/ordering-and-transition/transition-realms-and-identity.html": {
+		"Realm and identity of the navigation.transition object and its finished promise": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/ordering-and-transition/transition-to.html": {
+		"navigation.transition.to matches the navigate event's destination": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Illegal invocation\""
+	},
+	"/navigation-api/per-entry-events/dispose-for-full-session-history.tentative.html": {
+		"(harness)": "TIMEOUT: ",
+		"Dispose should fire when an entry is removed from session history due to too many entries": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/per-entry-events/dispose-for-navigation-in-sibling-detach-frame.html": {
+		"Detaching a frame from its own dispose handler during another frame's truncating push must not crash": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/precommit-handler/precommitHandler-addHandler-throws.html": {
+		"addHandler() after finish": "FAIL: assert_throws_dom: function \"() => precommit_controller.addHandler(() => {})\" threw object \"TypeError: Illegal invocation\" that is not a DOMException InvalidStateError: property \"code\" is equal to und",
+		"addHandler() after commit": "FAIL: assert_throws_dom: function \"() => precommit_controller.addHandler(() => {})\" threw object \"TypeError: Illegal invocation\" that is not a DOMException InvalidStateError: property \"code\" is equal to und"
+	},
+	"/navigation-api/precommit-handler/precommitHandler-addHandler.html": {
+		"(harness)": "ERROR: Unhandled rejection: Illegal invocation",
+		"handler added in addHandler() delays navigation finish": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Illegal invocation\"",
+		"handler added in addHandler() is executed in the correct order": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Illegal invocation\""
+	},
+	"/navigation-api/precommit-handler/precommitHandler-push.html": {
+		"precommitHandler for a push navigation, reject after commit": "FAIL: assert_equals: popstate before handler starts expected true but got false",
+		"precommitHandler for a push navigation, success": "FAIL: assert_equals: popstate before handler starts expected true but got false"
+	},
+	"/navigation-api/precommit-handler/precommitHandler-redirect-options.html": {
+		"precommitHandler redirect() with options dictionary": "FAIL: assert_equals: expected \"#redirect0\" but got \"#push\""
+	},
+	"/navigation-api/precommit-handler/precommitHandler-redirect-push-changed-to-replace.html": {
+		"precommitHandler redirect() push changed to replace": "FAIL: assert_equals: expected \"#redirect1\" but got \"#push\""
+	},
+	"/navigation-api/precommit-handler/precommitHandler-redirect-push.html": {
+		"precommitHandler redirect() push": "FAIL: assert_equals: expected \"#redirect1\" but got \"#push\""
+	},
+	"/navigation-api/precommit-handler/precommitHandler-redirect-replace-changed-to-push.html": {
+		"precommitHandler redirect() replace changed to push": "FAIL: assert_equals: expected \"#redirect1\" but got \"#replace\""
+	},
+	"/navigation-api/precommit-handler/precommitHandler-redirect-replace.html": {
+		"precommitHandler redirect() replace": "FAIL: assert_equals: expected \"#redirect1\" but got \"#replace\""
+	},
+	"/navigation-api/precommit-handler/precommitHandler-redirect-throws.html": {
+		"redirect() to invalid url": "FAIL: assert_throws_dom: function \"() => controller.redirect(\"https://example.com\\u0000mozilla.org\")\" threw object \"TypeError: Failed to construct 'URL': Invalid URL\" that is not a DOMException SyntaxError:"
+	},
+	"/navigation-api/precommit-handler/precommitHandler-replace.html": {
+		"precommitHandler for a replace navigation, reject after commit": "FAIL: assert_equals: popstate before handler starts expected true but got false",
+		"precommitHandler for a replace navigation, success": "FAIL: assert_equals: popstate before handler starts expected true but got false"
+	},
+	"/navigation-api/precommit-handler/precommitHandler-uncancelable.html": {
+		"precommitHandler for an uncancelable traverse navigation": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/precommit-handler/precommitHandler-window-stop-before-commit.html": {
+		" precommitHandler with window.stop() before navigation commit": "FAIL: assert_unreached: committed must not fulfill Reached unreachable code",
+		" precommitHandler with window.stop() before fragment navigation commit": "FAIL: assert_unreached: committed must not fulfill Reached unreachable code"
+	},
+	"/navigation-api/scroll-behavior/after-transition-reload-after-traverse.html": {
+		"scroll: after-transition on a reload of a traversed-to fragment entry scrolls to the fragment": "FAIL: assert_equals: should scroll to the fragment, ignoring any saved scroll position expected 1008 but got 1038"
+	},
+	"/navigation-api/scroll-behavior/after-transition-reload-no-fragment.html": {
+		"scroll: after-transition on a reload without a fragment scrolls to the beginning of the document": "FAIL: assert_equals: should scroll to the beginning of the document expected 0 but got 500"
+	},
+	"/navigation-api/scroll-behavior/after-transition-reload-no-scroll-anchoring.html": {
+		"scroll: after-transition should work on a reload navigation": "FAIL: assert_equals: expected 8 but got 1018"
+	},
+	"/navigation-api/scroll-behavior/after-transition-reload.html": {
+		"scroll: after-transition should work on a reload navigation": "FAIL: assert_equals: expected 8 but got 18"
+	},
+	"/navigation-api/scroll-behavior/after-transition-skips-restore-when-scrolled.html": {
+		"scroll: after-transition should not restore scroll if the document was scrolled during the navigation": "FAIL: assert_equals: scroll restoration must be skipped when the page was scrolled during the navigation expected 50 but got 0"
+	},
+	"/navigation-api/scroll-behavior/after-transition-timing.html": {
+		"scroll: after-transition should scroll when back completes, just before navigatesuccess": "FAIL: assert_not_equals: got disallowed value 0"
+	},
+	"/navigation-api/scroll-behavior/manual-scroll-clears-target-when-fragment-does-not-exist.html": {
+		"scroll: scroll() should clear the CSS :target element when the fragment does not exist": "FAIL: assert_equals: target element after navigating to #frag expected Element node <div id=\"frag\"></div> but got null"
+	},
+	"/navigation-api/scroll-behavior/manual-scroll-clears-target-when-no-fragment.html": {
+		"scroll: scroll() should clear the CSS :target element when the destination url contains no fragment": "FAIL: assert_equals: target element after navigating to #frag expected Element node <div id=\"frag\"></div> but got null"
+	},
+	"/navigation-api/scroll-behavior/manual-scroll-fragment-does-not-exist.html": {
+		"scroll: scroll() should scroll to beginning of document when the fragment does not exist": "FAIL: assert_equals: expected 0 but got 634"
+	},
+	"/navigation-api/scroll-behavior/manual-scroll-reload-no-scroll-anchoring.html": {
+		"scroll: scroll() should work on a reload navigation": "FAIL: assert_equals: expected 8 but got 1018"
+	},
+	"/navigation-api/scroll-behavior/manual-scroll-reload.html": {
+		"scroll: scroll() should work on a reload navigation": "FAIL: assert_equals: expected 8 but got 18"
+	},
+	"/navigation-api/scroll-behavior/scroll-on-synthetic-event.html": {
+		"scroll: scroll() should throw if invoked on a synthetic event.": "FAIL: Failed to construct 'NavigateEvent': Failed to read the 'destination' property from 'NavigateEventInit': Failed to convert value to 'NavigationDestination'."
+	},
+	"/navigation-api/state/cross-document-away-and-back.html?method=navigate": {
+		"entry.getState() behavior after navigating away and back": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/state/cross-document-away-and-back.html?method=updateCurrentEntry": {
+		"entry.getState() behavior after navigating away and back": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/state/cross-document-getState-undefined.html": {
+		"Default behavior for entry.getState() for a non-current cross-document entry": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/state/cross-document-getState.html": {
+		"entry.getState() still works for a non-current cross-document entry": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/state/cross-document-location-api.html?method=navigate": {
+		"entry.getState() behavior after cross-document location API navigation": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/state/cross-document-location-api.html?method=updateCurrentEntry": {
+		"entry.getState() behavior after cross-document location API navigation": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/state/location-reload.html?method=navigate": {
+		"entry.getState() after location.reload()": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/state/location-reload.html?method=updateCurrentEntry": {
+		"entry.getState() after location.reload()": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/state/same-document-away-and-back-location-api.html": {
+		"(harness)": "ERROR: Unhandled rejection: assert_not_equals: got disallowed value undefined"
+	},
+	"/navigation-api/updateCurrentEntry-method/exception-order-not-fully-active-unserializablestate.html": {
+		"updateCurrentEntry() with unserializable state while not fully active must throw an \"InvalidStateError\", not a \"DataCloneError\"": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/updateCurrentEntry-method/not-fully-active.html": {
+		"updateCurrentEntry() must throw if the document is not fully active": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
+	},
+	"/navigation-api/updateCurrentEntry-method/opaque-origin.html": {
+		"navigation.updateCurrentEntry() in an opaque origin iframe": "FAIL: assert_throws_dom: function \"() => { navigation.updateCurrentEntry({ state: 1 }); }\" did not throw"
+	},
+	"/navigation-api/updateCurrentEntry-method/same-document-away-and-back-location-api.html": {
+		"(harness)": "ERROR: Unhandled rejection: Cannot read properties of undefined (reading 'statevar')",
+		"entry.getState() behavior after navigating away using the location API, then back": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/updateCurrentEntry-method/unserializable.html": {
+		"updateCurrentEntry() must throw if state is unserializable (WritableStream)": "FAIL: Failed to read a named property 'DOMException' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame.",
+		"updateCurrentEntry() must throw if state is unserializable (SharedArrayBuffer)": "FAIL: WebAssembly.Memory(): could not allocate memory"
+	}
+}

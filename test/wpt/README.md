@@ -27,6 +27,8 @@ The suites, by area:
   `wpt-script-timing`, `wpt-modules`, `wpt-document-write`,
   `wpt-event-handlers`, `wpt-base-urls`
 - dom: `wpt-dom-insertion`
+- the Navigation API: `wpt-navigation-api` (the default mode),
+  `wpt-navigation-api-dial` (dialing, run by name)
 
 Upstream commit: `cbd1ca1e57141617f5434bd8137d9758f046a61e` (2026-11-07), for
 every area.
@@ -61,6 +63,7 @@ every area.
 | `html/webappapis/scripting/events/`                      | 55    | event handler attributes, onerror, the body and window forwarding                                                                                                                                   |
 | `html/infrastructure/urls/dynamic-changes-to-base-urls/` | 2     | what a changed `<base href>` does to element URLs                                                                                                                                                   |
 | `dom/nodes/`                                             | 92    | insertion, removal, cloning, textContent, the attribute setters, MutationObserver                                                                                                                   |
+| `navigation-api/`                                        | 508   | every test of the directory but the bfcache ones and one with a service worker of its own, with their resources                                                                                     |
 
 `test/wpt-server.mjs` serves the tree at the WPT paths the tests hard-code and
 ports what wptserve would do: `.sub.` template substitutions (`{{host}}` is
@@ -728,6 +731,52 @@ the inject's insertion hooks can change; 83 pages.
 Left out: the rest of `dom/nodes` (selectors, collections, character data)
 and `Document-createElement-namespace.html`.
 
+### navigation-api
+
+Suites `wpt-navigation-api` and `wpt-navigation-api-dial`: the whole
+`navigation-api/` directory (`lists/navigation-api.mjs`), two pages at a
+time, 493 pages with the variants. `wpt-navigation-api` runs them in the
+default mode, where a proxied document is a frame navigated to its route
+and its navigation object is the browser's (the History module routes the
+URLs it is given). `wpt-navigation-api-dial` runs them in dialing
+(`justCallStomp`, `called: true` in `runWpt`): each page is a tab of its
+own, written into a fresh call page, whose Navigation API is the inject's
+over the history the host keeps (`src/inject/dom/calledNavigation.ts`). It
+is in `test/run.mjs`'s `PENDING_SUITES`, run by name, as dialing is opt-in.
+Both compare with the same native run.
+
+`test/wpt-handlers/navigation-api.mjs` ports
+`navigation-methods/resources/slow-no-store.py`,
+`navigate-event/resources/cross-origin-redirect-on-second-visit.py` and
+`navigation-methods/return-value/resources/204-205-download-on-second-visit.py`.
+
+Left out: the bfcache pages (`*bfcache*`, RemoteContextHelper and the
+back/forward cache helper, not vendored) and
+`navigation-methods/reload-service-worker-fetch-event.html` (it registers a
+service worker of its own). `resources/testdriver-actions.js` is not
+vendored: the pages that load it fail natively too.
+
+Skipped (`NAVIGATION_API_SKIP`, both suites):
+`focus-reset/reentry-from-focus-reset-navigate-api-tracker.html`, which
+hangs Chrome 157's renderer natively (the blur of a focus reset navigates
+again), and every page of the origin with it.
+
+Fails natively, so not compared (80 of the 493 pages, Chrome 157): the
+pages that count the tab's entries or its `history.length` (the native run
+loads every page in one tab per worker, after the pages before it, so a
+page expecting a fresh tab finds more entries, or the 50-entry cap), the
+`userInitiated` ones (`test_driver.click` is a synthetic click), the
+`defer/tentative` pages (`deferPageSwap`, which Chrome does not ship), the
+`*-sameorigindomain.sub.html` cross-window pages (document.domain is off),
+and a dozen pages that time out natively at the fixture
+(`focus-reset/basic.html`, `focus-reset/multiple-intercept.html`,
+`per-entry-events/dispose-cross-document.html` among them).
+
+What dialing cannot have, which its list keeps: every event the inject
+fires is synthetic (`isTrusted` false); a traversal the browser's own Back
+starts is the host's and not cancelable; the frame's own `history` and
+`navigation` of the call page are never shown.
+
 ## State of the expected lists
 
 Measured 2026-11-07 (same-origin mode). `expected/wpt-cookies.json` and
@@ -823,6 +872,14 @@ that Chrome 157 run:
 | `wpt-base-urls`                  | 2         | 1            | 21             |
 | `wpt-dom-insertion`              | 83        | 2            | 3              |
 
+The two Navigation API suites were measured on 2026-11-20 on d29168779, on
+Chrome 157, with the native verdicts of one full native run (`WPT_NATIVE`):
+
+| Suite                     | Pages run | Pages listed | Entries listed |
+| ------------------------- | --------- | ------------ | -------------- |
+| `wpt-navigation-api`      | 493       | 127          | 163            |
+| `wpt-navigation-api-dial` | 493       | 235          | 315            |
+
 `BACKLOG.md` has every listed entry with its suspected cause, and per suite
 the entries the streams listed that this record no longer has.
 
@@ -848,7 +905,10 @@ limitations), which stalled whichever page came after a slow one.
 many load at once (the suites whose pages share the jar, the stores of an
 origin or a shared worker run one at a time). The proxied run uses a
 controller of its own on the demo's worker, without `onOpen`, so a page's
-popup is the browser's. The runner gives `wpt-referrer-policy` 25 minutes
+popup is the browser's. After each page its frame is sent to about:blank, and a
+frame still on the page after five seconds (a page whose navigate handler
+cancels every navigation keeps it) is replaced with a fresh one; before,
+every page after such a page timed out. The runner gives `wpt-referrer-policy` 25 minutes
 instead of the usual ten (the matrix at `WPT_CONCURRENCY=1`, the honest
 setting, takes about sixteen; a run the runner kills writes no list);
 `SUITE_TIMEOUT=<minutes>` overrides it for every suite of a run.

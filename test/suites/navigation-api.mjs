@@ -7,8 +7,9 @@
 // entry is never heard of, and pageswap shows no activation for a
 // navigation to the other site. Every proxied site is the proxy origin to
 // the browser, so each of them saw the other site's entries and could
-// commit its URL in this document. Both modes, against the pages loaded
-// natively at the top of a tab.
+// commit its URL in this document. The default mode's two (same-origin and
+// isolated) and dialing, against the pages loaded natively at the top of a
+// tab.
 import {
 	done,
 	FIXTURE,
@@ -55,6 +56,14 @@ const nativeSteps = new Map(native);
 for (const [mode, base] of [
 	['same-origin', PROXY],
 	['isolated', HOST],
+	// dialing: the documents' Navigation API is the inject's, over the
+	// history the host keeps (src/inject/dom/calledNavigation.ts)
+	['dial', `${PROXY}?nopool&mode=just-call-stomp`],
+	// and on the content slots where the run has them (test/run.mjs
+	// STOMP_SLOT_PORTS): the documents of another origin than the host's
+	...(process.env.CONTENT_SLOT_PORTS
+		? [['dial on slots', `${PROXY}?mode=just-call-stomp`]]
+		: []),
 ]) {
 	const page = await openDemo(browser, base);
 	const proxied = await measure(page, () => submitLanding(page, PAGE));

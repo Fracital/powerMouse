@@ -1139,9 +1139,23 @@ export const CALLED_KEY = '$stomp$called';
 
 /** Just call stomp: what a called document's inject is told of its tab's session history */
 export interface CalledSession {
-	/** the entries, the shown one at `index` */
-	entries: { url: string; key: string; id: string; document: number }[];
+	/**
+	 * the entries of the shown entry's origin around it (the run the
+	 * Navigation API lists: no other origin's URL is sent), the shown one at
+	 * `index`, with their Navigation API state
+	 */
+	entries: {
+		url: string;
+		key: string;
+		id: string;
+		document: number;
+		navState?: unknown;
+	}[];
 	index: number;
+	/** the tab's whole history: how many entries, and the shown one's place (history.length) */
+	joint?: { length: number; index: number };
+	/** the entry the navigation to it left, when that is of its origin (NavigationActivation's `from`) */
+	from?: { url: string; key: string; id: string; document: number } | null;
 	/** the shown entry's state */
 	state: unknown;
 	/** how the document was reached */

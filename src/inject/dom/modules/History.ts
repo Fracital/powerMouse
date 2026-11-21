@@ -181,8 +181,10 @@ export default class HistoryModule extends Module<DocumentClient> {
 		const accessor = (proto: object, name: string) =>
 			Reflect.getOwnPropertyDescriptor(proto, name)!.get!;
 		type Entry = { readonly key: string };
-		// navigation.navigate(url): the page's URL, resolved against its own
-		// address, is routed as a navigation of the document is
+		// navigation.navigate(url): the page's URL, resolved against its
+		// document's base URL as natively (a `<base href>` moves a bare
+		// fragment to another document), is routed as a navigation of the
+		// document is
 		// (location.assign, or with `history: 'replace'` location.replace).
 		// Unhooked, the URL resolved against the proxy's address and the frame
 		// left the proxy for the proxy origin's own path.
@@ -194,7 +196,7 @@ export default class HistoryModule extends Module<DocumentClient> {
 						return Reflect.apply(target, that, args);
 					let destination: URL;
 					try {
-						destination = new URL(String(args[0]), moduleClient.url.toString());
+						destination = new URL(String(args[0]), moduleClient.baseHref);
 					} catch (error) {
 						// the browser's own SyntaxError
 						return Reflect.apply(target, that, args);

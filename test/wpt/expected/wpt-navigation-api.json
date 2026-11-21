@@ -1,0 +1,419 @@
+{
+	"/navigation-api/currententrychange-event/history-back-same-doc.html": {
+		"currententrychange fires for history.back()": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/currententrychange-event/navigation-back-forward-same-doc.html": {
+		"currententrychange fires for same-document navigation.back() and navigation.forward()": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/focus-reset/autofocus.html?delayed-checkpoint": {
+		"(harness)": "ERROR: Error: assert_equals: Non-navigation API autofocus was processed expected Element node <button autofocus=\"\" id=\"initialAutofocusTarget\">Initial ... but got Element node <body><button autofocus=\"\" id=\"",
+		"An element with autofocus, present before navigation, gets focused": "NOTRUN: ",
+		"Two elements with autofocus, present before navigation; the first gets focused": "NOTRUN: ",
+		"An element with autofocus, present before navigation but disabled before finished, does not get focused": "NOTRUN: ",
+		"An element with autofocus, present before navigation but with its autofocus attribute removed before finished, does not get focused": "NOTRUN: ",
+		"Two elements with autofocus, present before navigation, but the first gets disabled; the second gets focused": "NOTRUN: ",
+		"An element with autofocus, introduced between committed and finished, gets focused": "NOTRUN: ",
+		"An element with autofocus, introduced after finished, does not get focused": "NOTRUN: "
+	},
+	"/navigation-api/focus-reset/autofocus.html?same-checkpoint": {
+		"(harness)": "ERROR: Error: assert_equals: Non-navigation API autofocus was processed expected Element node <button autofocus=\"\" id=\"initialAutofocusTarget\">Initial ... but got Element node <body><button autofocus=\"\" id=\"",
+		"An element with autofocus, present before navigation, gets focused": "NOTRUN: ",
+		"Two elements with autofocus, present before navigation; the first gets focused": "NOTRUN: ",
+		"An element with autofocus, present before navigation but disabled before finished, does not get focused": "NOTRUN: ",
+		"An element with autofocus, present before navigation but with its autofocus attribute removed before finished, does not get focused": "NOTRUN: ",
+		"Two elements with autofocus, present before navigation, but the first gets disabled; the second gets focused": "NOTRUN: ",
+		"An element with autofocus, introduced between committed and finished, gets focused": "NOTRUN: ",
+		"An element with autofocus, introduced after finished, does not get focused": "NOTRUN: "
+	},
+	"/navigation-api/focus-reset/change-focus-again-in-blur-during-intercept.html": {
+		"change-focus-again-in-blur-during-intercept": "FAIL: assert_true: Document has focus expected true got false"
+	},
+	"/navigation-api/focus-reset/change-focus-during-intercept.html": {
+		"change-focus-during-intercept": "FAIL: assert_equals: focus() worked expected Element node <button></button> but got Element node <body> <script> promise_test(async t => { let intercept..."
+	},
+	"/navigation-api/focus-reset/focus-reset-timing.html": {
+		"Focus should be reset before navigatesuccess": "FAIL: assert_equals: focus() worked expected Element node <button></button> but got Element node <body> <script> promise_test(async t => { navigation.ad...",
+		"Focus should be reset before navigateerror": "FAIL: assert_equals: focus() worked expected Element node <button></button> but got Element node <body> <script> promise_test(async t => { navigation.ad..."
+	},
+	"/navigation-api/navigate-event/cross-origin-traversal-does-not-fire-navigate.html": {
+		"A cross-origin traversal does not fire the navigate event": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
+	},
+	"/navigation-api/navigate-event/cross-origin-traversal-redirect.html": {
+		"(harness)": "TIMEOUT: timeout: no report within 30 s",
+		"A traversal that redirects from same-origin to cross-origin fires the navigate event": "MISSING: the harness ended TIMEOUT before this subtest"
+	},
+	"/navigation-api/navigate-event/cross-window/click-crossdocument-crossorigin.html": {
+		"clicking on an <a> element that navigates cross-document targeting a cross-origin window": "FAIL: assert_equals: expected (string) \"DONE\" but got (object) object \"[object Object]\""
+	},
+	"/navigation-api/navigate-event/cross-window/click-samedocument-crossorigin.html": {
+		"clicking on an <a> element that navigates same-document targeting a cross-origin window": "FAIL: assert_true: hashChange expected true got false"
+	},
+	"/navigation-api/navigate-event/cross-window/click-samedocument-crosssite.html": {
+		"clicking on an <a> element that navigates same-document targeting a cross-site window": "FAIL: assert_true: hashChange expected true got false"
+	},
+	"/navigation-api/navigate-event/cross-window/click-samedocument-sameorigin.html": {
+		"clicking on an <a> element that navigates same-document targeting a same-origin window": "FAIL: assert_true: hashChange expected true got false"
+	},
+	"/navigation-api/navigate-event/cross-window/location-crossdocument-crossorigin.html": {
+		"using location.href to navigate cross-document targeting a cross-origin window": "FAIL: assert_equals: expected (string) \"DONE\" but got (object) object \"[object Object]\""
+	},
+	"/navigation-api/navigate-event/cross-window/open-crossdocument-crossorigin.html": {
+		"using window.open() to navigate cross-document targeting a cross-origin window": "FAIL: assert_equals: expected (string) \"DONE\" but got (object) object \"[object Object]\""
+	},
+	"/navigation-api/navigate-event/cross-window/open-samedocument-crossorigin.html": {
+		"using window.open() to navigate same-document targeting a cross-origin window": "FAIL: assert_true: hashChange expected true got false"
+	},
+	"/navigation-api/navigate-event/cross-window/open-samedocument-crosssite.html": {
+		"using window.open() to navigate same-document targeting a cross-site window": "FAIL: assert_true: hashChange expected true got false"
+	},
+	"/navigation-api/navigate-event/cross-window/open-samedocument-sameorigin.html": {
+		"using window.open() to navigate same-document targeting a same-origin window": "FAIL: assert_true: hashChange expected true got false"
+	},
+	"/navigation-api/navigate-event/cross-window/submit-crossdocument-crossorigin.html": {
+		"submitting a <form> element that navigates cross-document targeting a cross-origin window": "FAIL: assert_equals: expected (string) \"DONE\" but got (object) object \"[object Object]\""
+	},
+	"/navigation-api/navigate-event/cross-window/submit-samedocument-crossorigin.html": {
+		"submitting a <form> element that navigates same-document targeting a cross-origin window": "FAIL: assert_true: hashChange expected true got false"
+	},
+	"/navigation-api/navigate-event/cross-window/submit-samedocument-crosssite.html": {
+		"submitting a <form> element that navigates same-document targeting a cross-site window": "FAIL: assert_true: hashChange expected true got false"
+	},
+	"/navigation-api/navigate-event/cross-window/submit-samedocument-sameorigin.html": {
+		"submitting a <form> element that navigates same-document targeting a same-origin window": "FAIL: assert_true: hashChange expected true got false"
+	},
+	"/navigation-api/navigate-event/intercept-and-navigate.html": {
+		"Using intercept() then navigate() in the ensuing currententrychange should abort the finished promise (but not the committed promise)": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/navigate-event/intercept-detach-multiple.html": {
+		"event.intercept() throws if used on an event from a detached iframe": "FAIL: assert_true: expected true got false"
+	},
+	"/navigation-api/navigate-event/intercept-navigation-back.html": {
+		"(harness)": "ERROR: Unhandled rejection: Navigation was aborted",
+		"event.intercept() can intercept navigation.back()": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigate-event/navigate-anchor-download.html": {
+		"(harness)": "TIMEOUT: ",
+		"<a> fires navigate and populates downloadRequest with ''": "TIMEOUT: Test timed out",
+		"<a> fires navigate and populates downloadRequest with 'filename'": "TIMEOUT: Test timed out",
+		"<area> fires navigate and populates downloadRequest with ''": "TIMEOUT: Test timed out",
+		"<area> fires navigate and populates downloadRequest with 'filename'": "FAIL: assert_true: expected true got false"
+	},
+	"/navigation-api/navigate-event/navigate-destination-after-detach.html": {
+		"navigate event destination after iframe detach": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/navigate-event/navigate-destination-dynamic-index.html": {
+		"navigate event destination.index should be dynamic": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/navigate-event/navigate-form-traverse.html": {
+		"(harness)": "TIMEOUT: ",
+		"reloading a page created from form submission results in formData of null, not the original form data": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigate-event/navigate-history-traversal-during-onnavigate-should-reject.html": {
+		"(harness)": "TIMEOUT: ",
+		"Test that await navigation.back().finished during onnavigate should reject": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigate-event/navigate-history-traversal-during-onnavigate.html": {
+		"(harness)": "TIMEOUT: "
+	},
+	"/navigation-api/navigate-event/navigate-navigation-back-same-document-in-iframe.html": {
+		"navigate event for navigation.back() - same-document in an iframe": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/navigate-event/navigate-navigation-back-same-document.html": {
+		"(harness)": "ERROR: Unhandled rejection: Navigation was aborted",
+		"navigate event for navigation.back() - same-document": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigate-event/navigate-navigation-navigate-cross-site-preventDefault.html": {
+		"(harness)": "TIMEOUT: ",
+		"preventDefault() cancels a cross-site navigation.navigate()": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigate-event/navigate-window-open.html": {
+		"window.open() fires navigate event in target window but not source": "FAIL: assert_true: expected true got false"
+	},
+	"/navigation-api/navigate-event/navigation-back-same-document-preventDefault.html": {
+		"navigation.back() same-document preventDefault": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/navigate-event/replaceState-inside-back-handler.html": {
+		"replaceState inside a navigate event for navigation.back()": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/navigate-event/same-url-replace-same-document.html": {
+		"navigate() to the current URL same document should replace": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/navigate-event/sourceElement-cross-origin.sub.html": {
+		"NavigateEvent.sourceElement should be null for cross-origin same-document initiators": "FAIL: assert_true: sourceElement must be null for cross-origin initiators (it was A) expected true got false"
+	},
+	"/navigation-api/navigation-activation/activation-push.html": {
+		"navigation.activation after push": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/navigation-activation/activation-same-document-then-cross-document.html": {
+		"navigation.activation same-document then cross-document": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/navigation-activation/activation-traverse-then-clobber.html": {
+		"navigation.activation - traverse, then push same-document": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/navigation-history-entry/entries-after-blob-navigation.html": {
+		"entries() after navigation to a blob: URL": "FAIL: assert_equals: expected \"blob:\" but got \"http:\""
+	},
+	"/navigation-api/navigation-history-entry/entries-mainframe-with-iframe.html": {
+		"navigation.entries() for main frame excludes iframe history entries": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/navigation-history-entry/no-referrer-dynamic-url-censored.html": {
+		"The url of a document is censored by a no-referrer policy dynamically": "FAIL: assert_equals: expected (object) null but got (string) \"http://localhost:PORT/common/blank.html?2\""
+	},
+	"/navigation-api/navigation-history-entry/opaque-origin-data-url.html": {
+		"(harness)": "TIMEOUT: ",
+		"entries() and currentEntry after navigation to a data: URL (which has an opaque origin)": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigation-history-entry/opaque-origin.html": {
+		"navigation.currentEntry/entries()/canGoBack/canGoForward in an opaque origin iframe": "FAIL: assert_equals: expected null but got object \"[object NavigationHistoryEntry]\""
+	},
+	"/navigation-api/navigation-methods/back-main-frame-nearest-after-subframe-navigation.html": {
+		"navigation.back() in the main frame lands on the nearest joint entry when a subframe navigated after it": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/navigation-methods/disambigaute-back.html": {
+		"(harness)": "ERROR: Unhandled rejection: Navigation was aborted"
+	},
+	"/navigation-api/navigation-methods/disambigaute-forward.html": {
+		"(harness)": "ERROR: Unhandled rejection: Navigation was aborted"
+	},
+	"/navigation-api/navigation-methods/forward-to-pruned-entry.html": {
+		"If forward pruning clobbers the target of a traverse, abort": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/navigation-methods/reload-info.html": {
+		"(harness)": "ERROR: Unhandled rejection: Navigation was aborted",
+		"reload() variant with only info": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigation-methods/reload-no-args.html": {
+		"(harness)": "ERROR: Unhandled rejection: Navigation was aborted",
+		"reload() variant with no state or info": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigation-methods/reload-state-and-info.html": {
+		"(harness)": "ERROR: Unhandled rejection: Navigation was aborted",
+		"reload() variant with info and new state": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigation-methods/reload-state-undefined.html": {
+		"(harness)": "ERROR: Unhandled rejection: Navigation was aborted",
+		"reload() variant with info and state: undefined counts the same as not present (because of Web IDL dictionary semantics), so preserves the state": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigation-methods/return-value/back-forward-initial-about-blank.html": {
+		"back() and forward() in initial about:blank document": "FAIL: assert_equals: result object must be from the right realm expected object \"[object Object]\" but got object \"[object Object]\""
+	},
+	"/navigation-api/navigation-methods/return-value/back-forward-opaque-origin.html": {
+		"navigation.back()/forward() in an opaque origin iframe": "FAIL: assert_unreached: onnavigate should not be called Reached unreachable code"
+	},
+	"/navigation-api/navigation-methods/return-value/forward-intercept-rejected.html": {
+		"forward() promise rejection with rejected intercept()": "FAIL: assert_equals: expected object \"[object NavigationHistoryEntry]\" but got object \"[object NavigationHistoryEntry]\""
+	},
+	"/navigation-api/navigation-methods/return-value/forward-intercept.html": {
+		"forward() and intercept() with a fulfilled promise": "FAIL: assert_equals: expected object \"[object NavigationHistoryEntry]\" but got object \"[object NavigationHistoryEntry]\""
+	},
+	"/navigation-api/navigation-methods/return-value/forward.html": {
+		"forward() promises": "FAIL: assert_equals: expected object \"[object NavigationHistoryEntry]\" but got object \"[object NavigationHistoryEntry]\""
+	},
+	"/navigation-api/navigation-methods/return-value/navigate-interrupted.html": {
+		"interrupted navigate() promises": "FAIL: assert_unreached: committed must not reject Reached unreachable code"
+	},
+	"/navigation-api/navigation-methods/return-value/navigate-opaque-origin.html": {
+		"navigation.navigate() in an opaque origin iframe": "FAIL: assert_unreached: onnavigate should not be called Reached unreachable code"
+	},
+	"/navigation-api/navigation-methods/return-value/traverseTo-detach-same-document-before-navigate-event.html": {
+		"traverseTo() promise rejections when detaching an iframe before onnavigate (same-document)": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/navigation-methods/return-value/traverseTo-detach-same-document.html": {
+		"traverseTo() promise rejections when detaching an iframe inside onnavigate (same-document)": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/navigation-methods/return-value/traverseTo-repeated.html": {
+		"Repeated navigation.traverseTo() with the same key": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/navigation-methods/traverseTo-after-adding-iframe.html": {
+		"(harness)": "ERROR: Unhandled rejection: Navigation was aborted"
+	},
+	"/navigation-api/navigation-methods/traverseTo-and-forward-in-cross-site-iframe.html": {
+		"(harness)": "TIMEOUT: "
+	},
+	"/navigation-api/navigation-methods/traverseTo-detach-between-navigate-and-navigatesuccess.html": {
+		"(harness)": "ERROR: Unhandled rejection: Navigation was aborted",
+		"Detach a window between when a traverseTo() fires navigate and navigatesuccess": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/navigation-methods/traverseTo-navigates-multiple-iframes.html": {
+		"(harness)": "TIMEOUT: "
+	},
+	"/navigation-api/ordering-and-transition/anchor-download-intercept-reject.html?no-currententrychange": {
+		"event and promise ordering for <a download> intercepted by passing a rejected promise to intercept()": "FAIL: assert_array_equals: expected property 0 to be \"navigate\" but got \"promise microtask\" (expected array [\"navigate\", \"handler run\", \"AbortSignal abort\", \"navigateerror\", \"promise microtask\", \"transition"
+	},
+	"/navigation-api/ordering-and-transition/anchor-download-intercept-reject.html?currententrychange": {
+		"event and promise ordering for <a download> intercepted by passing a rejected promise to intercept()": "FAIL: assert_array_equals: expected property 0 to be \"navigate\" but got \"promise microtask\" (expected array [\"navigate\", \"currententrychange\", \"handler run\", \"AbortSignal abort\", \"navigateerror\", \"promise m"
+	},
+	"/navigation-api/ordering-and-transition/anchor-download-intercept.html?no-currententrychange": {
+		"event and promise ordering for <a download> intercepted by intercept()": "FAIL: assert_array_equals: expected property 0 to be \"navigate\" but got \"promise microtask\" (expected array [\"navigate\", \"handler run\", \"navigatesuccess\", \"promise microtask\", \"transition.finished fulfilled"
+	},
+	"/navigation-api/ordering-and-transition/anchor-download-intercept.html?currententrychange": {
+		"event and promise ordering for <a download> intercepted by intercept()": "FAIL: assert_array_equals: expected property 0 to be \"navigate\" but got \"promise microtask\" (expected array [\"navigate\", \"currententrychange\", \"handler run\", \"navigatesuccess\", \"promise microtask\", \"transit"
+	},
+	"/navigation-api/ordering-and-transition/back-same-document-intercept-reject.html?no-currententrychange": {
+		"event and promise ordering for same-document navigation.back() intercepted by passing a rejected promise to intercept()": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/ordering-and-transition/back-same-document-intercept-reject.html?currententrychange": {
+		"event and promise ordering for same-document navigation.back() intercepted by passing a rejected promise to intercept()": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/ordering-and-transition/back-same-document-intercept.html?no-currententrychange": {
+		"event and promise ordering for same-document navigation.back() intercepted by intercept()": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/ordering-and-transition/back-same-document-intercept.html?currententrychange": {
+		"event and promise ordering for same-document navigation.back() intercepted by intercept()": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/ordering-and-transition/back-same-document.html?no-currententrychange": {
+		"event and promise ordering for same-document navigation.back()": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/ordering-and-transition/back-same-document.html?currententrychange": {
+		"event and promise ordering for same-document navigation.back()": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/ordering-and-transition/location-href-double-intercept.html?no-currententrychange": {
+		"event and promise ordering when location.href is set repeatedly and handled by intercept()": "FAIL: assert_array_equals: lengths differ, expected array [\"navigate\", \"handler run\", \"AbortSignal abort\", \"navigateerror\", \"navigate\", \"handler run\", \"transition.finished rejected\", \"promise microtask\", \"n"
+	},
+	"/navigation-api/ordering-and-transition/location-href-double-intercept.html?currententrychange": {
+		"event and promise ordering when location.href is set repeatedly and handled by intercept()": "FAIL: assert_array_equals: lengths differ, expected array [\"navigate\", \"currententrychange\", \"handler run\", \"AbortSignal abort\", \"navigateerror\", \"navigate\", \"currententrychange\", \"handler run\", \"transition"
+	},
+	"/navigation-api/ordering-and-transition/navigate-double-intercept.html?no-currententrychange": {
+		"event and promise ordering when navigate() is called repeatedly and handled by intercept()": "FAIL: assert_array_equals: lengths differ, expected array [\"navigate\", \"handler run\", \"AbortSignal abort\", \"navigateerror\", \"navigate\", \"handler run\", \"committed fulfilled 1\", \"transition.committed fulfille"
+	},
+	"/navigation-api/ordering-and-transition/navigate-double-intercept.html?currententrychange": {
+		"event and promise ordering when navigate() is called repeatedly and handled by intercept()": "FAIL: assert_array_equals: lengths differ, expected array [\"navigate\", \"currententrychange\", \"handler run\", \"AbortSignal abort\", \"navigateerror\", \"navigate\", \"currententrychange\", \"handler run\", \"committed "
+	},
+	"/navigation-api/ordering-and-transition/navigate-in-transition-finished.html?no-currententrychange": {
+		"event and promise ordering when navigate() is called inside the transition.finished promise handler": "FAIL: assert_equals: event 9 (handler run): navigation.transition.from expected object \"[object NavigationHistoryEntry]\" but got object \"[object NavigationHistoryEntry]\""
+	},
+	"/navigation-api/ordering-and-transition/navigate-in-transition-finished.html?currententrychange": {
+		"event and promise ordering when navigate() is called inside the transition.finished promise handler": "FAIL: assert_equals: event 10 (currententrychange): navigation.transition.from expected object \"[object NavigationHistoryEntry]\" but got object \"[object NavigationHistoryEntry]\""
+	},
+	"/navigation-api/ordering-and-transition/navigate-same-document-intercept-reentrant.html?no-currententrychange": {
+		"(harness)": "TIMEOUT: ",
+		"event and promise ordering for same-document navigation.navigate() inside the navigate handler": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/ordering-and-transition/navigate-same-document-intercept-reentrant.html?currententrychange": {
+		"(harness)": "TIMEOUT: ",
+		"event and promise ordering for same-document navigation.navigate() inside the navigate handler": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/per-entry-events/dispose-for-full-session-history.tentative.html": {
+		"Dispose should fire when an entry is removed from session history due to too many entries": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/per-entry-events/dispose-for-navigation-in-sibling-detach-frame.html": {
+		"Detaching a frame from its own dispose handler during another frame's truncating push must not crash": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/per-entry-events/dispose-skip-current-on-truncate.html": {
+		"Removing a currentEntry from the joint session history shouldn't dispose it": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/precommit-handler/precommitHandler-back-and-forth.html": {
+		"\n  Test that going back and forward during a precommitHandler ends up in the\n  correct entry\n": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/precommit-handler/precommitHandler-push.html": {
+		"precommitHandler for a push navigation, success": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/precommit-handler/precommitHandler-redirect-throws.html": {
+		"redirect() traverse": "FAIL: Failed to execute 'intercept' on 'NavigateEvent': intercept() may only be called with a precommitHandler when thenavigate event is cancelable."
+	},
+	"/navigation-api/precommit-handler/precommitHandler-replace.html": {
+		"precommitHandler for a replace navigation, success": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/precommit-handler/precommitHandler-traversal-commit-new-navigation-before-commit.html": {
+		"Cancel a precommitHandler traversal before commit by starting a new navigation": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/precommit-handler/precommitHandler-traverse.html": {
+		"(harness)": "ERROR: Uncaught InvalidStateError: Failed to execute 'intercept' on 'NavigateEvent': intercept() may only be called with a precommitHandler when thenavigate event is cancelable."
+	},
+	"/navigation-api/precommit-handler/precommitHandler-uncancelable.html": {
+		"precommitHandler for an uncancelable traverse navigation": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/scroll-behavior/after-transition-basic.html": {
+		"scroll: after-transition should scroll when back completes": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/scroll-behavior/after-transition-change-history-scroll-restoration-during-promise.html": {
+		"scroll: after-transition should ignore history.scrollRestoration even if it changes in the middle of the navigation": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/scroll-behavior/after-transition-explicit-scroll.html": {
+		"scroll: scroll() should preempt after-transition": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/scroll-behavior/after-transition-reject.html": {
+		"scroll: after-transition should not scroll when the intercept() handler rejects": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/scroll-behavior/after-transition-reload-after-traverse.html": {
+		"scroll: after-transition on a reload of a traversed-to fragment entry scrolls to the fragment": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/scroll-behavior/after-transition-reload-no-scroll-anchoring.html": {
+		"scroll: after-transition should work on a reload navigation": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/scroll-behavior/after-transition-reload.html": {
+		"scroll: after-transition should work on a reload navigation": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/scroll-behavior/after-transition-skips-restore-when-scrolled.html": {
+		"scroll: after-transition should not restore scroll if the document was scrolled during the navigation": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/scroll-behavior/after-transition-timing.html": {
+		"scroll: after-transition should scroll when back completes, just before navigatesuccess": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/scroll-behavior/after-transition-traverse-no-fragment.html": {
+		"scroll: after-transition on a traverse to an entry without a fragment restores the scroll position": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/scroll-behavior/after-transition-traverse-to-fragment.html": {
+		"scroll: after-transition on a traverse to an entry with a fragment restores the scroll position": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/scroll-behavior/manual-basic.html": {
+		"scroll: manual should prevent auto scroll on back.": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/scroll-behavior/manual-immediate-scroll.html": {
+		"scroll: scroll() should not work inside a navigate event handler": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/scroll-behavior/manual-scroll-after-dispatch.html": {
+		"scroll: scroll() should work after a navigate event dispatch": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/scroll-behavior/manual-scroll-after-resolve.html": {
+		"scroll: scroll() should throw after a navigation finished promise fulfills": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/scroll-behavior/manual-scroll-clears-target-when-fragment-does-not-exist.html": {
+		"scroll: scroll() should clear the CSS :target element when the fragment does not exist": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/scroll-behavior/manual-scroll-clears-target-when-no-fragment.html": {
+		"scroll: scroll() should clear the CSS :target element when the destination url contains no fragment": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/scroll-behavior/manual-scroll-fragment-does-not-exist.html": {
+		"scroll: scroll() should scroll to beginning of document when the fragment does not exist": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/scroll-behavior/manual-scroll-in-precommit-handler.html": {
+		"scroll: scroll() in precommitHandler throws": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/scroll-behavior/manual-scroll-reload-no-scroll-anchoring.html": {
+		"scroll: scroll() should work on a reload navigation": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/scroll-behavior/manual-scroll-reload.html": {
+		"scroll: scroll() should work on a reload navigation": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/scroll-behavior/manual-scroll-repeated.html": {
+		"scroll: scroll() should throw if called a second time": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/scroll-behavior/manual-scroll-resets-when-no-fragment.html": {
+		"scroll: scroll() should reset scroll position when the destination url contains no fragment": "FAIL: promise_test: Unhandled rejection with value: object \"AbortError: Navigation was aborted\""
+	},
+	"/navigation-api/state/cross-document-away-and-back.html?method=navigate": {
+		"(harness)": "TIMEOUT: timeout: no report within 30 s",
+		"entry.getState() behavior after navigating away and back": "MISSING: the harness ended TIMEOUT before this subtest"
+	},
+	"/navigation-api/state/cross-document-away-and-back.html?method=updateCurrentEntry": {
+		"(harness)": "TIMEOUT: timeout: no report within 30 s",
+		"entry.getState() behavior after navigating away and back": "MISSING: the harness ended TIMEOUT before this subtest"
+	},
+	"/navigation-api/state/same-document-away-and-back-location-api.html": {
+		"(harness)": "ERROR: Unhandled rejection: Navigation was aborted"
+	},
+	"/navigation-api/state/same-document-away-and-back-navigation-api.html": {
+		"(harness)": "ERROR: Unhandled rejection: Navigation was aborted"
+	},
+	"/navigation-api/updateCurrentEntry-method/opaque-origin.html": {
+		"navigation.updateCurrentEntry() in an opaque origin iframe": "FAIL: assert_throws_dom: function \"() => { navigation.updateCurrentEntry({ state: 1 }); }\" did not throw"
+	},
+	"/navigation-api/updateCurrentEntry-method/same-document-away-and-back-location-api.html": {
+		"(harness)": "ERROR: Unhandled rejection: Cannot read properties of undefined (reading 'statevar')",
+		"entry.getState() behavior after navigating away using the location API, then back": "TIMEOUT: Test timed out"
+	},
+	"/navigation-api/updateCurrentEntry-method/unserializable.html": {
+		"updateCurrentEntry() must throw if state is unserializable (SharedArrayBuffer)": "FAIL: WebAssembly.Memory(): could not allocate memory"
+	}
+}

@@ -11,7 +11,9 @@
 // activation, a browser quirk) are left out of the comparison and listed.
 // Every page starts with an empty cookie jar in both modes.
 // UPDATE_EXPECTED=1 rewrites the list from the measured run; WPT_ONLY=<regex>
-// runs only the matching pages (for a quick look, not for updating the list).
+// runs only the matching pages (for a quick look, not for updating the list),
+// WPT_NATIVE=<file> keeps the native verdicts in a file and takes them from
+// it on the next run.
 //
 // Output: one PASS/FAIL line per test page, `native-fail` and `proxied-fail`
 // lines for the excluded and the expected failures, `stalled` lines for a
@@ -236,10 +238,21 @@ async function runNative(browser, tests, concurrency) {
 	const queue = [...tests];
 	await Promise.all(
 		Array.from({ length: concurrency }, async () => {
-			const page = await context.newPage();
+			// a page that crashed its tab is that page's failure: the next page
+			// gets a tab of its own
+			const open = async () => {
+				const page = await context.newPage();
+				page.once('crash', () => (page.crashed = true));
+				return page;
+			};
+			let page = await open();
 			while (queue.length) {
 				const path = queue.shift();
 				await takeReport(path);
+				if (page.crashed || page.isClosed()) {
+					await page.close().catch(() => {});
+					page = await open();
+				}
 				// each page starts with an empty jar, so a cookie one page could not
 				// delete is that page's failure and not the next page's
 				await context.clearCookies();
@@ -260,7 +273,7 @@ async function runNative(browser, tests, concurrency) {
 				progress('native', path, report, started);
 				await page.goto('about:blank').catch(() => {});
 			}
-			await page.close();
+			await page.close().catch(() => {});
 		}),
 	);
 	await context.close();
@@ -273,82 +286,127 @@ async function runNative(browser, tests, concurrency) {
  * per worker, not one page with several frames: two frames loading at once
  * in one controller page stall each other (measured, not fixed here).
  */
-async function runProxied(browser, tests, concurrency, native, expected) {
+async function runProxied(
+	browser,
+	tests,
+	concurrency,
+	native,
+	expected,
+	called,
+) {
 	const errors = [];
 	const results = new Map();
 	const queue = [...tests];
 	await Promise.all(
 		Array.from({ length: concurrency }, async () => {
-			const page = await browser.newPage();
-			page.on('pageerror', (error) => errors.push(error.message));
-			await page.goto(PROXY);
-			await page.waitForFunction(
-				() => window.controller && window.controller.isReady,
-				null,
-				{ timeout: 45000 },
-			);
-			// a controller of the suite's own, on the demo page's worker and
-			// a transport described as the demo describes its own: the demo's
-			// controller takes a page's window.open as a tab of the demo and
-			// the page gets null, which is the demo's choice (`onOpen`) and
-			// not the proxy's behaviour. A host that takes no tabs leaves the
-			// popup to the browser, and that is what the tests that open one
-			// measure. The transport is a descriptor, hosted in the transport
-			// worker as the demo's is: a transport instance runs on the page,
-			// which cannot answer a proxied page's synchronous XHR while that
-			// page spins (every sync XHR then waited out its 30 s).
-			await page.evaluate(async () => {
-				const element = document.createElement('iframe');
-				element.style.cssText = 'width: 800px; height: 600px';
-				document.body.append(element);
-				const config = window.STOMP_CONFIG || {};
-				const controller = new window.StompController({
-					serviceworker: window.controller.serviceworker,
-					transport: {
-						module: config.testTransport
-							? '/test/mixed-transport.mjs'
-							: '/epoxy/index.mjs',
-						options: [
-							{
-								wisp:
-									config.wisp ||
-									`${location.origin.replace(/^http/, 'ws')}/wisp/`,
+			let page;
+			// a page that crashed its tab is that page's failure: the next page
+			// gets a host page of its own
+			const open = async () => {
+				page = await browser.newPage();
+				page.once('crash', () => (page.crashed = true));
+				page.on('pageerror', (error) => errors.push(error.message));
+				await page.goto(PROXY);
+				await page.waitForFunction(
+					() => window.controller && window.controller.isReady,
+					null,
+					{ timeout: 45000 },
+				);
+				// a controller of the suite's own, on the demo page's worker and
+				// a transport described as the demo describes its own: the demo's
+				// controller takes a page's window.open as a tab of the demo and
+				// the page gets null, which is the demo's choice (`onOpen`) and
+				// not the proxy's behaviour. A host that takes no tabs leaves the
+				// popup to the browser, and that is what the tests that open one
+				// measure. The transport is a descriptor, hosted in the transport
+				// worker as the demo's is: a transport instance runs on the page,
+				// which cannot answer a proxied page's synchronous XHR while that
+				// page spins (every sync XHR then waited out its 30 s).
+				await page.evaluate(async (called) => {
+					const element = document.createElement('iframe');
+					element.style.cssText = 'width: 800px; height: 600px';
+					document.body.append(element);
+					const config = window.STOMP_CONFIG || {};
+					const controller = new window.StompController({
+						serviceworker: window.controller.serviceworker,
+						transport: {
+							module: config.testTransport
+								? '/test/mixed-transport.mjs'
+								: '/epoxy/index.mjs',
+							options: [
+								{
+									wisp:
+										config.wisp ||
+										`${location.origin.replace(/^http/, 'ws')}/wisp/`,
+								},
+							],
+						},
+						directory: window.controller.directory.pathname,
+						codec: 'xor',
+						// (just call stomp is the controller's to opt in to)
+						...(called && { dialing: true }),
+					});
+					await controller.wait();
+					window.__wptController = controller;
+					window.__wptFrame = controller.createFrame(element);
+				}, called);
+			};
+			await open();
+			// just call stomp (`called`): each page is a tab of its own, a
+			// fresh frame called with it, whose history starts at the page
+			let tabs = 0;
+			const go = (url) =>
+				called
+					? page.evaluate(
+							async ({ url, key }) => {
+								const old = window.__wptFrame;
+								const element = document.createElement('iframe');
+								element.style.cssText = 'width: 800px; height: 600px';
+								old.element.replaceWith(element);
+								window.__wptFrame = window.__wptController.createFrame(element);
+								await window.StompController.justCallStomp(
+									window.__wptFrame,
+									url,
+									{ key },
+								);
 							},
-						],
-					},
-					directory: window.controller.directory.pathname,
-					codec: 'xor',
-				});
-				await controller.wait();
-				window.__wptController = controller;
-				window.__wptFrame = controller.createFrame(element);
-			});
+							{ url, key: `wpt-${++tabs}-${Math.random()}` },
+						)
+					: page.evaluate((url) => window.__wptFrame.go(url), url);
 			// the fallback reads the frame's own copy: the proxied frame is a
 			// direct child of the host page on a routed URL
+			// (a called one is the frame's element now: its URL is the call
+			// page's, whose name is the config's)
 			const fallback = (path) => async () => {
-				const frame = page
-					.frames()
-					.find(
-						(f) =>
-							f.parentFrame() === page.mainFrame() &&
-							/\/stomp\/[\w-]+\/html\//.test(f.url()),
-					);
+				const frame = called
+					? await page
+							.evaluateHandle(() => window.__wptFrame.element)
+							.then((handle) => handle.contentFrame())
+							.catch(() => null)
+					: page
+							.frames()
+							.find(
+								(f) =>
+									f.parentFrame() === page.mainFrame() &&
+									/\/stomp\/[\w-]+\/html\//.test(f.url()),
+							);
 				const direct = frame ? await readResults(frame) : null;
 				return direct?.path === path.split('?')[0] ? direct : null;
 			};
 			while (queue.length) {
 				const path = queue.shift();
 				await takeReport(path);
+				if (page.crashed || page.isClosed()) {
+					await page.close().catch(() => {});
+					await open();
+				}
 				// the proxy's jar is shared by every controller of the scope; empty
 				// it for the page the way the native run empties the browser's
 				await page
 					.evaluate(() => window.__wptController.cookies.clear())
 					.catch(() => {});
 				try {
-					await page.evaluate(
-						(url) => window.__wptFrame.go(url),
-						`${origin}${path}`,
-					);
+					await go(`${origin}${path}`);
 				} catch (error) {
 					results.set(path, {
 						status: { status: 'ERROR', message: error.message },
@@ -366,14 +424,53 @@ async function runProxied(browser, tests, concurrency, native, expected) {
 					!('(harness)' in (expected[path] || {}))
 				)
 					await stalled(page, path, native.get(path));
-				await page
-					.evaluate(() => window.__wptFrame.go('about:blank'))
-					.catch(() => {});
+				if (!called) await leave(page);
 			}
-			await page.close();
+			await page.close().catch(() => {});
 		}),
 	);
 	return { results, errors };
+}
+
+/**
+ * Send the default mode's frame to about:blank after a page. A page can keep
+ * its frame: the frame's navigation is the parent's script's, so a page
+ * whose navigate handler cancels every navigation, or that is still in one
+ * of its own, keeps the next page from ever loading there (each page after
+ * it timed out). When the frame still shows a routed document after a few
+ * seconds, it is replaced with a fresh one, as a new tab would be.
+ */
+async function leave(page) {
+	const left = await page
+		.evaluate(async () => {
+			const frame = window.__wptFrame;
+			const gone = () => {
+				try {
+					return !/\/stomp\/[\w-]+\/html\//.test(
+						frame.element.contentWindow.location.href,
+					);
+				} catch (error) {
+					return false;
+				}
+			};
+			frame.go('about:blank').catch(() => {});
+			for (let waited = 0; waited < 5000; waited += 100) {
+				if (gone()) return true;
+				await new Promise((resolve) => setTimeout(resolve, 100));
+			}
+			return gone();
+		})
+		.catch(() => false);
+	if (left) return;
+	await page
+		.evaluate(() => {
+			const old = window.__wptFrame;
+			const element = document.createElement('iframe');
+			element.style.cssText = 'width: 800px; height: 600px';
+			old.element.replaceWith(element);
+			window.__wptFrame = window.__wptController.createFrame(element);
+		})
+		.catch(() => {});
 }
 
 /**
@@ -440,11 +537,20 @@ function verdicts(report) {
  * the cookie jar or other state of the origin), `globals` the globals an
  * .any.js test runs in (of `window`, `dedicatedworker`, `sharedworker`),
  * `skip` the pages left out (RegExps over the path and query; the README
- * says why for each), `budget` the milliseconds a page has to report.
+ * says why for each), `budget` the milliseconds a page has to report,
+ * `called` runs the proxied pages in just call stomp
+ * (src/controller/justCallStomp.ts), each a tab of its own.
  */
 export async function runWpt(
 	suite,
-	{ roots, concurrency = 1, globals = ['window'], skip = [], budget },
+	{
+		roots,
+		concurrency = 1,
+		globals = ['window'],
+		skip = [],
+		budget,
+		called = false,
+	},
 ) {
 	const only = process.env.WPT_ONLY && new RegExp(process.env.WPT_ONLY);
 	if (process.env.WPT_CONCURRENCY)
@@ -465,7 +571,22 @@ export async function runWpt(
 	let errors;
 	try {
 		await fetch(`${FIXTURE}_wpt/reset`);
-		native = await runNative(browser, tests, concurrency);
+		// WPT_NATIVE=<file>: the native verdicts of an earlier run, kept there
+		// by the first run that names it (for a quick look at the proxied
+		// side, never for updating the list)
+		const kept = process.env.WPT_NATIVE;
+		if (kept && existsSync(kept)) {
+			native = new Map(JSON.parse(readFileSync(kept, 'utf8')));
+			for (const path of tests)
+				if (!native.has(path))
+					native.set(path, {
+						status: { status: 'ERROR', message: 'not in WPT_NATIVE' },
+						tests: [],
+					});
+		} else {
+			native = await runNative(browser, tests, concurrency);
+			if (kept) writeFileSync(kept, JSON.stringify([...native]));
+		}
 		await fetch(`${FIXTURE}_wpt/reset`);
 		({ results: proxied, errors } = await runProxied(
 			browser,
@@ -473,6 +594,7 @@ export async function runWpt(
 			concurrency,
 			native,
 			expected,
+			called,
 		));
 	} catch (error) {
 		// the browser is the only thing a suite spawns; never leave it behind

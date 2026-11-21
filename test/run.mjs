@@ -77,6 +77,11 @@ const SUITE_TIMEOUT_MINUTES = {
 	'wpt-indexeddb': 20,
 	// a persistent profile with an extension for each of four modes
 	'just-call-stomp-audit': 20,
+	// some 500 pages natively and proxied, a few dozen of which wait out
+	// their harness's timeout (about 11 and 15 minutes proxied, on a loaded
+	// runner, besides the native run)
+	'wpt-navigation-api': 45,
+	'wpt-navigation-api-dial': 45,
 };
 // what a suite's demo server needs beyond the defaults
 const SUITE_ENV = {
@@ -160,6 +165,9 @@ const SUITE_ENV = {
 	'dial-urls': { STOMP_SLOT_PORTS: '4' },
 	// the toolbar's dialing checks once more on content slots
 	toolbar: { STOMP_SLOT_PORTS: '4' },
+	// a dialed tab's history and Navigation API, on content slots too
+	'nav-router': { STOMP_SLOT_PORTS: '4' },
+	'navigation-api': { STOMP_SLOT_PORTS: '4' },
 };
 // where the content blocker's default lists and resources live
 // (src/blocker/types.ts DEFAULT_LISTS, DEFAULT_RESOURCES)
@@ -285,6 +293,10 @@ const PENDING_SUITES = new Map([
 	[
 		'just-call-stomp-audit',
 		'a measurement for the just-call-stomp experiment, run by name',
+	],
+	[
+		'wpt-navigation-api-dial',
+		'the Navigation API in the just-call-stomp experiment, run by name',
 	],
 ]);
 

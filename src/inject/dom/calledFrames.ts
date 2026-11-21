@@ -115,6 +115,9 @@ type Told = {
 	entries?: [string, string | File][] | null;
 	enctype?: string | null;
 	policy?: string;
+	/** a push's or replacement's: the key and id the document's Navigation API gave the entry */
+	key?: string;
+	entryId?: string;
 };
 
 const isText = (value: unknown, limit = MAX_URL): value is string =>
@@ -148,6 +151,8 @@ function toldOf(data: unknown, File: typeof globalThis.File): Told | null {
 		!optional('reload', (value) => typeof value === 'boolean') ||
 		!optional('enctype', (value) => value === null || isText(value, 256)) ||
 		!optional('policy', text(256)) ||
+		!optional('key', text(64)) ||
+		!optional('entryId', text(64)) ||
 		!optional(
 			'entries',
 			(value) =>
@@ -592,8 +597,9 @@ export function calledFrames(
 			case 'replace': {
 				const made: KidEntry = {
 					url: String(what.url),
-					key: what.op === 'replace' ? entry.key : id(),
-					id: id(),
+					// (the document's own names for it, which it steps by)
+					key: what.op === 'replace' ? entry.key : (what.key ?? id()),
+					id: what.entryId ?? id(),
 					document: entry.document,
 					state: what.state,
 					referrer: entry.referrer,

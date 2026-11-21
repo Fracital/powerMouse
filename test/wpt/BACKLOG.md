@@ -578,6 +578,138 @@ so the module `charset-01` and `charset-03` pages are not listed.
 `module/integrity.html` passes since master verifies a module's integrity
 (the rebase onto 082ac470).
 
+## wpt-navigation-api
+
+Measured 2026-11-20 on d29168779 with this series, Chrome 157, the native
+verdicts taken from one full native run (`WPT_NATIVE`): 493 pages, 961
+subtests that pass natively, 798 of them through the proxy; 127 pages and
+163 entries listed. The default mode's frame is navigated to its routes,
+and its `navigation` object is the browser's, hooked by the History module
+(`navigate()` routes its URL), so these are gaps of that routing, none of
+dialing's.
+
+- 67 pages (74 entries), most of `scroll-behavior/` (23), then
+  `navigation-methods/`, `navigate-event/`, `ordering-and-transition/`,
+  `precommit-handler/`, `navigation-activation/`, `per-entry-events/`,
+  `currententrychange-event/` and `state/`: "Unhandled rejection
+  AbortError: Navigation was aborted" (the harness, or the subtest). A
+  `navigation.navigate()` or `back()` whose promise a page awaits is
+  aborted by the navigation the History module or the Fragment module
+  makes in its place (the routed URL, the live fragment), so `committed` or
+  `finished` rejects. Already so before this series' History.ts change
+  (checked with it reverted on three of the pages).
+- 9 `navigate-event/cross-window/*-samedocument-*.html` pages (one each):
+  "hashChange expected true got false". Another window's navigation of the
+  frame to a fragment of its document is routed as a navigation to a
+  route, which is no fragment change of the routed URL.
+- 5 `focus-reset/` pages (20): autofocus and the focus steps of an
+  intercepted navigation (`change-focus-*-during-intercept.html`,
+  `focus-reset-timing.html`, `autofocus.html` both variants); the frame is
+  not focused as the native top-level page is.
+- 14 pages time out (28): cross-origin and cross-site traversals and
+  iframes (`cross-origin-traversal-redirect.html`,
+  `traverseTo-and-forward-in-cross-site-iframe.html`,
+  `traverseTo-navigates-multiple-iframes.html`), traversals started inside
+  `onnavigate`, `navigate-form-traverse.html`,
+  `navigate-anchor-download.html`, `opaque-origin-data-url.html`,
+  `navigate-same-document-intercept-reentrant.html` (both variants),
+  `state/cross-document-away-and-back.html` (both variants) and
+  `updateCurrentEntry-method/same-document-away-and-back-location-api.html`.
+- 32 single pages of other causes, each one entry, among them: the
+  `cross-window/*-crossdocument-crossorigin.html` pages (the other window's
+  report is an object, not "DONE"); `forward.html`, `forward-intercept.html`
+  and `forward-intercept-rejected.html` (the entry `committed` resolves to
+  is not the native one); the double-intercept and `navigate-in-transition-finished`
+  ordering pages; `anchor-download-intercept*.html` (a download's navigate
+  event comes after a microtask); `entries-after-blob-navigation.html`
+  (`blob:`); `no-referrer-dynamic-url-censored.html`; the opaque-origin
+  pages (`opaque-origin.html`, `back-forward-opaque-origin.html`,
+  `navigate-opaque-origin.html`, `updateCurrentEntry-method/opaque-origin.html`:
+  a sandboxed frame's navigation object acts as of the proxy's origin);
+  `precommitHandler-redirect-throws.html` and `precommitHandler-traverse.html`;
+  `updateCurrentEntry-method/unserializable.html` (SharedArrayBuffer: the
+  `WebAssembly.Memory` allocation fails on the runner).
+
+## wpt-navigation-api-dial
+
+Measured 2026-11-20 on d29168779 with this series, in dialing without a
+site pool (the WPT controller has none, so content slots are not covered
+here; `navigation-api` and `nav-router` run them), Chrome 157, the native
+verdicts from `WPT_NATIVE`: 493 pages, 961 subtests that pass natively;
+235 pages and 315 entries listed. The page's `history` and `navigation`
+are the inject's (`src/inject/dom/calledNavigation.ts`).
+
+- 119 pages (121 entries): "Blocked a frame with origin ... from accessing
+  a cross-origin frame" when the test reads `i.contentWindow.navigation`
+  (or another member) of a nested frame. A nested frame of a dialed
+  document is itself dialed (`calledFrames.ts`), and the parent's stand-in
+  for its window finds no owner (`Context.ts` `restrictContext` `as()`,
+  `#owner(entry)` null). Related, and reproduced alone: a parent that reads
+  `iframe.contentWindow` or `contentDocument` before the nested frame is
+  dialed (still on its initial about:blank, as most of these tests do)
+  keeps that frame from ever being written; it stays an empty call page
+  and its `load` never fires. Without that early read the same parent
+  reads the frame's `navigation.currentEntry` and its document. A
+  nested-frame gap of dialing, not of the emulation.
+- 34 pages time out (and 7 more time out with another failure): the
+  `navigate-event/cross-window/*-crossorigin.html` and `*-crosssite.html`
+  pages, the form submissions (`navigate-form*.html`), traversals started
+  in `onnavigate`, `navigate-multiple-history-pushState.html`,
+  `forward-to-pruned-entry.html`, `traverseTo-navigates-multiple-iframes.html`,
+  the opaque-origin and about:blank frames, `navigate-intercept-stop.html`
+  (window.stop()), `navigate-204-205-download-then-same-document.html`,
+  `dispose-for-full-session-history.tentative.html` (the 50-entry cap) and
+  `navigate-anchor-download.html`.
+- 5 pages (8 entries): the event constructors
+  (`NavigateEvent`, `NavigationCurrentEntryChangeEvent` with a
+  `destination` or `from`): the inject's entries and destinations are not
+  platform objects, and the browser's constructors take only its own.
+  `precommitHandler-redirect-throws.html` (an invalid URL is not refused
+  as natively) is with them.
+- 7 `focus-reset/` pages: the focus steps of an intercepted navigation,
+  done by the inject, differ from Chrome's (the document is a frame of the
+  call page, not the focused top-level page).
+- 63 pages of other causes, one or two entries each. The main groups:
+  - the intercept-reject and handler-throws pages, and their
+    `ordering-and-transition/*-intercept-reject.html` twins (the
+    `navigateerror` and the AbortSignal ordering);
+  - `precommit-handler/` redirect pages (`redirect()` is not applied to the
+    committed URL) and the popstate timing of precommit pushes and
+    replacements;
+  - `scroll-behavior/` reloads (a reload is a fresh document here, which
+    scrolls to its saved position before `scroll()`), and the
+    `:target`-clearing pages (the fragment is never in the call page's
+    URL, so `:target` does not match);
+  - `navigate-multiple-*.html` (a later navigation does not abort the
+    earlier one in Chrome's order);
+  - `window.stop()` and frame-detach signals (`signal-abort-*.html`);
+  - `entries()` after an about:blank, srcdoc or data: navigation of the
+    document's own frame;
+  - `history.state` after `navigate()` to a fragment
+    (`navigate-history-state*.html`);
+  - `sourceElement` of a cross-origin initiator;
+  - the cross-window same-origin pages ("Outside directory" from the other
+    window's report);
+  - the 204, 205 and download return-value pages, whose nested frame's URL
+    or settling differs. `navigate-204-205-download.html` (the 205 and
+    download subtests) and `return-value/navigate-opaque-origin.html` are
+    unstable: they passed in one of five runs and failed in four, two of
+    those (run alone) with this series' calledNavigation.ts fixes reverted.
+
+What dialing cannot have, so that no fix takes it off: every event the
+inject fires is synthetic (`isTrusted` false); a traversal that the
+browser's Back starts is the host's and is not cancelable; the frame's own
+`history` and `navigation` (the call page's) are never shown.
+
+Cleared by this series since the first measurement on d29168779 (319
+entries): `navigate-history-pushState.html` and
+`navigate-history-replaceState.html` (pushState and replaceState fire a
+navigate event with `hashChange` false), `state/history-replaceState.html`
+(both variants: replaceState leaves the entry without a Navigation API
+state, as Chrome does). `entries-after-cross-document-replace-with-forward-entries.html`
+and `navigate-from-initial-about-blank-gc.html` (timeouts) passed in that
+run.
+
 ## wpt-referrer-policy
 
 The list is empty.
