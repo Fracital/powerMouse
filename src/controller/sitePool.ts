@@ -21,6 +21,15 @@ export interface SitePoolInit {
 	 * what it stored stays in the one taken out.
 	 */
 	origins: string[];
+	/**
+	 * Whether the hub starts spare agents while its page is idle (the slot
+	 * the next new site would get, docs/site-pool.md "Spares"); default
+	 * true. With `false` a slot's agent, and with it the registration of
+	 * its service worker, starts only when the first site is shown from it:
+	 * a slot no site uses costs nothing (dialing's content slots,
+	 * docs/content-slots.md).
+	 */
+	warm?: boolean;
 }
 
 /**

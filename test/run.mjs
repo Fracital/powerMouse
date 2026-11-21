@@ -151,6 +151,9 @@ const SUITE_ENV = {
 	'site-pool-tabs': { STOMP_SITE_POOL: '5' },
 	// production's host page (cross-origin isolated) with its pool
 	'site-pool-coep': { STOMP_ISOLATION: 'on', STOMP_SITE_POOL: '5' },
+	// dialing on four content slots of its own (STOMP_SLOT_PORTS), as
+	// production's four behind Cloudflare (docs/content-slots.md)
+	'jcs-slots': { STOMP_SLOT_PORTS: '4' },
 };
 // where the content blocker's default lists and resources live
 // (src/blocker/types.ts DEFAULT_LISTS, DEFAULT_RESOURCES)
@@ -399,27 +402,34 @@ async function startServersOnce(name) {
 	// picked here, so the suite knows them (SITE_POOL_PORTS, test/lib.mjs
 	// SLOT_PORTS); STOMP_SITE_POOL=5 turns the pool on for the run, a suite's
 	// own setting wins
-	const poolSetting = String(
-		SUITE_ENV[name]?.STOMP_SITE_POOL ?? process.env.STOMP_SITE_POOL ?? '0',
-	).trim();
-	const slotPorts = [];
-	if (/^\d{1,2}$/.test(poolSetting))
-		while (slotPorts.length < Number(poolSetting)) {
-			const slot = await freePort();
-			if (
-				String(slot) !== port &&
-				slot !== fixturePort &&
-				!slotPorts.includes(slot)
-			)
-				slotPorts.push(slot);
-		}
-	else if (!/^off$/i.test(poolSetting))
-		slotPorts.push(
-			...poolSetting
-				.split(',')
-				.map(Number)
-				.filter((slot) => slot > 0),
-		);
+	// (and just call stomp's slots the same way: STOMP_SLOT_PORTS, CONTENT_SLOT_PORTS)
+	const pickSlots = async (key, taken = []) => {
+		const setting = String(
+			SUITE_ENV[name]?.[key] ?? process.env[key] ?? '0',
+		).trim();
+		const picked = [];
+		if (/^\d{1,2}$/.test(setting))
+			while (picked.length < Number(setting)) {
+				const slot = await freePort();
+				if (
+					String(slot) !== port &&
+					slot !== fixturePort &&
+					!picked.includes(slot) &&
+					!taken.includes(slot)
+				)
+					picked.push(slot);
+			}
+		else if (!/^off$/i.test(setting))
+			picked.push(
+				...setting
+					.split(',')
+					.map(Number)
+					.filter((slot) => slot > 0),
+			);
+		return picked;
+	};
+	const slotPorts = await pickSlots('STOMP_SITE_POOL');
+	const contentPorts = await pickSlots('STOMP_SLOT_PORTS', slotPorts);
 	const env = {
 		...process.env,
 		PORT: port,
@@ -433,6 +443,7 @@ async function startServersOnce(name) {
 		STOMP_SHIELDS_DEFAULTS: process.env.STOMP_SHIELDS_DEFAULTS ?? '0',
 		...SUITE_ENV[name],
 		STOMP_SITE_POOL: slotPorts.length ? slotPorts.join(',') : '0',
+		STOMP_SLOT_PORTS: contentPorts.length ? contentPorts.join(',') : '0',
 	};
 	delete env.STOMP_PROXY_ORIGIN;
 	delete env.STOMP_WISP_URL;
@@ -504,7 +515,7 @@ async function startServersOnce(name) {
 		stop();
 		throw error;
 	}
-	return { port, fixturePort, slotPorts, wispLog, stop };
+	return { port, fixturePort, slotPorts, contentPorts, wispLog, stop };
 }
 
 /**
@@ -512,7 +523,10 @@ async function startServersOnce(name) {
  * suites run one at a time, and as one block when it finishes when they run
  * in parallel, so the log never interleaves two suites.
  */
-function runSuite(name, { port, fixturePort, slotPorts, wispLog }) {
+function runSuite(
+	name,
+	{ port, fixturePort, slotPorts, contentPorts, wispLog },
+) {
 	return new Promise((resolve) => {
 		const child = spawn(process.execPath, [`${suitesDir}${name}.mjs`], {
 			env: {
@@ -521,6 +535,7 @@ function runSuite(name, { port, fixturePort, slotPorts, wispLog }) {
 				PORT: port,
 				FIXTURE: `http://127.0.0.1:${fixturePort}/`,
 				SITE_POOL_PORTS: slotPorts.join(','),
+				CONTENT_SLOT_PORTS: contentPorts.join(','),
 				...(wispLog && { WISP_LOG: wispLog }),
 			},
 			stdio: ['ignore', 'pipe', 'inherit'],

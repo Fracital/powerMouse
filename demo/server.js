@@ -100,6 +100,18 @@
 //                       request whose Host (or X-Forwarded-Port) names one
 //                       of them is a slot's. Unset: a page that came through
 //                       a front has no pool
+//   STOMP_SLOT_PORTS    content slots for dialing (docs/content-slots.md):
+//                       ports to answer on, as STOMP_SITE_POOL takes them (a
+//                       list, `2053,2083,2087,2096`, or a number of free
+//                       ports; default `0` or `off`: none). Only a page in
+//                       dialing mode (`?mode=just-call-stomp`) uses them: it
+//                       writes each proxied site into the call page of one
+//                       of them, an origin apart from the UI's; without them
+//                       (or where none answers) on the page's own origin
+//   STOMP_SLOT_PORTS_PUBLIC the same, as the browser reaches them through a
+//                       front (`2053,2083,2087,2096` behind Cloudflare), as
+//                       STOMP_SITE_POOL_PUBLIC: the server binds nothing for
+//                       them and hears X-Forwarded-Port for them
 //   STOMP_ADBLOCK       `0` turns off the built-in content blocker, which
 //                       is on by default (the controller's `adblock` option,
 //                       docs/adblock.md); a JSON object is that option
@@ -321,10 +333,21 @@ const app = express();
 // Told by the Host header, so a front that forwards every port to one does
 // not hide it.
 const poolPorts = [];
-const publicPoolPorts = (process.env.STOMP_SITE_POOL_PUBLIC ?? '')
-	.split(',')
-	.map((text) => parseInt(text))
-	.filter((number) => number > 0 && number < 65536);
+const portList = (text) =>
+	(text ?? '')
+		.split(',')
+		.map((text) => parseInt(text))
+		.filter((number) => number > 0 && number < 65536);
+const publicPoolPorts = portList(process.env.STOMP_SITE_POOL_PUBLIC);
+// dialing's content slots (STOMP_SLOT_PORTS, docs/content-slots.md): served
+// as the pool's are, and handed only to a page in that mode
+const contentPorts = [];
+const publicContentPorts = portList(process.env.STOMP_SLOT_PORTS_PUBLIC);
+const slotPort = (port) =>
+	poolPorts.includes(port) ||
+	publicPoolPorts.includes(port) ||
+	contentPorts.includes(port) ||
+	publicContentPorts.includes(port);
 // the port the browser asked: the Host header's, or behind a front that
 // forwards the slots' ports to this one and drops the port from Host (an
 // OpenResty `proxy_set_header Host $host`), the X-Forwarded-Port it sets,
@@ -332,13 +355,16 @@ const publicPoolPorts = (process.env.STOMP_SITE_POOL_PUBLIC ?? '')
 const hostPort = (req) => {
 	const port = /:(\d+)$/.exec(req.headers.host ?? '')?.[1];
 	const forwarded = Number(req.headers['x-forwarded-port']);
-	if (publicPoolPorts.includes(forwarded)) return forwarded;
+	if (
+		publicPoolPorts.includes(forwarded) ||
+		publicContentPorts.includes(forwarded)
+	)
+		return forwarded;
 	return port ? Number(port) : null;
 };
 app.use((req, res, next) => {
 	const port = hostPort(req);
-	if (port && (poolPorts.includes(port) || publicPoolPorts.includes(port)))
-		res.set('Origin-Agent-Cluster', '?1');
+	if (port && slotPort(port)) res.set('Origin-Agent-Cluster', '?1');
 	next();
 });
 /**
@@ -349,15 +375,15 @@ app.use((req, res, next) => {
  * its own port: a slot of another port would not answer)
  */
 const LOOPBACK = /^(localhost|127\.\d+\.\d+\.\d+|\[::1\]|[\w-]+\.localhost)$/;
-function slotPorts(req) {
+function slotPorts(req, bound = poolPorts, reached = publicPoolPorts) {
 	const hostname = (req.headers.host ?? '').replace(/:\d+$/, '');
 	const port = hostPort(req);
 	if (
-		poolPorts.length &&
+		bound.length &&
 		(port === server.address()?.port || LOOPBACK.test(hostname))
 	)
-		return poolPorts;
-	return publicPoolPorts;
+		return bound;
+	return reached;
 }
 
 if (process.env.STOMP_ISOLATION !== 'off')
@@ -438,13 +464,14 @@ if (wisp && webTransport)
 	});
 app.get('/config.js', (req, res) => {
 	const sitePool = slotPorts(req);
+	const contentSlots = slotPorts(req, contentPorts, publicContentPorts);
 	// a configured relay is advertised whatever Tor's state: the page asks
 	// /api/tor and says what it is, and its loads fail until Tor is ready
 	const localTor = torWisp?.relay ? { torWisp: '/wisp-tor/' } : {};
 	res.set('Cache-Control', 'no-store');
 	res.type('application/javascript');
 	res.send(
-		`window.STOMP_CONFIG = ${JSON.stringify({ ...pageConfig, ...localTor, transports: transportPaths(), ...(sitePool.length && { sitePool }) })};\n`,
+		`window.STOMP_CONFIG = ${JSON.stringify({ ...pageConfig, ...localTor, transports: transportPaths(), ...(sitePool.length && { sitePool }), ...(contentSlots.length && { contentSlots }) })};\n`,
 	);
 });
 
@@ -1155,26 +1182,42 @@ server.on('listening', () => {
 	if (dev) console.log('Development mode: live reload on /__dev');
 });
 
-// the site pool's ports answer as the main one does (no wisp of their own:
-// the transport is the host page's); bound before it, so whoever waits for
-// the main port finds them
-const pool = (process.env.STOMP_SITE_POOL ?? '0').trim();
-const poolWanted = /^off$/i.test(pool)
-	? []
-	: /^\d{1,2}$/.test(pool)
-		? Array.from({ length: Number(pool) }, () => 0)
-		: pool
-				.split(',')
-				.map((text) => parseInt(text))
-				.filter((number) => number > 0);
-for (const wanted of poolWanted) {
-	const slot = createServer(app);
-	await new Promise((resolve, reject) => {
-		slot.once('error', reject);
-		slot.listen({ port: wanted }, resolve);
-	});
-	poolPorts.push(slot.address().port);
-}
+// the site pool's ports and the content slots answer as the main one does
+// (no wisp of their own: the transport is the host page's); bound before it,
+// so whoever waits for the main port finds them
+const portsWanted = (setting) => {
+	const text = (setting ?? '0').trim();
+	return /^off$/i.test(text)
+		? []
+		: /^\d{1,2}$/.test(text)
+			? Array.from({ length: Number(text) }, () => 0)
+			: text
+					.split(',')
+					.map((text) => parseInt(text))
+					.filter((number) => number > 0);
+};
+const bindSlots = async (wantedPorts, bound) => {
+	for (const wanted of wantedPorts) {
+		// (a port both lists name is bound once, and is a slot of both)
+		if (
+			wanted &&
+			(poolPorts.includes(wanted) || contentPorts.includes(wanted))
+		) {
+			bound.push(wanted);
+			continue;
+		}
+		const slot = createServer(app);
+		await new Promise((resolve, reject) => {
+			slot.once('error', reject);
+			slot.listen({ port: wanted }, resolve);
+		});
+		bound.push(slot.address().port);
+	}
+};
+await bindSlots(portsWanted(process.env.STOMP_SITE_POOL), poolPorts);
 if (poolPorts.length) console.log(`Site pool ports: ${poolPorts.join(', ')}`);
+await bindSlots(portsWanted(process.env.STOMP_SLOT_PORTS), contentPorts);
+if (contentPorts.length)
+	console.log(`Content slot ports: ${contentPorts.join(', ')}`);
 
 server.listen({ port });

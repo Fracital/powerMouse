@@ -138,16 +138,21 @@ const PROXY_ORIGIN =
 			: null;
 // Just call stomp (?mode=just-call-stomp, StompController.justCallStomp):
 // every proxied document is written into a fresh frame of one constant page
-// the worker serves (its call page), and no frame is navigated to a site;
-// in the same-origin mode and without the site pool
+// the worker serves (its call page), and no frame is navigated to a site.
+// The call pages are on the content slots (STOMP_SLOT_PORTS,
+// docs/content-slots.md), origins apart from this page's, or on this page's
+// own origin where the server has none or none answers. A configured remote
+// controller stays isolated: it does not yet support dialing.
+const REMOTE_ISOLATION = !!PROXY_ORIGIN && PROXY_ORIGIN !== location.origin;
 const JUST_CALL =
-	new URLSearchParams(location.search).get('mode') === 'just-call-stomp';
+	new URLSearchParams(location.search).get('mode') === 'just-call-stomp' &&
+	!('proxyOrigin' in CFG && REMOTE_ISOLATION);
 // what the browser has for a dialed frame is its call page's URL alone:
 // the server's neutral scope for the mode and its call page's name
 // (STOMP_DIAL_DIRECTORY), unless the host named a call page itself
 const DIAL = JUST_CALL && CFG.dial ? CFG.dial : null;
 if (DIAL && !ASSETS.callPage) ASSETS.callPage = DIAL.page;
-let ISOLATED = !JUST_CALL && !!PROXY_ORIGIN && PROXY_ORIGIN !== location.origin;
+let ISOLATED = !JUST_CALL && REMOTE_ISOLATION;
 // The Tor choice is for STomp's proxied traffic, not the host page. A
 // separate Wisp relay must route TCP through Tor; with no relay, a saved Tor
 // choice is an error rather than a silent direct connection.
@@ -220,11 +225,13 @@ const HTTP3 =
 // a visit. The slots are ports of the proxy's host: this page's in the same
 // origin mode, the proxy origin's in the isolated one. The controller falls
 // back to the proxy's own origin by itself where a slot does not answer.
+// In dialing mode the slots are the content slots (CFG.contentSlots), the
+// default mode never uses them.
 const SITE_POOL = (() => {
-	const ports = CFG.sitePool;
+	const ports = JUST_CALL ? CFG.contentSlots : CFG.sitePool;
 	if (!Array.isArray(ports) || !ports.length) return null;
 	const query = new URLSearchParams(location.search);
-	if (query.has('nopool') || JUST_CALL) return null;
+	if (query.has('nopool')) return null;
 	const proxy = ISOLATED ? new URL(PROXY_ORIGIN) : location;
 	return ports.map((port) => `${proxy.protocol}//${proxy.hostname}:${port}`);
 })();
@@ -1570,7 +1577,11 @@ async function startController(name) {
 			...(new URLSearchParams(location.search).get('carrierhost') === '0' && {
 				carrierHost: false,
 			}),
-			...(SITE_POOL && { sitePool: { origins: SITE_POOL } }),
+			// (a content slot's agent and worker start with the first site
+			// shown from it, never as a spare: docs/content-slots.md)
+			...(SITE_POOL && {
+				sitePool: { origins: SITE_POOL, ...(JUST_CALL && { warm: false }) },
+			}),
 			cache: CACHE,
 			serviceWorkers: SERVICE_WORKERS,
 			serviceWorkerTimeout: SERVICE_WORKER_TIMEOUT,

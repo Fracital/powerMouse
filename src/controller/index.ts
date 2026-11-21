@@ -3815,26 +3815,49 @@ export class StompController extends EventTarget {
 	 * build that has no such call refuses.)
 	 */
 	async stopNavigation(routed: string, early = false): Promise<void> {
+		// (a route of a slot of the site pool is its worker's, which its
+		// agent reaches: a dialed frame's call made from a slot)
+		const origin = new URL(routed, location.href).origin;
+		if (origin !== location.origin && this.#sites?.has(origin))
+			return this.#sites.navigation(origin, { op: 'stop', routed, early });
 		await this.#call('stopNavigation', { routed, ...(early && { early }) });
 	}
 	/** @internal a frame is sent to the route `routed` again: the worker drops it no longer (stopNavigation `early`) */
 	async navigationSent(routed: string): Promise<void> {
+		const origin = new URL(routed, location.href).origin;
+		if (origin !== location.origin && this.#sites?.has(origin))
+			return this.#sites.navigation(origin, { op: 'sent', routed });
 		await this.#call('navigationSent', routed);
 	}
 	/**
 	 * @internal just call stomp (./justCallStomp.ts): a token for one call
-	 * of the routed URL `routed`, which this controller's worker now holds
-	 * for it (src/server/called.ts allowCallToken). The worker refuses one
-	 * for a controller that did not opt in (`init.dialing`).
+	 * of the routed URL `routed`, which the worker of `routed`'s origin now
+	 * holds for it (src/server/called.ts allowCallToken): this controller's
+	 * own, or under the site pool a slot's, told through the slot's agent
+	 * (which runs with this controller's `dialing`). The worker refuses one
+	 * for a controller that did not opt in (`init.dialing`); a slot whose
+	 * agent does not answer gives none (the call throws).
 	 */
 	async callToken(routed: string): Promise<string> {
 		const bytes = crypto.getRandomValues(new Uint8Array(CALL_TOKEN_DIGITS / 2));
 		const token = Array.from(bytes, (byte) =>
 			byte.toString(16).padStart(2, '0'),
 		).join('');
+		const origin = new URL(routed, location.href).origin;
+		if (origin !== location.origin && this.#sites?.has(origin)) {
+			if (this.config.dialing !== true)
+				throw new Error('Stomp: no call of this route');
+			await this.#sites.callToken(origin, token, routed);
+			return token;
+		}
 		await this.#ready;
 		await this.#call('callToken', { token, routed });
 		return token;
+	}
+	/** @internal a slot's agent: have this controller's worker hold `token` for one call of `routed` (callToken, asked by the hub) */
+	async siteCallToken(token: string, routed: string): Promise<void> {
+		await this.#ready;
+		await this.#call('callToken', { token, routed });
 	}
 	/**
 	 * The real URL a routed one stands for (the inverse of `route()`, with
@@ -3900,6 +3923,10 @@ export class StompController extends EventTarget {
 	/** whether this controller shows the sites from a pool of origins (ControllerInit.sitePool) */
 	get siteMode(): boolean {
 		return !!this.#sites;
+	}
+	/** @internal the site pool: whether the slot `origin` is left out while this page lives (it did not answer, or its agent is gone) */
+	siteOriginLeftOut(origin: string): boolean {
+		return !!this.#sites?.leftOut(origin);
 	}
 	/** @internal the site pool: whether `origin` is one of its slots */
 	siteOriginKnown(origin: string): boolean {
@@ -4048,6 +4075,9 @@ export class StompController extends EventTarget {
 				? { frameAncestors: config.frameAncestors }
 				: {}),
 			...(config.openTab ? { openTab: true } : {}),
+			// just call stomp: the slot's worker serves the call page and
+			// answers the calls of the hub's dialed frames (content slots)
+			...(config.dialing === true ? { dialing: true } : {}),
 			...(config.requestLog ? { requestLog: true } : {}),
 			...(config.errorPage ? { errorPage: config.errorPage } : {}),
 			...(config.names ? { names: config.names } : {}),
@@ -4365,6 +4395,10 @@ export class Frame extends EventTarget {
 	 * blank frames, once called; its steps are the frame's
 	 */
 	called: CalledFrame | null = null;
+	/** @internal just call stomp on the site pool: the element is about to show a slot's call page (#allowSlots) */
+	allowSlots() {
+		this.#allowSlots();
+	}
 	/** @internal just call stomp: a fresh element has the old one's place, and is the frame's from now on */
 	adopt(element: HTMLIFrameElement) {
 		this.element = element;

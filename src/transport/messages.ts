@@ -1089,6 +1089,16 @@ export const CALLED_URL_HEADER = 'x-stomp-called-url';
 /** just call stomp: the referrer policy of the call's navigation (its document's, or its link's), which the worker reads in place of the fetch's */
 export const CALL_POLICY_HEADER = 'x-stomp-call-policy';
 /**
+ * Just call stomp on the site pool's slots: the header of the worker's
+ * answer to a call whose document is another origin's to show (a site of
+ * another slot, or the hub's origin when a slot's agent is gone), naming the
+ * route there. The worker answers so in place of the 307 a navigation gets
+ * (a fetch would follow it to an origin whose worker does not control the
+ * call page), and the host calls again from a call page of that origin
+ * with a token for that origin's worker.
+ */
+export const CALL_MOVED_HEADER = 'x-stomp-call-moved';
+/**
  * Just call stomp: the key of the host's message to a call page, whose value
  * is the dial's token (CALL_TOKEN_DIGITS lowercase hex digits) and which
  * carries the one port the rest goes over

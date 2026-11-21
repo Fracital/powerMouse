@@ -1,0 +1,26 @@
+<!doctype html>
+<title>BUSY</title>
+<body>
+	<p id="out">busy</p>
+	<script>
+		// A heavy page: 200 ms of script out of every 250 (`?ms=` and `?every=`
+		// change them), and a style change on every animation frame. The
+		// jcs-slots suite runs it in a tab and measures the host page's own
+		// frames and input while it runs.
+		const query = new URLSearchParams(location.search);
+		const ms = Number(query.get('ms')) || 200;
+		const every = Number(query.get('every')) || 250;
+		const out = document.getElementById('out');
+		let spins = 0;
+		setInterval(() => {
+			const start = performance.now();
+			while (performance.now() - start < ms);
+			out.textContent = `busy ${++spins}`;
+		}, every);
+		const paint = () => {
+			out.style.transform = `translateX(${(performance.now() / 10) % 100}px)`;
+			requestAnimationFrame(paint);
+		};
+		requestAnimationFrame(paint);
+	</script>
+</body>

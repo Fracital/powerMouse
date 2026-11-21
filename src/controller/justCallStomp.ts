@@ -36,6 +36,22 @@
 // so a reload of the host shows the tab where it was, and every change of it
 // (an entry added, replaced or stepped to, a title) fires `entries` on the
 // Frame, for the host's own record of the tab.
+//
+// Under the site pool (ControllerInit.sitePool, docs/site-pool.md; the
+// content slots of docs/content-slots.md) every slot's worker serves the
+// call page on its own origin, and a site's documents are written into call
+// pages of its slot: another origin than the host's and than every other
+// slot's, so another process, other storage and another worker, as the
+// pool's navigations are. A call goes where the navigation would have begun
+// (the origin of its referrer, the document it leaves), or with none to the
+// site's slot (frame.go's choice), and its token is held by that origin's
+// worker (StompController.callToken asks the slot's agent). A worker whose
+// site is another slot's answers that it moved (src/server/called.ts), once
+// it has handed that slot's worker what it knew of the navigation, and the
+// call is made again from a fresh call page of that origin with a token of
+// its own. A slot that does not give a token (its agent is gone), or whose
+// call page does not say it is ready, is left out for the page, and the
+// call is made from the host's own origin instead.
 
 import { assetName } from '../config';
 import { navigationAnswer } from '../navigationAnswer';
@@ -84,6 +100,37 @@ function downloadName(disposition: string | null, url: string): string {
 	}
 	return 'download';
 }
+
+/** how many times one load may move to another origin (a redirect chain across the pool's slots) */
+const MOVES = 8;
+
+/** `url`'s path, query and fragment on `origin` (a route is one on every origin of the pool) */
+const on = (origin: string, url: string) => {
+	const { pathname, search, hash } = new URL(url);
+	return `${origin}${pathname}${search}${hash}`;
+};
+/** `url`'s origin, '' when it has none */
+const originOf = (url: string) => {
+	try {
+		return new URL(url, location.href).origin;
+	} catch (error) {
+		return '';
+	}
+};
+/**
+ * whether `pathname` is a route under `prefix` (the controller's address)
+ * that a slot whose agent is gone sent back to this page's worker, marked
+ * (`<scope>~home/<address>...`, HOMED_SEGMENT in src/server/serviceWorker.ts)
+ */
+const homed = (pathname: string, prefix: string) => {
+	const scope = prefix.replace(/[^/]+\/$/, '');
+	return (
+		pathname.startsWith(`${scope}~home/`) &&
+		`${scope}${pathname.slice(scope.length + '~home/'.length)}`.startsWith(
+			prefix,
+		)
+	);
+};
 
 export interface CalledEntry {
 	/** the page's real URL */
@@ -196,7 +243,11 @@ export function toldOf(data: unknown): Told | null {
 	return told as Told;
 }
 
-/** what a call page answers a call, else null (src/server/called.ts) */
+/**
+ * what a call page answers a call, else null (src/server/called.ts): the
+ * document's answer, a failure, or the route on another origin of the site
+ * pool that shows the document (CALL_MOVED_HEADER)
+ */
 export type CallAnswer =
 	| {
 			answered: {
@@ -208,11 +259,18 @@ export type CallAnswer =
 				disposition: string | null;
 			};
 	  }
-	| { failed: string };
+	| { failed: string }
+	| { moved: string };
 export function callAnswerOf(data: unknown): CallAnswer | null {
 	if (!data || typeof data !== 'object') return null;
-	const { answered, failed } = data as Record<string, any>;
+	const { answered, failed, moved } = data as Record<string, any>;
 	if (isText(failed, 1024)) return { failed };
+	if (isText(moved))
+		try {
+			return { moved: new URL(moved).href };
+		} catch (error) {
+			return null;
+		}
 	if (
 		answered &&
 		typeof answered === 'object' &&
@@ -290,11 +348,14 @@ function pageLoad(element: HTMLIFrameElement): Promise<void> {
 
 /**
  * A call over `port`, once the call page has its token and port: the page
- * says it is ready (else it is no call page, or it took another caller's
- * message: PAGE_WAIT_MS), then `call` goes and its answer comes back (within
- * CALL_WAIT_MS). Anything else the port hears is dropped.
+ * says it is ready, then `call` goes and its answer comes back (within
+ * CALL_WAIT_MS). Null when the page never says it is ready (PAGE_WAIT_MS):
+ * it is no call page (a slot's port that answers with something else, a
+ * slot whose worker went), or it took another caller's message; no call
+ * went then, so it may be made elsewhere. Anything else the port hears is
+ * dropped.
  */
-function dial(port: MessagePort, call: object): Promise<CallAnswer> {
+function dial(port: MessagePort, call: object): Promise<CallAnswer | null> {
 	return new Promise((resolve, reject) => {
 		let ready = false;
 		const fail = (why: string) => {
@@ -302,10 +363,10 @@ function dial(port: MessagePort, call: object): Promise<CallAnswer> {
 			port.onmessage = null;
 			reject(new Error(why));
 		};
-		let timer = setTimeout(
-			() => fail('The call page did not take the call'),
-			PAGE_WAIT_MS,
-		);
+		let timer = setTimeout(() => {
+			port.onmessage = null;
+			resolve(null);
+		}, PAGE_WAIT_MS);
 		port.onmessage = ({ data }) => {
 			if (!ready) {
 				if (data?.ready !== true || Object.keys(data).length !== 1) return;
@@ -502,12 +563,20 @@ export class CalledFrame {
 				break;
 			case 'token': {
 				// a frame of the document is to be called: a token for it, which
-				// only this page can have its worker hold (a route of its own)
+				// only this page can have the worker of the frame's origin hold
+				// (a route of its own, on this page's origin or a slot's)
 				let token: string | null = null;
 				try {
 					const routed = new URL(String(told.routed));
-					if (routed.href.startsWith(this.controller.directory.href))
-						token = await this.controller.callToken(routed.href);
+					const { controller } = this;
+					if (
+						(routed.origin === location.origin ||
+							controller.siteOrigins.includes(routed.origin)) &&
+						routed.pathname.startsWith(controller.directory.pathname) &&
+						!routed.username &&
+						!routed.password
+					)
+						token = await controller.callToken(routed.href);
 				} catch (error) {
 					// none: the frame's call is refused
 				}
@@ -603,24 +672,54 @@ export class CalledFrame {
 		};
 		// (the preference the document reads: its element's color-scheme,
 		// which the fresh element has too, from the same rules)
-		controller.reportViewport(
-			old.clientWidth,
-			old.clientHeight,
-			frameColorScheme(old),
-		);
+		const colorScheme = frameColorScheme(old);
+		controller.reportViewport(old.clientWidth, old.clientHeight, colorScheme);
 		controller.expectNavigation(frame, url);
 		// a reload and a step ask with the entry's own referrer, as natively
 		const referrer =
 			how.type === 'navigate'
 				? (how.referrer ?? '')
 				: (this.entries[this.index]?.referrer ?? '');
-		// the route and its token before the frame loads: the worker that
-		// answers the call page knows this controller then (a worker the
-		// browser stopped is woken and told it by these calls)
-		let routed: string;
-		let token: string;
+		// Start on the referrer's slot, whose worker knows the navigation, or
+		// on the destination's slot for an address typed in the UI. With no
+		// pool, or where the site's slot does not answer from here (a network
+		// that lets the host's port through alone, a slot left out since),
+		// the call page is this page's own origin's, as the pool's
+		// navigations fall back (docs/content-slots.md).
+		const slots = controller.siteOrigins;
+		const origins = [location.origin, ...slots];
+		const from = referrer ? originOf(referrer) : '';
+		const prefix = controller.directory.pathname;
+		const name = assetName(controller.config.assets, 'callPage');
+		// (the referrer the call is made with: a route is one on every origin
+		// of the pool, and the call page takes one of its own origin only;
+		// none once the call moved, where the worker it moved from handed it
+		// on)
+		let sent = referrer;
+		let at = location.origin;
+		let routed!: string;
+		/** no site is shown from `at` while this page lives: the site's slot now, or this page's origin */
+		const leave = async (tries: number) => {
+			controller.siteLeftOut(at);
+			const other =
+				tries < slots.length ? await until(controller.siteOrigin(url)) : null;
+			at =
+				other && other !== at && !controller.siteOriginLeftOut(other)
+					? other
+					: location.origin;
+			routed = on(at, routed);
+		};
+		let fresh!: HTMLIFrameElement;
+		let port!: MessagePort;
+		let answer!: CallAnswer;
+		let display!: string;
 		try {
-			routed = await until(controller.route(url));
+			if (controller.siteMode)
+				at =
+					slots.includes(from) && !controller.siteOriginLeftOut(from)
+						? from
+						: ((await until(controller.siteOrigin(url))) ?? location.origin);
+			routed = on(at, await until(controller.route(url)));
 			// a stop of the same route a moment ago is over for this call
 			const key = routed.split('#')[0];
 			const stopped = this.#stopped.get(key);
@@ -629,51 +728,120 @@ export class CalledFrame {
 				if (Date.now() < stopped)
 					await until(controller.navigationSent(routed).catch(() => {}));
 			}
-			token = await until(controller.callToken(routed));
+			for (let moves = 0, tries = 0; ; tries++) {
+				// the route's token before the frame loads, held by the worker of
+				// the origin the call is made from: the worker that answers the
+				// call page knows this controller then (a worker the browser
+				// stopped is woken and told it by these calls). A slot's comes
+				// through its agent, and a slot whose agent gives none (it went)
+				// is left out.
+				let token: string | null = null;
+				if (at !== location.origin) {
+					await until(
+						controller.siteViewport(
+							at,
+							old.clientWidth,
+							old.clientHeight,
+							colorScheme,
+						),
+					);
+					if (!controller.siteOriginLeftOut(at))
+						token = await until(controller.callToken(routed).catch(() => null));
+					if (!token) {
+						await leave(tries);
+						continue;
+					}
+					frame.allowSlots();
+				} else token = await until(controller.callToken(routed));
+				const page = `${at}${prefix}${name}`;
+				fresh = old.ownerDocument.createElement('iframe');
+				for (const { name, value } of [...old.attributes])
+					if (name !== 'src' && name !== 'srcdoc')
+						fresh.setAttribute(name, value);
+				display = fresh.style.getPropertyValue('display');
+				fresh.style.setProperty('display', 'none');
+				// (set before it is in the document: the frame's first navigation,
+				// which makes no history entry)
+				fresh.src = page;
+				old.after(fresh);
+				const channel = new MessageChannel();
+				port = channel.port1;
+				let heard: CallAnswer | null = null;
+				try {
+					const loaded = await until(
+						pageLoad(fresh).then(
+							() => true,
+							(error) => {
+								if (at === location.origin) throw error;
+								return false;
+							},
+						),
+					);
+					if (loaded) {
+						await until(controller.measureGeometry());
+						pending.routed = routed;
+						fresh.contentWindow!.postMessage({ [CALL_MESSAGE]: token }, at, [
+							channel.port2,
+						]);
+						heard = await until(
+							dial(port, {
+								routed,
+								type: how.type,
+								method: how.method ?? 'GET',
+								body: how.body ?? null,
+								referrer: sent ? on(at, sent) : '',
+								...(how.contentType && { contentType: how.contentType }),
+								...(how.policy && { policy: how.policy }),
+							}),
+						);
+					}
+					if (!heard && at === location.origin)
+						throw new Error('The call page did not take the call');
+					if (heard && 'failed' in heard) throw new Error(heard.failed);
+				} catch (error) {
+					fresh.remove();
+					port.close();
+					throw error;
+				}
+				if (!heard) {
+					// a slot's call page that did not load or never said it was
+					// ready (its port answers with something else, its worker
+					// went): no call went, so it is made from elsewhere
+					fresh.remove();
+					port.close();
+					pending.routed = null;
+					if (load !== this.#loads) return;
+					await leave(tries);
+					continue;
+				}
+				answer = heard;
+				if (!('moved' in answer)) break;
+				// another origin shows the document: called again from there,
+				// with what this origin's worker handed that one's (the referrer
+				// among it), and a token of that origin's worker
+				fresh.remove();
+				port.close();
+				pending.routed = null;
+				if (load !== this.#loads) return;
+				const to = new URL(answer.moved);
+				if (!origins.includes(to.origin))
+					throw new Error('The call moved to an origin of no slot');
+				if (
+					!(
+						to.pathname.startsWith(prefix) ||
+						(to.origin === location.origin && homed(to.pathname, prefix))
+					) ||
+					to.username ||
+					to.password
+				)
+					throw new Error('The call moved outside its controller');
+				if (++moves > MOVES || to.origin === at)
+					throw new Error('The call moved too often');
+				at = to.origin;
+				routed = to.href;
+				sent = '';
+			}
 		} catch (error) {
-			over();
-			if (error === STOPPED) return;
-			throw error;
-		}
-		const page = new URL(
-			assetName(controller.config.assets, 'callPage'),
-			controller.directory,
-		).href;
-		const fresh = old.ownerDocument.createElement('iframe');
-		for (const { name, value } of [...old.attributes])
-			if (name !== 'src' && name !== 'srcdoc') fresh.setAttribute(name, value);
-		const display = fresh.style.getPropertyValue('display');
-		fresh.style.setProperty('display', 'none');
-		// (set before it is in the document: the frame's first navigation,
-		// which makes no history entry)
-		fresh.src = page;
-		old.after(fresh);
-		const { port1: port, port2 } = new MessageChannel();
-		let answer: CallAnswer;
-		try {
-			await until(pageLoad(fresh));
-			await until(controller.measureGeometry());
-			pending.routed = routed;
-			fresh.contentWindow!.postMessage(
-				{ [CALL_MESSAGE]: token },
-				new URL(page).origin,
-				[port2],
-			);
-			answer = await until(
-				dial(port, {
-					routed,
-					type: how.type,
-					method: how.method ?? 'GET',
-					body: how.body ?? null,
-					referrer,
-					...(how.contentType && { contentType: how.contentType }),
-					...(how.policy && { policy: how.policy }),
-				}),
-			);
-			if ('failed' in answer) throw new Error(answer.failed);
-		} catch (error) {
-			fresh.remove();
-			port.close();
 			over();
 			// stopped: the frame keeps its document
 			if (error === STOPPED) return;
@@ -685,9 +853,9 @@ export class CalledFrame {
 			port.close();
 			return;
 		}
+		const got = 'answered' in answer ? answer.answered : null;
 		// an answer Chrome commits no document for (a 204, a download): the
 		// frame keeps its document and its entry, and the load is over
-		const got = 'answered' in answer ? answer.answered : null;
 		const kind = got && navigationAnswer(got.status, got.type, got.disposition);
 		if (got && kind) {
 			if (kind === 'download') {
@@ -715,13 +883,16 @@ export class CalledFrame {
 		// where the answer is from: the page's URL after its redirects, with
 		// the fragment asked for when the last one named none
 		let shown = url;
-		const real = 'answered' in answer ? answer.answered.url : '';
-		if (real) {
-			const after = new URL(real);
+		if (got?.url) {
+			const after = new URL(got.url);
 			if (!after.hash) after.hash = new URL(url).hash;
 			shown = after.href;
-			// the referrer of its navigations is the route it ended at
-			if (shown !== url) routed = await controller.route(shown);
+			// the referrer of its navigations is the route it ended at, on the
+			// origin it is shown from
+			if (shown !== url)
+				routed = got.routed.startsWith(`${at}${prefix}`)
+					? got.routed
+					: on(at, await controller.route(shown));
 		}
 		if (load !== this.#loads) {
 			fresh.remove();

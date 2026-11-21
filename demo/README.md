@@ -38,6 +38,7 @@ Environment variables:
 | `STOMP_ADBLOCK`           | on             | Set to `0` to turn off the content blocker (docs/adblock.md), a JSON object is its `adblock` option; `?noadblock` and `?adblock` do one visit, the toggle is kept                                                                                                                                                                                                         |
 | `STOMP_ECH_DNS`           | Cloudflare DoH | DNS-over-HTTPS endpoint epoxy asks for HTTPS records to offer real Encrypted Client Hello (docs/fingerprint.md), and HTTP/3 asks for a name's first request (docs/http3.md); `off` sends GREASE ECH only (`?noech` does one visit)                                                                                                                                        |
 | `STOMP_SITE_POOL`         | `0`            | More ports to answer on, a list or a number of free ones to take: the slots of the site pool (see Site pool; `0` or `off` for none, `?nopool` on the page leaves it out for a visit)                                                                                                                                                                                      |
+| `STOMP_SLOT_PORTS`        | `0`            | More ports to answer on for dialing's content slots (see Content slots), as `STOMP_SITE_POOL` takes them; only a page in dialing mode (`?mode=just-call-stomp`) uses them; `STOMP_SLOT_PORTS_PUBLIC` lists a front's                                                                                                                                                      |
 | `STOMP_DEFAULT_THEMES`    | Shooting Star  | Web Store ids, comma separated, of the themes a new profile has installed and not shown (docs/themes.md, The default theme); `0` for none, which the test suites use                                                                                                                                                                                                      |
 | `STOMP_TEST_TRANSPORT`    | unset          | Set to `1` to use `/test/mixed-transport.mjs` (epoxy that reaches the suites' fixture hosts: mixed-content's, and the names under a private suffix); test runs only                                                                                                                                                                                                       |
 
@@ -752,6 +753,24 @@ server's `Origin-Agent-Cluster: ?1`. A page that came through a front with
 no `STOMP_SITE_POOL_PUBLIC` has no pool; a slot the browser cannot reach
 is left out for the page and its sites are shown from the page's own
 origin (docs/site-pool.md, Fallbacks).
+
+## Content slots
+
+Off by default. With `STOMP_SLOT_PORTS` set (a list, or a number of free
+ports) the server answers on those ports as on its own, with
+`Origin-Agent-Cluster: ?1`, and the page in dialing mode
+(`?mode=just-call-stomp`) gives them to its controller as its site pool,
+with no spare slot (`warm: false`): each proxied site is written into the
+call page of its slot, an origin and a renderer process apart from the
+UI's, and a slot's service worker is registered only when the first site
+is shown from it (docs/content-slots.md). One port is enough to keep the
+pages off the UI's thread; more give the sites processes of their own.
+The default mode never uses them. Behind a front,
+`STOMP_SLOT_PORTS_PUBLIC` lists the front's ports (production's are 2053,
+2083, 2087 and 2096, docs/content-slots-deploy.md), as
+`STOMP_SITE_POOL_PUBLIC` does for the pool. Without them, with `?nopool`,
+or where a slot does not answer, the page writes the sites on its own
+origin. The ports are not a cookie boundary and not a sandbox.
 
 ## Cross-origin isolation
 

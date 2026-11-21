@@ -36,6 +36,16 @@
 // the client to the real origin of the route, as a vouched srcdoc document
 // is bound (./srcdocVouches.ts), so its loads are that origin's.
 //
+// Under the site pool (content slots, docs/content-slots.md) every slot's
+// worker serves the call page on its own origin, for its agent's controller
+// (which opted in as the hub's did), so a site's documents are written in
+// its slot's process. A token is held by the worker of the origin the call
+// is made from: the hub mints it and hands it to that slot's worker through
+// the slot's agent. A call whose document another origin shows (leaveSlot's
+// 307 to another slot, or to the hub's origin) is answered with
+// CALL_MOVED_HEADER instead, which ends the call; the host calls again from
+// a call page of that origin, with a token for that origin's worker.
+//
 // What the token does not close: on the host's own origin (the same-origin
 // fallback, no slot of its own) a script of that origin that got past the
 // inject can reach the call page's window, read what is written into it,
@@ -47,6 +57,7 @@ import { proxyOrigins } from '../routeURL';
 import {
 	CALL_HEADER,
 	CALL_MESSAGE,
+	CALL_MOVED_HEADER,
 	CALL_POLICY_HEADER,
 	CALL_TOKEN_DIGITS,
 	CALL_TOKEN_HEADER,
@@ -267,11 +278,19 @@ const callPageHTML = (
 				}
 				if (abort.signal.aborted) return;
 				if (settled) return close();
+				// another origin shows the document (a slot of the site pool):
+				// the host calls again from there, and this page is done
+				const moved = answer.headers.get(${JSON.stringify(CALL_MOVED_HEADER)});
 				const url = answer.headers.get(${JSON.stringify(CALLED_URL_HEADER)});
-				if (!url) return fail();
+				if (moved ? !text(moved, most) : !url) return fail();
 				settled = true;
 				removeEventListener('message', listen);
 				for (const other of pending) if (other !== close) other();
+				if (moved) {
+					release();
+					port.postMessage({ moved });
+					return;
+				}
 				response = answer;
 				port.postMessage({ answered: { url, routed: answer.url, status: answer.status, type: answer.headers.get('content-type'), disposition: answer.headers.get('content-disposition') } });
 				return;
@@ -407,7 +426,10 @@ export function callPageResponse(pathname: string): Response | null {
 			// document of the origin asks for its origin (on the host's own
 			// origin it changes nothing)
 			'origin-agent-cluster': '?1',
-			'referrer-policy': 'no-referrer',
+			// (no referrer policy of its own: the call's fetch carries the
+			// route of the document the navigation leaves as its referrer,
+			// which the worker reads, and the written document keeps the
+			// policy container of the page, which its own policy changes)
 		},
 	});
 }
@@ -541,12 +563,16 @@ export async function calledEvent(
 /**
  * The answer the handlers gave the call's event. A redirect within the
  * scope goes as it is (the page's fetch follows it, and calls again with
- * the same token); one anywhere else ends the call, as does the last
- * answer, which names the page's real URL.
+ * the same token); one to a route on another origin of the site pool (a
+ * slot's, or the hub's: `isPoolOrigin`) ends the call and is told as moved
+ * there (CALL_MOVED_HEADER: the page's fetch would follow it to an origin
+ * whose worker does not control the call page); one anywhere else ends the
+ * call, as does the last answer, which names the page's real URL.
  */
 export async function answerOf(
 	event: FetchEvent,
 	realURL: (url: string) => string | null,
+	isPoolOrigin: (origin: string) => boolean = () => false,
 ): Promise<Response> {
 	const answer = (event as FetchEvent & { answered?: Promise<Response> | null })
 		.answered;
@@ -583,6 +609,17 @@ export async function answerOf(
 				chain.href = next.href;
 				chain.awaiting = false;
 				return response;
+			}
+			if (next.origin !== self.location.origin && isPoolOrigin(next.origin)) {
+				finish();
+				void response.body?.cancel();
+				return new Response(null, {
+					status: 204,
+					headers: {
+						[CALL_MOVED_HEADER]: next.href,
+						'cache-control': 'no-store',
+					},
+				});
 			}
 		} catch (error) {
 			// no URL: the call ends here

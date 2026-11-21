@@ -167,6 +167,24 @@ function start(init: SiteAgentInit, port: MessagePort, host: string) {
 				await ready;
 				return [await controller!.goneClients(clients), []];
 			},
+			// just call stomp: the host's Stop of a call made from this origin,
+			// or the same route called again
+			navigation: async ({ op, routed, early }) => {
+				await ready;
+				if (op === 'stop')
+					await controller!.stopNavigation(String(routed), early === true);
+				else await controller!.navigationSent(String(routed));
+			},
+			// just call stomp: a token of the hub's for a call page of this origin
+			callToken: async ({ token, routed }) => {
+				await ready;
+				try {
+					await controller!.siteCallToken(String(token), String(routed));
+					return [true, []];
+				} catch (error) {
+					return [false, []];
+				}
+			},
 			// the isolated RemoteController's commands for a frame of the host's
 			// page this origin shows (frame.ts frameCommand)
 			command: async ({ index, command }) => {

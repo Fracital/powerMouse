@@ -496,7 +496,10 @@ function registerController(
 				const ready = await server;
 				let target: URL | null = null;
 				try {
-					target = new URL(routed, location.origin);
+					// (a call a slot whose agent is gone sent back here is held
+					// for its marked route, HOMED_SEGMENT, and judged as the
+					// route without the mark)
+					target = new URL(unhomed(new URL(routed, location.origin).href));
 				} catch (error) {
 					// no URL: refused below
 				}
@@ -506,7 +509,11 @@ function registerController(
 					target.origin !== location.origin ||
 					!target.pathname.startsWith(directory) ||
 					ready.realURL(target.href) === target.href ||
-					!allowCallToken(token, target.href, directory)
+					!allowCallToken(
+						token,
+						new URL(routed, location.origin).href,
+						directory,
+					)
 				)
 					throw new Error('Stomp: no call of this route');
 			},
@@ -2166,6 +2173,15 @@ function unmarkHomed(request: Request): Response | null {
 	});
 }
 
+/** `url` without the mark of a navigation a slot sent back (HOMED_SEGMENT) */
+function unhomed(url: string): string {
+	const parsed = new URL(url);
+	const scope = new URL(self.registration.scope).pathname;
+	if (!parsed.pathname.startsWith(`${scope}${HOMED_SEGMENT}`)) return url;
+	parsed.pathname = `${scope}${parsed.pathname.slice(scope.length + HOMED_SEGMENT.length)}`;
+	return parsed.href;
+}
+
 /**
  * A request under an address no controller of this run of the worker has:
  * the network's, unless it is a navigation at the address of a slot's
@@ -2935,7 +2951,10 @@ self.addEventListener('fetch', (event: FetchEvent) => {
 	// just call stomp: a call of a controller that opted in is answered as
 	// the navigation it stands for (./called.ts); for any other it is a
 	// request like any other
-	if (isCall(event.request) && callable(event.request.url, controllerFor)) {
+	if (
+		isCall(event.request) &&
+		callable(unhomed(event.request.url), controllerFor)
+	) {
 		event.respondWith(answerCall(event));
 		return;
 	}
@@ -2944,6 +2963,10 @@ self.addEventListener('fetch', (event: FetchEvent) => {
 
 async function answerCall(event: FetchEvent): Promise<Response> {
 	const realURL = (url: string) => {
+		// (a call a slot whose agent is gone sent back here, HOMED_SEGMENT:
+		// unmarkHomed answers it with the route without the mark, which the
+		// call page's fetch follows)
+		url = unhomed(url);
 		const ready = controllerFor(new URL(url).pathname)?.ready;
 		try {
 			const real = ready?.realURL(url);
@@ -2958,12 +2981,19 @@ async function answerCall(event: FetchEvent): Promise<Response> {
 			const real = realURL(url);
 			return real ? new URL(real).origin : null;
 		},
-		(url) => controllerFor(new URL(url).pathname)?.directory,
+		(url) => controllerFor(new URL(unhomed(url)).pathname)?.directory,
 	);
 	if (!called)
 		return new Response(null, { status: 403, statusText: 'Forbidden' });
 	dispatch(called);
-	return answerOf(called, realURL);
+	// (a redirect to another origin of the controller's pool, a slot's or
+	// the hub's, is told to the host as moved: leaveSlot, toHub)
+	const ref = controllerFor(new URL(unhomed(event.request.url)).pathname);
+	return answerOf(
+		called,
+		realURL,
+		(origin) => !!ref && proxyOrigins(ref.config).includes(origin),
+	);
 }
 
 function dispatch(event: FetchEvent) {

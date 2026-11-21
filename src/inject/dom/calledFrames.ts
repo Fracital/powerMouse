@@ -27,7 +27,18 @@
 // there are messages alone: nothing here reads the frame's window, so a
 // frame on another origin is called the same way. (Where the frame is of
 // this origin, its URL is checked as well before the call goes.)
+//
+// Under the site pool a frame of another site is written in its slot, as
+// the tab's frame is (justCallStomp.ts): the call goes where the frame's
+// navigation begins (its referrer's origin: this document's for a src the
+// page set), with a token for that origin's worker, and when the worker
+// there says the document moved to another slot, the frame is sent to that
+// slot's call page (location.replace, which a window of another origin
+// takes) and called again from there, with a token for that slot's worker.
+// A frame is never moved to the host's own origin: one whose slot is left
+// out stays unwritten (fail closed below the top).
 
+import { proxyOrigins } from '../../routeURL';
 import {
 	CALL_MESSAGE,
 	CALL_WAIT_MS,
@@ -44,6 +55,8 @@ type Globals = typeof globalThis & Record<string, any>;
 const READY_WAIT_MS = 10_000;
 /** the longest URL a message on a call's port names */
 const MAX_URL = 32_768;
+/** how many times one call may move to another slot */
+const MOVES = 8;
 
 type How = {
 	type: CalledSession['type'];
@@ -71,6 +84,9 @@ interface Kid {
 		routed: string;
 		how: How;
 		token: Promise<string | null>;
+		/** the referrer the navigation began with, when it moved to another slot (the entry's) */
+		first?: string;
+		moves?: number;
 	} | null;
 	/** the frame was sent to its call page before: the next is a replace of it */
 	shown: boolean;
@@ -82,6 +98,8 @@ interface Kid {
 	writing: boolean;
 	/** the route of the document shown, the referrer of its navigations */
 	routed: string;
+	/** the call page the frame is called from next: this document's frames', or another slot's (a site of the pool) */
+	page: string;
 }
 
 /** what a called frame's document tells (calledHooks.ts) */
@@ -149,13 +167,18 @@ function toldOf(data: unknown, File: typeof globalThis.File): Told | null {
 	return told as Told;
 }
 
-/** what a frame's call page answers its call, else null (src/server/called.ts) */
+/** what a frame's call page answers its call, else null (src/server/called.ts): the document's answer, a failure, or the route on another slot that shows it */
 function answerOf(
 	data: unknown,
-): { url: string; routed: string } | { failed: string } | null {
+):
+	| { url: string; routed: string }
+	| { failed: string }
+	| { moved: string }
+	| null {
 	if (!data || typeof data !== 'object') return null;
-	const { answered, failed } = data as Record<string, any>;
+	const { answered, failed, moved } = data as Record<string, any>;
 	if (isText(failed, 1024)) return { failed };
+	if (isText(moved)) return { moved };
 	if (
 		answered &&
 		typeof answered === 'object' &&
@@ -207,6 +230,52 @@ export function calledFrames(
 		return url.href;
 	})();
 	const scope = scopePrefix(client);
+	// the site pool: every origin of the pool has the same routes (the
+	// scope's path on each), and a frame's call page is on one of them. A
+	// slot's descendants may be on another slot, never on the hub's origin
+	const scopePath = new URL(scope).pathname;
+	const sites = client.config.sites;
+	const origins = [
+		origin,
+		...(sites ? (sites.origins ?? []) : proxyOrigins(client.config)),
+	];
+	/** `url` as a route of the pool's origin it names, else '' */
+	const routeOn = (url: string) => {
+		if (!url) return '';
+		try {
+			const to = new URL(url, page);
+			return origins.includes(to.origin) &&
+				to.pathname.startsWith(scopePath) &&
+				!to.username &&
+				!to.password
+				? to.href
+				: '';
+		} catch (error) {
+			return '';
+		}
+	};
+	/** the call page of the frames on `at`, an origin of the pool */
+	const pageOn = (at: string) => {
+		const url = new URL(kidPage);
+		return `${at}${url.pathname}${url.search}`;
+	};
+	/** the call page a navigation with `referrer` is called from: its document's origin */
+	const pageFor = (referrer: string) => {
+		try {
+			const at = new URL(referrer).origin;
+			if (origins.includes(at)) return pageOn(at);
+		} catch (error) {
+			// no referrer: this document's
+		}
+		return kidPage;
+	};
+	/** `routed` on the origin of the call page `on` */
+	const rebased = (routed: string, on: string) => {
+		const { pathname, search, hash } = new URL(routed);
+		return `${new URL(on).origin}${pathname}${search}${hash}`;
+	};
+	/** the windows of frames sent to another origin's call page, not written yet */
+	const waiting = new WeakSet<object>();
 	const kids = new WeakMap<Element, Kid>();
 	/**
 	 * the frames sent out of the document, by the page's URL: the parser's
@@ -246,9 +315,12 @@ export function calledFrames(
 		const win = frameWindow(element);
 		if (!win || !kid.shown) {
 			kid.shown = true;
-			return kidPage;
+			return kid.page;
 		}
-		win.location.replace(kidPage);
+		win.location.replace(kid.page);
+		// (a call page of another origin, which this realm cannot read, takes
+		// no message of the page's until its document is written)
+		if (new URL(kid.page).origin !== origin) waiting.add(win);
 		return true;
 	};
 
@@ -261,6 +333,9 @@ export function calledFrames(
 		return url.href;
 	})();
 	client.callPageWindow = (receiver) =>
+		(typeof receiver === 'object' &&
+			receiver !== null &&
+			waiting.has(receiver)) ||
 		hrefOf(receiver as Window).startsWith(pages);
 
 	client.callFrame = (element, url, to) => {
@@ -295,9 +370,12 @@ export function calledFrames(
 				port: null,
 				writing: false,
 				routed: '',
+				page: kidPage,
 			};
 			kids.set(element, kid);
 		}
+		// (called from this document's origin, whose worker knows the page)
+		kid.page = kidPage;
 		kid.want = {
 			url,
 			routed: absolute,
@@ -324,7 +402,7 @@ export function calledFrames(
 		// (a frame of this origin on another page is no call page; one of
 		// another origin cannot be read, and its call page says it is one)
 		const href = hrefOf(win);
-		if (!win || !kid.want || (href !== '' && href !== kidPage)) return;
+		if (!win || !kid.want || (href !== '' && href !== kid.page)) return;
 		Reflect.apply(stop, event, []);
 		void call(element, kid, win);
 	};
@@ -380,7 +458,7 @@ export function calledFrames(
 		});
 		Reflect.apply(windowPost, win, [
 			{ [CALL_MESSAGE]: token },
-			origin,
+			new URL(kid.page).origin,
 			[port2],
 		]);
 		const answer = await answered;
@@ -390,6 +468,30 @@ export function calledFrames(
 			return;
 		}
 		kid.calling = null;
+		// another slot shows the document: the frame goes to that slot's
+		// call page and is called from there, with what this one's worker
+		// handed that one's (the referrer among it) and a token for that
+		// slot's worker
+		if ('moved' in answer) {
+			port.close();
+			const moved = routeOn(answer.moved);
+			const moves = (want.moves ?? 0) + 1;
+			if (!moved || moves > MOVES) return;
+			const at = new URL(moved).origin;
+			if (at === new URL(kid.page).origin) return;
+			kid.page = pageOn(at);
+			kid.want = {
+				...want,
+				routed: moved,
+				token: askToken(moved),
+				first: want.first ?? how.referrer,
+				moves,
+				how: { ...how, referrer: '' },
+			};
+			reach(element, kid);
+			return;
+		}
+		waiting.delete(win);
 		let shown = want.url;
 		try {
 			const after = new URL(answer.url);
@@ -398,7 +500,7 @@ export function calledFrames(
 		} catch (error) {
 			// no URL: the one asked for
 		}
-		const route = answer.routed || want.routed;
+		const route = routeOn(answer.routed) || want.routed;
 		if (how.type === 'navigate') {
 			const made: KidEntry = {
 				url: shown,
@@ -406,7 +508,7 @@ export function calledFrames(
 				id: id(),
 				document: ++kid.documents,
 				state: null,
-				referrer: how.referrer,
+				referrer: want.first ?? how.referrer,
 				routed: route,
 			};
 			if (how.replace && kid.index >= 0) {
@@ -453,7 +555,9 @@ export function calledFrames(
 		to: string,
 		how: How,
 	) => {
-		kid.want = { url, routed: to, how, token: askToken(to) };
+		kid.page = pageFor(how.referrer);
+		const routed = rebased(to, kid.page);
+		kid.want = { url, routed, how, token: askToken(routed) };
 		reach(element, kid);
 	};
 
@@ -478,7 +582,9 @@ export function calledFrames(
 				} catch (error) {
 					// none
 				}
-				const value = to.startsWith(scope) ? await askToken(to) : null;
+				// (a route of any origin of the pool: the frame's frame may be on
+				// another slot)
+				const value = routeOn(to) === to && to ? await askToken(to) : null;
 				if (port === kid.port) send(port, { token: { id: what.id, value } });
 				break;
 			}
@@ -520,13 +626,9 @@ export function calledFrames(
 					});
 					break;
 				}
-				let to = String(what.routed ?? '');
-				try {
-					to = new URL(to, page).href;
-				} catch (error) {
-					to = '';
-				}
-				if (!to.startsWith(scope)) break;
+				// (a route of the frame's own origin, which may be another slot)
+				const to = routeOn(String(what.routed ?? ''));
+				if (!to) break;
 				const body = what.entries
 					? await encoded(what.entries, what.enctype ?? undefined)
 					: null;

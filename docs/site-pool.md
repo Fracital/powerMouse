@@ -610,6 +610,140 @@ it is now, at the commit before; the history.length a landed document
 reads at its first script among them, below under "Isolation mode's
 halves of the suites").
 
+## Just call stomp on the slots
+
+Just call stomp (src/controller/justCallStomp.ts) never navigates a frame
+to a site: each document is written into a fresh frame of one call page
+the worker serves (`<directory><callPage>`, docs/dialing.md). With a pool, every slot's worker
+serves that page on its own origin, and a site's documents are written
+into call pages of its slot. So a site is another origin, process,
+storage and worker than the host's page and every other slot's, as the
+pool's navigations are, and the host's page (the demo's UI) is never the
+thread a proxied page runs on. The slots, their assignment, the spares,
+the fallback and the agents are the pool's own: a controller with
+`sitePool: { origins }` and `justCallStomp(frame, url)` is all it takes.
+
+**Where a call is made.** From the origin the navigation would have
+begun on: the origin of its referrer (the route of the document it
+leaves), whose worker knows what that document told it (its hint, its
+policies, the redirect chain), or, with no referrer (a typed URL, a
+reload of the first entry), the site's slot, as `frame.go()` picks it.
+The worker answers the call as the frame's navigation, leaveSlot
+included. When the site is another slot's, leaveSlot hands that slot's
+worker the arrival and answers 307, which a fetch would follow to an
+origin whose worker does not control the call page, so the call's
+answer is a 204 with `x-stomp-call-moved` naming the route there
+(src/server/called.ts). The host removes that frame and calls again from
+a fresh call page of the slot it names, with no referrer of its own (the
+arrival carries it) and a fresh token, which the hub mints and hands that
+slot's worker through its agent (a token is good on the origin it was
+given to only). The same goes for a redirect chain that crosses
+slots, at most eight times.
+
+**Nested frames.** A called document is the host of its frames' calls
+(src/inject/dom/calledFrames.ts). A frame the page sends somewhere is
+first called from the page's own slot (its call page, `<callPage>?1`
+there); a frame of the page's own site stays there, one of another site
+is answered as moved, and the page sends the frame to that slot's call
+page with `location.replace` (which a window of another origin takes and
+which makes no history entry) and calls it from there. The page's realm
+cannot read such a frame's location, so the frame is followed by what was
+done to it, and a page's message to it before its call is dropped as to
+any call page. Its next documents are called from the origin of its own
+document, and move again as needed.
+
+**What the browser sees**, measured in the jcs-slots suite against Chrome
+157 (a page of 127.0.0.1 with a frame of localhost):
+
+| observation                                           | natively | one origin | slots  |
+| ----------------------------------------------------- | -------- | ---------- | ------ |
+| frame of another site, timers under a 300 ms spin     | 5 ms     | 301 ms     | 5-6 ms |
+| frame of the page's site, same                        | 300 ms   | 301 ms     | 300 ms |
+| message to the frame of another site and back, median | 0.3 ms   | 0.1 ms     | 0.4 ms |
+| the other slot's frame reads the page's localStorage  | no       | yes        | no     |
+| the page reads the other site's document or location  | no       | (emulated) | no     |
+
+Every frame's `src` and real location is a call page of its site's slot;
+a link to another site lands on that site's slot with Chrome's Referer
+and fetch metadata; Back writes the first page on its slot again; the
+host's history.length does not move.
+
+**The host's own thread.** The point of a content origin for the demo is
+its UI: in one origin a heavy page is the UI's main thread. With a page
+spinning 200 ms of every 250 in a tab, the host's key input waited 141 to
+148 ms (p95) and its animation frames came every 183 to 200 ms (p95, 16
+over 100 ms in 4 s) in one origin, and 2 to 10 ms and 17 ms (none over
+100 ms) from any number of slots, one included.
+
+**Every mode side by side** (Chrome 157, one fresh browser a mode; a page
+of 127.0.0.1 with a frame of localhost; the busy page in a tab of its
+own; MB is the Pss of every Chrome process, idle, then with one site and
+with two):
+
+| mode                 | MB            | other site's timers | shares raw storage | key input p95, busy tab | frames over 50 ms in 6 s |
+| -------------------- | ------------- | ------------------- | ------------------ | ----------------------- | ------------------------ |
+| Chrome, no proxy     | 162, 171, 190 | 8 ms                | no                 | 153 ms                  | 24                       |
+| navigated            | 348, 401, 417 | 300 ms              | yes                | 157 ms                  | 24                       |
+| navigated, 3 slots   | 592, 694, 658 | 5 ms                | no                 | 2 ms                    | 0                        |
+| called               | 417, 468, 486 | 300 ms              | yes                | 155 ms                  | 24                       |
+| called, 3 slots      | 479, 592, 675 | 5 ms                | no                 | 1 ms                    | 0                        |
+| called, content port | 475, 452, 485 | 300 ms              | yes                | 1 ms                    | 0                        |
+
+Chrome itself holds the UI to the busy page when the page is of the UI's
+own origin (the first row), so the UI's own origin is the wrong place for
+any page. One content port (the last row) frees the UI as the slots do,
+and keeps the sites in one process among themselves.
+
+**How many slots** (Chrome 157, headless, machine load about 35; two
+runs each; twelve tabs of twelve sites opened one after another, then a
+thirteenth site):
+
+| slots | first page | each site's first page, median | 13th site | MB idle | MB, 12 sites | renderers | UI input p95 |
+| ----- | ---------- | ------------------------------ | --------- | ------- | ------------ | --------- | ------------ |
+| none  | 326-380 ms | 190-219 ms                     | 185-202   | 394-404 | 461-473      | 3         | 145-148 ms   |
+| 1     | 515-529    | 189-242                        | 198-260   | 462-482 | 544-561      | 4         | 2-4 ms       |
+| 5     | 586-687    | 194-212                        | 178-252   | 509-537 | 816-826      | 8         | 2-9 ms       |
+| 10    | 439-990    | 311-482                        | 192-193   | 527-535 | 1140-1164    | 13        | 3-4 ms       |
+| 20    | 485-513    | 403-426                        | 275-286   | 524-529 | 1309-1323    | 16        | 5-6 ms       |
+| 32    | 515-816    | 372-459                        | 257-313   | 510-546 | 1298-1362    | 16        | 2-10 ms      |
+
+A slot nothing was shown from costs nothing (MB idle is flat from 5 to 32
+slots: the agents start with their first site, and the page keeps one or
+two spares). A slot in use costs some 65 to 70 MB with a small page in it
+(its renderer with the agent, its worker's share) and its start, 0.2 to
+0.3 s, which every site that is the first of its slot waits for unless a
+spare took it: with more slots than sites, every new site is such a
+first. Five slots keep a site's first page where one slot has it, and ten
+or more do not, so five is the cap the demo recommends (DEPLOY notes in
+the change). One port alone already takes the pages off the UI's thread.
+
+**The demo.** `STOMP_SLOT_PORTS` (a list or a number of ports, as
+`STOMP_SITE_POOL`; off by default) and, behind a front,
+`STOMP_SLOT_PORTS_PUBLIC` are the content slots the page in dialing mode
+(`?mode=just-call-stomp`) gives its controller as its pool, with
+`warm: false` (a slot starts with its first site, never as a spare); the
+default mode never uses them. docs/content-slots.md is the design
+(assignment, laziness, fallbacks, what the ports are not) and
+docs/content-slots-deploy.md what production needs.
+
+**Fallbacks.** Where a site's slot does not answer (left out by the hub,
+Fallbacks below) the call is made from the host's own origin, as the
+pool's navigations fall back: a typed address, a link whose referrer's
+slot went silent (the hub finds it out when it tells that slot's agent the
+viewport, 4 s at most), and a move that a slot's worker sends back to the
+hub (to the hub's origin, with or without the `~home` mark, which the
+hub's worker takes as a call too). A frame of a called document is never
+sent to the hub's origin: a frame whose site moved there stays unwritten.
+
+**Not yet:** a cross-site step of a frame's own history goes through the
+slot of the entry's referrer first (an extra call page there, then the
+move); the scroll of a document on a slot is not read when it is left
+(another origin; it needs the document to report it over its port), so
+Back to another document starts at the top; and a slot whose port stops
+answering while the hub still counts it live leaves the call waiting on
+its call page (the call page's answer has no bound before the worker's
+fetch is done).
+
 ## What a deployment needs
 
 - The proxy's host answering on the pool's ports as it does on its own,

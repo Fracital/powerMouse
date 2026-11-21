@@ -144,6 +144,18 @@ export type AgentBound = {
 	geometry: [HostGeometry];
 	/** which of these service worker clients the slot's worker does not know (the hub's ClientFrames) */
 	goneClients: [string[], string[]];
+	/**
+	 * just call stomp on the slots: have the slot's worker hold `token` for
+	 * one call of the routed URL `routed` on the slot's origin
+	 * (StompController.callToken); false when the worker refuses it
+	 */
+	callToken: [{ token: string; routed: string }, boolean];
+	/**
+	 * just call stomp on the slots: the host's Stop of a call made from this
+	 * slot (`stop`, StompController.stopNavigation), or the route called
+	 * again (`sent`, navigationSent), for the slot's worker
+	 */
+	navigation: [{ op: 'stop' | 'sent'; routed: string; early?: boolean }];
 	history: [
 		{ index: number; run: number; op: SiteHistoryOp },
 		SiteHistoryAnswer | null,
@@ -578,6 +590,8 @@ export class SiteHub {
 	 * agents' too.
 	 */
 	warm() {
+		if (!this.#host.init.sitePool || this.#host.init.sitePool.warm === false)
+			return;
 		if (this.#warming) return;
 		this.#warming = true;
 		const idle =
@@ -621,6 +635,10 @@ export class SiteHub {
 	leaveOut(origin: string) {
 		if (this.has(origin))
 			this.#kill(origin, new Error(`the agent of ${origin} is gone`));
+	}
+	/** whether no site is shown from the slot `origin` while this page lives (#kill) */
+	leftOut(origin: string): boolean {
+		return this.#dead.has(origin);
 	}
 	/** the agent's frame is still in this page (the host's own code may have removed it) */
 	#live(agent: Agent): boolean {
@@ -845,6 +863,35 @@ export class SiteHub {
 					.catch(() => {}),
 			),
 		);
+	}
+	/**
+	 * just call stomp: have the worker of the slot `origin` hold `token` for
+	 * one call of `routed` (AgentBound.callToken). It throws when the slot
+	 * is left out, its agent did not start or does not answer within
+	 * AGENT_CALL_MS (it is left out then, as #ask leaves it), or its worker
+	 * refuses the route (the slot stays): the call is not made from there.
+	 */
+	async callToken(origin: string, token: string, routed: string) {
+		if (!this.has(origin) || this.#dead.has(origin))
+			throw new Error(`the slot ${origin} is left out`);
+		const agent = this.#agent(origin);
+		await agent.ready;
+		if (!(await this.#ask(agent, 'callToken', { token, routed })))
+			throw new Error('Stomp: no call of this route');
+	}
+	/** tell the worker of the slot `origin` a Stop of a call from it, or that its route is called again (AgentBound.navigation); never throws */
+	async navigation(
+		origin: string,
+		op: AgentBound['navigation'][0],
+	): Promise<void> {
+		const agent = this.#agents.get(origin);
+		if (!agent) return;
+		try {
+			await agent.ready;
+			await this.#ask(agent, 'navigation', op);
+		} catch (error) {
+			// the agent is gone: its worker answers nothing more
+		}
 	}
 	/** tell the worker of one slot what the hub's own was told (FannedMethod), once it heard */
 	async applyTo(origin: string, method: FannedMethod, args: unknown) {
