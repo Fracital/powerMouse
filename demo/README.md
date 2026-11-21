@@ -68,6 +68,16 @@ and when the last Tor-mode tab closes. HTTP/3, UDP, WebTransport and the
 external ECH DNS lookup are off. A missing Tor relay stops Tor-mode browsing rather than
 trying the normal Wisp endpoint.
 
+**The in-browser Tor client** (a prototype, docs/tor-over-wisp.md): with
+`?tor=client` on the page (Tor mode for that visit) or `STOMP_TOR_CLIENT=1`
+on the server, Tor mode needs no relay. The transport worker runs arti
+(tor-js) and builds the circuits itself; `/wisp/` carries only TCP to Tor
+relays, so the server never sees a destination. WebSockets are refused.
+`node test/tor-client-smoke.mjs` checks it against the real Tor network.
+
+The server-side relay below sees every destination of every visitor and is
+to be removed once the client is the default.
+
 Run a Tor SOCKS5 listener on the demo server, then start the demo with:
 
 ```sh

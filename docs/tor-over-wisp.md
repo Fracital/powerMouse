@@ -1,6 +1,7 @@
 # Tor over Wisp: a Tor client in the browser
 
-Status: design, with an opt-in prototype (`?tor=client`, "Prototype" below).
+Status: design, with an opt-in prototype (`?tor=client`, "Prototype" below)
+that reaches the real Tor network.
 Today's Tor mode (docs/tor.md) is server-side Tor egress: the demo's server
 runs a Wisp relay (`/wisp-tor/`, `demo/torWisp.js`) that hands each TCP stream
 to a tor daemon's SOCKS port. That relay sees every destination host and port
@@ -294,6 +295,70 @@ opt-in.
 - **Two tabs, two clients**: each transport worker would run a client and
   pick circuits apart; one client per origin and profile in a SharedWorker
   (as the carrier host is) is the remedy ("Remaining work").
+
+## Prototype
+
+`?tor=client` on the demo (it turns Tor mode on for the visit), or
+`STOMP_TOR_CLIENT=1` on the server for every Tor-mode visit. Tor mode's
+transport is then `demo/public/tor-client/transport.mjs` instead of epoxy
+over `/wisp-tor/`: tor-js 0.4.4 (`node_modules/tor-js`, served at
+`/tor-client/tor-js/`), its socket provider a Wisp v1 client of its own over
+the demo's ordinary `/wisp/`, its storage IndexedDB `stomp-tor-client` (the
+transport worker's origin; not the `tor` profile's, so it survives the
+profile), `request()` tor-js's `fetch` with an isolation key per top-level
+site (`$stomp$network`) and session nonce, `connect()` refused.
+`newCircuit(site)` and `newIdentity()` exist on the transport and are not
+wired to the UI yet.
+
+`node test/tor-client-smoke.mjs` (after `node build.js`; `SKIP_NETWORK=1`
+skips it, and it is not a suite: it needs the public Tor network) starts a
+demo server of its own with holyWisp logging every stream, opens the demo
+with `?tor=client` in the suites' Chrome (`--host-resolver-rules` resolves no
+name but localhost, so nothing but the Wisp connection leaves), loads
+`https://check.torproject.org/api/ip`, `https://api.ipify.org/?format=json`
+and the first again, keeps the session 90 s, opens a fresh host page (a new
+transport worker and client) and loads the first site once more. It checks
+that the site says `IsTor: true`, that every Wisp stream went to an IP
+address (never a name), and that the fresh client went only to relays the
+first one had (its guards were kept).
+
+Measured on 2026-11-21 from this machine (load average 50 to 95 on 32 cores),
+five runs, the last four complete:
+
+| What                                                              | Measured                                       |
+| ----------------------------------------------------------------- | ---------------------------------------------- |
+| Cold bootstrap (consensus, 8 certificates, 9566 microdescriptors) | 2.0 s, 3.7 s, 2.0 s, 2.0 s                     |
+| Bootstrap with the directory kept in IndexedDB                    | 1.3 s, 1.1 s, 1.4 s, 1.0 s                     |
+| First site, submitted before bootstrap ended                      | 13.1 s (one slow circuit), 1.0 s, 3.6 s, 3.1 s |
+| Another site (a circuit of its own)                               | 2.2 s, 1.3 s, 1.6 s, 2.3 s                     |
+| The first site again (its circuit reused)                         | 1.4 s, 1.6 s, 1.5 s, 1.2 s                     |
+| Wisp streams per session                                          | 3 to 5, all `ip:orport` (443, 445, 9001, 9200) |
+| Exits: two sites / one site twice                                 | different in every run / the same in every run |
+| `tor_js_bg.wasm`                                                  | 5,083,815 bytes, 1.99 MB gzip                  |
+| tor-js's module (`wasm-file` entry) / our transport               | 139 KB (32 KB gzip) / 9 KB                     |
+
+Guards: a fresh client went back to the first one's guards when the first
+session had lasted 90 s, and picked new ones when it had lasted under 20 s
+(two runs): arti writes its state on its own schedule, so a very short visit
+keeps no guards. One earlier run ended with Chrome gone during the first load,
+not seen again.
+
+What the prototype does not do yet:
+
+- **No connection reuse**: tor-js's `fetch` opens a new Tor stream and a new
+  TLS handshake per request (its log shows a handshake for each), HTTP/1.1
+  only. A real page's tens of requests each pay a round trip through the
+  circuit. The stream API with epoxy on top (pools, HTTP/2) is the fix.
+- **No WebSocket** (refused), no HTTP/3, no WebTransport, as intended for now.
+- **No progress**: the status says "Tor route selected" while the client
+  bootstraps in the worker, and a load waits for it.
+- **One client per transport worker**: two tabs run two clients (the second
+  without the storage's lock keeps its state in memory only).
+- **The ordinary `/wisp/`**: no Tor-only endpoint, so the server does not
+  refuse non-relay destinations for Tor mode.
+- Not covered: the isolated mode's other paths (the sync relay of WebKit's
+  frozen pages still goes to the server's `/stomp-tor/sync-relay`, which needs
+  the old relay), offline.html, Firefox.
 
 ## Remaining work to make this the default Tor mode
 

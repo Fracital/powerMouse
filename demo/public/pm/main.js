@@ -216,6 +216,15 @@ const TOR_WISP = (() => {
 		return null;
 	}
 })();
+// The in-browser Tor client (docs/tor-over-wisp.md), opt-in: Tor mode's
+// circuits are built in the transport worker and the Wisp server carries
+// only TCP to Tor relays, so neither it nor this server sees where a page
+// goes. `?tor=client` asks for it on one visit (and turns Tor mode on),
+// STOMP_TOR_CLIENT=1 on the server for every visit.
+const TOR_CLIENT =
+	new URLSearchParams(location.search).get('tor') === 'client' ||
+	CFG.torClient === true;
+const TOR_AVAILABLE = TOR_CLIENT || !!TOR_WISP;
 // A separate service worker scope prevents an old controller from taking a
 // new Tor-mode route, and its worker keeps the Tor profile's stores (the
 // cookie jar, storage, caches, extensions: src/profile.ts) apart from the
@@ -413,6 +422,8 @@ const directWispURL = () =>
 	`${(ISOLATED ? PROXY_ORIGIN : location.origin).replace(/^http/, 'ws')}/wisp/`;
 const wispURL = () => {
 	if (TOR_REQUESTED) {
+		// the client's own Wisp connection, to Tor relays only
+		if (TOR_CLIENT) return directWispURL();
 		if (!TOR_WISP)
 			throw new Error('Tor relay unavailable. Turn Tor off to browse.');
 		return TOR_WISP;
@@ -460,7 +471,17 @@ const transports = {
 		options: [{ wisp: wispURL(), connections: [500, 400, 200] }],
 		...(OFFLINE && { host: OFFLINE.transportHost }),
 	}),
+	// Tor mode's transport with the in-browser client, whichever of the
+	// others is chosen for normal mode
+	torClient: () => ({
+		module: `${proxyBase()}/tor-client/transport.mjs`,
+		options: [{ wisp: wispURL() }],
+		...(OFFLINE && { host: OFFLINE.transportHost }),
+	}),
 };
+/** the descriptor of transport `name` in this page's mode */
+const transportFor = (name) =>
+	transports[TOR_REQUESTED && TOR_CLIENT ? 'torClient' : name]();
 
 let controller;
 
@@ -513,7 +534,7 @@ new ResizeObserver(() => {
 function preferredTransport() {
 	try {
 		const saved = UI_STORAGE.getItem('stomp-demo:transport');
-		if (saved in transports) return saved;
+		if (saved in transports && saved !== 'torClient') return saved;
 	} catch {}
 	return 'epoxy';
 }
@@ -1597,7 +1618,7 @@ async function startController(name) {
 			directory: DIRECTORY,
 			...(PROFILE && { profile: PROFILE, freshProfile: torSession.fresh }),
 			assets: ASSETS,
-			transport: transports[name](),
+			transport: transportFor(name),
 			codec: 'xor',
 			cache: CACHE,
 			serviceWorkers: SERVICE_WORKERS,
@@ -1624,7 +1645,7 @@ async function startController(name) {
 		setStatus(`Loading ${name} transport…`);
 		controller = new StompController({
 			serviceworker: registration,
-			transport: transports[name](),
+			transport: transportFor(name),
 			directory: DIRECTORY,
 			...(PROFILE && { profile: PROFILE }),
 			assets: ASSETS,
@@ -1661,7 +1682,7 @@ async function startController(name) {
 async function boot() {
 	if (!OFFLINE && !('serviceWorker' in navigator))
 		throw new Error('This browser does not support service workers.');
-	if (TOR_REQUESTED && !TOR_WISP)
+	if (TOR_REQUESTED && !TOR_AVAILABLE)
 		throw new Error('Tor relay unavailable. Turn Tor off to browse.');
 
 	const name = preferredTransport();
@@ -1720,7 +1741,7 @@ async function switchTransport(name) {
 		// until the new transport's carrier event says what it rides
 		transportName = name;
 		badgeFacts.set('Transport', transportFact(name));
-		await controller.setTransport(transports[name]());
+		await controller.setTransport(transportFor(name));
 		setStatus('Ready');
 	} catch (error) {
 		setStatus(`Transport failed: ${error.message}`, true);
@@ -3819,9 +3840,11 @@ transportSelect.addEventListener('change', () =>
 // changes needs no reload here: the transport's next connection is taken
 // as soon as the server takes it.
 let torStatus = TOR_REQUESTED
-	? TOR_WISP
-		? { state: 'checking' }
-		: { state: 'off' }
+	? TOR_CLIENT
+		? { state: 'unknown' }
+		: TOR_WISP
+			? { state: 'checking' }
+			: { state: 'off' }
 	: null;
 let torStatusShown = null; // boot()'s status line, once the controller is up
 function torStatusText(status = torStatus) {
@@ -4016,17 +4039,18 @@ function watchTorTabs() {
 	forgetTorIfOver();
 }
 torToggle.checked = TOR_REQUESTED;
-torToggle.disabled = !TOR_WISP && !TOR_REQUESTED;
+torToggle.disabled = !TOR_AVAILABLE && !TOR_REQUESTED;
 const torLabel = $('torLabel');
-torLabel.title = !TOR_WISP
+torLabel.title = !TOR_AVAILABLE
 	? 'Tor relay unavailable. The server must configure a Tor-backed Wisp relay.'
 	: TOR_REQUESTED
 		? `Tor selected. ${TOR_SCOPE_NOTE}`
 		: 'Route proxied TCP traffic through Tor. Applies after the page reloads.';
-torLabel.toggleAttribute('data-unavailable', !TOR_WISP);
+torLabel.toggleAttribute('data-unavailable', !TOR_AVAILABLE);
 if (TOR_REQUESTED) {
 	showTorStatus();
-	if (TOR_WISP) watchTor();
+	// the client's state is the transport worker's, not the server's
+	if (TOR_WISP && !TOR_CLIENT) watchTor();
 }
 torToggle.addEventListener('change', () => {
 	try {

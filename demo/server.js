@@ -36,6 +36,10 @@
 //                       loopback DNS validation shim: no public DNS lookups.
 //                       The relay takes connections only while Tor is ready
 //                       (/api/tor says; README "Tor routing").
+//   STOMP_TOR_CLIENT   1 makes Tor mode the in-browser Tor client (arti in
+//                       the transport worker, Wisp carrying only TCP to Tor
+//                       relays; docs/tor-over-wisp.md), a prototype;
+//                       `?tor=client` on the page asks for it on one visit
 //   STOMP_TOR_CONTROL  optional Tor control port for readiness, 127.0.0.1:PORT
 //                       or unix:/path; STOMP_TOR_CONTROL_PASSWORD or
 //                       STOMP_TOR_CONTROL_COOKIE (a SAFECOOKIE file) if needed
@@ -442,6 +446,9 @@ const pageConfig = {
 	// The UI must only offer Tor when the dedicated Tor gateway is ready.
 	// An external gateway's Tor egress is the deployer's responsibility.
 	...(torWisp?.external && { torWisp: torWisp.external }),
+	// the in-browser Tor client as Tor mode's transport (STOMP_TOR_CLIENT=1;
+	// `?tor=client` asks for it on one visit), docs/tor-over-wisp.md
+	...(process.env.STOMP_TOR_CLIENT === '1' && { torClient: true }),
 	// on unless turned off; a wisp server without UDP costs it nothing (the
 	// transport stays on HTTP/2, docs/http3.md)
 	http3: process.env.STOMP_HTTP3 !== '0',
@@ -982,6 +989,20 @@ const transportPaths = () =>
 			};
 app.use('/epoxy/', transportFiles('epoxy-transport'));
 app.use('/libcurl/', transportFiles('libcurl-transport'));
+// The in-browser Tor client (docs/tor-over-wisp.md, opt-in): tor-js's
+// module and arti's wasm, which demo/public/tor-client/transport.mjs loads
+// in the transport worker
+try {
+	app.use(
+		'/tor-client/tor-js/',
+		express.static(
+			join(dirname(fileURLToPath(import.meta.resolve('tor-js'))), '../..'),
+			fresh,
+		),
+	);
+} catch {
+	// not installed: the opt-in fails to load, nothing else changes
+}
 // self-hosted font for the page (no Google Fonts round-trip)
 app.use(
 	'/fonts/montserrat/',
