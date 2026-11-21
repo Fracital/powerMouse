@@ -7,8 +7,9 @@ import { runWpt } from '../wpt.mjs';
 
 await runWpt('wpt-cookies-more', {
 	roots: ['cookies/samesite', 'cookies/samesite-none-secure', 'cookies/domain'],
-	// the pages share the jar
-	concurrency: 1,
+	// each page in a browser context of its own, as each of the two
+	// loading at once is (its jar and storage its own)
+	concurrency: 2,
 	skip: [
 		// natively it posts no report within the budget on the fixture (two
 		// recorded runs): 30 s in each mode for nothing compared

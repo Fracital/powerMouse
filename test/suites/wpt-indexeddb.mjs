@@ -7,6 +7,8 @@ import { runWpt } from '../wpt.mjs';
 
 await runWpt('wpt-indexeddb', {
 	roots: ['IndexedDB'],
-	concurrency: 1,
+	// each page in a browser context of its own, as each of the two
+	// loading at once is (its jar and storage its own)
+	concurrency: 2,
 	globals: ['window', 'dedicatedworker'],
 });

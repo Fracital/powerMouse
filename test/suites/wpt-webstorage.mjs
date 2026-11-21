@@ -7,7 +7,9 @@ import { runWpt } from '../wpt.mjs';
 
 await runWpt('wpt-webstorage', {
 	roots: ['webstorage'],
-	concurrency: 1,
+	// each page in a browser context of its own, as each of the two
+	// loading at once is (its jar and storage its own)
+	concurrency: 2,
 	skip: [
 		// filling a store until setItem throws, and again after a clear(),
 		// crashes the proxied tab, and every page after it in the run with it
