@@ -48,6 +48,7 @@ export function calledHooks(client: DocumentClient) {
 		port: MessagePort;
 		session: CalledSession;
 		policy?: string;
+		moved?: (how: string) => void;
 	};
 	const { port, session } = called;
 	const global = client.global as Globals;
@@ -157,6 +158,7 @@ export function calledHooks(client: DocumentClient) {
 		state = pop.state;
 		client.rename(entries[index].url);
 		if (isScroll(pop.scroll)) restore(pop.scroll);
+		called.moved?.('traverse');
 		popped(from, entries[index].url, state);
 	};
 	// where the document is scrolled, for the entry it is when the host
@@ -200,6 +202,7 @@ export function calledHooks(client: DocumentClient) {
 		else entries[index] = { ...made, key: entries[index].key };
 		state = value;
 		client.rename(url);
+		called.moved?.(push ? 'push' : 'replace');
 		// (with the scroll of the entry left, before a fragment's scrolls it)
 		tell({
 			op: push ? 'push' : 'replace',

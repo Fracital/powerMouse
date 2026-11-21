@@ -72,6 +72,7 @@ import type {
 	PermissionRequestInfo,
 	RequestRule,
 	SiteArrival,
+	TabLoad,
 } from '../transport/messages';
 import {
 	ACTIVATED,
@@ -113,6 +114,7 @@ import {
 	SW_REVIVE,
 	SW_WAKE,
 	SWbound,
+	TAB_LOAD,
 	TRANSPORT_INIT,
 	WORKER_MODULES,
 } from '../transport/messages';
@@ -802,6 +804,20 @@ export function navigationTypeReport(data: unknown): string | null {
 	if (typeof data !== 'object' || data === null) return null;
 	const type = (data as Record<string, unknown>)[NAVIGATION_TYPE];
 	return typeof type === 'string' ? type : null;
+}
+/** a top document's load (TAB_LOAD, alone or beside a navigate report), else null */
+export function tabLoadReport(data: unknown): TabLoad | null {
+	if (typeof data !== 'object' || data === null) return null;
+	const load = (data as Record<string, unknown>)[TAB_LOAD];
+	if (typeof load !== 'object' || load === null) return null;
+	const { ready, how, client } = load as TabLoad;
+	if (ready !== 'loading' && ready !== 'interactive' && ready !== 'complete')
+		return null;
+	return {
+		ready,
+		how: typeof how === 'string' ? how : null,
+		...(typeof client === 'string' ? { client } : {}),
+	};
 }
 /** where the document a navigate report is of is in its slot's stretch of the frame's history (HISTORY_RUN), else null */
 export function historyRunReport(data: unknown): [number, number] | null {
@@ -1916,12 +1932,17 @@ export class StompController extends EventTarget {
 				return;
 			}
 			const navigate = navigateReport(event.data);
+			const load = tabLoadReport(event.data);
+			if (!navigate && load) {
+				this.#tabFeed?.loaded(frame, load);
+				return;
+			}
 			if (navigate) {
 				if (navigate.client) {
 					this.#clients.attribute(navigate.client, frame);
 					this.#extensionHub.place(navigate.client, this.tabIdOf(frame));
 				}
-				this.#tabFeed?.navigated(frame, navigate);
+				this.#tabFeed?.navigated(frame, navigate, load);
 				// (the controller's word, never the page's: navigateReport takes
 				// no such field from it)
 				if (navigate.client && this.#isolationWanted.has(navigate.client))
@@ -3651,6 +3672,14 @@ export class StompController extends EventTarget {
 		if (this.#extensionHub.any)
 			this.#extensionHub.expect(url, this.tabIdOf(frame));
 	}
+	/**
+	 * The host reloads `frame` (Frame.reload): its next document is a
+	 * reload of the browser's, not of its page's.
+	 * @internal
+	 */
+	tabReloading(frame: Frame) {
+		this.#tabFeed?.reloading(frame);
+	}
 	/** the tab id the extensions know a frame by */
 	tabIdOf(frame: Frame): number {
 		let id = this.#tabIds.get(frame);
@@ -5182,6 +5211,8 @@ export class Frame extends EventTarget {
 	 * `Pragma: no-cache`; nothing kept is cleared.
 	 */
 	async reload({ bypassCache = false }: ReloadOptions = {}): Promise<boolean> {
+		// (the host's reload, not the page's: the extensions' transition)
+		this.controller.tabReloading(this);
 		// (a called frame's reload is a reload: no hard reload there yet)
 		if (this.called) return this.called.reload();
 		const win = this.element.contentWindow;

@@ -278,13 +278,29 @@ controller.extensions  --RPC-->  ExtensionHub (with the controller)    Extension
 - **Tabs' and webNavigation's events.** The host page watches its frames
   (`framesAsTabs`): a frame that appears, is shown or goes away, each top
   document's first report (its commit), its URL moving within the
-  document, its title and icon, and the frame element's load. The hub
+  document, its title and icon, and its load as the document itself tells
+  it (`TAB_LOAD`: its readyState and how its entry was reached, the
+  frame element's load only for a document that tells none). A tab is
+  `complete` at its document's load event, as in Chrome 157, whatever
+  the frame's element saw (a called document's frame loads once, a
+  document's report can come after its load). The hub
   turns those into `tabs.onCreated`, `onUpdated` (status, URL, title,
   `favIconUrl`), `onActivated`, `onHighlighted` and `onRemoved`, and for an
   extension with `webNavigation` into `onBeforeNavigate`, `onCommitted`,
   `onDOMContentLoaded`, `onCompleted`, `onHistoryStateUpdated` and
   `onReferenceFragmentUpdated`, in Chrome's order, with the tab ids the hub
-  knows and a `documentId` per document. A frame below a tab's top is told
+  knows and a `documentId` per document. As Chrome tells them (the
+  ext-tab-status suite compares them with its own): `status: 'loading'`
+  carries `url` only when the URL changed; the title is told for a new
+  entry and not for a traversal or reload that shows the entry's own
+  again; `favIconUrl` is told once a navigation (a same-document one too),
+  after `complete` for a new entry and while loading for a traversal or
+  reload of an entry that had it; a traversal's `onCommitted` has the
+  entry's first `transitionType` with `forward_back`, a reload of the
+  host's (Frame.reload, `tabs.reload`) is `reload`, the page's own
+  `location.reload()` `link` with `client_redirect`, and a same-document
+  traversal has `forward_back`. An extension's page under a site pool is
+  shown from the hub's origin, never a slot's. A frame below a tab's top is told
   by the extension's content scripts in it: its commit when they say
   hello, its DOMContentLoaded and load from there. Listeners' URL filters
   are applied as Chrome applies them. `webNavigation.getFrame` and
@@ -703,9 +719,12 @@ they are now.
 - webNavigation sees a frame below a tab's top only where the extension's
   content scripts run, gives such a frame `parentFrameId` 0 however deep
   it is, and tells its top document's DOMContentLoaded at the frame's load.
-  A top document's `transitionType` is `typed` for a tab's first document,
-  `reload` for the same URL again and `link` otherwise, with no
-  qualifiers. A navigation that fails tells no `onErrorOccurred`.
+  A top document's `transitionType` is `typed` for a tab's first document
+  and `link` for any other new entry, whatever made it (a form, a script,
+  a redirect), and its qualifiers only `forward_back` and a reload's
+  `client_redirect`. A navigation that fails tells no `onErrorOccurred`.
+  Under a site pool no content script runs in a document of a slot (the
+  slots' workers keep no extensions).
   `onCreated` gives no `openerTabId`.
 - A main frame's request that neither the host nor a hooked document
   announced (one that leaves an image document, or an about:blank one the

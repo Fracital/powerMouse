@@ -8,6 +8,8 @@ import {
 	NAVIGATE,
 	NavigateInfo,
 	NAVIGATION_TYPE,
+	TAB_LOAD,
+	type TabLoad,
 } from '../../../transport/messages';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
@@ -344,7 +346,42 @@ export default class NavigateModule extends Module<DocumentClient> {
 			return touch;
 		};
 
+		// the document's load and how its entry was reached, for the host's
+		// tabs (TAB_LOAD: Chrome's tab status and webNavigation), read with
+		// the browser's own getters taken before any page script ran
+		const readyState = Reflect.getOwnPropertyDescriptor(
+			global.Document.prototype,
+			'readyState',
+		)?.get;
+		const ready = (): TabLoad['ready'] => {
+			const state = readyState
+				? Reflect.apply(readyState, global.document, [])
+				: 'complete';
+			return state === 'loading' || state === 'interactive'
+				? state
+				: 'complete';
+		};
+		let how = reachedBy(moduleClient);
+		const navigation = (global as { navigation?: EventTarget }).navigation;
+		const changeType = Reflect.getOwnPropertyDescriptor(
+			(
+				global as unknown as {
+					NavigationCurrentEntryChangeEvent?: { prototype: object };
+				}
+			).NavigationCurrentEntryChangeEvent?.prototype ?? {},
+			'navigationType',
+		)?.get;
+		if (navigation && changeType)
+			Reflect.apply(global.EventTarget.prototype.addEventListener, navigation, [
+				'currententrychange',
+				(event: Event) => {
+					const type = Reflect.apply(changeType, event, []);
+					if (typeof type === 'string') how = type;
+				},
+			]);
+
 		let last = '';
+		let lastLoad = '';
 		const post = () => {
 			const info: NavigateInfo = {
 				url: moduleClient.url.toString(),
@@ -357,11 +394,26 @@ export default class NavigateModule extends Module<DocumentClient> {
 			// the site pool: where the document is in its slot's stretch of
 			// the frame's history (a step within it changes no URL at times)
 			const run = history.ownRun?.() ?? null;
+			const load: TabLoad = {
+				ready: ready(),
+				how,
+				...(client ? { client } : {}),
+			};
+			const loadKey = JSON.stringify(load);
 			const key = JSON.stringify([info, run]);
-			if (key === last) return;
+			if (key === last) {
+				// (no navigate event of the host's for a load)
+				if (loadKey !== lastLoad) {
+					lastLoad = loadKey;
+					moduleClient.postToHost({ [TAB_LOAD]: load });
+				}
+				return;
+			}
 			last = key;
+			lastLoad = loadKey;
 			moduleClient.postToHost({
 				[NAVIGATE]: info,
+				[TAB_LOAD]: load,
 				...(navigationType ? { [NAVIGATION_TYPE]: navigationType() } : {}),
 				...(run ? { [HISTORY_RUN]: run } : {}),
 			});
@@ -370,6 +422,13 @@ export default class NavigateModule extends Module<DocumentClient> {
 
 		// many mutations land at once (a whole page), one message per turn
 		const schedule = watchHistory(post);
+		// a called document's moves make no history call of the browser's
+		const called = moduleClient.called;
+		if (called)
+			called.moved = (type) => {
+				how = type;
+				schedule();
+			};
 
 		// and the page's autofocus where the browser refuses it (../autofocus)
 		const autofocus = autofocusFlush(moduleClient);
@@ -392,5 +451,43 @@ export default class NavigateModule extends Module<DocumentClient> {
 			});
 		observe();
 		addDocumentOpenListener(global, observe);
+	}
+}
+
+/**
+ * How a document was reached, as its navigation's activation says (push,
+ * replace, reload, traverse), read before any page script ran; a called
+ * document's from what its host said
+ */
+function reachedBy(client: DocumentClient): string | null {
+	const session = client.called?.session;
+	if (session)
+		return session.type === 'back_forward'
+			? 'traverse'
+			: session.type === 'reload'
+				? 'reload'
+				: session.replaced
+					? 'replace'
+					: 'push';
+	const global = client.global as typeof globalThis & {
+		navigation?: object;
+		NavigationActivation?: { prototype: object };
+	};
+	try {
+		const navigation = global.navigation;
+		const activationProto = global.NavigationActivation?.prototype;
+		if (!navigation || !activationProto) return null;
+		const activation = Reflect.getOwnPropertyDescriptor(
+			Reflect.getPrototypeOf(navigation)!,
+			'activation',
+		)?.get;
+		const type = Reflect.getOwnPropertyDescriptor(
+			activationProto,
+			'navigationType',
+		)?.get;
+		const current = activation && Reflect.apply(activation, navigation, []);
+		return current && type ? String(Reflect.apply(type, current, [])) : null;
+	} catch (error) {
+		return null;
 	}
 }

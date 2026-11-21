@@ -75,6 +75,7 @@ import {
 	passkeyManager,
 	REPORT_GRACE_MS,
 	stayedReport,
+	tabLoadReport,
 } from './index';
 import {
 	EMBEDDER_REFUSED,
@@ -744,6 +745,11 @@ export class RemoteController extends EventTarget {
 				return;
 			}
 			const navigate = navigateReport(event.data);
+			const load = tabLoadReport(event.data);
+			if (!navigate && load) {
+				this.#extensionTabs?.loaded(frame, load);
+				return;
+			}
 			if (navigate) {
 				if (navigate.client) {
 					this.#clients.attribute(navigate.client, frame);
@@ -757,7 +763,7 @@ export class RemoteController extends EventTarget {
 						)
 						.catch(() => {});
 				}
-				this.#extensionTabs?.navigated(frame, navigate);
+				this.#extensionTabs?.navigated(frame, navigate, load);
 				if (navigate.client && this.#isolationWanted.has(navigate.client))
 					navigate.isolation = 'wanted';
 				// where the frame's history can go is the controller frame's to
@@ -899,6 +905,13 @@ export class RemoteController extends EventTarget {
 	}
 	async wait(): Promise<void> {
 		await this.#ready;
+	}
+	/**
+	 * The host reloads `frame` (see StompController.tabReloading).
+	 * @internal
+	 */
+	tabReloading(frame: RemoteFrame) {
+		this.#extensionTabs?.reloading(frame);
 	}
 	/** the tab id the extensions know a frame by (see StompController.tabIdOf) */
 	tabIdOf(frame: RemoteFrame): number {
@@ -1542,6 +1555,7 @@ export class RemoteFrame extends EventTarget {
 	}
 	/** reload the frame (past the caches with `bypassCache`, as Frame.reload); resolves when the reloaded document first reports (false when there was nothing to reload) */
 	async reload({ bypassCache = false }: ReloadOptions = {}): Promise<boolean> {
+		this.controller.tabReloading(this);
 		const reported = this.#nextReport();
 		const done =
 			(this.controller.siteMode

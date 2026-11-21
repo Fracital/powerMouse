@@ -585,6 +585,11 @@ export default class DocumentClient extends Client {
 		session: CalledSession;
 		/** the referrer policy of its answer's header */
 		policy?: string;
+		/**
+		 * a move within the document (push, replace, traverse) that made no
+		 * history call of the browser's: the host's tabs are told (Navigate)
+		 */
+		moved?: (how: string) => void;
 	};
 	/**
 	 * Just call stomp: a frame of this called document the page sent to

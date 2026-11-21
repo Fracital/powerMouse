@@ -5,6 +5,7 @@ import type GenericCodec from '../Codecs';
 import { assetName, Config, ConfigCodec, type BundleAsset } from '../config';
 import { switchesGroup, type OpenerFacts } from '../coop';
 import type { HopPolicy } from '../csp';
+import { extensionOfURL } from '../extensions/origin';
 import { isolationResponseHeaders, SERVED_EMBEDDER_POLICY } from '../isolation';
 import {
 	kindPartition,
@@ -2276,6 +2277,10 @@ async function leaveSlot(
 	// Its URL names the referrer, whose site's slot never has the token, and
 	// sending it there would only turn a live document into the error page.
 	if (/^inline:/.test(routed.resource)) return here();
+	// an extension's page (a background, a popup, an offscreen document) is
+	// the hub's: its worker alone keeps the extensions, and its runtime
+	// talks to the hub on this origin's channels
+	if (!ref.slot && extensionOfURL(routed.url)) return here();
 	// a route of a route of the proxy (a double route): the router answers it
 	// here with a redirect to the inner route, on its own origin already.
 	// Any other URL of the proxy's origins is a site like another

@@ -45,7 +45,11 @@ import {
 	type ThemeInfo,
 	type ThemePayload,
 } from '../extensions/types';
-import { EXTENSION_BUS_PREFIX, EXTENSION_CHANGES } from '../transport/messages';
+import {
+	EXTENSION_BUS_PREFIX,
+	EXTENSION_CHANGES,
+	type TabLoad,
+} from '../transport/messages';
 
 /** a tab as the hub's host knows it */
 export interface HubTab {
@@ -55,6 +59,26 @@ export interface HubTab {
 	active: boolean;
 	/** a document is loading in it (the feed saw it commit, not load) */
 	status?: 'loading';
+}
+
+/** a tab's top document as the hub's feed told it */
+interface HubTabState {
+	/** Chrome's status: complete at the document's load event */
+	status: 'loading' | 'complete';
+	documentId: string;
+	url: string;
+	title: string;
+	/** the icon the tab shows (favIconUrl), once told */
+	icon: string | null;
+	/** the page's icon, as its report has it */
+	page: string | null;
+	iconTold: boolean;
+	/** a traversal's or reload's entry's icon (told at once, as Chrome's favicons have it) */
+	knownIcon: string | null;
+	/** the title such an entry had: shown again, not told */
+	quietTitle: string | null;
+	/** webNavigation.onDOMContentLoaded was told */
+	dom: boolean;
 }
 
 /** what the hub asks of its controller about tabs */
@@ -120,12 +144,27 @@ export type TabEvent =
 			tabId: number;
 			url: string;
 			title: string;
+			/** the page's icon as its report has it (told as Chrome tells it) */
+			icon?: string | null;
 			client: string;
+			/** '' for a traversal: the entry's own (the hub keeps it) */
 			transition: string;
+			qualifiers?: string[];
+			/** how the document was reached (TabLoad's `how`) */
+			how?: string | null;
 	  }
-	| { e: 'history'; tabId: number; url: string; fragment: boolean }
+	| {
+			e: 'history';
+			tabId: number;
+			url: string;
+			fragment: boolean;
+			how?: string | null;
+	  }
 	| { e: 'title'; tabId: number; title: string }
 	| { e: 'icon'; tabId: number; icon: string }
+	/** the top document's DOMContentLoaded */
+	| { e: 'dom'; tabId: number }
+	/** its load event: the tab is complete */
 	| { e: 'complete'; tabId: number };
 
 /** a top document's navigate report, as the feed reads it */
@@ -140,8 +179,12 @@ export interface TabReport {
 export interface FramesAsTabs<F extends TabFrame> extends HubTabs {
 	/** the frames, or which one is shown, changed */
 	changed(): void;
-	/** a frame's top document reported (navigateReport) */
-	navigated(frame: F, report: TabReport): void;
+	/** a frame's top document reported (navigateReport), its load beside it */
+	navigated(frame: F, report: TabReport, load?: TabLoad | null): void;
+	/** a frame's top document's load moved on, and nothing else of it */
+	loaded(frame: F, load: TabLoad): void;
+	/** the host reloads the frame (its Frame.reload): the next document's transition */
+	reloading(frame: F): void;
 	/**
 	 * a nested document reported its client from `source`, its frame's
 	 * WindowProxy (the same object across the frame's documents): it keeps
@@ -202,8 +245,14 @@ export function framesAsTabs<F extends TabFrame>(
 		title: string;
 		icon: string | null;
 		complete: boolean;
+		/** its DOMContentLoaded was told */
+		dom: boolean;
+		/** its document tells its load itself (TAB_LOAD): the element's is none of it */
+		says: boolean;
 		/** a load came before its document reported (the commit completes at once) */
 		loaded: number;
+		/** when the host last reloaded the frame */
+		reloaded: number;
 	};
 	const seen = new Map<F, Seen>();
 	let active: F | null = null;
@@ -214,13 +263,35 @@ export function framesAsTabs<F extends TabFrame>(
 			// the hub's host is gone
 		}
 	};
+	const complete = (state: Seen) => {
+		if (state.complete) return;
+		if (!state.dom) {
+			state.dom = true;
+			send({ e: 'dom', tabId: state.tabId });
+		}
+		state.complete = true;
+		send({ e: 'complete', tabId: state.tabId });
+	};
+	// the frame's element's load: its document's, when the document says
+	// nothing of its own (a called document's is the call page's, once)
 	const loaded = (frame: F) => {
 		const state = seen.get(frame);
 		if (!state) return;
-		if (state.client && !state.complete) {
-			state.complete = true;
-			send({ e: 'complete', tabId: state.tabId });
-		} else if (state.client) state.loaded = Date.now();
+		if (state.says) return;
+		if (state.client && !state.complete) complete(state);
+		else if (state.client) state.loaded = Date.now();
+	};
+	// what the top document says of its load (TAB_LOAD), the frame's
+	// element aside: Chrome's tab is complete at the document's load event
+	const loadOf = (state: Seen, load: TabLoad | null | undefined) => {
+		// (a document's that knows no client yet is none of the tab's last)
+		if (!load?.client || load.client !== state.client) return;
+		state.says = true;
+		if (load.ready !== 'loading' && !state.dom) {
+			state.dom = true;
+			send({ e: 'dom', tabId: state.tabId });
+		}
+		if (load.ready === 'complete') complete(state);
 	};
 	const changed = () => {
 		if (!host.events) return;
@@ -235,7 +306,10 @@ export function framesAsTabs<F extends TabFrame>(
 					title: frame.title ?? '',
 					icon: null,
 					complete: false,
+					dom: false,
+					says: false,
 					loaded: 0,
+					reloaded: 0,
 				});
 				frame.element.addEventListener('load', () => loaded(frame));
 				send({
@@ -272,26 +346,56 @@ export function framesAsTabs<F extends TabFrame>(
 			if (id !== undefined) frameIds.set(client, id);
 			host.sameFrame?.(client, previous);
 		},
-		navigated: (frame, report) => {
+		reloading: (frame) => {
+			const state = seen.get(frame);
+			if (state) state.reloaded = Date.now();
+		},
+		loaded: (frame, load) => {
+			if (!host.events) return;
+			const state = seen.get(frame);
+			if (state) loadOf(state, load);
+		},
+		navigated: (frame, report, load) => {
 			if (!host.events) return;
 			changed();
 			const state = seen.get(frame);
 			if (!state) return;
 			if (report.client && report.client !== state.client) {
 				const first = state.client === null;
-				const reload = !first && report.url === state.url;
+				const how = load?.how ?? null;
+				// Chrome's: a reload of the host's is `reload`, the page's own
+				// (location.reload()) a link of a client redirect; a traversal
+				// is the entry's own transition, stepped
+				const byHost = Date.now() - state.reloaded < 30000;
+				state.reloaded = 0;
+				const [transition, qualifiers] = first
+					? ['typed', []]
+					: how === 'traverse'
+						? ['', ['forward_back']]
+						: how === 'reload'
+							? byHost
+								? ['reload', []]
+								: ['link', ['client_redirect']]
+							: how === null && report.url === state.url
+								? ['reload', []]
+								: ['link', []];
 				state.client = report.client;
 				state.url = report.url;
 				state.title = report.title;
 				state.icon = report.icon ?? null;
 				state.complete = false;
+				state.dom = false;
+				state.says = false;
 				send({
 					e: 'commit',
 					tabId: state.tabId,
 					url: report.url,
 					title: report.title,
+					icon: report.icon ?? null,
 					client: report.client,
-					transition: first ? 'typed' : reload ? 'reload' : 'link',
+					transition,
+					qualifiers,
+					how,
 				});
 				// its load came first: the frame's element said so before the
 				// report (the document says, when the host may read it)
@@ -304,16 +408,20 @@ export function framesAsTabs<F extends TabFrame>(
 				}
 				const early = !!state.loaded && Date.now() - state.loaded < 1000;
 				state.loaded = 0;
-				if (done ?? early) {
-					state.complete = true;
-					send({ e: 'complete', tabId: state.tabId });
-				}
+				if (load) loadOf(state, load);
+				else if (done ?? early) complete(state);
 				return;
 			}
 			if (report.url !== state.url) {
 				const fragment = sameDocumentURL(state.url, report.url);
 				state.url = report.url;
-				send({ e: 'history', tabId: state.tabId, url: report.url, fragment });
+				send({
+					e: 'history',
+					tabId: state.tabId,
+					url: report.url,
+					fragment,
+					how: load?.how ?? null,
+				});
 			}
 			if (report.title !== state.title) {
 				state.title = report.title;
@@ -795,10 +903,35 @@ export class ExtensionHub {
 	}
 
 	/** each tab as the feed told it: Chrome's status, top document and icon of it */
-	#tabState = new Map<
+	#tabState = new Map<number, HubTabState>();
+	/**
+	 * what each tab's entries were (Chrome's navigation entries, by URL):
+	 * the transition a traversal to one repeats, and the title and icon it
+	 * shows again with no change told
+	 */
+	#entries = new Map<
 		number,
-		{ status: 'loading' | 'complete'; documentId: string; icon: string | null }
+		Map<string, { transition: string; title: string; icon: string | null }>
 	>();
+	#entry(tabId: number, url: string) {
+		let entries = this.#entries.get(tabId);
+		if (!entries) this.#entries.set(tabId, (entries = new Map()));
+		let entry = entries.get(url);
+		if (!entry) {
+			entry = { transition: 'link', title: '', icon: null };
+			entries.set(url, entry);
+			if (entries.size > 256) entries.delete(entries.keys().next().value!);
+		}
+		return entry;
+	}
+	/** tabs.onUpdated's favIconUrl, once a navigation's icon is the tab's */
+	async #iconTold(tabId: number, state: HubTabState) {
+		if (!state.page) return;
+		state.icon = state.page;
+		state.iconTold = true;
+		this.#entry(tabId, state.url).icon = state.page;
+		await this.#updated(tabId, { favIconUrl: state.page });
+	}
 	/**
 	 * the documents below a tab's top that an extension's content scripts
 	 * reached, by the contexts that said hello from them (getAllFrames, their
@@ -910,6 +1043,7 @@ export class ExtensionHub {
 			if (event.e === 'removed') {
 				this.#forgetTab(event.tabId);
 				this.#tabState.delete(event.tabId);
+				this.#entries.delete(event.tabId);
 				for (const [key, frame] of this.#subframes)
 					if (frame.tabId === event.tabId) this.#subframes.delete(key);
 			}
@@ -952,70 +1086,142 @@ export class ExtensionHub {
 					this.#forgetTab(tabId);
 					this.#judgeContent(tabId, event.url);
 					const documentId = ExtensionHub.documentId(event.client);
+					const before = this.#tabState.get(tabId);
+					// a traversal or a reload shows the entry's title and icon
+					// again: Chrome tells neither (the entry had them)
+					const again = event.how === 'traverse' || event.how === 'reload';
+					const known = again
+						? this.#entries.get(tabId)?.get(event.url)
+						: undefined;
+					const entry = this.#entry(tabId, event.url);
+					const transition = event.transition || entry.transition;
+					if (event.transition) entry.transition = event.transition;
+					const state: HubTabState = {
+						status: 'loading',
+						documentId,
+						url: event.url,
+						title: event.title,
+						icon: null,
+						page: event.icon ?? null,
+						iconTold: false,
+						knownIcon: known?.icon ?? null,
+						quietTitle: known?.title || null,
+						dom: false,
+					};
+					this.#tabState.set(tabId, state);
 					this.#webNavigation(
 						'onBeforeNavigate',
 						this.#navigation(tabId, 0, event.url, null),
 					);
-					this.#tabState.set(tabId, {
-						status: 'loading',
-						documentId,
-						icon: null,
-					});
 					for (const [key, frame] of this.#subframes)
 						if (frame.tabId === tabId) this.#subframes.delete(key);
-					await this.#updated(tabId, { status: 'loading', url: event.url });
+					await this.#updated(tabId, {
+						status: 'loading',
+						...(before?.url === event.url ? {} : { url: event.url }),
+					});
 					this.#webNavigation(
 						'onCommitted',
 						this.#navigation(tabId, 0, event.url, documentId, {
-							transitionQualifiers: [],
-							transitionType: event.transition,
+							transitionQualifiers: event.qualifiers ?? [],
+							transitionType: transition,
 						}),
 					);
-					if (event.title) await this.#updated(tabId, { title: event.title });
+					if (event.title) {
+						entry.title = event.title;
+						if (event.title === state.quietTitle) state.quietTitle = null;
+						else await this.#updated(tabId, { title: event.title });
+					}
+					if (state.page && state.page === state.knownIcon)
+						await this.#iconTold(tabId, state);
+					return;
+				}
+				case 'dom': {
+					const state = this.#tabState.get(tabId);
+					if (!state || state.dom || state.status === 'complete') return;
+					state.dom = true;
+					this.#webNavigation(
+						'onDOMContentLoaded',
+						this.#navigation(tabId, 0, state.url, state.documentId),
+					);
 					return;
 				}
 				case 'complete': {
 					const state = this.#tabState.get(tabId);
 					if (!state || state.status === 'complete') return;
 					state.status = 'complete';
-					if (!this.#extensions.size) return;
-					const tab = await this.#tab(tabId).catch(() => null);
-					const url = String(tab?.url ?? '');
-					for (const name of ['onDOMContentLoaded', 'onCompleted'])
+					if (!state.dom) {
+						state.dom = true;
 						this.#webNavigation(
-							name,
-							this.#navigation(tabId, 0, url, state.documentId),
+							'onDOMContentLoaded',
+							this.#navigation(tabId, 0, state.url, state.documentId),
 						);
+					}
+					this.#webNavigation(
+						'onCompleted',
+						this.#navigation(tabId, 0, state.url, state.documentId),
+					);
 					await this.#updated(tabId, { status: 'complete' });
+					// a new entry's icon: once the page loaded, as Chrome fetches it
+					if (!state.iconTold) await this.#iconTold(tabId, state);
 					return;
 				}
 				case 'history': {
 					this.#judgeContent(tabId, event.url);
 					const state = this.#tabState.get(tabId);
 					const status = state?.status;
-					if (state) state.status = 'loading';
+					if (state) {
+						state.status = 'loading';
+						state.url = event.url;
+						const entry = this.#entry(tabId, event.url);
+						if (!entry.title) entry.title = state.title;
+					}
 					await this.#updated(tabId, { status: 'loading', url: event.url });
 					this.#webNavigation(
 						event.fragment
 							? 'onReferenceFragmentUpdated'
 							: 'onHistoryStateUpdated',
 						this.#navigation(tabId, 0, event.url, state?.documentId ?? null, {
-							transitionQualifiers: [],
+							transitionQualifiers:
+								event.how === 'traverse' ? ['forward_back'] : [],
 							transitionType: 'link',
 						}),
 					);
 					if (state) state.status = status ?? 'complete';
-					if (status !== 'loading')
+					if (status !== 'loading') {
 						await this.#updated(tabId, { status: 'complete' });
+						// (Chrome tells the icon again after each one)
+						if (state?.iconTold) await this.#iconTold(tabId, state);
+					}
 					return;
 				}
-				case 'title':
+				case 'title': {
+					const state = this.#tabState.get(tabId);
+					if (state) {
+						state.title = event.title;
+						this.#entry(tabId, state.url).title = event.title;
+						if (event.title === state.quietTitle) {
+							state.quietTitle = null;
+							return;
+						}
+						state.quietTitle = null;
+					}
 					await this.#updated(tabId, { title: event.title });
 					return;
+				}
 				case 'icon': {
 					const state = this.#tabState.get(tabId);
-					if (state) state.icon = event.icon;
-					await this.#updated(tabId, { favIconUrl: event.icon });
+					if (!state) {
+						await this.#updated(tabId, { favIconUrl: event.icon });
+						return;
+					}
+					state.page = event.icon;
+					// told when the page has loaded (or at once, the icon the
+					// entry had: Chrome's from its favicons)
+					if (
+						state.status === 'complete' ||
+						(!state.iconTold && state.page === state.knownIcon)
+					)
+						await this.#iconTold(tabId, state);
 					return;
 				}
 			}

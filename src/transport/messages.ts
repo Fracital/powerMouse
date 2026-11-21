@@ -650,6 +650,26 @@ export const NAVIGATION_TYPE = '$stomp$navigationType';
  */
 export const HISTORY_RUN = '$stomp$historyRun';
 /**
+ * A top document's load and how its entry was reached, as the extensions'
+ * tabs tell them (Chrome's tab status and webNavigation,
+ * framesAsTabs in src/controller/extensions.ts): beside NAVIGATE, and
+ * alone when only it changed (a navigate report is the host's `navigate`
+ * event, which a load is not)
+ */
+export const TAB_LOAD = '$stomp$tabLoad';
+export interface TabLoad {
+	/** the document's readyState */
+	ready: 'loading' | 'interactive' | 'complete';
+	/**
+	 * how its current entry was reached: the navigation's activation, then
+	 * each same-document move (push, replace, reload, traverse); null when
+	 * the browser does not say
+	 */
+	how: string | null;
+	/** the document's service worker client id, once it knows it */
+	client?: string;
+}
+/**
  * a proxied document telling the host it got its first user activation (a
  * click or a key), posted like a navigate report with the document's token
  * (its client's historyActivation.token), for Chrome's history intervention

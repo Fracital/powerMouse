@@ -149,6 +149,8 @@ const SUITE_ENV = {
 	'site-pool-revisit': { STOMP_SITE_POOL: '5' },
 	// two tabs of the demo on its own pool, in a run without one too
 	'site-pool-tabs': { STOMP_SITE_POOL: '5' },
+	// production's host page with a pool (the extensions' tabs on its slots)
+	'ext-tab-status': { STOMP_ISOLATION: 'on', STOMP_SITE_POOL: '3' },
 	// production's host page (cross-origin isolated) with its pool
 	'site-pool-coep': { STOMP_ISOLATION: 'on', STOMP_SITE_POOL: '5' },
 	// dialing on four content slots of its own (STOMP_SLOT_PORTS), as
