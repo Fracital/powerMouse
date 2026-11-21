@@ -137,8 +137,8 @@
 //                       65 s)
 //   STOMP_GITHUB_API    GitHub's API base URL (default https://api.github.com),
 //                       for tests, which point it at a fake: `off` asks
-//                       nothing and lists the git log alone (test/run.mjs sets
-//                       that for every suite). STOMP_GITHUB_POLL_MS (tests
+//                       nothing and lists the git log alone, without
+//                       avatars (test/run.mjs sets that for every suite). STOMP_GITHUB_POLL_MS (tests
 //                       only) is the poller's interval, default 60000
 //   STOMP_ISOLATION     `off` serves the pages without the headers that make
 //                       them cross-origin isolated (COOP same-origin and an
@@ -332,8 +332,9 @@ const app = express();
 // The embedder policy is `require-corp`, the value every browser with one
 // honours: WebKit (Safari, every browser on iOS) has no `credentialless`,
 // and a page that sends it is not isolated there, nor is any proxied page
-// in it. What the page loads from another origin (the commit list's
-// avatars) sends a Cross-Origin-Resource-Policy, and the service worker
+// in it. What the page loads from another origin would need to send a
+// Cross-Origin-Resource-Policy (the commit list's avatars are this server's
+// own, demo/commits.js), and the service worker
 // serves the proxied documents with the same value (src/isolation.ts
 // SERVED_EMBEDDER_POLICY). The proxy origin's own files say the same and let another origin
 // have them: in origin-isolation mode the host's page embeds the
@@ -568,6 +569,17 @@ app.get('/api/status', (req, res) => {
 // GitHub nothing. This checkout's log is read only for the default
 // repository (STOMP_REPO naming another lists GitHub's answer alone).
 const commitsRepo = process.env.STOMP_REPO || DEFAULT_REPO;
+// the authors' avatars, fetched from GitHub by this server and served under
+// a neutral directory (minted as dialing's are), never asked of GitHub by
+// the page
+const COMMIT_AVATARS = (() => {
+	const directory = `/${mint('avatars')}/`;
+	return [DIAL.directory, DIAL.torDirectory, VIBEOS_DIRECTORY].includes(
+		directory,
+	)
+		? `/${mint('avatars again')}/`
+		: directory;
+})();
 const checkout = fileURLToPath(new URL('..', import.meta.url));
 const commits = createCommits({
 	repo: commitsRepo,
@@ -575,9 +587,11 @@ const commits = createCommits({
 	api: process.env.STOMP_GITHUB_API,
 	interval: Number(process.env.STOMP_GITHUB_POLL_MS) || 60000,
 	checkout: commitsRepo === DEFAULT_REPO ? checkout : null,
+	avatars: COMMIT_AVATARS,
 });
 app.get('/api/commits', commits.list);
 app.get('/api/commits/stream', commits.stream);
+app.get(`${COMMIT_AVATARS}:name`, commits.avatar);
 // The page, its scripts and the STomp bundles change with every deploy and
 // are fetched once per visit anyway: no-cache makes browsers revalidate and
 // keeps CDNs (Cloudflare caches .js by default) from serving a stale service

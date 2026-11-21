@@ -44,9 +44,9 @@ protects and what it does not, and how its profile is kept apart.
   host page's settings and bookmarks are read in both modes, and nothing
   hides that the same browser and address use both.
 - **The host page is not proxied.** The page itself, `/config.js`, `/api/*`
-  (the uptime, the commit list), the commit list's avatars from GitHub, the
-  installed-app worker and the fonts are the browser's own requests to
-  their servers, from the visitor's address. Only what the controller's
+  (the uptime, the commit list), the commit list's avatars (which the server
+  fetches from GitHub), the installed-app worker and the fonts are the
+  browser's own requests to their servers, from the visitor's address. Only what the controller's
   transport carries goes through Tor.
 - **The browser is the visitor's.** STomp's fingerprint protections apply as
   in normal mode, which is not Tor Browser's uniform fingerprint. Screen size,

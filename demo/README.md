@@ -88,8 +88,8 @@ settings of the old `/wisp-tor/` relay are ignored, with one line at
 startup saying so. That relay saw every destination of every visitor.
 
 **Scope:** Tor mode is for sites opened through STomp's transport. It does
-**not** turn the browser into Tor Browser: the application shell, GitHub
-commits and avatars and other requests the host makes directly do not pass
+**not** turn the browser into Tor Browser: the application shell, the
+commit list and other requests the host makes directly do not pass
 through Tor, and shared logins and browser fingerprints can still link
 sessions. `docs/tor.md` has the privacy scope in full.
 
@@ -787,8 +787,8 @@ isolate, but WebKit (Safari, and every browser on iOS) has no
 proxied page was: a game that needs SharedArrayBuffer (blockshooter.club)
 ran natively and stopped at its isolation check through the demo. Under
 `require-corp` everything the page itself loads from another origin sends a
-Cross-Origin-Resource-Policy: GitHub's avatars in the commit list send
-`cross-origin`. The service worker serves the proxied documents and workers
+Cross-Origin-Resource-Policy. The commit list's avatars do not come from
+another origin: the server fetches them from GitHub and serves them itself. The service worker serves the proxied documents and workers
 with `require-corp` too (src/isolation.ts `SERVED_EMBEDDER_POLICY`).
 
 `STOMP_ISOLATION=off` leaves the three headers out. Nothing is isolated

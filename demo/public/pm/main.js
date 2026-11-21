@@ -4127,7 +4127,8 @@ function commitRow(commit) {
 	link.href = commit.url; // opens in the proxy (proxyLink)
 	if (commit.avatar) {
 		const avatar = element('img', 'commitAvatar');
-		avatar.src = `${commit.avatar}&s=48`;
+		// from the demo's server, which has it from GitHub (demo/commits.js)
+		avatar.src = commit.avatar;
 		avatar.alt = '';
 		avatar.width = 24;
 		avatar.height = 24;

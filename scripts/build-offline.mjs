@@ -158,12 +158,13 @@ try {
 		['-C', root, 'log', '-30', '--format=%H%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e'],
 		{ encoding: 'utf8' },
 	);
+	// GitHub's, at the size the page shows (the demo's server serves its own)
 	const avatarOf = (email) => {
 		const noreply = /^(\d+)\+[^@]+@users\.noreply\.github\.com$/i.exec(email);
 		if (noreply)
-			return `https://avatars.githubusercontent.com/u/${noreply[1]}?v=4`;
+			return `https://avatars.githubusercontent.com/u/${noreply[1]}?v=4&s=48`;
 		return email
-			? `https://avatars.githubusercontent.com/u/e?email=${encodeURIComponent(email)}`
+			? `https://avatars.githubusercontent.com/u/e?email=${encodeURIComponent(email)}&s=48`
 			: null;
 	};
 	commits = {

@@ -23,6 +23,13 @@
 // deploys a git checkout), the whole answer when GitHub cannot be reached,
 // and it marks each of GitHub's commits as deployed or pushed but not
 // deployed yet (`deployed`, only when there is a checkout to tell).
+//
+// The authors' avatars come from this server too (`avatar`): a page that
+// asked GitHub's avatar host itself would tell it of every visitor, and an
+// author's email with it. The server fetches each once, at the size the page
+// shows, keeps it, and serves it under a neutral directory by a name that
+// says nothing (a hash of GitHub's address). It fetches only the addresses it
+// put in its own answer.
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -47,6 +54,13 @@ const WATCHED_FOR = 3 * 60000;
 // quiet connections (Cloudflare's is 100 s)
 const KEEPALIVE = 25000;
 const MAX_STREAMS = 2000;
+// an avatar as the page shows it (24 CSS pixels, twice that for HiDPI)
+const AVATAR_SIZE = 48;
+const AVATAR_KEPT = 24 * 3600000;
+const AVATAR_RETRY = 10 * 60000;
+const MAX_AVATARS = 256;
+const MAX_AVATAR_BYTES = 256 * 1024;
+const AVATAR_TYPES = /^image\/(png|jpeg|gif|webp)$/;
 
 const run = promisify(execFile);
 
@@ -57,11 +71,28 @@ const run = promisify(execFile);
  * @param {string} options.api the API's base URL, or `off` to ask nothing
  * @param {number} options.interval ms between requests while watched
  * @param {string | null} options.checkout a git checkout of `repo`, or null
+ * @param {string} [options.avatars] the directory the avatars are served
+ *   under (`/<name>/`, mounted at `${avatars}:name`)
  */
-export function createCommits({ repo, token, api, interval, checkout }) {
+export function createCommits({
+	repo,
+	token,
+	api,
+	interval,
+	checkout,
+	avatars: avatarDirectory = '/api/commits/avatars/',
+}) {
 	const polling = api !== 'off';
 	const apiBase = (api || DEFAULT_API).replace(/\/+$/, '');
 	const idle = interval * 10;
+	// GitHub's avatar host; another API's own origin (a fake GitHub's, in
+	// the suites, which so ask the real GitHub nothing); none when nothing
+	// is to be asked of GitHub (`off`): the rows go without avatars
+	const avatarHost = !polling
+		? null
+		: apiBase === DEFAULT_API
+			? 'https://avatars.githubusercontent.com'
+			: `${new URL(apiBase).origin}/avatars`;
 	const stateFile = join(
 		tmpdir(),
 		`stomp-demo-commits2-${repo.replace(/[^\w.-]/g, '_')}${
@@ -130,15 +161,82 @@ export function createCommits({ repo, token, api, interval, checkout }) {
 		return local;
 	}
 
-	// an author's avatar: GitHub's for that email (the page adds `&s=` for size)
+	// an author's avatar: GitHub's for that email (avatarPath adds the size)
 	function avatarOf(email) {
+		if (!avatarHost) return null;
 		if (github.avatars[email]) return github.avatars[email];
 		const noreply = /^(\d+)\+[^@]+@users\.noreply\.github\.com$/i.exec(email);
-		if (noreply)
-			return `https://avatars.githubusercontent.com/u/${noreply[1]}?v=4`;
+		if (noreply) return `${avatarHost}/u/${noreply[1]}?v=4`;
 		return email
-			? `https://avatars.githubusercontent.com/u/e?email=${encodeURIComponent(email)}`
+			? `${avatarHost}/u/e?email=${encodeURIComponent(email)}`
 			: null;
+	}
+
+	// ---- avatars --------------------------------------------------------
+	// the avatar host's, or the API's own
+	const avatarOrigins = new Set(
+		avatarHost ? [new URL(avatarHost).origin, new URL(apiBase).origin] : [],
+	);
+	// name -> GitHub's address, for the names this server has handed out
+	const avatarSources = new Map();
+	// name -> { at, type, body } (body null: it could not be had)
+	const avatarsKept = new Map();
+	const avatarsAsked = new Map();
+	/** where the page finds GitHub's avatar `source` on this server */
+	function avatarPath(source) {
+		if (!source) return null;
+		let url;
+		try {
+			url = new URL(source);
+		} catch {
+			return null;
+		}
+		if (!avatarOrigins.has(url.origin)) return null;
+		url.searchParams.set('s', String(AVATAR_SIZE));
+		const name = createHash('sha256')
+			.update(url.href)
+			.digest('hex')
+			.slice(0, 16);
+		if (!avatarSources.has(name)) {
+			avatarSources.set(name, url.href);
+			if (avatarSources.size > MAX_AVATARS * 4)
+				avatarSources.delete(avatarSources.keys().next().value);
+		}
+		return `${avatarDirectory}${name}`;
+	}
+	/** GitHub's avatar, fetched once however many pages ask at a time */
+	function fetchAvatar(name, source) {
+		let asked = avatarsAsked.get(name);
+		if (asked) return asked;
+		asked = (async () => {
+			try {
+				const response = await fetch(source, {
+					headers: { accept: 'image/*' },
+					signal: AbortSignal.timeout(10000),
+				});
+				const type = (response.headers.get('content-type') ?? '')
+					.split(';')[0]
+					.trim()
+					.toLowerCase();
+				if (!response.ok || !AVATAR_TYPES.test(type)) return null;
+				if (Number(response.headers.get('content-length')) > MAX_AVATAR_BYTES)
+					return null;
+				const body = Buffer.from(await response.arrayBuffer());
+				return body.length > MAX_AVATAR_BYTES ? null : { type, body };
+			} catch {
+				return null;
+			}
+		})().then((got) => {
+			const kept = { at: Date.now(), type: got?.type, body: got?.body ?? null };
+			avatarsKept.delete(name);
+			avatarsKept.set(name, kept);
+			if (avatarsKept.size > MAX_AVATARS)
+				avatarsKept.delete(avatarsKept.keys().next().value);
+			avatarsAsked.delete(name);
+			return kept;
+		});
+		avatarsAsked.set(name, asked);
+		return asked;
 	}
 
 	// ---- the answer ----------------------------------------------------
@@ -161,7 +259,7 @@ export function createCommits({ repo, token, api, interval, checkout }) {
 				url: commit.url,
 				message: commit.message,
 				author: commit.author,
-				avatar: commit.avatar || avatarOf(commit.email),
+				avatar: avatarPath(commit.avatar || avatarOf(commit.email)),
 				date: commit.date,
 				...(known && { deployed: local.history.has(commit.sha) }),
 			});
@@ -172,7 +270,7 @@ export function createCommits({ repo, token, api, interval, checkout }) {
 				url: `https://github.com/${repo}/commit/${commit.sha}`,
 				message: commit.message,
 				author: commit.author,
-				avatar: avatarOf(commit.email),
+				avatar: avatarPath(avatarOf(commit.email)),
 				date: commit.date,
 				deployed: true,
 			});
@@ -395,5 +493,28 @@ export function createCommits({ repo, token, api, interval, checkout }) {
 		};
 		res.once('close', close);
 	}
-	return { list, stream, ready };
+	/** GET `${avatars}:name`: an author's avatar, from what is kept */
+	async function avatar(req, res) {
+		if (!answer) await ready;
+		const name = req.params.name;
+		const source = avatarSources.get(name);
+		if (!source) return res.sendStatus(404);
+		let kept = avatarsKept.get(name);
+		if (
+			!kept ||
+			Date.now() - kept.at > (kept.body ? AVATAR_KEPT : AVATAR_RETRY)
+		)
+			kept = await fetchAvatar(name, source);
+		if (!kept.body) {
+			res.set('Cache-Control', 'no-store');
+			return res.sendStatus(404);
+		}
+		res.set({
+			'Content-Type': kept.type,
+			'Cache-Control': 'public, max-age=86400',
+			'X-Content-Type-Options': 'nosniff',
+		});
+		res.end(kept.body);
+	}
+	return { list, stream, avatar, ready };
 }

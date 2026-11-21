@@ -1632,10 +1632,22 @@ const POLL_MS = 1500;
 const repoRoot = new URL('../../', import.meta.url).pathname;
 const git = (...args) =>
 	execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8' }).trim();
+// a 1x1 PNG, every avatar of the fake's
+const PIXEL = Buffer.from(
+	'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
+	'base64',
+);
 function fakeGitHub() {
 	const requests = [];
+	// its avatar host's requests (`/avatars/`, where the demo's server looks
+	// for this API's avatars), kept apart from the API's
+	const avatars = [];
 	const state = { list: [], etag: null, refuse: null };
 	const server = createServer((req, res) => {
+		if (req.url.startsWith('/avatars/')) {
+			avatars.push(req.url);
+			return res.writeHead(200, { 'content-type': 'image/png' }).end(PIXEL);
+		}
 		const entry = {
 			at: Date.now(),
 			etag: req.headers['if-none-match'] ?? null,
@@ -1677,6 +1689,7 @@ function fakeGitHub() {
 			resolve({
 				server,
 				requests,
+				avatars,
 				state,
 				url: `http://127.0.0.1:${server.address().port}`,
 			}),
@@ -1723,6 +1736,7 @@ async function liveCommits() {
 			.slice(0, 30)
 			.map((sha) => sha.slice(0, 7));
 	const first = githubCommit('a1'.repeat(20), 'Pushed first', pushDate(120000));
+	first.author = { login: 'pusher', avatar_url: `${fake.url}/avatars/u/7?v=4` };
 	fake.state.list = [first, head];
 	fake.state.etag = '"a"';
 	const temp = mkdtempSync(join(tmpdir(), 'stomp-live-commits-'));
@@ -1775,8 +1789,15 @@ async function liveCommits() {
 			const page = await context.newPage();
 			const asked = [];
 			const streams = { opened: 0, ended: 0 };
+			// images asked of anywhere but the demo's server
+			const foreign = [];
 			page.on('request', (request) => {
 				const path = new URL(request.url()).pathname;
+				if (
+					request.resourceType() === 'image' &&
+					new URL(request.url()).origin !== new URL(origin).origin
+				)
+					foreign.push(request.url());
 				if (path === '/api/commits') asked.push(Date.now());
 				if (path === '/api/commits/stream') streams.opened++;
 			});
@@ -1791,7 +1812,7 @@ async function liveCommits() {
 				null,
 				{ timeout: 30000 },
 			);
-			return { page, asked, streams };
+			return { page, asked, streams, foreign };
 		};
 		const rows = (page) =>
 			page.evaluate(() =>
@@ -1886,6 +1907,45 @@ async function liveCommits() {
 				during.length <= Math.floor(WINDOW / POLL_MS) + 1 &&
 				gaps.every((gap) => gap >= POLL_MS - 100),
 			JSON.stringify({ count: during.length, gaps }),
+		);
+
+		// the avatars: the demo's server's, under a name that says nothing,
+		// each asked of GitHub once, at the size the page shows, however
+		// many pages show it
+		const avatarsOf = (page) =>
+			page.evaluate(() =>
+				[...document.querySelectorAll('#commitList img.commitAvatar')].map(
+					(img) => ({
+						src: img.src,
+						loaded: img.complete && img.naturalWidth > 0,
+					}),
+				),
+			);
+		const shownAvatars = await eventually(
+			() => Promise.all([a, b, c].map(({ page }) => avatarsOf(page))),
+			(all) => all.every((list) => list.length && list.every((i) => i.loaded)),
+			15000,
+		);
+		const neutral = new RegExp(
+			`^${origin.replace(/[.]/g, '\\.')}[0-9a-f]{8}/[0-9a-f]{16}$`,
+		);
+		const sources = new Set(shownAvatars.flat().map((i) => i.src));
+		ok(
+			"live commits: the avatars are the demo's, under neutral names, each asked of GitHub once at the size shown, and the pages ask no other site",
+			shownAvatars.every(
+				(list) =>
+					list.length && list.every((i) => i.loaded && neutral.test(i.src)),
+			) &&
+				fake.avatars.length === sources.size &&
+				new Set(fake.avatars).size === fake.avatars.length &&
+				fake.avatars.includes('/avatars/u/7?v=4&s=48') &&
+				fake.avatars.every((path) => /[?&]s=48$/.test(path)) &&
+				[a, b, c].every(({ foreign }) => foreign.length === 0),
+			JSON.stringify({
+				sources: [...sources],
+				asked: fake.avatars,
+				foreign: [a, b, c].flatMap(({ foreign }) => foreign),
+			}),
 		);
 
 		// a push: every open page shows it at the top, without a reload
