@@ -2385,6 +2385,27 @@ input:focus-visible {
 	background: var(--pm-accent);
 	border: 1px solid var(--pm-on-accent);
 }
+/* pushed to GitHub, not deployed here yet: the dot is a ring (the row's
+   title says so) */
+.commitList li.pending::after {
+	background: var(--pm-page);
+	border-color: var(--pm-accent-text);
+}
+/* a row a push brought in while the page was open: it fades in where the
+   fitted list made room for it (opacity only, nothing moves) */
+.commitList li.arrived {
+	animation: commitArrived 0.6s ease-out;
+}
+@keyframes commitArrived {
+	from {
+		opacity: 0;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.commitList li.arrived {
+		animation: none;
+	}
+}
 .commit {
 	position: relative;
 	display: flex;

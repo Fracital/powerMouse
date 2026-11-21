@@ -42,6 +42,10 @@ const suitesDir = `${root}test/suites/`;
 // with --disable-default-apps: a fresh profile would download one from the
 // Web Store; webstore-themes names its own for the page it checks it in
 process.env.STOMP_DEFAULT_THEMES ??= '0';
+// and no demo server of the run asks GitHub's API for the home page's
+// commits (they list the checkout's git log, as their suites expect):
+// demo-bookmarks points one of its own at a fake GitHub instead
+process.env.STOMP_GITHUB_API ??= 'off';
 
 const PARALLEL = Math.max(
 	1,

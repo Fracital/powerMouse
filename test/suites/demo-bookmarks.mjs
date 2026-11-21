@@ -11,9 +11,17 @@
 // the title and the page's icon; the list kept across a reload; and no
 // links beside the title but Download (offline.html) and GitHub's, the
 // bookmarks having taken the others over; Estro's default, now estrogen,
-// renamed in a profile seeded before; and the home page's commit times
-// kept current as time passes. Both controller modes at once, each in a
-// context of its own.
+// renamed in a profile seeded before; the home page's commit times kept
+// current as time passes; and its commits live from a fake GitHub (a demo
+// server of its own polls it, one request per interval whatever the number
+// of pages, backing off on a refusal, and pushes a new commit to every open
+// page with no reload). Both controller modes at once, each in a context of
+// its own.
+import { execFileSync, spawn } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
 	done,
 	FIXTURE,
@@ -1587,9 +1595,437 @@ async function commitTimes(base) {
 	await context.close();
 }
 
+// The home page's commits live. A fake of GitHub's commits API, scripted
+// by the checks: its list and ETag, a 304 for a request whose If-None-Match
+// is the ETag, and a 403 with a reset when told. A demo server of the
+// suite's own asks it (STOMP_GITHUB_API) every 1.5 s while watched
+// (STOMP_GITHUB_POLL_MS), with a fresh TMPDIR so no kept answer of another
+// run is read. The real API is never asked.
+const POLL_MS = 1500;
+const repoRoot = new URL('../../', import.meta.url).pathname;
+const git = (...args) =>
+	execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8' }).trim();
+function fakeGitHub() {
+	const requests = [];
+	const state = { list: [], etag: null, refuse: null };
+	const server = createServer((req, res) => {
+		const entry = {
+			at: Date.now(),
+			etag: req.headers['if-none-match'] ?? null,
+			auth: req.headers.authorization ?? null,
+			path: req.url,
+			status: 0,
+		};
+		requests.push(entry);
+		const answer = (status, headers, body) => {
+			entry.status = status;
+			res.writeHead(status, headers).end(body);
+		};
+		if (!req.url.startsWith('/repos/Fracital/powerMouse/commits?'))
+			return answer(404, {}, '{}');
+		if (state.refuse) {
+			const reset = state.refuse;
+			state.refuse = null;
+			entry.reset = reset;
+			return answer(
+				403,
+				{
+					'content-type': 'application/json',
+					'x-ratelimit-remaining': '0',
+					'x-ratelimit-reset': String(reset),
+				},
+				'{"message":"API rate limit exceeded"}',
+			);
+		}
+		if (entry.etag === state.etag)
+			return answer(304, { etag: state.etag }, undefined);
+		answer(
+			200,
+			{ 'content-type': 'application/json', etag: state.etag },
+			JSON.stringify(state.list),
+		);
+	});
+	return new Promise((resolve) =>
+		server.listen(0, '127.0.0.1', () =>
+			resolve({
+				server,
+				requests,
+				state,
+				url: `http://127.0.0.1:${server.address().port}`,
+			}),
+		),
+	);
+}
+/** a commit as GitHub's API lists it */
+const githubCommit = (sha, message, date) => ({
+	sha,
+	html_url: `https://github.com/Fracital/powerMouse/commit/${sha}`,
+	commit: {
+		message: `${message}\n\nIts body.`,
+		author: { name: 'Pusher', email: 'pusher@example.com', date },
+		committer: { name: 'Pusher', email: 'pusher@example.com', date },
+	},
+	author: null,
+});
+async function eventually(read, want, timeout) {
+	const end = Date.now() + timeout;
+	let value = await read();
+	while (!want(value) && Date.now() < end) {
+		await sleep(100);
+		value = await read();
+	}
+	return value;
+}
+async function liveCommits() {
+	const fake = await fakeGitHub();
+	const headSha = git('rev-parse', 'HEAD');
+	const head = githubCommit(headSha, git('log', '-1', '--format=%s'), null);
+	head.commit.author.date = git('log', '-1', '--format=%aI');
+	head.commit.committer.date = git('log', '-1', '--format=%cI');
+	const now = Date.now();
+	const fresh = (sha, message, ago) =>
+		githubCommit(sha, message, new Date(now - ago).toISOString());
+	const first = fresh('a1'.repeat(20), 'Pushed first', 120000);
+	fake.state.list = [first, head];
+	fake.state.etag = '"a"';
+	const temp = mkdtempSync(join(tmpdir(), 'stomp-live-commits-'));
+	const server = spawn(
+		process.execPath,
+		[new URL('../../demo/server.js', import.meta.url).pathname],
+		{
+			env: {
+				...process.env,
+				TMPDIR: temp,
+				PORT: '0',
+				STOMP_GITHUB_API: fake.url,
+				STOMP_GITHUB_POLL_MS: String(POLL_MS),
+				STOMP_REPO: '',
+				GITHUB_TOKEN: '',
+				STOMP_WISP_URL: '',
+				STOMP_TOR_SOCKS5: '',
+				STOMP_TOR_WISP_URL: '',
+				STOMP_WISP_WEBTRANSPORT: '0',
+				STOMP_SITE_POOL: '0',
+				STOMP_SLOT_PORTS: '0',
+				STOMP_ADBLOCK: '0',
+				STOMP_DEFAULT_THEMES: '0',
+				STOMP_SHIELDS_DEFAULTS: '0',
+				STOMP_ECH_DNS: 'off',
+			},
+			stdio: ['ignore', 'pipe', 'inherit'],
+		},
+	);
+	const contexts = [];
+	try {
+		let log = '';
+		const port = await new Promise((resolve) => {
+			server.stdout.on('data', (chunk) => {
+				log += chunk;
+				const match = /http:\/\/localhost:(\d+)/.exec(log);
+				if (match) resolve(Number(match[1]));
+			});
+			server.once('exit', () => resolve(null));
+		});
+		if (!port) {
+			ok('live commits: a demo server against the fake GitHub starts', false);
+			return;
+		}
+		const origin = `http://127.0.0.1:${port}/`;
+		await waitForServer(`${origin}api/status`);
+		const open = async (route) => {
+			const context = await browser.newContext({
+				viewport: { width: 1280, height: 800 },
+			});
+			contexts.push(context);
+			const page = await context.newPage();
+			const asked = [];
+			const streams = { opened: 0, ended: 0 };
+			page.on('request', (request) => {
+				const path = new URL(request.url()).pathname;
+				if (path === '/api/commits') asked.push(Date.now());
+				if (path === '/api/commits/stream') streams.opened++;
+			});
+			page.on('requestfailed', (request) => {
+				if (new URL(request.url()).pathname === '/api/commits/stream')
+					streams.ended++;
+			});
+			if (route) await route(page);
+			await page.goto(origin);
+			await page.waitForFunction(
+				() => document.querySelectorAll('#commitList li').length > 0,
+				null,
+				{ timeout: 30000 },
+			);
+			return { page, asked, streams };
+		};
+		const rows = (page) =>
+			page.evaluate(() =>
+				[...document.querySelectorAll('#commitList li')].map((li) => ({
+					sha: li.dataset.sha,
+					text: li.querySelector('.commitSha').textContent,
+					message: li.querySelector('.commitMsg').textContent,
+					pending: li.classList.contains('pending'),
+					title: li.querySelector('.commit').title,
+					time: li.querySelector('time')?.textContent ?? null,
+					datetime: li.querySelector('time')?.dateTime ?? null,
+					hidden: li.classList.contains('hidden'),
+				})),
+			);
+		const short = (sha) => sha.slice(0, 7);
+
+		const a = await open();
+		const shown = await rows(a.page);
+		ok(
+			"live commits: GitHub's newest commit is on top, marked pushed but not deployed (a ring, its title), and this checkout's HEAD after it, deployed",
+			shown[0]?.sha === short(first.sha) &&
+				shown[0].message === 'Pushed first' &&
+				shown[0].pending &&
+				shown[0].title === 'Pushed, not deployed yet' &&
+				shown[1]?.sha === short(headSha) &&
+				!shown[1].pending &&
+				!shown[1].title &&
+				shown.length === 30 &&
+				shown.slice(1).every((row) => !row.pending) &&
+				fake.requests[0]?.status === 200 &&
+				fake.requests.every((r) => r.auth === null),
+			JSON.stringify({
+				shown: shown.slice(0, 3),
+				count: shown.length,
+				requests: fake.requests.slice(0, 3),
+			}),
+		);
+		const ring = await a.page.evaluate(() => {
+			const style = (li) => getComputedStyle(li, '::after');
+			const [pending, deployed] = document.querySelectorAll('#commitList li');
+			return {
+				pending: [style(pending).backgroundColor, style(pending).width],
+				deployed: [style(deployed).backgroundColor, style(deployed).width],
+			};
+		});
+		ok(
+			"live commits: the pending row's dot is hollow, the same size as a deployed one's",
+			ring.pending[0] !== ring.deployed[0] &&
+				ring.pending[1] === ring.deployed[1],
+			JSON.stringify(ring),
+		);
+
+		// unchanged: a conditional request, answered 304
+		const unchanged = await eventually(
+			() => fake.requests.find((r) => r.status === 304),
+			Boolean,
+			15000,
+		);
+		ok(
+			'live commits: the poller asks again with the ETag it was given and gets a 304',
+			unchanged?.etag === '"a"',
+			JSON.stringify(fake.requests),
+		);
+
+		// many pages, and requests of /api/commits: still one request to
+		// GitHub per interval
+		const b = await open();
+		const c = await open();
+		await Promise.all(
+			[a, b, c].map(({ page }) =>
+				page.evaluate(() =>
+					Promise.all(
+						Array.from({ length: 10 }, () =>
+							fetch('/api/commits', { cache: 'no-store' }),
+						),
+					),
+				),
+			),
+		);
+		const from = Date.now();
+		const WINDOW = 9000;
+		await sleep(WINDOW);
+		const during = fake.requests.filter(
+			(r) => r.at >= from && r.at < from + WINDOW,
+		);
+		const gaps = during.slice(1).map((r, i) => r.at - during[i].at);
+		ok(
+			'live commits: with three pages open and thirty requests of /api/commits, the poller still asks GitHub once per interval',
+			during.length >= 2 &&
+				during.length <= Math.floor(WINDOW / POLL_MS) + 1 &&
+				gaps.every((gap) => gap >= POLL_MS - 100),
+			JSON.stringify({ count: during.length, gaps }),
+		);
+
+		// a push: every open page shows it at the top, without a reload
+		await a.page.evaluate(() => {
+			window.__liveMark = 'kept';
+			window.__headRow = document.querySelectorAll('#commitList li')[1];
+		});
+		const second = githubCommit(
+			'b2'.repeat(20),
+			'Pushed second',
+			new Date().toISOString(),
+		);
+		const askedBefore = [a, b, c].map(({ asked }) => asked.length);
+		fake.state.list = [second, first, head];
+		fake.state.etag = '"b"';
+		const pushedAt = Date.now();
+		const arrived = await Promise.all(
+			[a, b, c].map(({ page }) =>
+				eventually(
+					() => rows(page),
+					(list) => list[0]?.sha === short(second.sha),
+					20000,
+				),
+			),
+		);
+		const tookMs = Date.now() - pushedAt;
+		const askedAfter = [a, b, c].map(({ asked }) => asked.length);
+		const after = await a.page.evaluate(() => {
+			const list = document.getElementById('commitList');
+			const shown = [...list.children].filter(
+				(li) => !li.classList.contains('hidden'),
+			);
+			const bottom = list.getBoundingClientRect().bottom;
+			return {
+				mark: window.__liveMark,
+				sameHead: list.children[2] === window.__headRow,
+				count: list.children.length,
+				overflow: list.scrollHeight - list.clientHeight,
+				cut: shown.filter(
+					(li) => li.getBoundingClientRect().bottom > bottom + 1,
+				).length,
+				last: shown.at(-1)?.classList.contains('last'),
+				lastCount: list.querySelectorAll('li.last').length,
+			};
+		});
+		ok(
+			'live commits: a pushed commit shows at the top of every open page with no reload, the rows already there kept',
+			arrived.every((list) => list[0]?.sha === short(second.sha)) &&
+				arrived[0][0].message === 'Pushed second' &&
+				arrived[0][0].pending &&
+				arrived[0][1].sha === short(first.sha) &&
+				after.mark === 'kept' &&
+				after.sameHead &&
+				after.count === 30 &&
+				JSON.stringify(askedAfter) === JSON.stringify(askedBefore),
+			JSON.stringify({
+				tookMs,
+				top: arrived.map((list) => list[0]),
+				after,
+				askedBefore,
+				askedAfter,
+			}),
+		);
+		ok(
+			'live commits: the new row has its <time> (just now) and the list is fitted again (whole rows, the last marked)',
+			arrived[0][0].time === 'just now' &&
+				arrived[0][0].datetime === second.commit.author.date &&
+				after.overflow <= 0 &&
+				after.cut === 0 &&
+				after.last &&
+				after.lastCount === 1,
+			JSON.stringify({ row: arrived[0][0], after }),
+		);
+		const changed = fake.requests.find(
+			(r) => r.status === 200 && r.etag === '"a"',
+		);
+		ok(
+			'live commits: the poller heard 200, then 304s, then the new list (asked with the old ETag)',
+			!!changed && fake.requests[0].status === 200,
+			JSON.stringify(fake.requests.map((r) => [r.status, r.etag])),
+		);
+
+		// a refusal: nothing until its reset
+		const reset = Math.ceil(Date.now() / 1000) + 5;
+		fake.state.refuse = reset;
+		const refused = await eventually(
+			() => fake.requests.find((r) => r.status === 403),
+			Boolean,
+			15000,
+		);
+		const next = await eventually(
+			() => fake.requests.find((r) => refused && r.at > refused.at),
+			Boolean,
+			25000,
+		);
+		const stillShown = await rows(b.page);
+		ok(
+			'live commits: after a 403 the poller asks nothing before x-ratelimit-reset, then asks again with its ETag, and the pages keep their list',
+			!!refused &&
+				!!next &&
+				next.at >= reset * 1000 &&
+				next.etag === '"b"' &&
+				stillShown[0]?.sha === short(second.sha),
+			JSON.stringify({
+				refusedAt: refused?.at,
+				reset: reset * 1000,
+				next,
+			}),
+		);
+
+		// a hidden page holds no stream; shown again it opens one
+		const visible = (hidden) =>
+			c.page.evaluate((hidden) => {
+				Object.defineProperty(document, 'hidden', {
+					configurable: true,
+					get: () => hidden,
+				});
+				document.dispatchEvent(new Event('visibilitychange'));
+			}, hidden);
+		const opened = c.streams.opened;
+		await visible(true);
+		const closed = await eventually(
+			() => ({ ...c.streams }),
+			(now) => now.ended > 0,
+			5000,
+		);
+		await visible(false);
+		const reopened = await eventually(
+			() => ({ ...c.streams }),
+			(now) => now.opened > opened,
+			5000,
+		);
+		ok(
+			'live commits: a hidden page closes its stream, and showing it opens one again',
+			opened >= 1 &&
+				closed.ended >= 1 &&
+				closed.opened === opened &&
+				reopened.opened === opened + 1,
+			JSON.stringify({ opened, closed, reopened }),
+		);
+
+		// a page whose stream fails asks /api/commits at the poller's pace
+		const d = await open((page) =>
+			page.route('**/api/commits/stream', (route) => route.abort()),
+		);
+		const third = githubCommit(
+			'c3'.repeat(20),
+			'Pushed third',
+			new Date().toISOString(),
+		);
+		fake.state.list = [third, second, first, head];
+		fake.state.etag = '"c"';
+		const polled = await eventually(
+			() => rows(d.page),
+			(list) => list[0]?.sha === short(third.sha),
+			20000,
+		);
+		const streamed = await rows(a.page);
+		ok(
+			'live commits: a page whose stream fails polls /api/commits and shows the push too',
+			polled[0]?.sha === short(third.sha) &&
+				d.asked.length >= 2 &&
+				streamed[0]?.sha === short(third.sha),
+			JSON.stringify({ top: polled[0], asked: d.asked.length }),
+		);
+	} finally {
+		await Promise.all(contexts.map((context) => context.close()));
+		server.kill();
+		fake.server.close();
+		rmSync(temp, { recursive: true, force: true });
+	}
+}
+
 await Promise.all([
 	run('same-origin', PROXY),
 	run('isolated', HOST),
 	commitTimes(HOST),
+	liveCommits(),
 ]);
 await done(browser, errors);

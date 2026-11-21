@@ -166,7 +166,7 @@ server on the same port:
 | `/libcurl/`     | `@mercuryworkshop/libcurl-transport`'s `dist/`                                                                                          |
 | `/wisp/`        | WebSocket upgrade handed to holyWisp (the `holywisp` package), see below                                                                |
 | `/api/status`   | `{ uptime, version, node, build }` for the landing page footer and the menu's About                                                     |
-| `/api/commits`  | `{ repo, url, commits }` for the landing page's latest commits: GitHub's answer, kept ten minutes                                       |
+| `/api/commits`  | `{ repo, url, commits, live }`, the landing page's commits: GitHub's and the git log's; `/api/commits/stream` pushes changes            |
 | `/offline.html` | `build/offline.html`, built here when missing or another tree's (503 until then), and `/offline.html.sha256`; any origin may fetch them |
 
 Nothing else is proxied by the server. All page traffic goes through the
@@ -291,8 +291,16 @@ holyWisp is started.
    frame is visible. The landing page doubles as the new-tab page: submitting
    there or clicking a quick link opens a new tab. Closing the last tab goes
    back to the landing page. Below the address bar it shows the repository's
-   latest commits, from `/api/commits` (the server's ten-minute copy of
-   GitHub's answer; `STOMP_REPO` names another repository).
+   latest commits, from `/api/commits`, kept current while the page is
+   visible by `/api/commits/stream` (Server-Sent Events; when the stream
+   fails, by asking `/api/commits` again each minute): the server's one
+   poller asks GitHub about once a minute, conditionally and within its
+   rate limit (`GITHUB_TOKEN` makes an unchanged list free), merges in this
+   checkout's git log, which marks each commit `deployed` or not and is the
+   answer when GitHub is out of reach, and pushes each change, so a push
+   shows within about a minute and visitors cost GitHub nothing. A commit
+   pushed but not deployed yet has a hollow dot; `STOMP_REPO` names another
+   repository.
    Its links, like Fork us on GitHub, open in the proxy, never in the real
    browser: a click in the current tab, Ctrl, Cmd, Shift or the middle
    button in a new one. Chrome's tab keys are the demo's (`pm/main.js`,

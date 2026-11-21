@@ -3992,8 +3992,9 @@ pollStatus();
 setInterval(pollStatus, 10000);
 setInterval(renderUptime, 1000);
 
-// the repository's latest commits (/api/commits, the server's copy of
-// GitHub's answer), drawn as a git log: a rail with a dot per commit, the
+// the repository's latest commits (/api/commits, the server's merge of
+// GitHub's answer and its own checkout, kept current over
+// /api/commits/stream), drawn as a git log: a rail with a dot per commit, the
 // author's avatar, the message's first line, who and when, the short sha
 const AGO_UNITS = [
 	[31536000, 'year'],
@@ -4054,51 +4055,171 @@ function element(tag, className, text) {
 	if (text !== undefined) node.textContent = text;
 	return node;
 }
-async function showCommits() {
+/** one commit's row, made once and updated in place after */
+function commitRow(commit) {
+	const link = element('a', 'commit');
+	link.href = commit.url; // opens in the proxy (proxyLink)
+	if (commit.avatar) {
+		const avatar = element('img', 'commitAvatar');
+		avatar.src = `${commit.avatar}&s=48`;
+		avatar.alt = '';
+		avatar.width = 24;
+		avatar.height = 24;
+		link.append(avatar);
+	} else link.append(element('span', 'commitAvatar'));
+	const body = element('div', 'commitBody');
+	const message = element('div', 'commitMsg', commit.message);
+	message.title = commit.message;
+	const meta = element('div', 'commitMeta');
+	meta.append(`${commit.author}, `);
+	if (commit.date) {
+		const when = element('time', null, ago(commit.date));
+		when.dateTime = commit.date;
+		when.title = new Date(commit.date).toLocaleString();
+		meta.append(when);
+	}
+	body.append(message, meta);
+	link.append(body, element('code', 'commitSha', commit.sha));
+	const item = element('li');
+	item.dataset.sha = commit.sha;
+	item.append(link);
+	return item;
+}
+/** a commit GitHub has and this server's checkout does not yet (the
+ * server says only where it has a checkout to tell): a hollow dot */
+function markDeployed(item, commit) {
+	const pending = commit.deployed === false;
+	item.classList.toggle('pending', pending);
+	const link = item.firstChild;
+	if (pending) link.title = 'Pushed, not deployed yet';
+	else link.removeAttribute('title');
+}
+/** the list as `data` has it, newest first: rows already shown stay the
+ * same elements (their avatar loaded, their hover kept), new ones go in
+ * where they belong (a push: at the top), and the room is fitted again in
+ * the same task, so no frame shows the list unfitted */
+function renderCommits(data) {
 	const list = $('commitList');
-	const note = $('commitsNote');
+	const repoLink = $('commitsRepo');
+	if (repoLink.textContent !== data.repo) repoLink.textContent = data.repo;
+	if (repoLink.getAttribute('href') !== data.url) repoLink.href = data.url;
+	const shown = new Map(
+		[...list.children].map((item) => [item.dataset.sha, item]),
+	);
+	const live = list.children.length > 0;
+	data.commits.forEach((commit, index) => {
+		let item = shown.get(commit.sha);
+		shown.delete(commit.sha);
+		if (!item) {
+			item = commitRow(commit);
+			if (live) {
+				item.classList.add('arrived');
+				item.addEventListener(
+					'animationend',
+					() => item.classList.remove('arrived'),
+					{ once: true },
+				);
+			}
+		}
+		markDeployed(item, commit);
+		if (list.children[index] !== item)
+			list.insertBefore(item, list.children[index] ?? null);
+	});
+	for (const item of shown.values()) item.remove();
+	$('commitsNote').textContent = data.commits.length ? '' : 'No commits yet';
+	fitCommits();
+	tickCommitTimes();
+}
+async function showCommits() {
 	try {
 		const response = await fetch('/api/commits');
 		const data = await response.json();
 		if (!response.ok)
 			throw new Error(data.error || `status ${response.status}`);
-		const repoLink = $('commitsRepo');
-		repoLink.textContent = data.repo;
-		repoLink.href = data.url;
-		for (const commit of data.commits) {
-			const link = element('a', 'commit');
-			link.href = commit.url; // opens in the proxy (proxyLink)
-			if (commit.avatar) {
-				const avatar = element('img', 'commitAvatar');
-				avatar.src = `${commit.avatar}&s=48`;
-				avatar.alt = '';
-				avatar.width = 24;
-				avatar.height = 24;
-				link.append(avatar);
-			} else link.append(element('span', 'commitAvatar'));
-			const body = element('div', 'commitBody');
-			const message = element('div', 'commitMsg', commit.message);
-			message.title = commit.message;
-			const meta = element('div', 'commitMeta');
-			meta.append(`${commit.author}, `);
-			if (commit.date) {
-				const when = element('time', null, ago(commit.date));
-				when.dateTime = commit.date;
-				when.title = new Date(commit.date).toLocaleString();
-				meta.append(when);
-			}
-			body.append(message, meta);
-			link.append(body, element('code', 'commitSha', commit.sha));
-			const item = element('li');
-			item.append(link);
-			list.append(item);
-		}
-		note.textContent = data.commits.length ? '' : 'No commits yet';
-		fitCommits();
-		tickCommitTimes();
+		renderCommits(data);
+		// a server that pushes changes says where (demo/server.js); a host
+		// that answers /api/commits itself (offline.html, SystemYA) does
+		// not, and its list stays as it came
+		if (data.live?.stream) followCommits(data.live);
 	} catch (error) {
-		note.textContent = `GitHub did not answer (${error.message}). The repository is linked above.`;
+		$('commitsNote').textContent =
+			`GitHub did not answer (${error.message}). The repository is linked above.`;
 	}
+}
+// Live commits: the server's one poller asks GitHub and pushes each change
+// over Server-Sent Events, so a push shows on every open page within about
+// a minute and no page asks GitHub itself. The stream is open only while the
+// page is visible (a hidden tab holds no connection: on HTTP/1.1 a browser
+// has six per origin for all its tabs), and shown again it reconnects and
+// gets the list at once. A stream that fails is tried again later, waiting
+// longer each time, and until it is back the page asks /api/commits at the
+// poller's interval.
+const COMMITS_RETRY = [2000, 60000 * 5];
+const commitsLive = {
+	config: null,
+	source: null,
+	retry: COMMITS_RETRY[0],
+	retryTimer: 0,
+	pollTimer: 0,
+};
+function followCommits(config) {
+	commitsLive.config = config;
+	document.removeEventListener('visibilitychange', commitsVisibility);
+	document.addEventListener('visibilitychange', commitsVisibility);
+	commitsVisibility();
+}
+function commitsVisibility() {
+	if (document.hidden) stopCommitsLive();
+	else if (!commitsLive.source && !commitsLive.retryTimer) openCommitsStream();
+}
+function stopCommitsLive() {
+	commitsLive.source?.close();
+	commitsLive.source = null;
+	clearTimeout(commitsLive.retryTimer);
+	clearTimeout(commitsLive.pollTimer);
+	commitsLive.retryTimer = commitsLive.pollTimer = 0;
+}
+function openCommitsStream() {
+	commitsLive.retryTimer = 0;
+	const source = new EventSource(commitsLive.config.stream);
+	commitsLive.source = source;
+	source.addEventListener('commits', (event) => {
+		if (commitsLive.source !== source) return;
+		commitsLive.retry = COMMITS_RETRY[0];
+		clearTimeout(commitsLive.pollTimer);
+		commitsLive.pollTimer = 0;
+		try {
+			renderCommits(JSON.parse(event.data));
+		} catch {
+			// a bad event leaves the list as it was
+		}
+	});
+	source.addEventListener('error', () => {
+		if (commitsLive.source !== source) return;
+		// the browser's own reconnect has no backoff of its own: ours
+		source.close();
+		commitsLive.source = null;
+		if (document.hidden) return;
+		commitsLive.retryTimer = setTimeout(
+			openCommitsStream,
+			commitsLive.retry * (0.75 + Math.random() / 2),
+		);
+		commitsLive.retry = Math.min(commitsLive.retry * 2, COMMITS_RETRY[1]);
+		if (!commitsLive.pollTimer) pollCommits();
+	});
+}
+/** while the stream is down: /api/commits at the poller's interval */
+function pollCommits() {
+	commitsLive.pollTimer = setTimeout(async () => {
+		try {
+			const response = await fetch('/api/commits', { cache: 'no-cache' });
+			if (response.ok && !commitsLive.source?.readyState)
+				renderCommits(await response.json());
+		} catch {
+			// the server is away: the list stays, and the next poll tries again
+		}
+		if (commitsLive.pollTimer && !document.hidden) pollCommits();
+	}, commitsLive.config.interval || 60000);
 }
 // asked once; a page opened from the fragment asks after its tab (or when
 // home shows first), so they never come before it
