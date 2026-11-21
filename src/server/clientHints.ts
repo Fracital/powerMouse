@@ -259,8 +259,8 @@ export interface HintsDocument {
 }
 
 /**
- * Every policy-controlled feature Chrome 152 or 156 knows
- * (`document.featurePolicy.features()`, measured on both). A document's
+ * Every policy-controlled feature Chrome 152, 156 or 158 knows
+ * (`document.featurePolicy.features()`, measured on each). A document's
  * policy reaches the browser as `Permissions-Policy` naming the ones it may
  * not use (browserPolicy), so the browser itself refuses them and
  * `document.featurePolicy` reads as natively. `cross-origin-isolated` is
@@ -306,6 +306,7 @@ const BROWSER_FEATURES: string[] = [
 	'digital-credentials-get',
 	'display-capture',
 	'encrypted-media',
+	'focus-without-user-activation',
 	'fullscreen',
 	'gamepad',
 	'geolocation',
@@ -347,6 +348,7 @@ const BROWSER_FEATURES: string[] = [
 	'translator',
 	'unload',
 	'usb',
+	'web-app-installation',
 	'window-management',
 	'xr-spatial-tracking',
 ];
@@ -358,8 +360,11 @@ const BROWSER_FEATURES: string[] = [
  */
 const FEATURE_VERSIONS: Record<string, { since?: number; until?: number }> = {
 	'digital-credentials-create': { since: 156 },
+	'focus-without-user-activation': { since: 158 },
 	'media-playback-while-not-visible': { since: 156 },
 	'speaker-selection': { since: 156 },
+	// navigator.install()
+	'web-app-installation': { since: 158 },
 	'join-ad-interest-group': { until: 155 },
 	'private-aggregation': { until: 155 },
 	'run-ad-auction': { until: 155 },
@@ -389,8 +394,8 @@ function browserFeatures(): string[] {
 
 /**
  * The features whose default allowlist is `*`: a frame of another origin
- * has them without an allow attribute (measured on Chrome 152 and 156);
- * every other one's is `self`
+ * has them without an allow attribute (measured on Chrome 152, 156 and
+ * 158); every other one's is `self`
  */
 const DEFAULT_ALL_FEATURES = new Set([
 	'aria-notify',
@@ -401,6 +406,7 @@ const DEFAULT_ALL_FEATURES = new Set([
 	'ch-ua-mobile',
 	'ch-ua-platform',
 	'deferred-fetch-minimal',
+	'focus-without-user-activation',
 	'gamepad',
 	'interest-cohort',
 	'join-ad-interest-group',
