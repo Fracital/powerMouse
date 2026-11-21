@@ -254,7 +254,7 @@ import {
 	type CacheHit,
 } from './cache';
 import { cacheMarkOf, renewCacheSecret } from './cacheMarks';
-import { isCallPage } from './called';
+import { calledClient, isCallPage } from './called';
 import {
 	decodeDocument,
 	decodeScript,
@@ -4930,9 +4930,10 @@ function genericForward(
 		else if (rewriter.isolated && navigation && navigationRedirect)
 			responseHeaders.set('cross-origin-resource-policy', 'cross-origin');
 		// a worker's script needs an embedder policy to start under a
-		// document that has one (every proxied document, in an isolated host)
+		// document that has one (every proxied document, in an isolated host,
+		// and a dialed one, which keeps its call page's)
 		else if (
-			rewriter.isolated &&
+			(rewriter.isolated || calledClient(context?.clientId)) &&
 			(serverRequest.destination === 'worker' ||
 				serverRequest.destination === 'sharedworker')
 		)

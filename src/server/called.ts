@@ -444,6 +444,15 @@ export function callPage(event: FetchEvent, pathname: string): boolean {
 	return true;
 }
 
+/**
+ * Whether the client is a call page that called (or is calling): its
+ * document is the one written into it, under the call page's embedder
+ * policy (callPageResponse), whatever the host's isolation
+ */
+export function calledClient(clientId: string | undefined): boolean {
+	return !!clientId && (done.has(clientId) || calling.has(clientId));
+}
+
 /** whether the request is a call (it carries the header and is no navigation) */
 export function isCall(request: Request): boolean {
 	return request.mode !== 'navigate' && request.headers.has(CALL_HEADER);
