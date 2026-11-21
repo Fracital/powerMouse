@@ -44,6 +44,7 @@ import {
 	sleep,
 	submitLanding,
 	submitOmni,
+	waitForServer,
 } from '../lib.mjs';
 
 const SKIP_NETWORK = process.env.SKIP_NETWORK === '1';
@@ -149,7 +150,9 @@ button.onclick = () => {
 
 let downloads = 0;
 let damaged = false;
-const server = createServer((request, response) => {
+/** longer than a click's transient activation (5 s) */
+const SLOW_ICON_MS = 6000;
+const server = createServer(async (request, response) => {
 	const url = new URL(request.url, 'http://store.test');
 	if (url.pathname === '/origin-check') {
 		response.writeHead(200, { 'content-type': 'text/html' });
@@ -157,9 +160,13 @@ const server = createServer((request, response) => {
 	}
 	if (url.pathname.startsWith('/detail/')) {
 		response.writeHead(200, { 'content-type': 'text/html' });
-		return response.end(detailPage('/icon.png'));
+		return response.end(
+			detailPage(url.searchParams.has('slow') ? '/slow-icon.png' : '/icon.png'),
+		);
 	}
-	if (url.pathname === '/icon.png') {
+	if (url.pathname === '/icon.png' || url.pathname === '/slow-icon.png') {
+		// (the slow one comes after the click's activation has expired)
+		if (url.pathname === '/slow-icon.png') await sleep(SLOW_ICON_MS);
 		response.writeHead(200, { 'content-type': 'image/png' });
 		return response.end(ICON);
 	}
@@ -385,19 +392,20 @@ const called = (frame, area, name, args) =>
 		[area, name, args],
 	);
 
-async function run(mode, base) {
-	// Only this browser context replaces the test transport. The live arm
-	// receives the real module, and no request can change the fixture's port.
-	const page = await openDemo(browser, base, {}, (page) =>
-		page.context().route('**/test/mixed-transport.mjs', (route) =>
-			route.fulfill({
-				status: 200,
-				headers: {
-					'content-type': 'text/javascript',
-					'access-control-allow-origin': '*',
-					'cross-origin-resource-policy': 'cross-origin',
-				},
-				body: `import Epoxy from '../epoxy/index.mjs';
+/**
+ * Only this browser context replaces the test transport. The live arm
+ * receives the real module, and no request can change the fixture's port.
+ */
+const storeTransport = (page) =>
+	page.context().route('**/test/mixed-transport.mjs', (route) =>
+		route.fulfill({
+			status: 200,
+			headers: {
+				'content-type': 'text/javascript',
+				'access-control-allow-origin': '*',
+				'cross-origin-resource-policy': 'cross-origin',
+			},
+			body: `import Epoxy from '../epoxy/index.mjs';
 		export default class extends Epoxy {
 			request(remote, ...rest) {
 				const url = new URL(remote);
@@ -407,9 +415,11 @@ async function run(mode, base) {
 				return super.request(url, ...rest);
 			}
 		}`,
-			}),
-		),
+		}),
 	);
+
+async function run(mode, base) {
+	const page = await openDemo(browser, base, {}, storeTransport);
 	page.on('pageerror', (error) => errors.push(`${mode}: ${error.message}`));
 	const consoleErrors = [];
 	page.on('console', (message) => {
@@ -988,6 +998,132 @@ async function run(mode, base) {
 	await page.context().close();
 }
 
+/**
+ * The host's page in a frame of a page of its own origin, as SystemYA shows
+ * the demo (its /app/ page frames the UI, no allow or sandbox attribute): a
+ * proxied page's reports go to the host, not to the browser's top, so the
+ * store's click shows the host's dialog. The icon comes after the click's
+ * activation has expired, and the install still goes through: the click is
+ * read when the page calls. A call with no click is still refused.
+ */
+async function framed() {
+	const mode = 'framed host';
+	await waitForServer(PROXY);
+	const page = await browser.newPage({
+		viewport: { width: 1280, height: 860 },
+	});
+	await storeTransport(page);
+	page.on('pageerror', (error) => errors.push(`${mode}: ${error.message}`));
+	const SHELL = `${PROXY}webstore-framed-shell`;
+	await page.route(SHELL, (route) =>
+		route.fulfill({
+			status: 200,
+			headers: { 'content-type': 'text/html' },
+			body: `<!doctype html><meta charset="utf-8"><title>Shell</title>
+<style>body{margin:0}nav{height:48px}iframe{display:block;border:0;width:100%;height:800px}</style>
+<nav>Shell</nav><main><iframe id="serviceEmbed" title="Shell" src="/"></iframe></main>`,
+		}),
+	);
+	await page.goto(SHELL);
+	let host = null;
+	for (let tries = 0; tries < 100 && !host; tries++) {
+		host = page.frames().find((frame) => frame.url() === PROXY) ?? null;
+		if (!host) await sleep(100);
+	}
+	await host.waitForFunction(
+		() => /^(Ready|Error)/.test(document.getElementById('logMsg').textContent),
+		null,
+		{ timeout: 45000 },
+	);
+	await submitLanding(host, STORE);
+	let frame = await storeFrame(host, 'Add to Chrome');
+	ok(
+		`${mode}: the store's page offers Add to Chrome`,
+		(await buttonText(frame)) === 'Add to Chrome',
+		String(await buttonText(frame)),
+	);
+	const heard = await until(
+		host,
+		() => window.controller.activeTab?.lastNavigate?.url ?? null,
+		(url) => url === STORE,
+	);
+	ok(
+		`${mode}: the store's page reports where it is to the host, not to the shell`,
+		heard === STORE,
+		String(heard),
+	);
+
+	await sleep(5500);
+	const quiet = await evaluateQuietly(
+		frame,
+		`new Promise((resolve) => chrome.webstorePrivate.beginInstallWithManifest3(
+			{ id: ${JSON.stringify(ID)}, manifest: ${JSON.stringify(MANIFEST_TEXT)}, iconUrl: '/icon.png' },
+			(result) => resolve({ result, error: chrome.runtime.lastError?.message ?? null })))`,
+	);
+	ok(
+		`${mode}: a call with no click shows no dialog and answers user_gesture_required`,
+		quiet?.result === 'user_gesture_required' &&
+			quiet.error === 'This function must be called during a user gesture' &&
+			(await dialog(host)) === null,
+		JSON.stringify(quiet),
+	);
+
+	await frame.click('#action');
+	const asked = await until(
+		host,
+		() => !!document.getElementById('passkeyPrompt'),
+		Boolean,
+	);
+	const shown = await dialog(host);
+	ok(
+		`${mode}: the click shows the host's dialog`,
+		asked && shown?.title === `Add "${NAME}"?`,
+		JSON.stringify({ shown, log: await pageLog(frame) }),
+	);
+	if (shown) await answerDialog(host, 'Cancel');
+
+	// the icon after the activation: the install goes through. Nothing
+	// after the click gives a document an activation (Playwright's evaluate
+	// does), so the host's has expired when the dialog is asked for
+	await submitOmni(host, `${STORE}?slow`);
+	await sleep(500);
+	frame = await storeFrame(host, 'Add to Chrome');
+	const clicked = Date.now();
+	await frame.click('#action');
+	let slow = null;
+	while (!slow?.shown && Date.now() - clicked < SLOW_ICON_MS + 20000) {
+		await sleep(250);
+		slow = await evaluateQuietly(
+			host,
+			`({ shown: !!document.getElementById('passkeyPrompt'), active: navigator.userActivation.isActive })`,
+		);
+	}
+	const waited = Date.now() - clicked;
+	const slowShown = await dialog(host);
+	ok(
+		`${mode}: an icon that comes after the activation expired still shows the dialog`,
+		slow?.shown &&
+			slow.active === false &&
+			waited >= SLOW_ICON_MS &&
+			slowShown?.title === `Add "${NAME}"?` &&
+			slowShown.icon.startsWith('data:image/png;base64,'),
+		JSON.stringify({ waited, slow, slowShown, log: await pageLog(frame) }),
+	);
+	if (slowShown) {
+		await answerDialog(host, 'Add extension');
+		frame = await storeFrame(host, 'Remove from Chrome');
+		const log = await pageLog(frame);
+		ok(
+			`${mode}: Add extension installs it`,
+			(await buttonText(frame)) === 'Remove from Chrome' &&
+				JSON.stringify(log?.findLast((entry) => entry[0] === 'complete')) ===
+					'["complete",null]',
+			JSON.stringify(log),
+		);
+	}
+	await page.context().close();
+}
+
 /** the real store's ChatGPT page: an enabled Add to Chrome, and the host's dialog on its click */
 async function live() {
 	const page = await openDemo(browser, HOST);
@@ -1042,5 +1178,6 @@ async function live() {
 if (!SKIP_NETWORK) await live();
 await run('isolated', HOST);
 await run('same-origin', PROXY);
+await framed();
 server.close();
 await done(browser, errors);

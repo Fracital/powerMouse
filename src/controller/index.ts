@@ -2818,6 +2818,10 @@ export class StompController extends EventTarget {
 					await this.#extensionPrompt(request),
 					[],
 				],
+				extensionGesture: async (client) => [
+					await this.#extensionGesture(client),
+					[],
+				],
 				passkeyFocused: async (client) => [
 					await this.#passkeyFocused(client),
 					[],
@@ -3115,16 +3119,15 @@ export class StompController extends EventTarget {
 	 * shows Chrome's dialog, only while a click activated the page. Chrome
 	 * shows its install dialog on any call; STomp asks the user only for
 	 * one, so a page that calls on its own gets no dialog drawn over the
-	 * host. A click in the store's frame activates this document too: it
-	 * is the frame's ancestor, or (the controller frame) a frame of its
-	 * origin, which Chrome activates with it.
+	 * host. The worker read the click when the page called (`gestured`,
+	 * #extensionGesture), or (an older worker) it is read now.
 	 */
 	async #extensionPrompt(
 		request: ExtensionPromptRequest,
 	): Promise<ExtensionPromptAnswer> {
 		if (
-			!navigator.userActivation?.isActive ||
-			!(await this.#passkeyFocused(request.client))
+			request.gestured !== true &&
+			!(await this.#extensionGesture(request.client))
 		)
 			return 'gesture';
 		// a theme: Chrome installs it on the click and shows no dialog
@@ -3132,6 +3135,18 @@ export class StompController extends EventTarget {
 		const relay = this.#init.extensionPromptRelay;
 		if (relay) return relay(request);
 		return this.extensions.prompt(request, this.#clients.frame(request.client));
+	}
+	/**
+	 * whether a click activated the store's page `client` and the focus is
+	 * in its frame. A click in the store's frame activates this document
+	 * too: it is the frame's ancestor, or (the controller frame) a frame of
+	 * its origin, which Chrome activates with it.
+	 */
+	async #extensionGesture(client: string): Promise<boolean> {
+		return (
+			!!navigator.userActivation?.isActive &&
+			(await this.#passkeyFocused(client))
+		);
 	}
 	/**
 	 * whether the focus is in the page of the frame that shows the document

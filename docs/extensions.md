@@ -713,7 +713,8 @@ they are now.
   `privacy.*` and `proxy.settings` (which `set` changes for the context),
   and nothing for the rest.
 - Store installs need transient user activation and focus in the requesting
-  frame. Approvals belong to that document, last two minutes, and are lost
+  frame, read when the store's page calls (the icon's download comes
+  after it). Approvals belong to that document, last two minutes, and are lost
   if the worker restarts. Reload the listing to try again. The listing flow
   supports MV3 extensions, not themes, apps, or items the store flags for an
   additional safety check. A change to the listing's manifest requires a new

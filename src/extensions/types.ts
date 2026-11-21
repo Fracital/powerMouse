@@ -437,6 +437,8 @@ export interface ExtensionPromptRequest {
 	url: string;
 	/** that page's service worker client (the host finds its frame) */
 	client: string;
+	/** the controller read the page's click when the page called (Controllerbound.extensionGesture) */
+	gestured?: true;
 }
 
 /** the user's answer: `gesture` when the page asked without a user's click, which shows no dialog */

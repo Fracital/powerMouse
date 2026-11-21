@@ -3187,27 +3187,59 @@ export default class DocumentClient extends Client {
 
 	postToHost(message: object): boolean {
 		if (!this.topPostMessage) return false;
-		// a window that is its own top (a popup) has no host above it: the
-		// message would reach the page's own listeners, which never hear one
-		// natively. Nor has a frame of a popup: its top is a proxied document
-		// (one with a client), whose page posts on what it hears
-		// (cookies/samesite/about-blank-toplevel.https.html relays it to the
-		// opener). A host is never proxied, and one of another origin (a
-		// slot's) throws on the read
-		const top = this.top;
-		if ((top as unknown) === this.global) return false;
+		const host = this.#hostWindow();
+		if (!host) return false;
 		try {
-			if (Reflect.getOwnPropertyDescriptor(top, this.names.client))
-				return false;
-		} catch (error) {
-			// a host of another origin
-		}
-		try {
-			Reflect.apply(this.topPostMessage, top, [message, '*']);
+			Reflect.apply(this.topPostMessage, host, [message, '*']);
 			return true;
 		} catch (error) {
 			return false;
 		}
+	}
+	/**
+	 * The window whose controller shows this document's page: the one that
+	 * frames the outermost proxied document above this one. That is the
+	 * browser's top unless the host's page is itself in a frame of a page
+	 * of its origin (SystemYA's /app/ frames the demo's UI): its top is that
+	 * page, which hears nothing of ours. A window that is its own top (a
+	 * popup) has no host above it: the message would reach the page's own
+	 * listeners, which never hear one natively. Nor has a frame of a popup:
+	 * its top is a proxied document (one with a client), whose page posts on
+	 * what it hears (cookies/samesite/about-blank-toplevel.https.html relays
+	 * it to the opener). A host is never proxied, and a window between two
+	 * proxied documents is not the host either. When a window of another
+	 * origin (a slot's hub, a frame of another slot, an isolated host) comes
+	 * before any such window, the windows above cannot be told apart: the
+	 * browser's top, as ever
+	 */
+	#hostWindow(): typeof globalThis | null {
+		const name = this.names.client;
+		let context: unknown = this.global;
+		// the lowest window above the outermost proxied document so far
+		let host: unknown = null;
+		for (let depth = 0; depth < 64; depth++) {
+			let parent: unknown;
+			try {
+				parent = Reflect.apply(nativeParentGet, context, []);
+				if (parent === context) break;
+				if (Reflect.getOwnPropertyDescriptor(parent as object, name))
+					host = null;
+				else host ??= parent;
+			} catch (error) {
+				// a window of another origin
+				break;
+			}
+			context = parent;
+		}
+		if (host) return host as typeof globalThis;
+		const top = this.top;
+		if ((top as unknown) === this.global) return null;
+		try {
+			if (Reflect.getOwnPropertyDescriptor(top, name)) return null;
+		} catch (error) {
+			// a host of another origin
+		}
+		return top;
 	}
 	/** the document was opened (document.open(), or a write once it had loaded): its URL is its opener's, its loads may still have no worker */
 	opened = false;

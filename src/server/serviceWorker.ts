@@ -795,6 +795,16 @@ webStore.prompt = async (directory, request) => {
 	const ref = controllers.get(directory);
 	return ref ? ref.rpc.call('extensionPrompt', request) : 'cancel';
 };
+webStore.gesture = async (directory, client) => {
+	const ref = controllers.get(directory);
+	if (!ref) return false;
+	try {
+		return (await ref.rpc.call('extensionGesture', client)) === true;
+	} catch (error) {
+		// a controller from before the call: its dialog reads the click
+		return null;
+	}
+};
 webStore.fetch = async (directory, url) => {
 	const ref = controllers.get(directory);
 	if (!ref) throw new Error('no controller');

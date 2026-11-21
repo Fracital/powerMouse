@@ -10,7 +10,8 @@
 // extension_install_status.cc, crx_installer.cc): their results, their
 // error strings and the status the store shows. The install dialog and the
 // uninstall dialog are the host's (Controllerbound.extensionPrompt), shown
-// only once the page's click activated the controller's document.
+// only when the page's click activated the controller's document as the
+// page called (Controllerbound.extensionGesture).
 import { EXTENSION_ID } from '../../extensions/crx';
 import { cleanPath } from '../../extensions/origin';
 import { permissionMessages } from '../../extensions/permissionMessages';
@@ -46,6 +47,9 @@ export const webStore = {
 		_directory: string,
 		_request: ExtensionPromptRequest,
 	): Promise<ExtensionPromptAnswer> => Promise.resolve('cancel'),
+	/** whether a click activated the page `client` as it called, null when its controller cannot say (its dialog reads it then) */
+	gesture: (_directory: string, _client: string): Promise<boolean | null> =>
+		Promise.resolve(false),
 	/** a GET through the controller's transport, without the jar's cookies (the icon, the package) */
 	fetch: (_directory: string, _url: string): Promise<Response> =>
 		Promise.reject(new Error('no controller')),
@@ -203,6 +207,24 @@ interface Approval {
 	directory: string;
 }
 
+/** the store's document that called, and its click as read when it called */
+interface StorePage {
+	url: string;
+	client: string;
+	gesture: Promise<boolean | null>;
+}
+
+/**
+ * The prompt's `gestured`, or the gesture refusal: Chrome takes the call's
+ * gesture with the call, so the click is read when the page calls
+ * (storeCall), never after the icon's download
+ */
+async function gestured(page: StorePage): Promise<{ gestured?: true } | null> {
+	const gesture = await page.gesture;
+	if (gesture === false) return null;
+	return gesture ? { gestured: true } : {};
+}
+
 /** what beginInstallWithManifest3 approved, until completeInstall takes it (PendingApprovals) */
 const approvals = new Map<string, Approval>();
 /** the ids an install is under way for (InstallTracker's active installs) */
@@ -275,7 +297,7 @@ async function iconOf(directory: string, url: string): Promise<string> {
 async function beginInstall(
 	registry: ExtensionRegistry,
 	directory: string,
-	page: { url: string; client: string },
+	page: StorePage,
 	details: Record<string, unknown>,
 ): Promise<string> {
 	const id = String(details.id);
@@ -323,9 +345,13 @@ async function beginInstall(
 			typeof details.localizedName === 'string' && details.localizedName
 				? details.localizedName
 				: String(manifest.name);
+		const gesture = await gestured(page);
+		if (!gesture)
+			throw new StoreError(INSTALL_GESTURE, 'user_gesture_required');
 		// a theme installs on the click with no dialog (Chrome 157 measured):
-		// the controller checks the click and asks the host nothing
+		// the controller asks the host nothing
 		const answer = await webStore.prompt(directory, {
+			...gesture,
 			kind: theme ? 'theme' : 'install',
 			id,
 			name: shown(name),
@@ -473,7 +499,7 @@ async function fullVersion(): Promise<string> {
 async function webstorePrivate(
 	registry: ExtensionRegistry,
 	directory: string,
-	page: { url: string; client: string },
+	page: StorePage,
 	call: string,
 	args: unknown[],
 ): Promise<unknown> {
@@ -534,7 +560,7 @@ async function webstorePrivate(
 async function management(
 	registry: ExtensionRegistry,
 	directory: string,
-	page: { url: string; client: string },
+	page: StorePage,
 	call: string,
 	args: unknown[],
 ): Promise<unknown> {
@@ -564,7 +590,10 @@ async function management(
 			const loaded = found();
 			if (loaded.record.policy) throw new StoreError(cannotModify(id));
 			const info = await registry.infoOf(id);
+			const gesture = await gestured(page);
+			if (!gesture) throw new StoreError(UNINSTALL_GESTURE);
 			const answer = await webStore.prompt(directory, {
+				...gesture,
 				kind: 'uninstall',
 				id,
 				name: shown(loaded.manifest.name),
@@ -595,6 +624,12 @@ async function management(
 	}
 }
 
+/** the calls that show a dialog, only on a click */
+const GESTURE_CALLS = new Set([
+	'webstorePrivate.beginInstallWithManifest3',
+	'management.uninstall',
+]);
+
 /**
  * A call of the store's page: refused unless the calling document is the
  * store's, by its own client's URL (never by what the call says)
@@ -608,6 +643,13 @@ export async function storeCall(
 	call: string,
 	args: unknown[],
 ): Promise<{ status: number; body: StoreAnswer }> {
+	// the click, read as the page calls (Chrome takes the call's gesture
+	// with it): what the worker does before its dialog may take longer than
+	// the activation lasts. Only the store's page goes on to use it
+	const gesture =
+		client && GESTURE_CALLS.has(`${area}.${call}`)
+			? webStore.gesture(directory, client).catch(() => null)
+			: Promise.resolve(false);
 	const found = client ? await self.clients.get(client) : undefined;
 	const url = found ? realURL(found.url) : '';
 	if (!found || found.type !== 'window' || !isStoreURL(url))
@@ -616,7 +658,7 @@ export async function storeCall(
 			body: { error: `This page may not call ${area}.${call}.` },
 		};
 	await registry.sweepThemes();
-	const page = { url, client: found.id };
+	const page: StorePage = { url, client: found.id, gesture };
 	try {
 		const value =
 			area === 'webstorePrivate'

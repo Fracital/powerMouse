@@ -1651,6 +1651,13 @@ export type Controllerbound = {
 	 */
 	extensionPrompt: [ExtensionPromptRequest, ExtensionPromptAnswer];
 	/**
+	 * whether a click activated the page of the store's document `client`
+	 * and its frame has the focus, read when the page calls: the worker's
+	 * steps before the dialog (the icon's download) may outlast the
+	 * activation, which Chrome takes with the call
+	 */
+	extensionGesture: [string, boolean];
+	/**
 	 * the site pool: whether the focus is in the page of the frame the
 	 * document `client` is in (a ceremony's focus check, whose top may be a
 	 * document of another slot)
