@@ -43,10 +43,31 @@ demo without vibeOS; the `demo-vibeos` suite says SKIP there.
 
 `dist/vibeos/` holds the desktop's module and stylesheet (`embed.js`,
 `embed.css`) and the files vibeOS serves on its own site (its icons, wallpapers,
-games, cursors, the v86 emulator), under `/vibeos/`. The npm package leaves it
-out (`package.json` `files`). The server serves `/vibeos/` from there and
-offers the switch (`config.js` `vibeos`) only while `dist/vibeos/embed.js`
-exists; it never reads `vendor/`.
+games, cursors, the v86 emulator) next to them. The npm package leaves it
+out (`package.json` `files`). The server serves it from there and offers the
+switch (`config.js` `vibeos`) only while `dist/vibeos/embed.js` exists; it
+never reads `vendor/`.
+
+## Its addresses
+
+No address the browser keeps for a tab or a frame names vibeOS. The server
+serves `dist/vibeos/` under a neutral directory, `/<8 hex>/`, minted the way
+dialing's scopes are (docs/dialing.md): derived from the machine's name and
+the checkout's path, the same at every start. `config.js` gives the page that
+directory (`vibeos.base`) and, for each of vibeOS's own pages that a window
+shows in a frame (its games, `dist/vibeos/appfiles/<name>/`), a neutral
+directory of its own inside it (`vibeos.pages`): the Tetris window's frame is
+at `/<8 hex>/<8 hex>/`, its files under that. The directory is known where
+the bundle runs, not where it is built: vibeOS takes it from its module's
+own URL (`__VIBEOS_EMBED__` in its `src/dom/types.ts`), and its stylesheet
+names its files relative to itself.
+
+What stays named is what is no frame's address: the module and stylesheet
+(`embed.js`, `embed.css`), the icons, cursors, wallpapers and fonts, and a
+game's own scripts and images, which a request shows (in the developer tools)
+but no address bar does. The tabs are dialed as ever, so a tab's frame is
+the call page. The vibeOS browser's Open in browser opens a page's own
+address in a new browser tab, as asked.
 
 To move vibeOS on: `git -C vendor/vibeOS fetch && git -C vendor/vibeOS checkout
 <commit>`, rebuild, run `demo-vibeos`, and commit the new submodule commit.
@@ -72,13 +93,13 @@ To move vibeOS on: `git -C vendor/vibeOS fetch && git -C vendor/vibeOS checkout
 ## Lazy loading
 
 Nothing of vibeOS is fetched before the first switch: the page ships only the
-button and the `vibeos` flag of `config.js`, which it fetches anyway. The first
-switch imports `/vibeos/embed.js` and its stylesheet and boots the desktop
+button and the `vibeos` entry of `config.js`, which it fetches anyway. The first
+switch imports `embed.js` from vibeOS's directory and its stylesheet and boots the desktop
 (a brief load), then moves the tabs; every switch after that is instant and
 fetches nothing. There is no prefetch: none is needed for the first switch to
 keep the tabs live (they are moved only once the desktop is up), and a fetch at
 idle would cost every visit for a feature few use. `demo-vibeos` checks that a
-fresh page makes no request under `/vibeos/` until the switch is used.
+fresh page makes no request under vibeOS's directory until the switch is used.
 
 ## How the tabs move
 

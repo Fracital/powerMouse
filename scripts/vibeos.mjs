@@ -12,10 +12,9 @@ import { build } from 'esbuild';
 
 export const VIBEOS_SOURCE = 'vendor/vibeOS';
 export const VIBEOS_OUT = 'dist/vibeos';
-// where the server serves dist/vibeos/ (demo/server.js)
-const BASE = '/vibeos/';
 
-// vibeOS's static files, as its own site serves them, under BASE
+// vibeOS's static files, as its own site serves them, next to embed.js (the
+// server serves dist/vibeos/ under a neutral directory of its own)
 const STATIC = [
 	['tango', 'tango'],
 	['appfiles', 'appfiles'],
@@ -32,18 +31,24 @@ const say = (text) => console.log(`vibeOS: ${text}`);
 
 /**
  * vibeOS's stylesheets name its files from its site's root (`url('/tango/…')`):
- * here they are under BASE. Its web font is left out: the host page loads
- * nothing from another site.
+ * here they are next to embed.css, wherever the server puts it, so each is
+ * named from there (`url(./tango/…)`). Its sources name that directory at
+ * run time too (__VIBEOS_EMBED__: next to the module). A stylesheet of
+ * another site's is left out: the host page loads nothing from another site.
  */
 const rebased = {
 	name: 'vibeos-rebase',
 	setup(builder) {
-		builder.onLoad({ filter: /\.css$/ }, async ({ path }) => {
-			const text = (await readFile(path, 'utf8'))
-				.replace(/@import\s+url\(\s*['"]?https?:[^)]*\)\s*;/g, '')
-				.replace(/url\(\s*(['"]?)\/(?!\/)/g, `url($1${BASE}`);
-			return { contents: text, loader: 'css' };
-		});
+		builder.onResolve({ filter: /^\/[^/]/ }, ({ path, kind }) =>
+			kind === 'url-token' ? { path: `.${path}`, external: true } : undefined,
+		);
+		builder.onLoad({ filter: /\.css$/ }, async ({ path }) => ({
+			contents: (await readFile(path, 'utf8')).replace(
+				/@import\s+url\(\s*['"]?https?:[^)]*\)\s*;/g,
+				'',
+			),
+			loader: 'css',
+		}));
 	},
 };
 
@@ -83,10 +88,9 @@ export async function buildVibeOS() {
 			minify: true,
 			sourcemap: true,
 			outdir: VIBEOS_OUT,
-			define: { __VIBEOS_BASE__: JSON.stringify(BASE) },
+			define: { __VIBEOS_EMBED__: 'true' },
 			// its tsconfig names astro's, which only its own build installs
 			tsconfigRaw: {},
-			external: [`${BASE}*`],
 			plugins: [rebased],
 			logLevel: 'warning',
 		});

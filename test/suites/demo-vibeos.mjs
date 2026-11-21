@@ -2,7 +2,9 @@
 // built into dist/vibeos/ by scripts/vibeos.mjs), which this suite skips
 // when the build has no vibeOS:
 //  - a fresh page asks for nothing of vibeOS until the switch is used: no
-//    module, stylesheet or file under /vibeos/;
+//    module, stylesheet or file under its directory;
+//  - no address names vibeOS: its directory is a neutral one (config.js),
+//    and so is the address of a game's frame (its window's page);
 //  - the tab manager's vibeOS button turns every tab into a window of
 //    vibeOS's browser at once: no card animates back to full screen, each
 //    window holds the tab's own frame element, the card shown in the middle
@@ -44,6 +46,14 @@ if (!existsSync(`${root}dist/vibeos/embed.js`)) {
 const STATE = `${FIXTURE}pages/vibeos-state.html`;
 const OTHER = `${FIXTURE}pages/bookmark-a.html`;
 const NEXT = `${FIXTURE}pages/bookmark-b.html`;
+
+// the server's directory for vibeOS and its names for vibeOS's pages
+const { vibeos: VIBE } = JSON.parse(
+	/STOMP_CONFIG = (.*);\s*$/s.exec(
+		await (await fetch(`${HOST}config.js`)).text(),
+	)[1],
+);
+const NEUTRAL = /^[0-9a-f]{8}\/$/;
 
 const browser = await launch();
 const errors = [];
@@ -173,11 +183,26 @@ async function openTabs(page) {
 // ---- with moveBefore ------------------------------------------------------
 {
 	const vibeRequests = [];
+	// the documents the page loads (a frame's, the address the browser has
+	// for it) that name vibeOS or its files
+	const named = [];
 	const page = await openDemo(browser, HOST, {}, (p) =>
 		p.on('request', (request) => {
-			if (new URL(request.url()).pathname.startsWith('/vibeos/'))
-				vibeRequests.push(request.url());
+			const url = new URL(request.url());
+			if (url.pathname.startsWith(VIBE.base)) vibeRequests.push(url.href);
+			if (
+				request.resourceType() === 'document' &&
+				/vibe|appfiles|tetris|index\.html/i.test(url.pathname)
+			)
+				named.push(url.href);
 		}),
+	);
+	ok(
+		"vibeOS's directory and its pages' names are neutral",
+		NEUTRAL.test(VIBE.base.slice(1)) &&
+			Object.keys(VIBE.pages).length >= 3 &&
+			Object.values(VIBE.pages).every((name) => NEUTRAL.test(name)),
+		JSON.stringify(VIBE),
 	);
 	page.on('pageerror', (error) => errors.push(error.message));
 	if (process.env.VIBE_DEBUG)
@@ -488,6 +513,50 @@ async function openTabs(page) {
 	);
 	console.log(`second switch: ${secondSwitch} ms`);
 	await checkState(page, 'into vibeOS again', before, hitsBefore);
+
+	// a game's window: its frame's address is its neutral name, under the
+	// neutral directory
+	await page.click('#vibeos-root .vo-applications:not(.vo-leave)');
+	await page.evaluate(() =>
+		[...document.querySelectorAll('#vibeos-root .vo-menu-item')]
+			.find((item) => item.textContent.trim() === 'Tetris')
+			.click(),
+	);
+	const game = await until(
+		page,
+		() => {
+			const frame = document.querySelector('#vibeos-root .vo-web-app-frame');
+			try {
+				return {
+					src: frame.src,
+					href: frame.contentWindow.location.href,
+					title: frame.contentDocument.title,
+					canvas: !!frame.contentDocument.getElementById('canvas'),
+				};
+			} catch {
+				return null;
+			}
+		},
+		(v) => v?.canvas,
+	);
+	const gameAt = `${new URL(HOST).origin}${VIBE.base}${VIBE.pages['/appfiles/tetris/index.html']}`;
+	ok(
+		"a game's frame has a neutral address: neither vibeOS nor the game's",
+		game?.canvas && game.src === gameAt && game.href === gameAt,
+		JSON.stringify(game),
+	);
+	await page.evaluate(() =>
+		document
+			.querySelector('#vibeos-root .vo-web-app-frame')
+			.closest('.vo-window')
+			.querySelector('.vo-window-close')
+			.click(),
+	);
+	ok(
+		'no document the page loaded has an address that names vibeOS or its files',
+		named.length === 0 && vibeRequests.length > 0,
+		named.join(' '),
+	);
 	await page.click('#vibeos-root .vo-leave');
 	await page.close();
 }

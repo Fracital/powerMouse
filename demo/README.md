@@ -855,7 +855,8 @@ so a host of the page that gives it no `dial` config dials on its own
 
 The tab manager's desktop button and the menu's vibeOS item switch the page to
 vibeOS (the `vendor/vibeOS` submodule, built into `dist/vibeos/` and served
-under `/vibeos/`; `config.js` says `vibeos` only when the build has it).
+under a neutral directory, `/<8 hex>/`, its games' pages under neutral
+directories inside it; `config.js` says `vibeos` only when the build has it).
 Nothing of it loads before the first switch, which imports its module. Each
 tab becomes a window of vibeOS's browser holding the tab's own frame element,
 moved there with `moveBefore`, so no tab reloads either way; the browser's tabs

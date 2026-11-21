@@ -23,6 +23,8 @@ video or a game in progress. Switch back and the windows are tabs again.
   Themes, Install, vibeOS, Settings and About work the same in both.
 - The first switch loads vibeOS (a moment); later switches are instant. The
   demo downloads nothing of vibeOS until you use it.
+- Like a tab's address, a vibeOS window's address says nothing: a game's
+  window has a neutral one, which names neither vibeOS nor the game.
 
 ## Building the demo with vibeOS
 

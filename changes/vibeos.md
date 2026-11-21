@@ -9,6 +9,10 @@
   Nothing of vibeOS loads before the first switch. Without the submodule the
   build goes on, says so, and the demo has no switch (docs/vibeos.md,
   `demo-vibeos`).
+- vibeOS is served under a neutral directory minted as dialing's scopes are
+  (`config.js` `vibeos.base`), and each of its games under a neutral one
+  inside it (`vibeos.pages`), so no frame's address names vibeOS or the game;
+  the bundle finds its directory where it runs.
 
 ### Build
 

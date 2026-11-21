@@ -484,16 +484,55 @@ if (wisp && webTransport)
 // vibeOS, the desktop the page can switch to (scripts/vibeos.mjs builds it
 // into dist/vibeos/ when its submodule is checked out): the page offers it
 // when the build has it, looked at on each request, as a rebuild adds it
-// or leaves it out under a running server
+// or leaves it out under a running server. It is served under a neutral
+// directory minted as dialing's are, and each page of its own that a window
+// shows in a frame (a game, dist/vibeos/appfiles/<name>/) under a neutral
+// directory inside that one: the address a frame has names neither vibeOS
+// nor the page
 const VIBEOS_DIR = join(stompPath, 'vibeos');
 const vibeosBuilt = () => existsSync(join(VIBEOS_DIR, 'embed.js'));
+const VIBEOS_DIRECTORY = (() => {
+	const directory = `/${mint('vibeos')}/`;
+	return [DIAL.directory, DIAL.torDirectory].includes(directory)
+		? `/${mint('vibeos again')}/`
+		: directory;
+})();
+/** its pages' neutral names: `<8 hex>` to the page's directory in appfiles */
+function vibeosPages() {
+	const appfiles = join(VIBEOS_DIR, 'appfiles');
+	let names = [];
+	try {
+		names = readdirSync(appfiles, { withFileTypes: true })
+			.filter(
+				(entry) =>
+					entry.isDirectory() &&
+					existsSync(join(appfiles, entry.name, 'index.html')),
+			)
+			.map((entry) => entry.name);
+	} catch {
+		// not built
+	}
+	return new Map(names.map((name) => [mint(`vibeos page ${name}`), name]));
+}
+const vibeosConfig = () =>
+	vibeosBuilt() && {
+		vibeos: {
+			base: VIBEOS_DIRECTORY,
+			pages: Object.fromEntries(
+				[...vibeosPages()].map(([hex, name]) => [
+					`/appfiles/${name}/index.html`,
+					`${hex}/`,
+				]),
+			),
+		},
+	};
 app.get('/config.js', (req, res) => {
 	const sitePool = slotPorts(req);
 	const contentSlots = slotPorts(req, contentPorts, publicContentPorts);
 	res.set('Cache-Control', 'no-store');
 	res.type('application/javascript');
 	res.send(
-		`window.STOMP_CONFIG = ${JSON.stringify({ ...pageConfig, ...(vibeosBuilt() && { vibeos: '/vibeos/' }), transports: transportPaths(), ...(sitePool.length && { sitePool }), ...(contentSlots.length && { contentSlots }) })};\n`,
+		`window.STOMP_CONFIG = ${JSON.stringify({ ...pageConfig, ...vibeosConfig(), transports: transportPaths(), ...(sitePool.length && { sitePool }), ...(contentSlots.length && { contentSlots }) })};\n`,
 	);
 });
 
@@ -559,8 +598,21 @@ const cached = { maxAge: '1d', immutable: false };
 const KEPT = 'public, max-age=31536000, immutable';
 const publicDir = fileURLToPath(new URL('./public/', import.meta.url));
 // vibeOS's module, stylesheet and files (none of them asked for before the
-// page's first switch to it)
-app.use('/vibeos/', express.static(VIBEOS_DIR, fresh));
+// page's first switch to it), its pages under their neutral names
+app.use(
+	VIBEOS_DIRECTORY,
+	(req, res, next) => {
+		const page = /^\/([0-9a-f]{8})(\/.*)?$/.exec(req.path);
+		const name = page && vibeosPages().get(page[1]);
+		if (!name) return next();
+		// its directory's own address, never express.static's redirect to
+		// the page's real one
+		if (!page[2]) return res.redirect(301, `${req.baseUrl}${req.path}/`);
+		req.url = `/appfiles/${name}${page[2]}${req.url.slice(req.path.length)}`;
+		next();
+	},
+	express.static(VIBEOS_DIR, fresh),
+);
 // (`?<hash>`, or a first parameter of its own: `controllerFrame.html?<hash>&script=`)
 const askedByHash = (res, path) => {
 	const asked = /\?([0-9a-f]{16})(?:&|$)/.exec(res.req.originalUrl);

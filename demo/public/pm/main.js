@@ -7700,7 +7700,8 @@ menuAbout.addEventListener('click', () => {
 // dist/vibeos/ by scripts/vibeos.mjs) is a desktop this page can switch to:
 // the tab manager's vibeOS button and the menu's vibeOS item. Nothing of it
 // loads before the first switch: config.js names its directory when the
-// server has it, and the switch imports its module then. Each tab becomes a
+// server has it (a neutral one, `/<8 hex>/`, with neutral names for the
+// pages its windows show in frames), and the switch imports its module then. Each tab becomes a
 // window of its browser that shows the tab's own frame element, moved there
 // with an atomic move (moveBefore), which keeps its document alive: the page,
 // its scroll, what was typed, its timers and its frames go on as they were,
@@ -7708,7 +7709,8 @@ menuAbout.addEventListener('click', () => {
 // where they are and vibeOS lays each one over its window (body.vibeos-overlay).
 // The tabs of its browser are this page's tabs (vibeHost.createTab): there is
 // one list of tabs, shown two ways.
-const VIBEOS = !OFFLINE && typeof CFG.vibeos === 'string' ? CFG.vibeos : null;
+const VIBEOS =
+	!OFFLINE && typeof CFG.vibeos?.base === 'string' ? CFG.vibeos.base : null;
 const ATOMIC_MOVE = typeof Element.prototype.moveBefore === 'function';
 const vibeShown = () => !!vibe?.shown();
 let vibeLoading = null;
@@ -7761,6 +7763,7 @@ function tabChanged(tab) {
 }
 
 const vibeHost = {
+	pages: CFG.vibeos?.pages,
 	leaveLabel: 'powerMouse',
 	leave: () => leaveVibe(),
 	controller: async () => {
