@@ -17,9 +17,9 @@
   not once quinn took the bytes into its send buffer (up to the server's
   flow control and quinn's 15 MiB send window), so `writer.ready` and an
   upload counted by settled writes keep the path's pace
-  (deploy/epoxy/h3/src/wt.rs `until_sent`, `webtransport-buffered`). It
-  takes an epoxy-transport build with this stomp-h3; until STomp pins one
-  the suite reports the old pace as known.
+  (deploy/epoxy/h3/src/wt.rs `until_sent`, `webtransport-buffered`). The
+  epoxy-transport STomp pins (EpoxyTransport dist be1a3b1) carries this
+  stomp-h3.
 
 ### Fixes
 
