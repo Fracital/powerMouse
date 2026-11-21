@@ -1,7 +1,8 @@
 # Dialing (just call stomp)
 
-Dialing is an experimental, opt-in way to show a proxied tab: the frame never
-navigates to a site. Each document is written into a fresh frame of one
+Dialing is a way to show a proxied tab, opt-in for a host of the library and
+the demo's default (demo/README.md, "Dialing"): the frame never navigates to
+a site. Each document is written into a fresh frame of one
 constant page, the call page, which the service worker serves and controls.
 The browser's session history, the frame's `src` and its real location only
 ever show the call page. The code is `src/controller/justCallStomp.ts` (the
@@ -35,8 +36,8 @@ a depth.
 `callPage` names no file in `dist/`: the worker makes the page. A host that
 serves the bundle under neutral names gives the call page a neutral name of
 its own too, as it does the others, and serves nothing for it. The URL is only
-as neutral as the host's `directory`: the demo's dialing mode uses a scope the
-server mints (`STOMP_DIAL_DIRECTORY`, demo/README.md), not `/stomp/`.
+as neutral as the host's `directory`: the demo's page dials on a scope the
+server derives (`STOMP_DIAL_DIRECTORY`, demo/README.md), not `/stomp/`.
 
 ## The protocol
 
@@ -105,10 +106,18 @@ calledFrames.ts, and the call page's own checks).
   dialed document of its own origin. Only a call page on another origin is
   out of its reach.
 - A token lives in the worker's memory: a worker the browser restarts between
-  the token and the call refuses the call, and the frame shows nothing (fail
-  closed).
+  the token and the call, or a new worker that took the scope over (a Tor
+  profile's, registered again by a new session), refuses the call. The host
+  calls a refused GET of its own origin again, twice at most, each time with
+  a fresh token and a fresh call page; anything else stays refused, and the
+  frame shows nothing new (fail closed).
+- A hard reload (`frame.reload({ bypassCache: true })`) tells the worker of
+  the host's own origin before the call, which then fetches the document
+  and what it loads past the caches; on a content slot it is a reload.
 - The demo's isolation mode (`STOMP_PROXY_ORIGIN`, RemoteController) does not
-  dial yet. Its dialing mode uses the content slots when the server has them
+  dial yet, and a browser without the Navigation API cannot: the demo shows
+  the classic tabs there, and says so. Its page uses the content slots when
+  the server has them
   (docs/content-slots.md); with them each site's call page is on its slot's
   origin (the same path, `<directory><callPage>`), out of reach of a script
   on the host's origin.

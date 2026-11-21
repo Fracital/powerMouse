@@ -1,8 +1,9 @@
 // powerMouse's app worker (demo/README.md "The installed app"): the service
 // worker of the site's root, which makes the page an app Chrome installs
 // and opens in a window of its own (manifest.webmanifest). It is not
-// STomp's: STomp's worker has the scope /stomp/, where every proxied
-// page, frame and request lives, and a narrower scope always wins, so
+// STomp's: STomp's worker has a scope of its own (the server's neutral
+// dial directory, /stomp/ for classic tabs), where every proxied page,
+// frame, call page and request lives, and a narrower scope always wins, so
 // nothing proxied ever comes here. Of what is left it handles one thing,
 // the load of the app's page (/), and only to answer it when the network
 // is down, with a page that says so and loads the app again once the site

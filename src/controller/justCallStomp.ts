@@ -69,6 +69,7 @@ import {
 	type CalledSession,
 } from '../transport/messages';
 import { frameColorScheme } from './colorScheme';
+import { tellHardReload } from './history';
 import type { Frame, StompController } from './index';
 
 /** the sessionStorage name a tab's history is kept under */
@@ -115,6 +116,17 @@ function downloadName(disposition: string | null, url: string): string {
 
 /** how many times one load may move to another origin (a redirect chain across the pool's slots) */
 const MOVES = 8;
+/**
+ * how many times a GET the host's own worker refused is called again, with
+ * a fresh token and a fresh call page: the token lives in a worker's
+ * memory, and the worker that answers the call page can be another than
+ * the one that took it (the browser stopped it in between, or a new one
+ * took the scope over, as a Tor profile's worker does when a new session
+ * registers it again)
+ */
+const REFUSED_RETRIES = 2;
+/** how long before each of them, times its number */
+const REFUSED_WAIT_MS = 300;
 
 /** `url`'s path, query and fragment on `origin` (a route is one on every origin of the pool) */
 const on = (origin: string, url: string) => {
@@ -180,6 +192,8 @@ type How = {
 	navState?: unknown;
 	/** a step's: the entry the tab showed before it (NavigationActivation's `from`) */
 	left?: CalledEntry;
+	/** a reload's: past the caches (Frame.reload's `bypassCache`) */
+	hard?: boolean;
 };
 
 /** what a called document tells its host (calledHooks.ts) */
@@ -549,11 +563,14 @@ export class CalledFrame {
 	go(url: string): Promise<void> {
 		return this.#load(new URL(url).href, { type: 'navigate' });
 	}
-	/** the entry shown again, as a reload does */
-	async reload(): Promise<boolean> {
+	/**
+	 * the entry shown again, as a reload does; `bypassCache` as Chrome's hard
+	 * reload (Frame.reload's)
+	 */
+	async reload({ bypassCache = false } = {}): Promise<boolean> {
 		const entry = this.entries[this.index];
 		if (!entry) return false;
-		await this.#load(entry.url, { type: 'reload' });
+		await this.#load(entry.url, { type: 'reload', hard: bypassCache });
 		return true;
 	}
 	canStep(delta: number): boolean {
@@ -908,6 +925,7 @@ export class CalledFrame {
 				if (Date.now() < stopped)
 					await until(controller.navigationSent(routed).catch(() => {}));
 			}
+			let refusals = 0;
 			for (let moves = 0, tries = 0; ; tries++) {
 				// the route's token before the frame loads, held by the worker of
 				// the origin the call is made from: the worker that answers the
@@ -932,7 +950,13 @@ export class CalledFrame {
 						continue;
 					}
 					frame.allowSlots();
-				} else token = await until(controller.callToken(routed));
+				} else {
+					token = await until(controller.callToken(routed));
+					// a hard reload: the worker that answers the call gives it and
+					// what its document loads Chrome's LOAD_BYPASS_CACHE (a slot's
+					// worker is not told: there it is a reload)
+					if (how.hard) await until(tellHardReload(routed));
+				}
 				const page = `${at}${prefix}${name}`;
 				fresh = old.ownerDocument.createElement('iframe');
 				for (const { name, value } of [...old.attributes])
@@ -947,6 +971,7 @@ export class CalledFrame {
 				const channel = new MessageChannel();
 				port = channel.port1;
 				let heard: CallAnswer | null = null;
+				let again = false;
 				try {
 					const loaded = await until(
 						pageLoad(fresh).then(
@@ -977,11 +1002,35 @@ export class CalledFrame {
 					}
 					if (!heard && at === location.origin)
 						throw new Error('The call page did not take the call');
-					if (heard && 'failed' in heard) throw new Error(heard.failed);
+					if (heard && 'failed' in heard) {
+						// (a GET, which no refused or failed call sent twice could
+						// change: nothing else is called again)
+						if (
+							at === location.origin &&
+							refusals < REFUSED_RETRIES &&
+							(how.method ?? 'GET') === 'GET' &&
+							!how.body
+						)
+							again = true;
+						else throw new Error(heard.failed);
+					}
 				} catch (error) {
 					fresh.remove();
 					port.close();
 					throw error;
+				}
+				if (again) {
+					fresh.remove();
+					port.close();
+					pending.routed = null;
+					if (load !== this.#loads) return;
+					refusals++;
+					await until(
+						new Promise((resolve) =>
+							setTimeout(resolve, REFUSED_WAIT_MS * refusals),
+						),
+					);
+					continue;
 				}
 				if (!heard) {
 					// a slot's call page that did not load or never said it was

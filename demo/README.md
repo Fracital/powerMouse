@@ -38,7 +38,8 @@ Environment variables:
 | `STOMP_ADBLOCK`           | on             | Set to `0` to turn off the content blocker (docs/adblock.md), a JSON object is its `adblock` option; `?noadblock` and `?adblock` do one visit, the toggle is kept                                                                                                                                                                                                         |
 | `STOMP_ECH_DNS`           | Cloudflare DoH | DNS-over-HTTPS endpoint epoxy asks for HTTPS records to offer real Encrypted Client Hello (docs/fingerprint.md), and HTTP/3 asks for a name's first request (docs/http3.md); `off` sends GREASE ECH only (`?noech` does one visit)                                                                                                                                        |
 | `STOMP_SITE_POOL`         | `0`            | More ports to answer on, a list or a number of free ones to take: the slots of the site pool (see Site pool; `0` or `off` for none, `?nopool` on the page leaves it out for a visit)                                                                                                                                                                                      |
-| `STOMP_SLOT_PORTS`        | `0`            | More ports to answer on for dialing's content slots (see Content slots), as `STOMP_SITE_POOL` takes them; only a page in dialing mode (`?mode=just-call-stomp`) uses them; `STOMP_SLOT_PORTS_PUBLIC` lists a front's                                                                                                                                                      |
+| `STOMP_SLOT_PORTS`        | `0`            | More ports to answer on for dialing's content slots (see Content slots), as `STOMP_SITE_POOL` takes them; only a page that dials (the default, see Dialing) uses them; `STOMP_SLOT_PORTS_PUBLIC` lists a front's                                                                                                                                                          |
+| `STOMP_DIALING`           | on             | Set to `0` for the classic tabs, each frame navigated to its page's route (see Dialing): for the test suites of that path; there `?mode=just-call-stomp` dials again. No address of the page turns dialing off                                                                                                                                                            |
 | `STOMP_DEFAULT_THEMES`    | Shooting Star  | Web Store ids, comma separated, of the themes a new profile has installed and not shown (docs/themes.md, The default theme); `0` for none, which the test suites use                                                                                                                                                                                                      |
 | `STOMP_TEST_TRANSPORT`    | unset          | Set to `1` to use `/test/mixed-transport.mjs` (epoxy that reaches the suites' fixture hosts: mixed-content's, and the names under a private suffix); test runs only                                                                                                                                                                                                       |
 
@@ -163,8 +164,8 @@ server on the same port:
 | Path            | Serves                                                                                                                                  |
 | --------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `/`             | `demo/public` (the page, stylesheet, script, images)                                                                                    |
-| `/stomp/`       | `dist/` via `stompPath` from `@sysce/stomp/path`                                                                                        |
-| `/<minted>/`    | `dist/` again, the dialing mode's neutral scope (`STOMP_DIAL_DIRECTORY`, "Dialing" below)                                               |
+| `/stomp/`       | `dist/` via `stompPath` from `@sysce/stomp/path`, the classic tabs' scope ("Dialing" below)                                             |
+| `/<minted>/`    | `dist/` again, the page's neutral scope, where it dials (`STOMP_DIAL_DIRECTORY`, "Dialing" below)                                       |
 | `/epoxy/`       | `@mercuryworkshop/epoxy-transport`'s `dist/`                                                                                            |
 | `/libcurl/`     | `@mercuryworkshop/libcurl-transport`'s `dist/`                                                                                          |
 | `/wisp/`        | WebSocket upgrade handed to holyWisp (the `holywisp` package), see below                                                                |
@@ -270,7 +271,7 @@ holyWisp is started.
    the tabs back, the token's tab on show at its entry; a token the browser
    tab never wrote (a copied link, another window) opens home. A frame's
    navigation already adds a browser history entry, so the demo only
-   replaces its address then; a dialed tab (`?mode=just-call-stomp`,
+   replaces its address then; a dialed tab (the default,
    "Dialing" below) is never navigated, so each new entry of it is a
    `pushState`, and Back and Forward step the tab. A demo framed by its embedder (SystemYA's `/ui/`), or one
    whose `STOMP_CONFIG.addressFragment` is `'sealed'`, also writes the
@@ -777,14 +778,14 @@ origin (docs/site-pool.md, Fallbacks).
 
 Off by default. With `STOMP_SLOT_PORTS` set (a list, or a number of free
 ports) the server answers on those ports as on its own, with
-`Origin-Agent-Cluster: ?1`, and the page in dialing mode
-(`?mode=just-call-stomp`) gives them to its controller as its site pool,
+`Origin-Agent-Cluster: ?1`, and the page, which dials ("Dialing"
+below), gives them to its controller as its site pool,
 with no spare slot (`warm: false`): each proxied site is written into the
 call page of its slot, an origin and a renderer process apart from the
 UI's, and a slot's service worker is registered only when the first site
 is shown from it (docs/content-slots.md). One port is enough to keep the
 pages off the UI's thread; more give the sites processes of their own.
-The default mode never uses them. Behind a front,
+The classic tabs never use them. Behind a front,
 `STOMP_SLOT_PORTS_PUBLIC` lists the front's ports (production's are 2053,
 2083, 2087 and 2096, docs/content-slots-deploy.md), as
 `STOMP_SITE_POOL_PUBLIC` does for the pool. Without them, with `?nopool`,
@@ -830,22 +831,42 @@ measurements.
 
 ## Dialing
 
-`?mode=just-call-stomp` dials the tabs (`justCallStomp`, docs/dialing.md):
-each document is written into one constant call page instead of the frame
-navigating to the site. The page's controller is made with `dialing: true`;
-in every other mode it is not, and the service worker then has no call page
-and answers no call.
+The page dials its tabs (`justCallStomp`, docs/dialing.md): each document
+is written into one constant call page instead of the frame navigating to
+the site. The page's controller is made with `dialing: true`. It shows the
+classic tabs (each frame navigated to its page's route under `/stomp/`,
+the controller without `dialing`, so the service worker has no call page
+and answers no call) only where it cannot dial, and no address of the page
+asks for them:
+
+- the browser lacks the Navigation API, which a dialed document's history
+  is (`justCallStomp()` throws `NotSupportedError` there): the status line
+  says `Ready (classic tabs: this browser lacks the Navigation API)` and
+  About's Dialing row says why; a library that refuses for a reason the
+  page did not foresee loads the page again with the classic tabs, never
+  leaving a tab blank;
+- the server names a proxy origin (`STOMP_PROXY_ORIGIN`): the remote
+  controller does not dial yet. On `localhost` with none, whose classic
+  tabs were the isolated mode, the page dials on its own origin;
+- offline.html, which writes its documents into call pages of its own;
+- a server run with `STOMP_DIALING=0`, for the test suites of the classic
+  path (test/run.mjs, `dials()`); there `?mode=just-call-stomp` dials again,
+  for the suites that check both side by side.
 
 What the browser has for a dialed frame (its `src` and its real location) is
 the call page's URL alone, `<scope><callPage>`, with `?1`, `?2` for the frames
 of its documents. So that this names nothing, the mode does not use
-`/stomp/`: the server mints a scope and a page name when it starts
-(`/3dee0ce3/c2866a19.html`, and another scope for Tor mode), tells the page in
+`/stomp/`: the server derives a scope and a page name from the machine's
+name and the checkout's path, the same at every start, so a tab open across
+a restart keeps a scope the server serves (`/3dee0ce3/c2866a19.html`, and
+another scope for Tor mode), tells the page in
 `/config.js` (`dial: { directory, torDirectory, page }`) and serves `dist/`
 there too. `STOMP_DIAL_DIRECTORY` (`/<name>/`) and `STOMP_DIAL_PAGE` (`<name>`)
 fix them instead. A host that sets `STOMP_ASSETS.callPage` keeps its own name
 for the page. `test/suites/dial-urls.mjs` walks the mode and checks every
-frame's URL at every step, and that the default mode has no call page.
+frame's URL at every step, and that the classic tabs have no call page;
+`test/suites/dial-default.mjs` that the page dials with no address asking,
+and falls back where the browser has no Navigation API.
 
 For a host that vendors the bundle under neutral names (SystemYA's
 `scripts/prepare-stomp.mjs`): `callPage` is a new key of
@@ -853,8 +874,9 @@ For a host that vendors the bundle under neutral names (SystemYA's
 own list sees it. It names no file in `dist/`: give it a stamped neutral name
 like the others (`pg.<stamp>.html`) in the `assets` the controller gets, and
 copy nothing for it. The scope it lives under is the host's `directory`, which
-should be neutral too (`/vendor/rt/` is). It matters only to a host that opts
-in to dialing.
+should be neutral too (`/vendor/rt/` is). The demo's page dials by default,
+so a host of the page that gives it no `dial` config dials on its own
+`directory`.
 
 ## Deploying somewhere real
 

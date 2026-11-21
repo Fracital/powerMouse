@@ -6,7 +6,7 @@
 // Tor relay in front of a fake Tor (test/torFakes.mjs: a SOCKS5 listener
 // that connects every name to the fixture, and a control port): Tor down,
 // bootstrapping, ready, down again and back, all in one host page.
-/* global TOR_REQUESTED, TOR_WISP, DIRECTORY, CACHE, HTTP3, WEB_TRANSPORT, wispURL */
+/* global TOR_REQUESTED, TOR_WISP, DIRECTORY, CACHE, HTTP3, WEB_TRANSPORT, JUST_CALL, wispURL */
 import { spawn } from 'node:child_process';
 import {
 	activeFrame,
@@ -27,6 +27,11 @@ await waitForServer(PROXY);
 const browser = await launch();
 const errors = [];
 
+/** the ordinary scope the page should be on */
+const ordinary = (state) => state.dial?.directory ?? '/stomp/';
+/** the Tor mode's scope */
+const torScope = (state) => state.dial?.torDirectory ?? '/stomp-tor/';
+
 async function until(page, read, want, limit = 25000) {
 	const start = Date.now();
 	let value;
@@ -44,6 +49,9 @@ const read = () => ({
 	configured: TOR_WISP,
 	endpoint: TOR_REQUESTED && TOR_WISP ? wispURL() : null,
 	directory: DIRECTORY,
+	// the page dials (docs/dialing.md): its scopes are the server's neutral
+	// ones, the classic tabs' /stomp/ and /stomp-tor/
+	dial: JUST_CALL ? (globalThis.STOMP_CONFIG?.dial ?? null) : null,
 	cache: CACHE,
 	http3: HTTP3,
 	webTransport: WEB_TRANSPORT,
@@ -80,7 +88,7 @@ for (const [name, origin] of [
 	ok(
 		`${name}: Tor starts off and the ordinary controller keeps its route`,
 		state.requested === false &&
-			state.directory === '/stomp/' &&
+			state.directory === ordinary(state) &&
 			state.checked === false &&
 			state.disabled === false &&
 			state.cache === true,
@@ -96,7 +104,7 @@ for (const [name, origin] of [
 		state.requested === true &&
 			state.checked === true &&
 			state.stored === '1' &&
-			state.directory === '/stomp-tor/' &&
+			state.directory === torScope(state) &&
 			state.endpoint === state.configured &&
 			state.endpoint.includes('/wisp/') &&
 			// its own HTTP cache, in the Tor profile (gone with it)
@@ -114,13 +122,15 @@ for (const [name, origin] of [
 			),
 		Boolean,
 	);
-	const frame = shown && (await activeFrame(page));
-	const title = frame
-		? await until(
-				frame,
-				() => document.title,
-				(name) => name === 'Bookmark A',
+	// (the active frame while the title comes: a dialed tab's first document
+	// takes a frame of its own in the place of the one it had)
+	const frame = shown
+		? await waitActive(page, () => document.title === 'Bookmark A').catch(() =>
+				activeFrame(page),
 			)
+		: null;
+	const title = frame
+		? await frame.evaluate(() => document.title).catch(() => null)
 		: null;
 	ok(
 		`${name}: proxied page contents load over the selected relay`,
@@ -137,7 +147,7 @@ for (const [name, origin] of [
 		`${name}: turning Tor off returns to the ordinary scope`,
 		state.requested === false &&
 			state.checked === false &&
-			state.directory === '/stomp/' &&
+			state.directory === ordinary(state) &&
 			state.stored === '0' &&
 			state.cache === true,
 		JSON.stringify(state),
@@ -430,7 +440,7 @@ for (const [name, origin] of [
 			state.configured === null &&
 			state.checked === true &&
 			state.disabled === false &&
-			state.directory === '/stomp-tor/' &&
+			state.directory === torScope(state) &&
 			state.http3 === false &&
 			state.webTransport === false,
 		JSON.stringify(state),
@@ -445,7 +455,7 @@ for (const [name, origin] of [
 		state.requested === false &&
 			state.checked === false &&
 			state.disabled === true &&
-			state.directory === '/stomp/',
+			state.directory === ordinary(state),
 		JSON.stringify(state),
 	);
 	await context.close();

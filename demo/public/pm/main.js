@@ -136,17 +136,50 @@ const PROXY_ORIGIN =
 		: location.hostname === 'localhost'
 			? location.origin.replace('localhost', '127.0.0.1')
 			: null;
-// Just call stomp (?mode=just-call-stomp, StompController.justCallStomp):
-// every proxied document is written into a fresh frame of one constant page
-// the worker serves (its call page), and no frame is navigated to a site.
-// The call pages are on the content slots (STOMP_SLOT_PORTS,
-// docs/content-slots.md), origins apart from this page's, or on this page's
-// own origin where the server has none or none answers. A configured remote
-// controller stays isolated: it does not yet support dialing.
+// Dialing (just call stomp, StompController.justCallStomp, docs/dialing.md)
+// is how the demo shows a tab: every proxied document is written into a
+// fresh frame of one constant page the worker serves (its call page), and
+// no frame is navigated to a site, so the browser has the call page's
+// neutral URL for every frame of every tab. The call pages are on the
+// content slots (STOMP_SLOT_PORTS, docs/content-slots.md), origins apart
+// from this page's, or on this page's own origin where the server has none
+// or none answers (production). The page shows its tabs the classic way
+// (frames navigated to their routes) only where it cannot dial:
+// - the browser lacks the Navigation API, which a dialed document's history
+//   is (justCallStomp() throws NotSupportedError there): said on the status
+//   line and in About's Dialing row, never a blank tab;
+// - a configured remote controller (STOMP_PROXY_ORIGIN) stays isolated: it
+//   does not dial yet;
+// - offline.html writes its documents into call pages of its own
+//   (demo/offline/host.mjs);
+// - a server that runs the suites' classic path (STOMP_DIALING=0, test/
+//   run.mjs), where a suite asks for dialing with ?mode=just-call-stomp.
+// No address of the page turns dialing off.
 const REMOTE_ISOLATION = !!PROXY_ORIGIN && PROXY_ORIGIN !== location.origin;
-const JUST_CALL =
-	new URLSearchParams(location.search).get('mode') === 'just-call-stomp' &&
-	!('proxyOrigin' in CFG && REMOTE_ISOLATION);
+const DIALING_UNSUPPORTED =
+	!('navigation' in globalThis) || !('NavigateEvent' in globalThis)
+		? 'this browser lacks the Navigation API'
+		: null;
+// a library that refused to dial for a reason the check above did not
+// foresee (createTab): this browser tab's next load shows tabs classically
+const NO_DIAL_KEY = 'stomp-demo:no-dialing';
+const DIALING_REFUSED = (() => {
+	try {
+		return sessionStorage.getItem(NO_DIAL_KEY);
+	} catch {
+		return null;
+	}
+})();
+const DIALING_WANTED =
+	!OFFLINE &&
+	!('proxyOrigin' in CFG && REMOTE_ISOLATION) &&
+	(CFG.dialing !== false ||
+		new URLSearchParams(location.search).get('mode') === 'just-call-stomp');
+// why a page that would dial does not (null when it dials, or never would)
+const DIAL_FALLBACK = DIALING_WANTED
+	? (DIALING_UNSUPPORTED ?? DIALING_REFUSED)
+	: null;
+const JUST_CALL = DIALING_WANTED && !DIAL_FALLBACK;
 // what the browser has for a dialed frame is its call page's URL alone:
 // the server's neutral scope for the mode and its call page's name
 // (STOMP_DIAL_DIRECTORY), unless the host named a call page itself
@@ -223,8 +256,8 @@ const HTTP3 =
 // a visit. The slots are ports of the proxy's host: this page's in the same
 // origin mode, the proxy origin's in the isolated one. The controller falls
 // back to the proxy's own origin by itself where a slot does not answer.
-// In dialing mode the slots are the content slots (CFG.contentSlots), the
-// default mode never uses them.
+// A page that dials uses the content slots (CFG.contentSlots) instead; the
+// site pool's are for the classic tabs alone.
 const SITE_POOL = (() => {
 	const ports = JUST_CALL ? CFG.contentSlots : CFG.sitePool;
 	if (!Array.isArray(ports) || !ports.length) return null;
@@ -1512,6 +1545,20 @@ async function startController(name) {
 				: `same origin (${location.origin})`,
 		'green',
 	);
+	// how the tabs are shown (the frames' URLs: the call page's, or each
+	// document's route where the page cannot dial)
+	if (JUST_CALL)
+		badge(
+			'Dialing',
+			`on: every frame is the call page ${DIRECTORY}${assetName('callPage')}`,
+			'green',
+		);
+	else if (DIAL_FALLBACK)
+		badge(
+			'Dialing',
+			`off (${DIAL_FALLBACK}): tabs are shown the classic way, each frame at its page's route`,
+			'orange',
+		);
 	transportName = name;
 	// the console's line is the transport's own ([wisp], when it connects);
 	// About shows the fact
@@ -1574,7 +1621,7 @@ async function startController(name) {
 			...(PROFILE && { profile: PROFILE }),
 			assets: ASSETS,
 			codec: 'xor',
-			// the dialing mode's call page and calls exist for this
+			// dialing's call page and calls exist for this
 			// controller only (justCallStomp)
 			...(JUST_CALL && { dialing: true }),
 			// ?carrierhost=0: this visit's transport opens its own carrier
@@ -1641,7 +1688,9 @@ async function boot() {
 		!controller.stale
 			? TOR_REQUESTED
 				? torReadyStatus()
-				: 'Ready'
+				: DIAL_FALLBACK
+					? `Ready (classic tabs: ${DIAL_FALLBACK})`
+					: 'Ready'
 			: controller.stale.newer === 'worker'
 				? 'Ready (STomp was updated: reload the page)'
 				: 'Ready (service worker updating)';
@@ -1758,12 +1807,30 @@ function createTab(id = 0, at = tabs.length) {
 		tab.calling = StompController.justCallStomp(frame, undefined, {
 			key: `tab-${tab.sid}`,
 		});
-		tab.calling.catch(() => {});
+		tab.calling.catch(refusedDialing);
 	}
 	session.tab = Math.max(session.tab, tab.sid);
 	tabs.splice(Math.min(Math.max(at, 0), tabs.length), 0, tab);
 	keepTabs();
 	return tab;
+}
+
+/**
+ * A library that will not dial in this browser (justCallStomp's
+ * NotSupportedError) would leave every tab blank: the page loads again
+ * showing its tabs the classic way (DIALING_REFUSED), at the same address,
+ * whose token reopens them, and says why
+ */
+function refusedDialing(error) {
+	if (error?.name !== 'NotSupportedError') return;
+	try {
+		if (sessionStorage.getItem(NO_DIAL_KEY) !== null) return;
+		sessionStorage.setItem(NO_DIAL_KEY, error.message || 'dialing refused');
+	} catch {
+		return void setStatus(`Dialing failed: ${error.message}`, true);
+	}
+	setStatus('Dialing is not supported here: loading the classic tabs…');
+	location.reload();
 }
 
 /** note a URL the frame reached, unless it was our own back/forward */
@@ -2872,8 +2939,8 @@ function syncOmnibox(force = false) {
 // joint session history, and that entry shares the page's own with the
 // entry before it, so every entry of a frame's walk shows the newest token:
 // the page only replaces its address (writeAddress), and history.length
-// grows no more than the frame's navigations make it. A dialed tab
-// (?mode=just-call-stomp) is never navigated, so each new entry of its
+// grows no more than the frame's navigations make it. A dialed tab (the
+// default, JUST_CALL) is never navigated, so each new entry of its
 // history is a pushState here (calledEntries), and Back and Forward come
 // back as popstate events that step the tab to the token's entry.
 //

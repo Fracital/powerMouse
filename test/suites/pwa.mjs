@@ -7,8 +7,8 @@
 //    icons load at their sizes;
 //  - Chrome has no installability error (Page.getInstallabilityErrors) and
 //    reads the manifest without one (Page.getAppManifest);
-//  - the app worker controls the page from /, beside STomp's worker at
-//    /stomp/, and a request of the page goes to the network without it
+//  - the app worker controls the page from /, beside STomp's worker at its
+//    scope (the server's dial directory), and a request of the page goes to the network without it
 //    (its static routes); a proxied page loads as before;
 //  - Chrome's own offer (beforeinstallprompt) puts Install powerMouse in
 //    the menu; choosing it prompts once and the item goes; appinstalled
@@ -266,10 +266,19 @@ const scopes = await page.evaluate(async () =>
 		)
 		.sort(),
 );
+// the page dials (docs/dialing.md): STomp's scope is the server's neutral
+// one, /stomp/ for classic tabs
+/* global DIRECTORY */
+const stompScope = await page.evaluate(() => DIRECTORY);
 ok(
-	"STomp's worker keeps /stomp/, the app worker has /",
+	`STomp's worker keeps ${stompScope}, the app worker has /`,
 	JSON.stringify(scopes) ===
-		JSON.stringify(['/ /app-worker.js', '/stomp/ /stomp/serviceWorker.js']),
+		JSON.stringify(
+			[
+				'/ /app-worker.js',
+				`${stompScope} ${stompScope}serviceWorker.js`,
+			].sort(),
+		),
 	JSON.stringify(scopes),
 );
 const timing = await page.evaluate(async () => {

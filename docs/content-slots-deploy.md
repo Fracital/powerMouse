@@ -7,7 +7,7 @@ abulxt/Fracital ansible). Every infra path below was read at infra HEAD
 `d7a3683` (2026-11-20); check them against HEAD on the day.
 
 What the ports are for, and what they are not, is docs/content-slots.md:
-dialing (`?mode=just-call-stomp`) writes every proxied page into a call
+dialing (the demo's default) writes every proxied page into a call
 page on another port of stomp.fracit.al, so powerMouse's UI on 443 and the
 pages are different origins, agent clusters and processes. The ports are
 not a cookie boundary and not a sandbox.
@@ -17,7 +17,7 @@ not a cookie boundary and not a sandbox.
 - Apply only once the content slots have landed and been deployed (the
   app reads `STOMP_SLOT_PORTS_PUBLIC`, section 5). Sections 1 to 4 can be
   staged before: nothing uses the ports until the `.env` line exists.
-- Only the dialing mode uses the ports. The default (navigated) mode, the
+- Only a page that dials uses the ports. The classic (navigated) tabs, the
   UI on 443, the wisp relay and every other Fracital name are unchanged.
 - A browser that cannot reach the ports (a filter that lets 443 through
   alone) is unaffected: the page finds the slots silent and writes the
@@ -200,7 +200,7 @@ done
 # the UI's own origin does not ask for one, even when a client claims a slot
 curl -sI -H 'X-Forwarded-Port: 2053' "https://stomp.fracit.al/stomp/controllerFrame.html" |
   grep -ci '^origin-agent-cluster'                               # 0 (with the hardening)
-# the page hands the ports to the dialing mode
+# the page hands the ports to its dialing
 curl -s "https://stomp.fracit.al/config.js?x=$RANDOM" |
   grep -o '"contentSlots":\[[0-9,]*\]'                           # [2053,2083,2087,2096]
 ```
@@ -209,10 +209,10 @@ On the edge: `openresty -t`, then `ss -ltn | grep -cE ':(2053|2083|2087|2096) '`
 (4 times the listen addresses). On divide: `nft list table ip divide_nat |
 grep 2053` and `pve-firewall compile 2>/dev/null | grep -c 2053`.
 
-In a browser: open `https://stomp.fracit.al/?mode=just-call-stomp`, visit
+In a browser: open `https://stomp.fracit.al/`, visit
 a site, and check that the tab's iframe `src` is
 `https://stomp.fracit.al:<one of the ports>/<dial directory>/<dial page>`
-(the server's minted names, `STOMP_CONFIG.dial`), that
+(the server's neutral names, `STOMP_CONFIG.dial`), that
 `chrome://process-internals` lists that origin as origin-keyed, that
 DevTools' Application panel shows a service worker only on the ports a
 site was shown from, and that with the `.env` line removed the same visit

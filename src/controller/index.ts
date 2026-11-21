@@ -5246,8 +5246,9 @@ export class Frame extends EventTarget {
 	async reload({ bypassCache = false }: ReloadOptions = {}): Promise<boolean> {
 		// (the host's reload, not the page's: the extensions' transition)
 		this.controller.tabReloading(this);
-		// (a called frame's reload is a reload: no hard reload there yet)
-		if (this.called) return this.called.reload();
+		// (a called frame's: a call made again, which its worker is told is a
+		// hard reload)
+		if (this.called) return this.called.reload({ bypassCache });
 		const win = this.element.contentWindow;
 		if (!win) return false;
 		const stops = this.#stops;

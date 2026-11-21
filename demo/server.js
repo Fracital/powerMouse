@@ -103,11 +103,11 @@
 //   STOMP_SLOT_PORTS    content slots for dialing (docs/content-slots.md):
 //                       ports to answer on, as STOMP_SITE_POOL takes them (a
 //                       list, `2053,2083,2087,2096`, or a number of free
-//                       ports; default `0` or `off`: none). Only a page in
-//                       dialing mode (`?mode=just-call-stomp`) uses them: it
-//                       writes each proxied site into the call page of one
-//                       of them, an origin apart from the UI's; without them
-//                       (or where none answers) on the page's own origin
+//                       ports; default `0` or `off`: none). Only a page
+//                       that dials (the default, docs/dialing.md) uses them:
+//                       it writes each proxied site into the call page of
+//                       one of them, an origin apart from the UI's; without
+//                       them (or where none answers) on the page's own origin
 //   STOMP_SLOT_PORTS_PUBLIC the same, as the browser reaches them through a
 //                       front (`2053,2083,2087,2096` behind Cloudflare), as
 //                       STOMP_SITE_POOL_PUBLIC: the server binds nothing for
@@ -161,21 +161,28 @@
 //                       the page sends it here (over the same Wisp relay as
 //                       everything else, the built-in holyWisp or
 //                       STOMP_WISP_URL)
-//   STOMP_DIAL_DIRECTORY the service worker scope of the dialing mode
-//                       (?mode=just-call-stomp), where every dialed frame's
-//                       URL is the call page: a neutral path such as
-//                       `/a1b2c3d4/` (default: one minted when the server
-//                       starts, and the Tor mode's another). Its call page's
-//                       name is STOMP_DIAL_PAGE (default: minted too,
+//   STOMP_DIAL_DIRECTORY the service worker scope of the page, which dials
+//                       (docs/dialing.md): every dialed frame's URL is the
+//                       call page, a neutral path such as `/a1b2c3d4/`
+//                       (default: one derived from this machine's name and
+//                       the checkout's path, the same at every start, and
+//                       the Tor mode's another). Its call page's name is
+//                       STOMP_DIAL_PAGE (default: derived too,
 //                       `<8 hex>.html`). Neither names the proxy, the page or
 //                       the route, so the URL the browser has for a frame
 //                       says nothing
+//   STOMP_DIALING       `0`: the page shows its tabs the classic way, each
+//                       frame navigated to its page's route under /stomp/,
+//                       unless the page asks for dialing
+//                       (`?mode=just-call-stomp`). For the test suites of
+//                       that path (test/run.mjs); no visitor's address turns
+//                       dialing off
 //   STOMP_DEV           development mode (`npm run dev` sets it): /__dev is a
 //                       WebSocket that announces rebuilt bundles and edited
 //                       files to the page, which reloads what changed; see
 //                       demo/public/pm/dev.js
 import { execFile } from 'node:child_process';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, statSync, watch } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
@@ -209,17 +216,28 @@ const wispWebTransport = process.env.STOMP_WISP_WEBTRANSPORT || '1';
 const webTransportOn = wispWebTransport !== '0';
 const proxyOrigin = process.env.STOMP_PROXY_ORIGIN || '';
 const dev = !!process.env.STOMP_DEV;
-// the dialing mode's scopes and call page (STOMP_DIAL_DIRECTORY,
-// STOMP_DIAL_PAGE): neutral names, minted per start as a host mints its
-// asset names per build
-const mint = () => randomBytes(4).toString('hex');
+// dialing's scopes and call page (STOMP_DIAL_DIRECTORY, STOMP_DIAL_PAGE):
+// neutral names, the same from start to start of this checkout on this
+// machine. A name minted per start would leave every tab open across a
+// restart (a deploy) with a worker on a scope this server no longer serves:
+// its assets, its sync relay and its worker's update would all be 404s
+const mint = (what) =>
+	createHash('sha256')
+		.update(
+			`${hostname()}\0${fileURLToPath(new URL('..', import.meta.url))}\0${what}`,
+		)
+		.digest('hex')
+		.slice(0, 8);
 const DIAL = (() => {
 	const given = process.env.STOMP_DIAL_DIRECTORY;
-	const directory = given && /^\/[\w-]+\/$/.test(given) ? given : `/${mint()}/`;
+	const directory =
+		given && /^\/[\w-]+\/$/.test(given) ? given : `/${mint('directory')}/`;
 	const page = /^[\w.-]+$/.test(process.env.STOMP_DIAL_PAGE ?? '')
 		? process.env.STOMP_DIAL_PAGE
-		: `${mint()}.html`;
-	return { directory, torDirectory: `/${mint()}/`, page };
+		: `${mint('page')}.html`;
+	let torDirectory = `/${mint(`tor ${directory}`)}/`;
+	if (torDirectory === directory) torDirectory = `/${mint('tor')}/`;
+	return { directory, torDirectory, page };
 })();
 
 // the transports only export their dist entry; serve its directory
@@ -421,8 +439,11 @@ const pageConfig = {
 	// on unless turned off; a wisp server without UDP costs it nothing (the
 	// transport stays on HTTP/2, docs/http3.md)
 	http3: process.env.STOMP_HTTP3 !== '0',
-	// the dialing mode's scopes and call page (STOMP_DIAL_DIRECTORY)
+	// dialing's scopes and call page (STOMP_DIAL_DIRECTORY)
 	dial: DIAL,
+	// the page dials unless told not to (STOMP_DIALING=0, the suites of
+	// the classic path)
+	...(process.env.STOMP_DIALING === '0' && { dialing: false }),
 	echDns:
 		process.env.STOMP_ECH_DNS === 'off'
 			? null

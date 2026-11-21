@@ -13,6 +13,8 @@
 //   npm test -- back escapes   only these (names without .mjs)
 //   PARALLEL=1 npm test        one at a time, streaming output
 //   RERUN=0 npm test           no second run, alone, for a suite that failed
+//   DIAL_DEFAULT=1 npm test    every suite on the demo's default (dialing),
+//                              not only the demo's own (dials() below)
 //
 // Needs a built dist/ (`npm run build`) and Chrome (CHROME env, default
 // /usr/bin/google-chrome). PORT / FIXTURE_PORT pin the ports of a sequential
@@ -175,6 +177,38 @@ const SUITE_ENV = {
 	'nav-router': { STOMP_SLOT_PORTS: '4' },
 	'navigation-api': { STOMP_SLOT_PORTS: '4' },
 };
+// The demo page dials (docs/dialing.md): every tab's frames are its call
+// page, each document written into a fresh one. The suites written for
+// frames navigated to their routes (a frame's URL, its history entries,
+// what a navigation request carries) run the demo's classic tabs, which
+// its server shows with STOMP_DIALING=0: every suite but those of the
+// demo's own UI (demo, demo-*) and DIALING_SUITES. A suite that checks both
+// ways side by side (CLASSIC_SUITES) runs on a classic server and asks for
+// dialing with ?mode=just-call-stomp. DIAL_DEFAULT=1 runs every other
+// suite on the page's default too: the matrix that tells which of the
+// classic path's suites dialing passes.
+const DIALING_SUITES = new Set(['dial-default', 'back', 'pwa', 'offline-html']);
+const CLASSIC_SUITES = new Set([
+	'top-url-tokens',
+	'dial-urls',
+	'jcs-slots',
+	'toolbar',
+	'nav-router',
+	'navigation-api',
+	'ext-tab-status',
+	'just-call-stomp-audit',
+	'wpt-navigation-api-dial',
+]);
+const DIAL_DEFAULT = process.env.DIAL_DEFAULT === '1';
+/** whether `name` runs on the demo's default, which dials */
+const dials = (name) =>
+	!CLASSIC_SUITES.has(name) &&
+	(DIAL_DEFAULT ||
+		name === 'demo' ||
+		name.startsWith('demo-') ||
+		DIALING_SUITES.has(name));
+/** what a suite's demo server, and one it starts itself, gets for it */
+const dialingEnv = (name) => (dials(name) ? {} : { STOMP_DIALING: '0' });
 // where the content blocker's default lists and resources live
 // (src/blocker/types.ts DEFAULT_LISTS, DEFAULT_RESOURCES)
 const LIST_SERVERS = [
@@ -476,12 +510,14 @@ async function startServersOnce(name) {
 		// match native (mixed-content and the cookie suites compare them). A
 		// suite that drives the demo and wants the defaults sets it to '1'.
 		STOMP_SHIELDS_DEFAULTS: process.env.STOMP_SHIELDS_DEFAULTS ?? '0',
+		...dialingEnv(name),
 		...SUITE_ENV[name],
 		STOMP_SITE_POOL: slotPorts.length ? slotPorts.join(',') : '0',
 		STOMP_SLOT_PORTS: contentPorts.length ? contentPorts.join(',') : '0',
 	};
 	delete env.STOMP_PROXY_ORIGIN;
 	delete env.STOMP_WISP_URL;
+	if (dials(name)) delete env.STOMP_DIALING;
 	// the demo's default (HTTP/3 on) unless the suite itself pins it
 	if (!SUITE_ENV[name]?.STOMP_HTTP3) delete env.STOMP_HTTP3;
 	// WISP_LOG: every stream the demo's holyWisp opens and closes, each line
@@ -567,6 +603,7 @@ function runSuite(
 			env: {
 				...process.env,
 				...blockerEnv(fixturePort),
+				...dialingEnv(name),
 				PORT: port,
 				FIXTURE: `http://127.0.0.1:${fixturePort}/`,
 				SITE_POOL_PORTS: slotPorts.join(','),

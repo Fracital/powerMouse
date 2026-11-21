@@ -48,7 +48,7 @@
 //    first click after a reload, and a tab older than its worker (a deploy),
 //    whose buttons, list and menus work from the first click.
 // (the demo page's own globals, read in the page)
-/* global activateTab, extAnchor, extButton, openExtensionsPage, openExtMenu, tabs */
+/* global activateTab, extAnchor, extButton, openExtensionsPage, openExtMenu, tabs, JUST_CALL, DIRECTORY, assetName */
 import { readFileSync } from 'node:fs';
 import { crc32, deflateRawSync } from 'node:zlib';
 import {
@@ -1203,9 +1203,9 @@ ok(
 );
 
 // Options: its page in a new tab, the bar showing chrome-extension://
-const tabsBefore = await page.evaluate(
-	() => document.querySelectorAll('#frames iframe.frame').length,
-);
+// (the page's tabs, not its frames: a dialed tab has one for each document
+// it shows, two for a moment while the next one comes)
+const tabsBefore = await page.evaluate(() => tabs.length);
 await page.click(`#extActions .extAction[data-ext="${id}"]`, {
 	button: 'right',
 });
@@ -1216,7 +1216,7 @@ const options = await until(
 	page,
 	() => ({
 		bar: document.querySelector('#omni input').value,
-		tabs: document.querySelectorAll('#frames iframe.frame').length,
+		tabs: tabs.length,
 		shields: document.getElementById('toolShields').hidden,
 	}),
 	(value) => value?.bar === optionsUrl,
@@ -1272,12 +1272,34 @@ const typedFrame = await page.evaluate(() => {
 	const tab = [...document.querySelectorAll('#frames iframe.frame')].find(
 		(element) => !element.classList.contains('hidden'),
 	);
-	return tab?.src ?? '';
+	return {
+		src: tab?.src ?? '',
+		// the page dials (docs/dialing.md): the frame is its call page, the
+		// classic tabs' a route under /stomp/
+		call: JUST_CALL
+			? new URL(`${DIRECTORY}${assetName('callPage')}`, location.href).href
+			: null,
+	};
 });
+const typedTitle = await (async () => {
+	const start = Date.now();
+	while (Date.now() - start < 20000) {
+		const handle = await page.$('#frames iframe.frame:not(.hidden)');
+		const frame = await handle?.contentFrame();
+		const title = await frame?.evaluate(() => document.title).catch(() => '');
+		if (title === 'Probe options') return title;
+		await sleep(200);
+	}
+	return null;
+})();
 ok(
 	'a chrome-extension:// address typed in the bar opens that page',
-	typed === optionsUrl && /\/stomp\//.test(typedFrame),
-	JSON.stringify({ typed, typedFrame }),
+	typed === optionsUrl &&
+		typedTitle === 'Probe options' &&
+		(typedFrame.call
+			? typedFrame.src === typedFrame.call
+			: /\/stomp\//.test(typedFrame.src)),
+	JSON.stringify({ typed, typedFrame, typedTitle }),
 );
 
 // the tab manager's cards carry the buttons as pictures

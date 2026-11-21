@@ -384,13 +384,17 @@ ok(
 		placed.icon === 24,
 	JSON.stringify(placed),
 );
+// the demo page's direct wisp server: its own origin's, as it dials there
+// (docs/dialing.md; its classic tabs on localhost were isolated, with the
+// proxy and its wisp server on 127.0.0.1)
+const DIRECT = `ws://${new URL(HOST).host}/wisp/`;
 const own = await download(demo);
 const ownWisp = await configuredWisp(demo);
 ok(
 	"Download saves offline.html with the server's own wisp server in it, and nothing else changed",
 	own.name === 'offline.html' &&
 		slotOf(own.text) === ownWisp &&
-		ownWisp === WISP &&
+		ownWisp === DIRECT &&
 		unslotted(own.text) === unslotted(servedText),
 	JSON.stringify({ name: own.name, saved: slotOf(own.text), ownWisp }),
 );
@@ -435,7 +439,7 @@ const torTitle = await tor.getAttribute('#offlineDownload', 'title');
 ok(
 	'with Tor on, Download writes the direct wisp server, never the Tor relay, and says so',
 	(await configuredWisp(tor)) === TOR &&
-		slotOf(torSaved.text) === WISP &&
+		slotOf(torSaved.text) === DIRECT &&
 		/no Tor mode/.test(torTitle ?? '') &&
 		unslotted(torSaved.text) === unslotted(servedText),
 	JSON.stringify({ saved: slotOf(torSaved.text), title: torTitle }),

@@ -86,18 +86,32 @@
 			document.getElementById('detail').textContent = info.error
 				? `${info.kind || 'error'}${info.status ? ` (${info.status})` : ''}: ${info.error}`
 				: '';
-			document
-				.getElementById('retry')
-				.addEventListener('click', () => location.reload());
-			// Tor mode (the /stomp-tor/ scope): a load that failed while the
+			// In a dialed tab (docs/dialing.md) this page was written into the
+			// call page, whose own reload would show the call page again and
+			// nothing in it: the host reloads the tab, told over the port the
+			// call left on the window (src/server/called.ts)
+			const reload = () => {
+				const called = window.$stomp$called;
+				if (called && called.port) {
+					try {
+						called.port.postMessage({ op: 'navigate', reload: true });
+						return;
+					} catch {}
+				}
+				location.reload();
+			};
+			document.getElementById('retry').addEventListener('click', reload);
+			// Tor mode (the /stomp-tor/ scope, or a dialed tab of the host's
+			// Tor profile, pm/profile.js): a load that failed while the
 			// server's Tor was down or still connecting says so, and loads
 			// again by itself once Tor is ready (demo/server.js /api/tor).
 			// The question goes to the demo's server, not through Tor: this
 			// page runs no inject, its requests are the host's own.
-			if (
-				location.pathname.startsWith('/stomp-tor/') &&
-				(info.kind === 'transport' || info.kind === 'timeout')
-			) {
+			let torMode = location.pathname.startsWith('/stomp-tor/');
+			try {
+				torMode ||= top !== self && top.PMProfile?.tor === true;
+			} catch {}
+			if (torMode && (info.kind === 'transport' || info.kind === 'timeout')) {
 				const tell = (status) => {
 					const progress =
 						status.progress != null ? ` (${status.progress}%)` : '';
@@ -123,7 +137,7 @@
 						status?.state === 'ready' || status?.state === 'unknown';
 					// ready at once: the site itself failed, the page says so
 					if (ready && !waited) return;
-					if (ready) return location.reload();
+					if (ready) return reload();
 					// no Tor relay here at all: nothing to wait for
 					if (status?.state === 'off') return;
 					if (status) {

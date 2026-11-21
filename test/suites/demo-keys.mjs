@@ -295,6 +295,8 @@ await reloadKeys(PROXY, 'same-origin').then((page) => page.close());
 		);
 
 		const reload = async (modifiers) => {
+			// (the tab's frame now: a dialed tab's each document has its own)
+			frame = (await tabFrame(page, () => window.__late === true)) ?? frame;
 			const origin = await timeOrigin(frame);
 			counted = await hardHits();
 			// (into the page: its body has no box of its own)

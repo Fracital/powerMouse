@@ -1,8 +1,8 @@
 # Content slots for dialing
 
-**Off by default (2026-11-20). Dialing itself (just call stomp,
-`?mode=just-call-stomp`) is opt-in and experimental; the slots are its
-UI/content split. docs/content-slots-deploy.md is what production needs,
+**Off by default (2026-11-20). Dialing itself (just call stomp) is the
+demo's default since 2026-11-20 (demo/README.md, "Dialing"); the slots are
+its UI/content split. docs/content-slots-deploy.md is what production needs,
 prepared and not applied.**
 
 Dialing writes every proxied document into a fresh frame of one constant
@@ -34,9 +34,9 @@ the other side can be scripted or read.
   front, `STOMP_SLOT_PORTS_PUBLIC` lists the ports as the browser reaches
   them; the server binds nothing for them and takes the front's
   `X-Forwarded-Port` for them (and only for them) as the port asked. The
-  page gets the ports as `STOMP_CONFIG.contentSlots`, and only the page in
-  dialing mode uses them; the default (navigated) mode never does, and has
-  its own pool (`STOMP_SITE_POOL`). `?nopool` leaves the slots out for one
+  page gets the ports as `STOMP_CONFIG.contentSlots`, and only a page that
+  dials uses them; the classic tabs (navigated) never do, and have their
+  own pool (`STOMP_SITE_POOL`). `?nopool` leaves the slots out for one
   visit. The test harness picks free ports for `STOMP_SLOT_PORTS` as it
   does for `STOMP_SITE_POOL` (test/run.mjs, `CONTENT_SLOT_PORTS` in the
   suite's environment).

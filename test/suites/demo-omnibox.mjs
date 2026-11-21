@@ -141,8 +141,10 @@ async function home(page) {
 	await sleep(300);
 }
 
-const tabCount = (page) =>
-	page.evaluate(() => document.querySelectorAll('#frames iframe').length);
+// (the page's tabs: a dialed tab has a frame for each document it shows,
+// two for a moment while the next one comes)
+/* global tabs, JUST_CALL, DIRECTORY, assetName */
+const tabCount = (page) => page.evaluate(() => tabs.length);
 
 for (const [mode, base] of [
 	['isolated', HOST],
@@ -451,9 +453,17 @@ for (const [mode, base] of [
 	await page.evaluate(() => delete window.controller.suggest);
 	// a cookie of the fixture's origin in the proxied page's jar, seen by the
 	// page's own request and not by suggest()'s
+	// (a route's frame, or where the page dials, its call page's)
+	const call = await page.evaluate(() =>
+		JUST_CALL ? `${DIRECTORY}${assetName('callPage')}` : null,
+	);
 	const frame = page
 		.frames()
-		.findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
+		.findLast(
+			(f) =>
+				/\/stomp\/[\w-]+\/html\//.test(f.url()) ||
+				(call !== null && new URL(f.url()).pathname === call),
+		);
 	const key = `omni-${mode}-${Date.now()}`;
 	const pageSaw = await frame
 		?.evaluate(async (key) => {

@@ -719,10 +719,10 @@ the change). One port alone already takes the pages off the UI's thread.
 
 **The demo.** `STOMP_SLOT_PORTS` (a list or a number of ports, as
 `STOMP_SITE_POOL`; off by default) and, behind a front,
-`STOMP_SLOT_PORTS_PUBLIC` are the content slots the page in dialing mode
-(`?mode=just-call-stomp`) gives its controller as its pool, with
+`STOMP_SLOT_PORTS_PUBLIC` are the content slots the page, which dials by
+default, gives its controller as its pool, with
 `warm: false` (a slot starts with its first site, never as a spare); the
-default mode never uses them. docs/content-slots.md is the design
+classic tabs never use them. docs/content-slots.md is the design
 (assignment, laziness, fallbacks, what the ports are not) and
 docs/content-slots-deploy.md what production needs.
 

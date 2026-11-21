@@ -72,14 +72,23 @@ export function tellHardReloads(teller: (url: string) => Promise<unknown>) {
 }
 
 /**
+ * Tell the worker of this realm's origin that the next navigation to
+ * `url` (a route) is a hard reload, waiting for it at most TELL_WAIT_MS;
+ * nothing where the realm has no controller
+ */
+export async function tellHardReload(url: string): Promise<void> {
+	const told = hardTeller?.(url).catch(() => {});
+	if (told) await Promise.race([told, sleep(TELL_WAIT_MS)]);
+}
+
+/**
  * Reload `win` (a document of this realm's origin) as the browser's Reload
  * does, past the caches when `hard`: its worker hears of it first (at most
  * TELL_WAIT_MS), a realm without a controller reloads it as a reload
  */
 export async function reloadWindow(win: Window, hard = false, run = 0) {
 	noteBrowserNavigation(win, run);
-	const told = hard ? hardTeller?.(win.location.href).catch(() => {}) : null;
-	if (told) await Promise.race([told, sleep(TELL_WAIT_MS)]);
+	if (hard) await tellHardReload(win.location.href);
 	win.location.reload();
 }
 
