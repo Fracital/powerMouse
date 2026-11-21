@@ -558,7 +558,9 @@ installed by hand). git, npm and rsync run as `deploy`; root does only what
 its fixed sudo rules (re-own the trees, `pm2 restart stomp`, its logs). The
 gate accepts exactly
 `deploy <sha>` and refuses if the live checkout has work that is not on
-GitHub. It runs on `push` only, so pull requests never reach the key. Server
+GitHub. In its stage it checks out the submodules (`vendor/vibeOS`) and
+installs vibeOS's runtime dependencies; if either fails it builds without
+vibeOS, whose switch is then left out, instead of failing the deploy. It runs on `push` only, so pull requests never reach the key. Server
 settings live in `/opt/stomp/repo/.env` on terp (`PORT`, `STOMP_WISP_URL`
 pointing at the edges' keyed holyWisp relay on holywisp.fracit.al); CI never
 touches it. The OpenResty

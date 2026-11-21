@@ -53,6 +53,23 @@ restart_app() {
 	fi
 }
 
+# vibeOS (vendor/vibeOS) is a submodule the build uses when it is there and leaves out when it is
+# not, so a submodule that will not check out costs that feature, never the deploy. Its build output
+# goes into dist/, which is all the live checkout gets; the live checkout never needs the submodule.
+checkout_submodules() {
+	[[ -f $STAGE/.gitmodules ]] || return 0
+	git -C "$STAGE" submodule sync -q
+	if ! git -C "$STAGE" submodule update -q --init --force --depth 1; then
+		log "submodules did not check out; building without them"
+		return 0
+	fi
+	git -C "$STAGE" submodule foreach -q 'git clean -qfdx -e node_modules'
+	if [[ -f $STAGE/vendor/vibeOS/package-lock.json ]]; then
+		(cd "$STAGE" && npm ci --prefix vendor/vibeOS --omit=dev --ignore-scripts --no-audit --no-fund --loglevel=error) >&2 ||
+			log "vendor/vibeOS dependencies did not install; building without vibeOS"
+	fi
+}
+
 # Build $1 in the stage checkout, then move the live checkout, deps and dist to it.
 build_and_sync() {
 	local sha=$1
@@ -60,6 +77,7 @@ build_and_sync() {
 	git -C "$STAGE" fetch -q "$UPSTREAM" "$sha" || git -C "$STAGE" fetch -q "$REPO" "$sha"
 	git -C "$STAGE" checkout -q --force --detach "$sha"
 	git -C "$STAGE" clean -qfdx -e node_modules
+	checkout_submodules
 	(cd "$STAGE" && npm ci --no-audit --no-fund --loglevel=error --ignore-scripts && npm run build) >&2
 	git -C "$REPO" fetch -q "$STAGE" "$sha"
 	git -C "$REPO" reset -q --keep "$sha"
