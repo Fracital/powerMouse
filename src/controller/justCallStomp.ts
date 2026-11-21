@@ -717,6 +717,9 @@ export class CalledFrame {
 					const { controller } = this;
 					if (
 						(routed.origin === location.origin ||
+							// (a file: page's, offline.html's: a file: URL's origin
+							// reads "null", its location's "file://")
+							(location.protocol === 'file:' && routed.protocol === 'file:') ||
 							controller.siteOrigins.includes(routed.origin)) &&
 						routed.pathname.startsWith(controller.directory.pathname) &&
 						!routed.username &&
@@ -985,9 +988,13 @@ export class CalledFrame {
 					if (loaded) {
 						await until(controller.measureGeometry());
 						pending.routed = routed;
-						fresh.contentWindow!.postMessage({ [CALL_MESSAGE]: token }, at, [
-							channel.port2,
-						]);
+						// (a file: page's frames, offline.html's, are of an origin
+						// that reads "null", which no target names)
+						fresh.contentWindow!.postMessage(
+							{ [CALL_MESSAGE]: token },
+							location.protocol === 'file:' ? '*' : at,
+							[channel.port2],
+						);
 						heard = await until(
 							dial(port, {
 								routed,

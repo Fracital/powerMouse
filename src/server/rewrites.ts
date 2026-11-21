@@ -254,7 +254,7 @@ import {
 	type CacheHit,
 } from './cache';
 import { cacheMarkOf, renewCacheSecret } from './cacheMarks';
-import { calledClient, isCallPage } from './called';
+import { calledClient, emulatedWorker, isCallPage } from './called';
 import {
 	decodeDocument,
 	decodeScript,
@@ -6987,6 +6987,8 @@ export function registerRewrites(
 				...(globalThis.location?.protocol === 'file:'
 					? { fileRoutes: true }
 					: {}),
+				// it runs in a dedicated worker of its page (offline.html)
+				...(emulatedWorker() ? { srcdocCalls: true } : {}),
 				...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 				// every document's inject builds the window membrane from this
 				...(init.membrane === false ? { membrane: false } : {}),

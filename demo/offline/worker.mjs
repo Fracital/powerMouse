@@ -213,26 +213,27 @@ async function fetchEvent(given) {
 	const event = new Event('fetch', { cancelable: true });
 	let answer = null;
 	const lasting = [];
-	Object.defineProperties(event, {
-		request: { value: request },
-		clientId: { value: given.clientId || '' },
-		resultingClientId: { value: given.resultingClientId || '' },
-		replacesClientId: { value: '' },
-		isReload: { value: !!given.isReload },
-		preloadResponse: { value: Promise.resolve(undefined) },
-		handled: { value: Promise.resolve() },
-		respondWith: {
-			value(promise) {
-				if (answer) throw new DOMException('responded', 'InvalidStateError');
-				answer = Promise.resolve(promise);
-			},
+	// (configurable, as a FetchEvent's are accessors of its prototype: the
+	// worker views an event through a Proxy that answers some of them
+	// itself, src/server/called.ts calledRequest's view)
+	const facts = {
+		request,
+		clientId: given.clientId || '',
+		resultingClientId: given.resultingClientId || '',
+		replacesClientId: '',
+		isReload: !!given.isReload,
+		preloadResponse: Promise.resolve(undefined),
+		handled: Promise.resolve(),
+		respondWith(promise) {
+			if (answer) throw new DOMException('responded', 'InvalidStateError');
+			answer = Promise.resolve(promise);
 		},
-		waitUntil: {
-			value(promise) {
-				lasting.push(Promise.resolve(promise).catch(() => {}));
-			},
+		waitUntil(promise) {
+			lasting.push(Promise.resolve(promise).catch(() => {}));
 		},
-	});
+	};
+	for (const [name, value] of Object.entries(facts))
+		Object.defineProperty(event, name, { value, configurable: true });
 	self.dispatchEvent(event);
 	return answer ?? nativeFetch(request);
 }

@@ -3,7 +3,7 @@
 // (./host.mjs) before the demo's main.js asks for the controller
 // (`STOMP_OFFLINE.ready`).
 /* global __PM_PRELUDE__, __PM_ADBLOCK__, __PM_BUILD__, __PM_COMMITS__ */
-import { createFrame, install, ORIGIN } from './host.mjs';
+import { createFrame, dialing, install, ORIGIN } from './host.mjs';
 
 const WISP_KEY = 'stomp-demo:wisp';
 const query = new URLSearchParams(location.search);
@@ -90,6 +90,8 @@ globalThis.STOMP_OFFLINE = {
 	/** resolves with the stand-in for the service worker the controller is given */
 	ready,
 	createFrame,
+	/** whether the tabs dial (./host.mjs dialing) */
+	dialing,
 	/** what the controller is given beside the demo's own options */
 	controllerInit: {
 		// no SharedWorker (a file: page's cannot start), no worker of the

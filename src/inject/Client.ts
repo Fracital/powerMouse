@@ -280,6 +280,8 @@ export default class Client {
 	syncFrozen: boolean;
 	/** this realm's routes are file:// ones (config.fileRoutes) */
 	fileRoutes: boolean;
+	/** a frame on its call page reads about:srcdoc (config.srcdocCalls) */
+	srcdocCalls: boolean;
 	/** what this document reads synchronously, where syncFrozen is (config.syncSeed): never handed on */
 	syncSeed?: SyncSeed;
 	applied: boolean;
@@ -1005,6 +1007,7 @@ export default class Client {
 		this.syncAnswers = init.syncAnswers;
 		this.syncFrozen = !!init.syncFrozen;
 		this.fileRoutes = !!init.fileRoutes;
+		this.srcdocCalls = !!init.srcdocCalls;
 		this.syncSeed = init.syncSeed;
 		// a stale cached bundle next to a new service worker: say so once,
 		// the page still gets its best effort
@@ -1118,6 +1121,7 @@ export default class Client {
 			...(this.sites ? { sites: this.sites } : {}),
 			...(this.syncFrozen ? { syncFrozen: true } : {}),
 			...(this.fileRoutes ? { fileRoutes: true } : {}),
+			...(this.srcdocCalls ? { srcdocCalls: true } : {}),
 		};
 	}
 	/**

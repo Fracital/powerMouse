@@ -570,6 +570,34 @@ function heldScripts(win) {
 }
 
 /**
+ * The fetch of a frame's window `win`, the document `client`: its routes go
+ * to the worker (a load the inject copies as the load it is), the files of
+ * dist/ are their copies, and anything else is the window's own. `called`
+ * answers a call page's fetch of its document (null: not one).
+ */
+function frameFetch(win, client, called) {
+	const held = heldScripts(win);
+	const own = win.fetch;
+	return (input, init) => {
+		let request;
+		try {
+			request = new win.Request(ownRoute(input), init);
+		} catch (error) {
+			return win.Promise.reject(error);
+		}
+		const path = localPath(request.url);
+		if (path === null || !underScope(path))
+			return Reflect.apply(own, win, [input, init]);
+		const call = called(request, init);
+		if (call) return call;
+		if (path.startsWith(held.path)) return held.copied(request, path);
+		const file = fileOf(path);
+		if (file) return Promise.resolve(fileResponse(file, win.Response));
+		return workerFetch(request, client, win, loadOf(path, request));
+	};
+}
+
+/**
  * A tab's frame whose documents are written into call pages (the demo's
  * Frame, for what the demo calls): `go`, `back`, `forward`, `reload`,
  * `url`, `title`, `canGoBack`, `canGoForward`, `lastNavigate`
@@ -822,26 +850,11 @@ export class WrittenFrame extends EventTarget {
 	 * so they are added again after one.
 	 */
 	#prime(win, client) {
-		const held = heldScripts(win);
-		const own = win.fetch;
-		const frameFetch = (input, init) => {
-			let request;
-			try {
-				request = new win.Request(ownRoute(input), init);
-			} catch (error) {
-				return win.Promise.reject(error);
-			}
-			const path = localPath(request.url);
-			if (path === null || !underScope(path))
-				return Reflect.apply(own, win, [input, init]);
-			if (request.headers.has(CALL_HEADER))
-				return this.#called(request, client, win);
-			if (path.startsWith(held.path)) return held.copied(request, path);
-			const file = fileOf(path);
-			if (file) return Promise.resolve(fileResponse(file, win.Response));
-			return workerFetch(request, client, win, loadOf(path, request));
-		};
-		win.fetch = frameFetch;
+		win.fetch = frameFetch(win, client, (request) =>
+			request.headers.has(CALL_HEADER)
+				? this.#called(request, client, win)
+				: null,
+		);
 		// (one function each: adding one again while it is on adds nothing)
 		const clicked = (event) => this.#clicked(win, event);
 		const submitted = (event) => this.#submitted(win, event);
@@ -1008,7 +1021,273 @@ export class WrittenFrame extends EventTarget {
 	}
 }
 
-/** the demo's createFrame, for a frame whose documents the page writes */
-export function createFrame(controller, element, callbacks) {
-	return new WrittenFrame(controller, element, callbacks);
+// ---- dialing ---------------------------------------------------------------
+//
+// Where this page's origin is one a URL can name (Chrome reads a file:
+// page's as `file://`), the demo dials as it does online
+// (src/controller/justCallStomp.ts): each document of a tab is written into
+// a fresh frame of the call page the worker serves, and the document's
+// inject keeps its session history, its Navigation API and its frames'
+// calls (src/inject/dom/calledHooks.ts). Nothing serves the call page's URL
+// here, so a frame sent to it (by the controller's src, a called document's
+// src for a frame of its own, or that frame's location.replace for its next
+// document) is given the page as its srcdoc, whose first script primes its
+// window: its fetch goes to the worker, its document gets a port to the
+// worker (OFFLINE_WORKER) in place of a controller (no worker controls it,
+// so the inject copies its loads).
+// (Firefox reads this page's origin as "null", on which the controller
+// would make its routes and call pages, and keeps the written frames above.)
+
+/** global the inject takes its port to the worker from (src/transport/messages.ts OFFLINE_WORKER) */
+const OFFLINE_WORKER = '$stomp$offlineWorker';
+/** the header of a call page's fetch that carries its token (src/transport/messages.ts CALL_TOKEN_HEADER) */
+const CALL_TOKEN_HEADER = 'x-stomp-call-token';
+/** whether the demo dials here */
+export const dialing =
+	OWN !== 'null' &&
+	location.origin !== 'null' &&
+	'navigation' in globalThis &&
+	'NavigateEvent' in globalThis;
+/** the call page's path, once a controller dialed */
+let callPath = null;
+/** the call page as the worker serves it, its first script this page's prime */
+let callMarkup = null;
+let callAsked = null;
+/** the call page each frame sent to one was given (its `?<depth>`) */
+const callPages = new WeakMap();
+/** the frames sent to the call page before they were in a document */
+const unshown = new WeakSet();
+let calls = 0;
+const setAttribute = Element.prototype.setAttribute;
+
+/** the call page's markup, asked of the worker once */
+function callPageReady() {
+	callAsked ??= (async () => {
+		const answer = await emulated.request({
+			url: toWorker(callPath),
+			method: 'GET',
+			headers: [['accept', 'text/html']],
+			body: null,
+			mode: 'navigate',
+			destination: 'iframe',
+			credentials: 'include',
+			cache: 'no-store',
+			redirect: 'manual',
+			referrer: '',
+			clientId: HOST_CLIENT,
+			resultingClientId: `pm-call-${Date.now().toString(36)}`,
+		});
+		if (answer.status !== 200 || !answer.body)
+			throw new Error(
+				`offline.html: the worker serves no call page (${answer.error || answer.status})`,
+			);
+		const markup = await new Response(answer.body).text();
+		// (the first script of the page: before its own takes its fetch)
+		// (up the windows by this realm's own getter: a called document's
+		// parent reads as itself to its page, Framing)
+		const key = JSON.stringify(KEY);
+		const prime = `<script>(() => { try { const up = Object.getOwnPropertyDescriptor(window, 'parent').get; let at = window; let own; do { const next = up.call(at); if (next === at) break; at = next; own = Object.getOwnPropertyDescriptor(at, ${key}); } while (!own); own.value(window); } catch (error) { console.error('offline.html: a call page found no host', error); } })()</script>`;
+		callMarkup = markup.replace('<script>', `${prime}<script>`);
+	})();
+	callAsked.catch(() => {
+		callAsked = null;
+	});
+	return callAsked;
+}
+
+/** the call page `value` names (resolved against `base`), as the worker has it, or null */
+function callPageOf(value, base) {
+	if (!callPath) return null;
+	let url;
+	try {
+		url = new URL(ownRoute(String(value)), base);
+	} catch {
+		return null;
+	}
+	const route = routeOf(url.href);
+	if (!route) return null;
+	const { pathname, search } = new URL(route);
+	if (pathname !== callPath || !(search === '' || /^\?\d+$/.test(search)))
+		return null;
+	return toWorker(`${pathname}${search}`);
+}
+
+/** `element` to the call page `page`: the page as its srcdoc (a new one each time, which navigates it) */
+function showCall(element, page, now = false) {
+	if (!callMarkup) return false;
+	callPages.set(element, page);
+	// a frame not in a document yet gets it once it is in one (dialable):
+	// the inject routes the attributes of a frame it sees inserted, and
+	// would take the srcdoc for one of the page's
+	if (!now && !element.isConnected) {
+		unshown.add(element);
+		return true;
+	}
+	unshown.delete(element);
+	// (the page's own URL, which its frame does not read, with its depth)
+	const markup = callMarkup.replace(
+		`const here = ${JSON.stringify(toWorker(callPath))};`,
+		() => `const here = ${JSON.stringify(page)};`,
+	);
+	Reflect.apply(setAttribute, element, [
+		'srcdoc',
+		`${markup}<!--${++calls}-->`,
+	]);
+	return true;
+}
+
+/**
+ * A frame of `win` sent to the call page goes to it as a srcdoc: by its src
+ * setter and, once `watch` is called, by the src attribute (the parser's
+ * frame, the inject's own write of it); a frame that showed a document is
+ * sent by a navigation of its window to it (primeCall)
+ */
+function dialable(win, own = false) {
+	const prototype = win.HTMLIFrameElement.prototype;
+	const src = Object.getOwnPropertyDescriptor(prototype, 'src');
+	Object.defineProperty(prototype, 'src', {
+		get: src.get,
+		set(value) {
+			const page = callPageOf(value, baseOf.call(this));
+			if (!page || !showCall(this, page, own))
+				Reflect.apply(src.set, this, [value]);
+		},
+		configurable: true,
+		enumerable: src.enumerable,
+	});
+	const sent = (element, again) => {
+		if (unshown.has(element)) {
+			showCall(element, callPages.get(element));
+			return;
+		}
+		if (!again && callPages.has(element)) return;
+		const value = Reflect.apply(getAttribute, element, ['src']);
+		if (value === null) return;
+		const page = callPageOf(value, baseOf.call(element));
+		if (page) showCall(element, page);
+	};
+	const frames = (node) =>
+		node.localName === 'iframe' || node.localName === 'frame'
+			? [node]
+			: typeof node.querySelectorAll === 'function'
+				? [...node.querySelectorAll('iframe, frame')]
+				: [];
+	/**
+	 * the frames the document has and gets. Only once it has loaded: an
+	 * observer of the document from before its write left the scripts the
+	 * page inserts unrewritten (Chrome 158)
+	 */
+	return function watch() {
+		for (const element of frames(win.document)) sent(element, false);
+		new win.MutationObserver((records) => {
+			for (const record of records)
+				if (record.type === 'attributes') sent(record.target, true);
+				else
+					for (const node of record.addedNodes)
+						for (const element of frames(node)) sent(element, false);
+		}).observe(win.document, {
+			subtree: true,
+			childList: true,
+			attributes: true,
+			attributeFilter: ['src'],
+		});
+	};
+}
+
+/** a call page's fetch of its document: the worker's answer, the shell's scripts named by their copies */
+async function calledFetch(request, init, client, win) {
+	const referrer = init?.referrer
+		? (() => {
+				const path = localPath(ownRoute(init.referrer));
+				return path === null ? init.referrer : toWorker(path);
+			})()
+		: '';
+	const response = await workerFetch(request, client, win, { referrer });
+	const type = response.headers.get('content-type') ?? '';
+	if (!response.body || !/^\s*(text\/html|application\/xhtml\+xml)/i.test(type))
+		return response;
+	const markup = withCopies(await response.text());
+	const headers = new win.Headers(response.headers);
+	headers.set('content-type', `${type.split(';')[0].trim()}; charset=utf-8`);
+	const copy = new win.Response(markup, {
+		status: response.status,
+		statusText: response.statusText,
+		headers,
+	});
+	Object.defineProperties(copy, {
+		url: { value: response.url, configurable: true },
+		redirected: { value: response.redirected, configurable: true },
+	});
+	return copy;
+}
+
+/** a call page's window, from its first script: see the section's head */
+function primeCall(win) {
+	const element = win.frameElement;
+	const page = callPages.get(element) ?? toWorker(callPath);
+	// the documents of frames that went
+	for (const [id, other] of emulated.clients)
+		if (id !== HOST_CLIENT && other.closed) emulated.client({ id, gone: true });
+	const client = nextClient();
+	emulated.client(
+		{ id: client, url: page, type: 'window', frameType: 'nested' },
+		win,
+	);
+	const channel = new win.MessageChannel();
+	channel.port1.onmessage = (event) =>
+		emulated.postMessage(event.data, [...event.ports], client);
+	Object.defineProperty(win, OFFLINE_WORKER, {
+		value: channel.port2,
+		configurable: true,
+	});
+	win.fetch = frameFetch(win, client, (request, init) =>
+		request.headers.has(CALL_TOKEN_HEADER)
+			? calledFetch(request, init, client, win)
+			: null,
+	);
+	const watch = dialable(win);
+	// (the call page's own load, then the written document's)
+	let loads = 0;
+	const loaded = () => {
+		if (++loads < 2) return;
+		element.removeEventListener('load', loaded);
+		watch();
+	};
+	if (element) addListener.call(element, 'load', loaded);
+	const navigation = win.navigation;
+	if (navigation)
+		addListener.call(navigation, 'navigate', (event) => {
+			const to = callPageOf(event.destination.url, location.href);
+			if (!to || !event.cancelable) return;
+			event.preventDefault();
+			event.stopImmediatePropagation();
+			const frame = win.frameElement;
+			if (frame) showCall(frame, to);
+		});
+}
+
+/**
+ * The demo's createFrame. A dialing tab's frame is the controller's own
+ * (`dial`), whose call pages this page gives their srcdoc; else a frame
+ * whose documents this page writes.
+ */
+export function createFrame(controller, element, callbacks, dial = false) {
+	if (!dial) return new WrittenFrame(controller, element, callbacks);
+	if (!callPath) {
+		const name =
+			controller.config?.assets?.callPage ??
+			controller.constructor.DEFAULT_ASSETS?.callPage;
+		callPath = `${scope}${name}`;
+		Object.defineProperty(window, KEY, { value: primeCall });
+		dialable(window, true);
+		// the call page is in hand before a frame is sent to it: the
+		// controller asks a token for each call first
+		const token = controller.callToken;
+		controller.callToken = async function callToken(...args) {
+			const given = await Reflect.apply(token, this, args);
+			await callPageReady();
+			return given;
+		};
+	}
+	return controller.createFrame(element);
 }

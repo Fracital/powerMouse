@@ -169,8 +169,11 @@ export function allowCallToken(
  * under WORKER_BASE. Nothing of it stays: its listener and variables go
  * with the write (document.open removes the window's listeners).
  */
+// (`at`: the page's own URL where its location is not, a srcdoc frame's;
+// such a page is under no controller: callPageResponse)
 const callPageHTML = (
 	origins: string[],
+	at: string | null = null,
 ) => `<!doctype html><meta charset="utf-8"><script>(() => {
 	const key = ${JSON.stringify(CALL_MESSAGE)};
 	const origins = ${JSON.stringify(origins)};
@@ -180,7 +183,9 @@ const callPageHTML = (
 	const most = ${MAX_URL};
 	const ancestors = location.ancestorOrigins;
 	const above = ancestors && ancestors.length ? ancestors[0] : null;
-	const scope = new URL('.', location.href).pathname;
+	const here = ${at === null ? 'location.href' : JSON.stringify(at)};
+	const own = new URL(here).origin;
+	const scope = new URL('.', here).pathname;
 	const fetching = fetch.bind(window);
 	const later = setTimeout.bind(window);
 	const rootOf = Object.getOwnPropertyDescriptor(Document.prototype, 'documentElement').get;
@@ -190,8 +195,8 @@ const callPageHTML = (
 	const text = (value, limit) => typeof value === 'string' && value.length <= limit;
 	const ours = (value) => {
 		try {
-			const url = new URL(value, location.href);
-			return url.origin === location.origin && url.pathname.startsWith(scope) ? url : null;
+			const url = new URL(value, here);
+			return url.origin === own && url.pathname.startsWith(scope) ? url : null;
 		} catch (error) {
 			return null;
 		}
@@ -270,7 +275,7 @@ const callPageHTML = (
 			if (!ask || typeof ask !== 'object' || Object.keys(ask).length !== 1) return;
 			if (ask.call && !asked && !settled) {
 				asked = true;
-				const made = navigator.serviceWorker && navigator.serviceWorker.controller ? request(ask.call, token, abort.signal) : null;
+				const made = ${at === null ? 'navigator.serviceWorker && navigator.serviceWorker.controller' : 'true'} ? request(ask.call, token, abort.signal) : null;
 				if (!made) return fail();
 				let answer;
 				try {
@@ -353,7 +358,7 @@ const callPageHTML = (
 			const metas = policies.map((policy) => '<meta http-equiv="Content-Security-Policy" content="' + quote(policy) + '">').join('') + (referrer ? '<meta name="referrer" content="' + quote(referrer) + '">' : '');
 			if (metas) markup = markup.replace(/<head>(<meta charset="utf-8" \\/>)?/i, (head) => head + metas);
 			release();
-			Object.defineProperty(window, ${JSON.stringify(CALLED_KEY)}, { value: { port, session: write.session, policy: referrer || '' }, configurable: true });
+			Object.defineProperty(window, ${JSON.stringify(CALLED_KEY)}, { value: { port, session: write.session, policy: referrer || ''${at === null ? '' : ', page: here'} }, configurable: true });
 			Object.defineProperty(window, ${JSON.stringify(WORKER_BASE)}, { value: write.url, configurable: true });
 			// the call's own fetch is none of the page's
 			performance.clearResourceTimings();
@@ -375,6 +380,11 @@ const callPageHTML = (
 	};
 	addEventListener('message', listen);
 })()</script>`;
+
+/** whether this worker runs in a dedicated worker of its page (offline.html, demo/offline/worker.mjs), not as a service worker */
+export const emulatedWorker = () =>
+	'WorkerGlobalScope' in globalThis &&
+	!('ServiceWorkerGlobalScope' in globalThis);
 
 /** the call page's path of each controller that opted in, with the origins that may call it */
 function callPages(): Map<string, Set<string>> {
@@ -426,24 +436,36 @@ export function isCallPage(url: string): boolean {
 export function callPageResponse(pathname: string): Response | null {
 	const origins = callPages().get(pathname);
 	if (!origins) return null;
-	return new Response(callPageHTML([...origins]), {
-		headers: {
-			'content-type': 'text/html; charset=utf-8',
-			'cache-control': 'no-store',
-			// a host page that is cross-origin isolated embeds it
-			'cross-origin-embedder-policy': 'require-corp',
-			'cross-origin-resource-policy': 'cross-origin',
-			// served from a site's own origin (a slot of the site pool), its
-			// own process: Chrome keys a process by site unless the first
-			// document of the origin asks for its origin (on the host's own
-			// origin it changes nothing)
-			'origin-agent-cluster': '?1',
-			// (no referrer policy of its own: the call's fetch carries the
-			// route of the document the navigation leaves as its referrer,
-			// which the worker reads, and the written document keeps the
-			// policy container of the page, which its own policy changes)
+	// offline.html (demo/offline/), whose worker runs in a dedicated worker
+	// of its page: its host gives a frame the page as its srcdoc, whose
+	// location is about:srcdoc, under no controller; and on file: the
+	// frame's origin, and its parent's in a message, reads "null"
+	const emulated = emulatedWorker();
+	const file = self.location.protocol === 'file:';
+	return new Response(
+		callPageHTML(
+			file ? [...origins, 'null'] : [...origins],
+			emulated ? `${self.location.origin}${pathname}` : null,
+		),
+		{
+			headers: {
+				'content-type': 'text/html; charset=utf-8',
+				'cache-control': 'no-store',
+				// a host page that is cross-origin isolated embeds it
+				'cross-origin-embedder-policy': 'require-corp',
+				'cross-origin-resource-policy': 'cross-origin',
+				// served from a site's own origin (a slot of the site pool), its
+				// own process: Chrome keys a process by site unless the first
+				// document of the origin asks for its origin (on the host's own
+				// origin it changes nothing)
+				'origin-agent-cluster': '?1',
+				// (no referrer policy of its own: the call's fetch carries the
+				// route of the document the navigation leaves as its referrer,
+				// which the worker reads, and the written document keeps the
+				// policy container of the page, which its own policy changes)
+			},
 		},
-	});
+	);
 }
 
 /** the longest a called document's load is held for a frame of it (callHold) */

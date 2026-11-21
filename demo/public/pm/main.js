@@ -150,8 +150,9 @@ const PROXY_ORIGIN =
 //   line and in About's Dialing row, never a blank tab;
 // - a configured remote controller (STOMP_PROXY_ORIGIN) stays isolated: it
 //   does not dial yet;
-// - offline.html writes its documents into call pages of its own
-//   (demo/offline/host.mjs);
+// - offline.html where its host cannot make the call pages itself
+//   (demo/offline/host.mjs dialing: Firefox, whose file: origin is opaque),
+//   which writes its documents into call pages of its own there;
 // - a server that runs the suites' classic path (STOMP_DIALING=0, test/
 //   run.mjs), where a suite asks for dialing with ?mode=just-call-stomp.
 // No address of the page turns dialing off.
@@ -171,7 +172,7 @@ const DIALING_REFUSED = (() => {
 	}
 })();
 const DIALING_WANTED =
-	!OFFLINE &&
+	(!OFFLINE || OFFLINE.dialing) &&
 	!('proxyOrigin' in CFG && REMOTE_ISOLATION) &&
 	(CFG.dialing !== false ||
 		new URLSearchParams(location.search).get('mode') === 'just-call-stomp');
@@ -1771,7 +1772,7 @@ function createTab(id = 0, at = tabs.length) {
 	// there is this page's (Ctrl+R would reload it, every tab with it)
 	element.contentWindow?.addEventListener('keydown', onBrowserKey, true);
 	const frame = OFFLINE
-		? OFFLINE.createFrame(controller, element, controllerCallbacks)
+		? OFFLINE.createFrame(controller, element, controllerCallbacks, JUST_CALL)
 		: controller.createFrame(element);
 	// Each tab keeps a list of the pages it reached, for browsers without the
 	// Navigation API. Where the frame can tell (frame.canGoBack) it is the

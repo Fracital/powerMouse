@@ -94,6 +94,13 @@ export interface Config {
 	 */
 	fileRoutes?: boolean;
 	/**
+	 * Set by a service worker that runs in a dedicated worker of its page
+	 * (offline.html, demo/offline/): no URL of the scope is served to a
+	 * frame, so its host gives a frame sent to the call page the page as its
+	 * srcdoc, and a frame on its call page reads about:srcdoc
+	 */
+	srcdocCalls?: boolean;
+	/**
 	 * Where syncFrozen is: the cookies of a document's URL and its stores, as the worker had them when it served the document, for the
 	 * storage key `key` (a document whose own key differs has none)
 	 */

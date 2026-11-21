@@ -526,7 +526,12 @@ export function calledFrames(
 		// (a frame of this origin on another page is no call page; one of
 		// another origin cannot be read, and its call page says it is one)
 		const href = hrefOf(win);
-		if (!win || !kid.want || (href !== '' && href !== kid.page)) {
+		// (offline.html gives a frame its call page as a srcdoc)
+		const onPage =
+			href === '' ||
+			href === kid.page ||
+			(client.srcdocCalls && href === 'about:srcdoc');
+		if (!win || !kid.want || !onPage) {
 			release(kid);
 			return;
 		}
@@ -590,7 +595,9 @@ export function calledFrames(
 		});
 		Reflect.apply(windowPost, win, [
 			{ [CALL_MESSAGE]: token },
-			new URL(kid.page).origin,
+			// (a file: page's frames are of an origin that reads "null",
+			// which no target names: offline.html's)
+			client.fileRoutes ? '*' : new URL(kid.page).origin,
 			[port2],
 		]);
 		const answer = await answered;

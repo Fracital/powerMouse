@@ -41,6 +41,8 @@ export function calledHooks(client: DocumentClient) {
 		session: CalledSession;
 		policy?: string;
 		moved?: (how: string) => void;
+		/** the call page's URL, where its frame reads about:srcdoc (config.srcdocCalls) */
+		page?: string;
 	};
 	const { port, session } = called;
 	const global = client.global as Globals;
@@ -71,7 +73,14 @@ export function calledHooks(client: DocumentClient) {
 			tell({ op: 'token', id, routed });
 		});
 	// this document's own frames are called too
-	calledFrames(client, page, session.routed ?? '', askToken);
+	// (the page its frames' call pages are numbered from: offline.html's
+	// frame reads about:srcdoc, and its call page says which it is)
+	calledFrames(
+		client,
+		client.srcdocCalls && typeof called.page === 'string' ? called.page : page,
+		session.routed ?? '',
+		askToken,
+	);
 	const isScroll = (value: unknown): value is [number, number] =>
 		Array.isArray(value) &&
 		value.length === 2 &&
