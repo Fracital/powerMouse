@@ -104,6 +104,20 @@ export async function done(browser, extra = []) {
 	process.exit(failures ? 1 : 0);
 }
 
+/**
+ * `run(item)` for every item of `items`, at most `limit` at once, in order of
+ * the list: for a suite's independent cases, each in a browser context of
+ * its own (browser.newPage() makes one)
+ */
+export async function inPool(items, limit, run) {
+	const queue = [...items];
+	await Promise.all(
+		Array.from({ length: Math.min(limit, queue.length) }, async () => {
+			while (queue.length) await run(queue.shift());
+		}),
+	);
+}
+
 export async function waitForServer(url, tries = 60) {
 	for (let i = 0; ; i++) {
 		try {

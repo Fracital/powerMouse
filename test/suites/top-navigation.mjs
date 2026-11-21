@@ -29,6 +29,7 @@ import {
 	done,
 	FIXTURE,
 	HOST,
+	inPool,
 	launch,
 	ok,
 	openDemo,
@@ -173,26 +174,26 @@ const browser = await launch();
 const answers = {};
 
 // natively: each case's top in a tab of its own (a tab's history.length
-// stops at 50)
+// stops at 50), in a browser context of its own, four cases at once (each
+// waits for its beacons, and a navigation that does not land is waited out)
 step('native');
-{
+for (const name of NAMES) answers[name] = {};
+await inPool(NAMES, 4, async (name) => {
 	const messages = [];
-	for (const name of NAMES) {
-		const page = await browser.newPage();
-		page.on('console', (message) => messages.push(message.text()));
-		(answers[name] ??= {}).native = await runCase(
-			name,
-			`${RUN}-n-${NAMES.indexOf(name)}`,
-			{
-				open: (url) => page.goto(url).catch(() => {}),
-				frames: () => page.frames(),
-				messages,
-				settle: () => 2500,
-			},
-		);
-		await page.close();
-	}
-}
+	const page = await browser.newPage();
+	page.on('console', (message) => messages.push(message.text()));
+	answers[name].native = await runCase(
+		name,
+		`${RUN}-n-${NAMES.indexOf(name)}`,
+		{
+			open: (url) => page.goto(url).catch(() => {}),
+			frames: () => page.frames(),
+			messages,
+			settle: () => 2500,
+		},
+	);
+	await page.close();
+});
 ok(
 	'natively: every case ran and reported',
 	NAMES.every(
@@ -223,10 +224,8 @@ const proxiedFrames = (page) => () =>
 				frame.url().startsWith('about:'),
 		);
 
-for (const [mode, base] of [
-	['same-origin', PROXY],
-	['isolated', HOST],
-]) {
+// both modes at once, each in demo pages of its own (contexts of their own)
+async function runMode([mode, base]) {
 	step(mode);
 	const messages = [];
 	let page = null;
@@ -276,6 +275,12 @@ for (const [mode, base] of [
 	}
 	await page.close();
 }
+await Promise.all(
+	[
+		['same-origin', PROXY],
+		['isolated', HOST],
+	].map(runMode),
+);
 
 if (process.env.TOP_NAV_DUMP)
 	writeFileSync(process.env.TOP_NAV_DUMP, JSON.stringify(answers, null, '\t'));
