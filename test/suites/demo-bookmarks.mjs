@@ -9,10 +9,11 @@
 // bar's star and every tab card's, in step with each other, the sidebar and
 // another window of the demo; the real URL stored, never the route, with
 // the title and the page's icon; the list kept across a reload; and no
-// links beside the title, the bookmarks having taken them over; Estro's
-// default, now estrogen, renamed in a profile seeded before; and the
-// home page's commit times kept current as time passes. Both controller
-// modes at once, each in a context of its own.
+// links beside the title but Download (offline.html) and GitHub's, the
+// bookmarks having taken the others over; Estro's default, now estrogen,
+// renamed in a profile seeded before; and the home page's commit times
+// kept current as time passes. Both controller modes at once, each in a
+// context of its own.
 import {
 	done,
 	FIXTURE,
@@ -298,12 +299,13 @@ async function run(mode, base) {
 	await sleep(300);
 
 	ok(
-		`${mode}: no links beside the title but GitHub's`,
+		`${mode}: no links beside the title but Download and GitHub's`,
 		JSON.stringify(
 			await page.$$eval('.head a', (links) => links.map((a) => a.href)),
 		) ===
 			JSON.stringify([
 				`${new URL(base).origin}/`,
+				`${new URL(base).origin}/offline.html`,
 				'https://github.com/Fracital/powerMouse',
 			]),
 		JSON.stringify(

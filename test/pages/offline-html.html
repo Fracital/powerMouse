@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>Offline page one</title>
+		<link rel="stylesheet" href="offline-html.css" />
+	</head>
+	<body>
+		<h1 id="heading">One</h1>
+		<img id="picture" src="offline-html.svg" width="40" height="40" alt="" />
+		<div id="painted"></div>
+		<p><a id="next" href="offline-html-2.html">to the second page</a></p>
+		<form id="search" action="offline-html-2.html">
+			<input name="q" value="first query" />
+			<button id="searchButton">search</button>
+		</form>
+		<form id="post" method="post" action="/offline-html/posted">
+			<input name="q" value="posted value" />
+			<button id="postButton">post</button>
+		</form>
+		<script src="offline-html.js"></script>
+	</body>
+</html>

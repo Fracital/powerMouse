@@ -11,7 +11,9 @@
 //
 // Builds five times (`node build.js`, which empties dist/ first), with a
 // probe file added and removed, and compares; dist/ ends as the tree builds
-// it. Exit code 1 lists every problem.
+// it. offline.html (scripts/build-offline.mjs, the build's artifact beside
+// dist/) is made twice from the same dist/ and compared too, and has to name
+// no checkout path either. Exit code 1 lists every problem.
 //   node scripts/check-reproducible.mjs
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -80,6 +82,19 @@ for (const path of second.keys())
 		problems.push(`${path}: names the checkout's path (${checkout})`);
 if (!id) problems.push(`${DIST}/serviceWorker.js: no build id found`);
 
+const OFFLINE = 'build/offline.html';
+const buildOffline = () => {
+	execFileSync(process.execPath, ['scripts/build-offline.mjs'], {
+		stdio: ['ignore', 'ignore', 'inherit'],
+	});
+	return readFileSync(OFFLINE);
+};
+const offline = buildOffline();
+if (!buildOffline().equals(offline))
+	problems.push(`${OFFLINE}: differs between two builds of the same tree`);
+if (offline.includes(checkout))
+	problems.push(`${OFFLINE}: names the checkout's path (${checkout})`);
+
 const outside = buildWithProbes([
 	'test/.reproducible-probe',
 	'docs/.reproducible-probe',
@@ -106,5 +121,5 @@ if (problems.length) {
 	process.exit(1);
 }
 console.log(
-	`check-reproducible: ${second.size} files, identical across builds and with a non-input changed; build id ${id}, ${changedId} with an input changed`,
+	`check-reproducible: ${second.size} files, identical across builds and with a non-input changed; build id ${id}, ${changedId} with an input changed; ${OFFLINE} identical across builds`,
 );

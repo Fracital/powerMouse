@@ -1,0 +1,9 @@
+The content blocker (/stomp/blocker.wasm) is compiled from Brave's
+adblock-rust, licensed under the Mozilla Public License, version 2.0
+(MPL-2.0). Its source is at https://github.com/brave/adblock-rust, and the
+version is the one rust/Cargo.lock in powerMouse's source pins. A copy of
+the MPL is at https://mozilla.org/MPL/2.0/.
+
+The filter lists compiled into /stomp/adblock-snapshot.dat.gz are uBlock
+Origin's uAssets lists, licensed under the GNU General Public License,
+version 3 (GPL-3.0), https://github.com/uBlockOrigin/uAssets:

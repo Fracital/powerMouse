@@ -1,0 +1,15 @@
+The epoxy transport (/epoxy/ in this file: index.mjs, epoxy-simd.wasm,
+h3/stomp_h3.js and h3/stomp_h3_bg.wasm) is Fracital's fork of Mercury
+Workshop's epoxy-transport, built with epoxy-tls and the patches in
+deploy/epoxy of powerMouse's source.
+
+It is licensed under the GNU Affero General Public License, version 3 only
+(AGPL-3.0-only), whose text is below. Its Corresponding Source:
+  https://github.com/Fracital/EpoxyTransport, at the commit named below
+  deploy/epoxy in powerMouse's source, named above (the build, the
+  upstream commits it starts from and its patches)
+
+Its wasm modules are compiled from Rust crates under their own licences,
+among them hyper, h2 and hyper-util (MIT), rustls (Apache-2.0, ISC or MIT),
+ring (ISC and Apache-2.0), quinn and h3 (MIT or Apache-2.0) and brotli
+(MIT); deploy/epoxy names their versions.

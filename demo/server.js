@@ -19,6 +19,9 @@
 //   /fonts/      Montserrat from @fontsource
 //   /config.js   deployment config for the page (see the environment below)
 //   /wisp-tor/   opt-in, Tor-only SOCKS5 Wisp gateway (TCP only; no UDP)
+//   /offline.html the demo and STomp in one HTML file (build/offline.html,
+//                which `npm run build` writes, and this server too when it
+//                is missing or another tree's), and /offline.html.sha256
 //   /wisp/       wisp server the transports tunnel through (holyWisp, the
 //                server the production edges run, as a child process),
 //                unless STOMP_WISP_URL names an external one
@@ -62,6 +65,8 @@
 //                       offer it, and some judge a session by it,
 //                       docs/http3.md); `?http3=0` on the page turns it off
 //                       for one visit, `?http3` on for one
+//   STOMP_OFFLINE_FILE  where /offline.html is served from and built into
+//                       (default build/offline.html)
 //   STOMP_ECH_DNS       the DNS-over-HTTPS endpoint epoxy asks for HTTPS
 //                       records, to offer real Encrypted Client Hello where a
 //                       site publishes a config, as Chrome does (default
@@ -137,11 +142,11 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, statSync, watch } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
+import { readFile, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { hostname, tmpdir } from 'node:os';
-import { basename, dirname, join, sep } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import express from 'express';
@@ -150,6 +155,7 @@ import { holyWisp } from 'holywisp';
 // running an old, unpatched Node get a SyntaxError here instead of a running
 // proxy. Upgrade Node. Don't replace this with createRequire/readFileSync.
 import pkg from '../package.json' with { type: 'json' };
+import { keyOfOffline, offlineKey } from '../scripts/offline-key.mjs';
 import { heldLoads, syncRelay } from './syncRelay.js';
 import { startTorWisp } from './torWisp.js';
 
@@ -666,6 +672,117 @@ if (!dev)
 		// (an ETag of the stamped text: an unchanged page is a 304)
 		res.send(stampedPage());
 	});
+// offline.html (scripts/build-offline.mjs): the demo and STomp in one HTML
+// file, which the home page's Download saves with the page's wisp server
+// written in, and which a host that vendors the page fetches from here
+// (STOMP_ASSETS.offline, from any origin: CORS, the ETag readable). `npm run
+// build` writes it, and this server makes it itself, in the background, when
+// the file is missing or names another tree's key (scripts/offline-key.mjs),
+// so a deploy that copies only dist/ serves the current one. Until it is
+// there the routes answer 503 with Retry-After; a failed build is tried
+// again a minute on. Served with an ETag of its SHA-256 and revalidated each
+// time, as a deploy changes it under the same name.
+const offlineFile = process.env.STOMP_OFFLINE_FILE
+	? resolve(process.env.STOMP_OFFLINE_FILE)
+	: join(checkout, 'build/offline.html');
+const offline = { kept: null, building: null, failedAt: 0, failure: '' };
+const OFFLINE_RETRY_MS = 60_000;
+
+/** build offline.html into offlineFile, unless a build runs or just failed */
+function buildOffline() {
+	if (offline.building || Date.now() - offline.failedAt < OFFLINE_RETRY_MS)
+		return;
+	console.log(`offline.html: building ${offlineFile}`);
+	offline.building = new Promise((done) =>
+		execFile(
+			process.execPath,
+			[join(checkout, 'scripts/build-offline.mjs'), '--out', offlineFile],
+			{ cwd: checkout, maxBuffer: 1 << 20 },
+			(error, stdout, stderr) => {
+				offline.building = null;
+				if (error) {
+					offline.failedAt = Date.now();
+					offline.failure = String(stderr || error.message)
+						.trim()
+						.split('\n')
+						.slice(-3)
+						.join(' ');
+					console.error(`offline.html: the build failed: ${offline.failure}`);
+				} else {
+					offline.failedAt = 0;
+					console.log(stdout.trim());
+				}
+				done();
+			},
+		),
+	);
+}
+
+/** the file as it is now, when it is this checkout's; else null, and a build starts */
+async function offlineHtml() {
+	const info = await stat(offlineFile).catch(() => null);
+	if (
+		info &&
+		offline.kept?.mtimeMs === info.mtimeMs &&
+		offline.kept.size === info.size
+	)
+		return offline.kept;
+	if (info) {
+		const bytes = await readFile(offlineFile);
+		const named = keyOfOffline(bytes.subarray(0, 2048).toString('utf8'));
+		if (named && named === offlineKey(checkout)) {
+			offline.kept = {
+				mtimeMs: info.mtimeMs,
+				size: info.size,
+				bytes,
+				sha256: createHash('sha256').update(bytes).digest('hex'),
+			};
+			return offline.kept;
+		}
+	}
+	buildOffline();
+	return null;
+}
+offlineHtml().catch((error) =>
+	console.error('offline.html: not read:', error.message),
+);
+const offlineRoute = (answer) => async (req, res) => {
+	res.set({
+		'Access-Control-Allow-Origin': '*',
+		'Access-Control-Expose-Headers': 'ETag',
+	});
+	const kept = await offlineHtml().catch(() => null);
+	if (!kept) {
+		res.status(503).type('text/plain');
+		res.set({
+			'Cache-Control': 'no-store',
+			'Retry-After': offline.failedAt ? '60' : '5',
+		});
+		res.send(
+			offline.failedAt
+				? `offline.html could not be built here (${offline.failure}); it is tried again in a minute\n`
+				: 'offline.html is being built; ask again in a few seconds\n',
+		);
+		return;
+	}
+	res.set({ 'Cache-Control': 'no-cache', ETag: `"${kept.sha256}"` });
+	answer(res, kept);
+};
+app.get(
+	'/offline.html',
+	offlineRoute((res, kept) => {
+		res.type('html');
+		res.attachment('offline.html');
+		res.send(kept.bytes);
+	}),
+);
+app.get(
+	'/offline.html.sha256',
+	offlineRoute((res, kept) => {
+		res.type('text/plain');
+		res.send(`${kept.sha256}  offline.html\n`);
+	}),
+);
 app.use(
 	express.static(publicDir, {
 		setHeaders: (res, path) =>

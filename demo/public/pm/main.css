@@ -600,6 +600,25 @@ a span:active,
 .git:hover:active {
 	background: var(--pm-accent-active);
 }
+/* Download (offline.html), the Fork button's twin to its left */
+.git.offlineDownload {
+	right: 130px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+}
+.git.offlineDownload img {
+	display: block;
+	pointer-events: none;
+}
+/* a phone's width has no room for it beside the title, and a phone opens no
+   HTML file it saved as a page */
+@media only screen and (max-width: 479px) {
+	.git.offlineDownload {
+		display: none;
+	}
+}
 .inputWrapper {
 	width: calc(100% - 40px);
 	height: 100%;
@@ -940,6 +959,9 @@ button::-moz-focus-inner {
 		font-size: 16px;
 		width: 200px;
 		height: 65px;
+	}
+	.git.offlineDownload {
+		right: 230px;
 	}
 	/* the box is measured against its own form, never the card: the home
 	   screen's zoom in (zoomLanding) transforms the form, and a transformed

@@ -59,6 +59,9 @@ const mainForm = $('mainForm');
 // Deployment config comes from /config.js (demo/server.js renders it from the
 // environment); anything missing falls back to the local-development defaults.
 const CFG = window.STOMP_CONFIG || {};
+// the offline-html build (scripts/build-offline.mjs): no service worker, the
+// page serves the proxy itself (demo/offline/host.mjs)
+const OFFLINE = globalThis.STOMP_OFFLINE ?? null;
 
 // Origin isolation: the proxy (dist/, transports, wisp, every proxied page)
 // can be served from a different origin than this page, so proxied content is
@@ -293,16 +296,16 @@ const proxyBase = () => (ISOLATED ? PROXY_ORIGIN : '');
 const transportPath = (name) => CFG.transports?.[name] || `/${name}/`;
 // STOMP_WISP_URL points the transports at an external wisp server (in
 // production, the edge relay); otherwise the demo server's own /wisp/
+const directWispURL = () =>
+	CFG.wisp ||
+	`${(ISOLATED ? PROXY_ORIGIN : location.origin).replace(/^http/, 'ws')}/wisp/`;
 const wispURL = () => {
 	if (TOR_REQUESTED) {
 		if (!TOR_WISP)
 			throw new Error('Tor relay unavailable. Turn Tor off to browse.');
 		return TOR_WISP;
 	}
-	return (
-		CFG.wisp ||
-		`${(ISOLATED ? PROXY_ORIGIN : location.origin).replace(/^http/, 'ws')}/wisp/`
-	);
+	return directWispURL();
 };
 
 // transports are described, not constructed: the controller imports and
@@ -336,12 +339,14 @@ const transports = {
 		}),
 		...(WEB_TRANSPORT && { webTransport: WEB_TRANSPORT }),
 		...(SHARDS !== null && { shards: SHARDS }),
+		...(OFFLINE && { host: OFFLINE.transportHost }),
 	}),
 	libcurl: () => ({
 		module: `${proxyBase()}${transportPath('libcurl')}index.mjs`,
 		// libcurl.js 0.7's default pool (50 total, 6 per host) deadlocks once a
 		// page fans out more requests than that; see CHANGELOG known limitations
 		options: [{ wisp: wispURL(), connections: [500, 400, 200] }],
+		...(OFFLINE && { host: OFFLINE.transportHost }),
 	}),
 };
 
@@ -1294,10 +1299,12 @@ async function startController(name) {
 		// StompController.register(), which resolves once the worker is
 		// activated): its transport, the transport worker, epoxy's module and
 		// the wisp carrier, comes up while a first visit's worker installs
-		const registration = await navigator.serviceWorker.register(
-			`${DIRECTORY}${assetName('serviceWorker')}`,
-			{ scope: DIRECTORY, updateViaCache: 'none' },
-		);
+		const registration = OFFLINE
+			? await OFFLINE.ready
+			: await navigator.serviceWorker.register(
+					`${DIRECTORY}${assetName('serviceWorker')}`,
+					{ scope: DIRECTORY, updateViaCache: 'none' },
+				);
 		setStatus(`Loading ${name} transport…`);
 		controller = new StompController({
 			serviceworker: registration,
@@ -1316,6 +1323,7 @@ async function startController(name) {
 			serviceWorkerEventDelay: SERVICE_WORKER_EVENT_DELAY,
 			...ADBLOCK,
 			...controllerCallbacks,
+			...OFFLINE?.controllerInit,
 		});
 	}
 	window.controller = controller; // handy from devtools
@@ -1327,7 +1335,7 @@ async function startController(name) {
 }
 
 async function boot() {
-	if (!('serviceWorker' in navigator))
+	if (!OFFLINE && !('serviceWorker' in navigator))
 		throw new Error('This browser does not support service workers.');
 	if (TOR_REQUESTED && !TOR_WISP)
 		throw new Error('Tor relay unavailable. Turn Tor off to browse.');
@@ -1401,7 +1409,9 @@ function createTab(id = 0) {
 	element.title = 'Proxied page';
 	element.allow = FRAME_ALLOW;
 	framesContainer.append(element);
-	const frame = controller.createFrame(element);
+	const frame = OFFLINE
+		? OFFLINE.createFrame(controller, element, controllerCallbacks)
+		: controller.createFrame(element);
 	// Each tab keeps a list of the pages it reached, for browsers without the
 	// Navigation API. Where the frame can tell (frame.canGoBack) it is the
 	// authority: the list over-counts when a site redirects or replaces its
@@ -1678,7 +1688,7 @@ function showLanding() {
 	if (dockRects) slideFrom(homeTiles, dockRects);
 	// home names no page: the address keeps only the page's own flags
 	addressWrites++;
-	history.replaceState(null, '', addressFor(''));
+	history.replaceState(hostState(), '', addressFor(''));
 	mainForm.url.focus();
 }
 
@@ -2469,6 +2479,8 @@ function syncOmnibox(force = false) {
 // STOMP_CONFIG.addressFragment is 'sealed', also writes the sealed route of
 // the page on show as its fragment (`#html/<sealed>`), as it always did: the
 // embedder reads it and decides what its own address shows.
+// offline.html keeps its Settings restart choice in the entry's state
+const hostState = () => (OFFLINE ? history.state : null);
 const ADDRESS_FRAGMENT =
 	(CFG.addressFragment ?? (window.parent !== window ? 'sealed' : 'token')) ===
 	'sealed';
@@ -2639,8 +2651,8 @@ async function writeAddress(tab, { push = false } = {}) {
 	if (`${location.pathname}${location.search}${location.hash}` !== address) {
 		// (an address whose token names nothing is replaced)
 		if (push && session.tokens[addressToken()] && addressToken() !== token)
-			history.pushState(null, '', address);
-		else history.replaceState(null, '', address);
+			history.pushState(hostState(), '', address);
+		else history.replaceState(hostState(), '', address);
 	}
 	const text = barUrl(record.url);
 	keepBarText(token, text);
@@ -2776,7 +2788,7 @@ function restoreTabs(token, record) {
 const openedToken = addressToken();
 const openedRecord = (openedToken && session.tokens[openedToken]) || null;
 if (openedToken && !openedRecord)
-	history.replaceState(null, '', addressFor('', location.hash));
+	history.replaceState(hostState(), '', addressFor('', location.hash));
 
 // What the address bar showed at each token (and fragment) written, so a
 // load at one (a reload, a restored session) has the page's address in the
@@ -6553,6 +6565,90 @@ shieldsButton.addEventListener('click', () => {
 	else openShields();
 });
 
+// ---- Download: offline.html -------------------------------------------------
+// The home page's Download, left of Fork us on GitHub, saves powerMouse as
+// one HTML file (offline.html, scripts/build-offline.mjs) that runs from the
+// user's disk through the wisp server this page uses. The file comes from
+// this deployment's /offline.html (demo/server.js), or from where a host that
+// vendors the UI names it as STOMP_ASSETS.offline: a URL, which may be
+// another origin's (stomp.fracit.al's answers any origin), or a name of
+// DIRECTORY's as the service worker's is. The wisp server the file was built
+// with is JSON in one element at the top of its head, and this page's
+// direct one (directWispURL()) takes its place there; nothing else of this
+// page or its profile goes in. Never the Tor relay: the file has no Tor
+// mode to keep UDP, HTTP/3, WebTransport and its cache off with it, and the
+// relay is this server's own route.
+const OFFLINE_FILE = ASSETS.offline
+	? new URL(ASSETS.offline, new URL(DIRECTORY, location.href)).href
+	: '/offline.html';
+// (the element's name split, so this script, inlined into the file it
+// saves, does not name it a second time)
+const OFFLINE_WISP = new RegExp(
+	'(<script type="application/json" id="pm-' + 'wisp">)[^<]*(</script>)',
+);
+
+/** offline.html as this deployment serves it, with this page's wisp server */
+async function offlineWithWisp() {
+	const response = await fetch(OFFLINE_FILE, { cache: 'no-cache' });
+	if (!response.ok) throw new Error(`${OFFLINE_FILE}: ${response.status}`);
+	const text = await response.text();
+	if (!OFFLINE_WISP.test(text))
+		throw new Error(`${OFFLINE_FILE} names no wisp server to change`);
+	const wisp = new URL(directWispURL(), location.href).href;
+	return text.replace(
+		OFFLINE_WISP,
+		(whole, open, close) =>
+			`${open}${JSON.stringify(wisp).replaceAll('<', '\\u003c')}${close}`,
+	);
+}
+
+(() => {
+	const link = $('offlineDownload');
+	if (!link) return;
+	// offline.html itself: it is the file, and Settings names its wisp server
+	if (OFFLINE) {
+		link.hidden = true;
+		return;
+	}
+	link.href = OFFLINE_FILE;
+	if (TOR_REQUESTED)
+		link.title =
+			"Save powerMouse as one HTML file that runs from your computer through this site's direct wisp server: the file has no Tor mode";
+	const label = [...link.querySelector('.git').childNodes].find(
+		(node) => node.nodeType === Node.TEXT_NODE && node.data.trim(),
+	);
+	let saving = false;
+	// every click saves it, a middle or modified one too: the file as it is
+	// served names another wisp server, and a link of another origin would
+	// open in the proxy (proxyLink)
+	const save = async (event) => {
+		if (event.type === 'auxclick' && event.button !== 1) return;
+		event.preventDefault();
+		if (saving) return;
+		saving = true;
+		link.setAttribute('aria-busy', 'true');
+		try {
+			const blob = new Blob([await offlineWithWisp()], { type: 'text/html' });
+			const url = URL.createObjectURL(blob);
+			const saved = document.createElement('a');
+			saved.href = url;
+			saved.download = 'offline.html';
+			saved.click();
+			setTimeout(() => URL.revokeObjectURL(url), 60_000);
+		} catch (error) {
+			console.warn('offline.html was not saved:', error);
+			const was = label.data;
+			label.data = 'Not available';
+			setTimeout(() => (label.data = was), 3000);
+		} finally {
+			saving = false;
+			link.removeAttribute('aria-busy');
+		}
+	};
+	link.addEventListener('click', save);
+	link.addEventListener('auxclick', save);
+})();
+
 // ---- the menu: Fullscreen, Extensions, Settings and About -------------------
 // The button beside the address box (and its twin in the tab manager, which
 // hides the bar) opens the Shields panel's popover as a menu: Fullscreen puts
@@ -6707,7 +6803,8 @@ menuAbout.addEventListener('click', () => {
 // app come as ?launch= and ?url= on the page's address, at a launch or
 // later (launchQueue, the manifest's focus-existing): the window and its
 // tabs stay, and the address shows none of it.
-const APP = !!$('pmAppManifest');
+// (offline.html is never the app: it has no worker, and no manifest to name)
+const APP = !OFFLINE && !!$('pmAppManifest');
 const appWindow = matchMedia(
 	'(display-mode: standalone), (display-mode: window-controls-overlay), (display-mode: minimal-ui)',
 );
@@ -8211,11 +8308,33 @@ function buildSettingsPage() {
 				<h3 class="spSectionTitle" id="spPageModeTitle">Page appearance</h3>
 				<p class="spSectionNote">Whether websites are shown light or dark, as Chrome's mode sets it: what pages read for prefers-color-scheme and send as Sec-CH-Prefers-Color-Scheme. Open pages change with it.</p>
 				<div class="spThemes" id="spPageModes" role="radiogroup" aria-labelledby="spPageModeTitle"></div>
-			</section>
+			</section>${
+				OFFLINE
+					? `
+			<section class="spSection">
+				<h3 class="spSectionTitle">Wisp server</h3>
+				<p class="spSectionNote">This file is not served by a STomp server, so it tunnels through the wisp server named here. Empty means the one it was built with, ${escapeHtml(OFFLINE.wisp.builtIn)}. The page starts again with the new one.</p>
+				<div class="spAddRow">
+					<input class="spInput" id="spWisp" type="url" inputmode="url" placeholder="${escapeHtml(OFFLINE.wisp.builtIn)}" value="${escapeHtml(OFFLINE.wisp.saved ?? '')}" aria-label="Wisp server URL" />
+					<button class="spBtn" id="spWispSave" type="button">Save</button>
+				</div>
+			</section>`
+					: ''
+			}
 			<div class="spStatus" id="spStatus" aria-live="polite"></div>
 		</div>`;
 	const page = (selector) => shieldsPage.querySelector(selector);
 	page('#spClose').addEventListener('click', closeShieldsPage);
+	if (OFFLINE)
+		page('#spWispSave').addEventListener('click', () => {
+			const asked = page('#spWisp').value.trim();
+			if (asked && !/^wss?:\/\//i.test(asked)) {
+				page('#spStatus').textContent =
+					'A wisp server address starts with wss:// or ws://';
+				return;
+			}
+			OFFLINE.wisp.save(asked);
+		});
 	page('#spGetThemes').addEventListener('click', () => {
 		closeShieldsPage();
 		navigate(THEME_STORE, { newTab: true });

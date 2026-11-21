@@ -154,15 +154,16 @@ has no `dev`, and `dev.js` is never fetched.
 `demo/server.js` is an Express app plus a [wisp](https://github.com/MercuryWorkshop/wisp-protocol)
 server on the same port:
 
-| Path           | Serves                                                                                            |
-| -------------- | ------------------------------------------------------------------------------------------------- |
-| `/`            | `demo/public` (the page, stylesheet, script, images)                                              |
-| `/stomp/`      | `dist/` via `stompPath` from `@sysce/stomp/path`                                                  |
-| `/epoxy/`      | `@mercuryworkshop/epoxy-transport`'s `dist/`                                                      |
-| `/libcurl/`    | `@mercuryworkshop/libcurl-transport`'s `dist/`                                                    |
-| `/wisp/`       | WebSocket upgrade handed to holyWisp (the `holywisp` package), see below                          |
-| `/api/status`  | `{ uptime, version, node, build }` for the landing page footer and the menu's About               |
-| `/api/commits` | `{ repo, url, commits }` for the landing page's latest commits: GitHub's answer, kept ten minutes |
+| Path            | Serves                                                                                                                                  |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `/`             | `demo/public` (the page, stylesheet, script, images)                                                                                    |
+| `/stomp/`       | `dist/` via `stompPath` from `@sysce/stomp/path`                                                                                        |
+| `/epoxy/`       | `@mercuryworkshop/epoxy-transport`'s `dist/`                                                                                            |
+| `/libcurl/`     | `@mercuryworkshop/libcurl-transport`'s `dist/`                                                                                          |
+| `/wisp/`        | WebSocket upgrade handed to holyWisp (the `holywisp` package), see below                                                                |
+| `/api/status`   | `{ uptime, version, node, build }` for the landing page footer and the menu's About                                                     |
+| `/api/commits`  | `{ repo, url, commits }` for the landing page's latest commits: GitHub's answer, kept ten minutes                                       |
+| `/offline.html` | `build/offline.html`, built here when missing or another tree's (503 until then), and `/offline.html.sha256`; any origin may fetch them |
 
 Nothing else is proxied by the server. All page traffic goes through the
 transport, which tunnels through `/wisp/`.
@@ -284,7 +285,8 @@ holyWisp is started.
    GitHub's answer; `STOMP_REPO` names another repository).
    Its links, like Fork us on GitHub, open in the proxy, never in the real
    browser: a click in the current tab, Ctrl, Cmd, Shift or the middle
-   button in a new one.
+   button in a new one. Download, left of Fork us on GitHub, saves
+   offline.html (below) with the page's wisp server written in.
 8. **Navigation bar** at the bottom of the screen, styled after the early
    Android bar: Back steps through the active tab's own history (the frame
    reports whether it can step, from the browser's Navigation API, so mashing
@@ -522,11 +524,131 @@ The transport switch has epoxy (the default) and libcurl, remembered in
 Use epoxy. libcurl is there to tell a transport bug from a STomp one: a site
 that fails the same way on both fails in STomp.
 
+## offline.html
+
+`npm run build` ends with `scripts/build-offline.mjs`, which writes
+`build/offline.html`: this page and STomp in one HTML file of about 10 MB
+that runs from `file:` or any static host with no service worker
+(`npm run build:offline` makes only it; nothing goes into `dist/`).
+`dist/serviceWorker.js` runs unchanged in a dedicated worker the page starts
+(`demo/offline/worker.mjs` gives it a service worker's scope there), and each
+document of a tab is written into a frame of its own that loads one fixed
+page and fetches its route through that worker (`demo/offline/host.mjs`).
+The bundles, wasm modules and transports are gzipped in a JSON payload.
+
+The file is a build output, like `dist/`: `/build` is in `.gitignore`, so
+it is never committed, and it is not in the npm package (`package.json`
+`files` is `dist` and `lib`). A host gets it from a server that serves it
+(below), not from `@sysce/stomp`.
+
+The wisp server it tunnels through is JSON in one element at the top of its
+head: `wss://holywisp.fracit.al/` as built (`STOMP_OFFLINE_WISP` names
+another), which the home page's Download replaces with the page's direct
+wisp server (`STOMP_CONFIG.wisp`, key path and all, else this server's
+`/wisp/`). Never the Tor relay: the file has no Tor mode, and with Tor on,
+Download's title says the copy is direct. In the file itself, `?wisp=` and
+Settings > Wisp server change the wisp server, and Download is not shown.
+Settings saves the choice and restarts without the `wisp` query. The
+current tab keeps the choice in its history entry, so a reload works even
+if the browser does not keep `file:` storage. A copy that names a relay
+whose key changes stops reaching it until Settings names the new one.
+
+### Serving it
+
+The server serves `/offline.html` and `/offline.html.sha256`
+(`<sha256>  offline.html`). It builds the file itself, in the background,
+when `build/offline.html` is missing or names another tree's key
+(`scripts/offline-key.mjs`: dist/build.json and every other file the build
+reads, the key in the file's first comment), writing a temporary file and
+renaming it, so a deploy that copies only `dist/` serves the current one.
+`STOMP_OFFLINE_FILE` puts the file elsewhere. Both routes answer:
+
+| Case                   | Status | Headers                                                                                                                                                                                    |
+| ---------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| the file is current    | 200    | `Access-Control-Allow-Origin: *`, `Access-Control-Expose-Headers: ETag`, `ETag: "<sha256 of the file>"`, `Cache-Control: no-cache`; `/offline.html` also `Content-Disposition: attachment` |
+| `If-None-Match` agrees | 304    | the same                                                                                                                                                                                   |
+| being built            | 503    | `Retry-After: 5`, `Cache-Control: no-store`, the CORS pair                                                                                                                                 |
+| its build failed       | 503    | `Retry-After: 60` (tried again a minute later), the rest as above                                                                                                                          |
+
+The ETag is the file's SHA-256 and changes with every deploy that changes
+the file under the same name; `no-cache` makes every fetch revalidate. A
+GET without custom headers is a simple CORS request, so there is no
+preflight, and a page under `Cross-Origin-Embedder-Policy: require-corp`
+(this one, a host's) may read it because the answer is CORS.
+
+### A host that vendors the page (SystemYA)
+
+Download fetches the file from `/offline.html`, or from
+`STOMP_ASSETS.offline` where the host sets it before `pm/main.js`: a URL,
+another origin's too, or a name resolved against the controller's
+directory (`/stomp/`, `/stomp-tor/` with Tor on) as the service worker's
+name is. No other name of the host's contract changes. For SystemYA's
+`/ui/` copy the intended value is
+`STOMP_ASSETS.offline = 'https://stomp.fracit.al/offline.html'`, so nothing
+is vendored and the saved copy carries SystemYA's own direct wisp server;
+that value is not set there yet and needs the infrastructure's agreement.
+The save is a click on a `blob:` link made after the fetch. A frame
+without a `sandbox` attribute (SystemYA's `/app/` frames `/ui/` that way)
+saves it; a sandboxed one saves it only with `allow-downloads`, and Chrome
+refuses it silently otherwise, the button showing nothing (the
+offline-html suite checks both). The names a host's contract gains:
+`STOMP_ASSETS.offline`, `#offlineDownload` in `index.html`, and
+`pm/icons/document-save-24.png` and `-32.png`. A host that leaves
+`STOMP_ASSETS.offline` unset and does not serve `/offline.html` gets "Not
+available" on the button for three seconds.
+
+### What it cannot do
+
+Measured in headless Chrome 157 and 158 only, from `file:` (the
+offline-html suite; a static host was tried by hand when it was written):
+
+- It reads its payload with `Uint8Array.fromBase64` and
+  `DecompressionStream`, so an older browser stops at the start. A phone
+  cannot open a saved HTML file as a page, so Download is hidden below
+  480 px.
+- With no service worker there is no sync bridge, and the transport runs
+  on the page's own thread (a `file:` page can start no SharedWorker, and
+  the transports' modules are mapped in this page only): a proxied page's
+  synchronous XMLHttpRequest fails.
+- No site pool or isolation: every proxied document is written into a
+  frame of the file's own origin (`file:` or the static host's), as with
+  the same-origin controller. It is not a security boundary.
+- Not modelled yet: `response.url` and `responseURL` (read as `''`), a
+  page's own history (`pushState`, `history.length`, `popstate`), a header
+  CSP, saving a page's downloads (they are shown), nested proxied frames,
+  a page's Workers and SharedWorkers, EventSource, `sendBeacon`, emulated
+  service workers of pages, rewrite workers, streaming media, and the
+  non-SIMD epoxy build. A held script runs after the markup after it.
+- Its profile (cookies, site storage, Settings, themes) is the browser's
+  storage for the `file:` page, not a site's. Chrome was seen to reopen a
+  file before its last `localStorage` write showed, which is why the wisp
+  choice is kept in the history entry as well.
+
+### Licences
+
+A one-line comment after the doctype names the licence (GPL-3.0-only) and
+the source commit, and a comment ends the file with
+`scripts/offline-notices.mjs`'s notices: STomp's licence, each npm package
+in a bundled file (read from the bundles' source maps) or carried whole
+(the transports, libcurl.js and its C libraries' notice, the font), each
+with its licence file or a notice held in `demo/offline/notices/` (the
+epoxy fork, which ships no LICENSE, the adblock engine and lists, the
+Tango icons, the Powermouse style), the Public Suffix List's header, and
+the Rust crates of `core.wasm`, `codec.wasm`, `blocker.wasm` and
+`stomp_h3_bg.wasm` by name and version from `rust/Cargo.lock` and
+`deploy/epoxy/h3/Cargo.lock`. The build fails when a bundled package has
+neither a licence file nor a held notice. The crates' own licence texts
+are not in the file yet, nor the crates of `epoxy-simd.wasm` by version
+(the epoxy fork's lockfile is not in this repository): that needs
+cargo-about in `deploy/rust`'s and `deploy/epoxy`'s containers, and
+`dist/` ships those wasm modules without them today too.
+
 ## Files
 
 ```
 demo/
 ├── server.js           Express + holyWisp host
+├── offline/            offline.html's page side: boot, the emulated worker, frames, notices
 ├── public/
 │   ├── index.html      landing + browser chrome markup
 │   ├── favicon.ico

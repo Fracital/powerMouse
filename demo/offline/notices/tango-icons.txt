@@ -1,0 +1,4 @@
+The toolbar's back, forward and reload icons, the globe, the computer and
+the Download button's icon are from the Tango Desktop Project
+(http://tango.freedesktop.org/), as vibeOS's web app ships them. The Tango
+icons are in the public domain.

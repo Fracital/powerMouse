@@ -1,7 +1,7 @@
 {
 	"views": {
 		"landing": {
-			"digest": "02b761bd12e2bb40101c720f5d69cff5b697a0402a2477fe2bcacafb9e17f653",
+			"digest": "1acf6cd90bfac3f2fb928fc15270f0885e394476aaf2e7893dc7f21ed12d55e4",
 			"common": {
 				"::placeholderbackground-color": "rgba(0, 0, 0, 0)",
 				"::placeholderbackground-image": "none",
@@ -51,7 +51,7 @@
 					"border-right-color": "rgb(182, 182, 182)",
 					"border-top-color": "rgb(182, 182, 182)"
 				},
-				"div#landing>div.head:0>a": {
+				"a#offlineDownload": {
 					"::placeholdercolor": "rgb(0, 0, 238)",
 					"border-bottom-color": "rgb(0, 0, 238)",
 					"border-left-color": "rgb(0, 0, 238)",
@@ -61,7 +61,7 @@
 					"color": "rgb(0, 0, 238)",
 					"outline-color": "rgb(0, 0, 238)"
 				},
-				"div#landing>div.head:0>a>div.git.ns": {
+				"a#offlineDownload>div.git.ns.offlineDownload": {
 					"::placeholdercolor": "rgb(0, 0, 0)",
 					"background-color": "rgb(232, 237, 88)",
 					"border-bottom-color": "rgb(0, 0, 0)",
@@ -413,7 +413,7 @@
 			}
 		},
 		"browser": {
-			"digest": "ca9b7f9c5132093040b9c6b2e1e107049ee2e6d4e828ec4ec2de476c9c60ef2e",
+			"digest": "3bcfaaea90a0b4773d4d2c1160162beccbae5234065db01a3714709958449262",
 			"common": {
 				"::placeholderbackground-color": "rgba(0, 0, 0, 0)",
 				"::placeholderbackground-image": "none",
@@ -463,7 +463,7 @@
 					"border-top-color": "rgb(182, 182, 182)"
 				},
 				"div#landing>div.head:0>h1": {},
-				"div#landing>div.head:0>a": {
+				"a#offlineDownload": {
 					"::placeholdercolor": "rgb(0, 0, 238)",
 					"border-bottom-color": "rgb(0, 0, 238)",
 					"border-left-color": "rgb(0, 0, 238)",
@@ -473,7 +473,7 @@
 					"color": "rgb(0, 0, 238)",
 					"outline-color": "rgb(0, 0, 238)"
 				},
-				"div#landing>div.head:0>a>div.git.ns": {
+				"a#offlineDownload>div.git.ns.offlineDownload": {
 					"::placeholdercolor": "rgb(0, 0, 0)",
 					"background-color": "rgb(232, 237, 88)",
 					"border-bottom-color": "rgb(0, 0, 0)",
@@ -838,7 +838,7 @@
 			}
 		},
 		"shields": {
-			"digest": "a4c5f1c58019ca9631bf6bb1083e128354ccfc5f900efdb6867f03fad101a0d8",
+			"digest": "bed003b783e4b1739b06e130157d697904fd8216c065f9aa84e12ee520428471",
 			"common": {
 				"::afterbackground-color": null,
 				"::afterbackground-image": null,
@@ -900,7 +900,7 @@
 					"border-right-color": "rgb(255, 255, 255)",
 					"border-top-color": "rgb(255, 255, 255)"
 				},
-				"div#landing>div.head:0>a": {
+				"a#offlineDownload": {
 					"::placeholdercolor": "rgb(0, 0, 238)",
 					"border-bottom-color": "rgb(0, 0, 238)",
 					"border-left-color": "rgb(0, 0, 238)",
@@ -910,7 +910,7 @@
 					"color": "rgb(0, 0, 238)",
 					"outline-color": "rgb(0, 0, 238)"
 				},
-				"div#landing>div.head:0>a>div.git.ns": {
+				"a#offlineDownload>div.git.ns.offlineDownload": {
 					"::placeholdercolor": "rgb(0, 0, 0)",
 					"background-color": "rgb(232, 237, 88)",
 					"border-bottom-color": "rgb(0, 0, 0)",

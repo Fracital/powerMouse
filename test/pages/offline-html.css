@@ -1,0 +1,8 @@
+#heading {
+	color: rgb(0, 128, 0);
+}
+#painted {
+	width: 40px;
+	height: 40px;
+	background-image: url(offline-html.svg);
+}

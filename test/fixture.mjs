@@ -362,6 +362,22 @@ export function startFixture(port = 8084) {
 						: 'globalThis.__dupClassic = true;',
 			);
 		}
+		// a form's POST as a page (offline-html suite): its method and body
+		if (path === '/offline-html/posted') {
+			const chunks = [];
+			req.on('data', (chunk) => chunks.push(chunk));
+			req.on('end', () => {
+				const body = Buffer.concat(chunks).toString('utf8');
+				const text = (value) =>
+					value.replace(/[<&]/g, (c) => (c === '<' ? '&lt;' : '&amp;'));
+				res.setHeader('content-type', 'text/html; charset=utf-8');
+				res.setHeader('cache-control', 'no-store');
+				res.end(
+					`<!doctype html><title>Offline posted</title><p id="method">${text(req.method)}</p><p id="body">${text(body)}</p>`,
+				);
+			});
+			return;
+		}
 		// how many request bytes arrived (streamed-body measurement)
 		if (path === '/echo-body') {
 			let bytes = 0;

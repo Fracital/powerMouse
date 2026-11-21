@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>Offline page two</title>
+		<link rel="stylesheet" href="offline-html.css" />
+	</head>
+	<body>
+		<h1 id="heading">Two</h1>
+		<p id="query"></p>
+		<p><a id="back" href="offline-html.html">to the first page</a></p>
+		<script>
+			document.getElementById('query').textContent =
+				new URLSearchParams(location.search).get('q') ?? '';
+		</script>
+	</body>
+</html>

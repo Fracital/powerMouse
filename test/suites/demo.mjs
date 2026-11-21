@@ -181,7 +181,10 @@ await waitActive(page, () => document.title === 'Example Domain').then(
 // the demo's own links (Fork us on GitHub, the repository, a commit) open
 // in the proxy, never in the real browser
 for (const [name, selector] of [
-	['Fork us on GitHub', '.git'],
+	[
+		'Fork us on GitHub',
+		'a[href="https://github.com/Fracital/powerMouse"] .git',
+	],
 	['the repository link', '#commitsRepo'],
 	['a commit', '.commit'],
 ]) {

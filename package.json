@@ -50,11 +50,12 @@
 		"node": ">=22"
 	},
 	"scripts": {
-		"build": "npm run check && node build.js && tsc -p tsconfig.types.json && node scripts/types-extensions.mjs",
+		"build": "npm run check && node build.js && tsc -p tsconfig.types.json && node scripts/types-extensions.mjs && node scripts/build-offline.mjs",
+		"build:offline": "node scripts/build-offline.mjs",
 		"dev": "node scripts/dev.mjs",
 		"check": "tsc --noEmit",
 		"check:types": "node scripts/check-types.mjs",
-		"lint": "eslint src build.js demo/server.js demo/public/pm/dev.js scripts test bench .github/scripts",
+		"lint": "eslint src build.js demo/server.js demo/public/pm/dev.js demo/offline scripts test bench .github/scripts",
 		"format": "prettier --write .",
 		"check:prose": "node scripts/check-prose.mjs && node scripts/changelog.mjs check",
 		"changelog": "node scripts/changelog.mjs fold",
