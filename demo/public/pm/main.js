@@ -1546,6 +1546,11 @@ const controllerCallbacks = {
 		if (!tab.goingTo) tab.url = info.url;
 		tab.icon = info.icon;
 		recordUrl(tab);
+		// its load ended before its address was known: the page is there
+		if (tab.loadedUnknown && info.url && !tab.loading) {
+			tab.loadedUnknown = false;
+			if (tab === activeTab) setStatus('Ready');
+		}
 		if (tab === activeTab) syncOmnibox();
 		syncCardBar(tab); // its card in the switcher, if there is one
 		fillIcons(); // its page may have declared an icon a bookmark lacks
@@ -1780,6 +1785,7 @@ function createTab(id = 0, at = tabs.length) {
 		passkeyOffer: null, // a passkey sign-in its site waits for (askPasskey)
 		loading: false, // a load is in progress: the bar's Reload is Stop (setLoading)
 		loadingDocument: null, // the id of the document whose load that is (LOAD_HOOK), null for the host's
+		loadedUnknown: false, // its last load ended before its frame knew its address (loaded, onNavigate)
 		settledAt: 0, // when its load last ended (Stop, the load event, a navigation that stayed), on the clock of LOAD_HOOK's words
 	};
 	const loaded = async () => {
@@ -1792,6 +1798,9 @@ function createTab(id = 0, at = tabs.length) {
 		tab.goingTo = null;
 		tab.stayedOn = null;
 		recordUrl(tab);
+		// a frame of the site pool's can end its load before its agent has
+		// its document's address: its report says it then (onNavigate)
+		tab.loadedUnknown = !frame.url;
 		if (tab === activeTab) {
 			setStatus(frame.url ? 'Ready' : 'Loaded');
 			syncOmnibox();
