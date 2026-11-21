@@ -379,13 +379,6 @@ const KNOWN_OPEN = {
 		match: (c, f) =>
 			c.tags.spell.startsWith('invalid') && f.kind === 'breakage',
 	},
-	'navigation-api': {
-		// Navigation.navigate() in a proxied frame: the request native makes
-		// is not made proxied (the base or the intercept differs)
-		why: 'the Navigation API navigate() resolves or intercepts a URL differently under the proxy (src/inject/dom/modules/Navigate.ts)',
-		match: (c, f) =>
-			c.tags.sink === 'navigation-navigate' && f.kind === 'breakage',
-	},
 	'srcset-readback': {
 		// img.srcset / currentSrc readback for odd candidate URLs (a tab or
 		// newline inside, a bad descriptor, credentials): the parsed value

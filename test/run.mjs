@@ -346,6 +346,10 @@ const PENDING_SUITES = new Map([
 		'wpt-navigation-api-dial',
 		'the Navigation API in the just-call-stomp experiment, run by name',
 	],
+	[
+		'wpt-navigation-api',
+		'the Navigation API web-platform-tests, about 30 minutes on CI by itself, run by name',
+	],
 ]);
 
 const wanted = process.argv.slice(2);
