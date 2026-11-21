@@ -100,7 +100,8 @@ try {
 	const pkg = join(dir, 'node_modules/@sysce/stomp');
 	mkdirSync(pkg, { recursive: true });
 	writeFileSync(join(pkg, 'package.json'), JSON.stringify(PACKAGE));
-	for (const name of PACKAGE.files)
+	// a "!" entry only leaves files out of what npm packs, and nothing it names is a type
+	for (const name of PACKAGE.files.filter((name) => !name.startsWith('!')))
 		symlinkSync(join(ROOT, name), join(pkg, name), 'dir');
 	// beside it only what installing the package brings: its dependencies,
 	// not the checkout's devDependencies
