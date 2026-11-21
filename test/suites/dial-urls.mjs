@@ -25,6 +25,17 @@
 // spent twice, a token for another route: none is answered. The control: a
 // token the controller minted is.
 //
+// With content slots (STOMP_SLOT_PORTS, docs/content-slots.md) the same
+// walk runs again, the demo's dialing mode on four slots of its own: each
+// site's documents are written into the call page of its slot, another
+// origin than the host's, which the host realm cannot read. There every
+// frame's src (an isolated world's view of its parent, past the hooks) and
+// real location (an isolated world in the frame, and the browser's own) is
+// the call page of its depth on an origin of the pool, the same path and
+// query at every step, a step back restores the scroll the document told
+// over its port, and the documents are on the slots at all (no silent
+// fallback to the host's origin).
+//
 // Default mode (the demo without the mode): the controller refuses a
 // token and justCallStomp, the call page's URL is no page of the worker's
 // (the demo's server answers it, 404), and a page's request that carries the
@@ -49,13 +60,40 @@ const DIAL = JSON.parse(
 	/window\.STOMP_CONFIG = (.*);\s*$/s.exec(config)[1],
 ).dial;
 const CALL = `${new URL(PROXY).origin}${DIAL.directory}${DIAL.page}`;
+// the content slots (test/run.mjs CONTENT_SLOT_PORTS): origins of the pool
+const SLOTS = (process.env.CONTENT_SLOT_PORTS ?? '')
+	.split(',')
+	.map(Number)
+	.filter((port) => port > 0)
+	.map((port) => `http://${new URL(PROXY).hostname}:${port}`);
+/** the call page's path (the same on every origin of the pool) */
+const CALL_PATH = `${DIAL.directory}${DIAL.page}`;
 // SystemYA's neutral words (scripts/check-neutral-dist.mjs NAME_WORDS), the
 // dial's own and the old call page's name
 const WORDS =
 	/stomp|sysce|epoxy|libcurl|powermouse|adblock|rewriter|proxy|ruffle|flash|swf|unblock|blank|call|dial|route|html\//i;
 
-/** why `url` says more than nothing, or null: the call page at `depth` */
-function strayOf(url, depth) {
+/**
+ * why `url` says more than nothing, or null: the call page at `depth`, on
+ * the host's origin or (`pool`) on any origin of the content slots
+ */
+function strayOf(url, depth, pool = false) {
+	const words = wordsOf(url);
+	if (words) return words;
+	const parsed = new URL(url);
+	const want = depth === 0 ? CALL : `${CALL}?${depth}`;
+	if (url === want) return null;
+	if (
+		pool &&
+		SLOTS.includes(parsed.origin) &&
+		`${parsed.pathname}${parsed.search}${parsed.hash}` ===
+			`${CALL_PATH}${depth === 0 ? '' : `?${depth}`}`
+	)
+		return null;
+	return `not ${want}`;
+}
+/** why `url` names more than nothing (a destination, a route, a word), or null */
+function wordsOf(url) {
 	if (typeof url !== 'string' || !url) return 'none';
 	if (url.includes(`:${F}`) || /jcs-|dial-nest|redirect/.test(url))
 		return 'destination';
@@ -67,224 +105,372 @@ function strayOf(url, depth) {
 	}
 	if (WORDS.test(parsed.pathname + parsed.search + parsed.hash))
 		return 'a word';
-	const want = depth === 0 ? CALL : `${CALL}?${depth}`;
-	return url === want ? null : `not ${want}`;
+	return null;
+}
+
+/**
+ * The walk through a dialed tab (above), on the demo page at `url`; with
+ * `pool`, on the content slots. The page, still open.
+ */
+async function walk(label, url, pool) {
+	/** the slots a document of the tab was written on */
+	const onSlots = new Set();
+	const page = await openDemo(browser, url);
+	// the site pool's agents (hidden frames of the host page on each slot
+	// in use, src/controller/sites.ts): no tab's frame, and no call page;
+	// what they are named says nothing either
+	const agentPath = `${DIAL.directory}${await page.evaluate(
+		() =>
+			window.controller.config.assets?.controllerFrame ||
+			window.StompController.DEFAULT_ASSETS.controllerFrame,
+	)}`;
+	const agent = (url) => {
+		try {
+			return pool && new URL(url).pathname === agentPath;
+		} catch (error) {
+			return false;
+		}
+	};
+	/** strayOf, where an agent's URL is only to name nothing */
+	const strayOfFrame = (url, depth) =>
+		agent(url) ? wordsOf(url) : strayOf(url, depth, pool);
+	const reports = [];
+	const requests = [];
+	page.on('console', (message) => {
+		const text = message.text();
+		if (!text.startsWith('JCS:')) return;
+		try {
+			reports.push(JSON.parse(text.slice(4)));
+		} catch (error) {
+			// cut short
+		}
+	});
+	page.on('request', (request) => {
+		if (request.isNavigationRequest() && request.frame() !== page.mainFrame())
+			requests.push(request.url());
+	});
+	const waitReport = async (pred, from, timeout = 30000) => {
+		for (const start = Date.now(); Date.now() - start < timeout;) {
+			const found = reports.slice(from).find(pred);
+			if (found) return found;
+			await sleep(100);
+		}
+		return null;
+	};
+	const loadOf = (step, from, extra = () => true) =>
+		waitReport((r) => r.step === step && r.why === 'load' && extra(r), from);
+
+	/** every dialed frame as the host realm reads it: real src and location, by depth */
+	const tree = () =>
+		page.evaluate(() => {
+			const get = Element.prototype.getAttribute;
+			const all = Document.prototype.querySelectorAll;
+			const windowOf = Reflect.getOwnPropertyDescriptor(
+				HTMLIFrameElement.prototype,
+				'contentWindow',
+			).get;
+			const out = [];
+			const walk = (doc, selector, depth) => {
+				for (const element of Reflect.apply(all, doc, [selector])) {
+					const entry = {
+						depth,
+						src: Reflect.apply(get, element, ['src']),
+						srcdoc: Reflect.apply(get, element, ['srcdoc']),
+					};
+					out.push(entry);
+					try {
+						const win = Reflect.apply(windowOf, element, []);
+						entry.href = win.location.href;
+						walk(win.document, 'iframe, frame', depth + 1);
+					} catch (error) {
+						entry.crossOrigin = true;
+					}
+				}
+			};
+			walk(document, '#browser iframe', 0);
+			return out;
+		});
+
+	const seen = new Map();
+	/** the frames on the slots (another origin than the host's): as an isolated world in each reads them */
+	/**
+	 * the frames on the slots (another origin than the host's, which the
+	 * host realm cannot read): the browser's own DOM of each process that
+	 * shows one (DevTools' DOM.getDocument, past every hook), its frames'
+	 * real src and srcdoc attributes and each document's URL, by depth
+	 */
+	const slotTree = async () => {
+		const out = [];
+		const host = await page.evaluate(() => {
+			const get = Element.prototype.getAttribute;
+			return [...document.querySelectorAll('#browser iframe')].map(
+				(element) => [
+					Reflect.apply(get, element, ['src']),
+					Reflect.apply(get, element, ['srcdoc']),
+				],
+			);
+		});
+		for (const [src, srcdoc] of host) out.push({ depth: 0, src, srcdoc });
+		const hrefs = [];
+		const attribute = (node, name) => {
+			const list = node.attributes ?? [];
+			for (let i = 0; i < list.length; i += 2)
+				if (list[i] === name) return list[i + 1];
+			return null;
+		};
+		const walkNode = (node, depth) => {
+			if (node.nodeName === 'IFRAME' || node.nodeName === 'FRAME') {
+				out.push({
+					depth: depth + 1,
+					src: attribute(node, 'src'),
+					srcdoc: attribute(node, 'srcdoc'),
+				});
+				if (node.contentDocument) {
+					hrefs.push({
+						depth: depth + 1,
+						href: node.contentDocument.documentURL,
+					});
+					walkNode(node.contentDocument, depth + 1);
+				}
+				return;
+			}
+			for (const child of node.children ?? []) walkNode(child, depth);
+		};
+		for (const frame of page.frames()) {
+			if (frame === page.mainFrame()) continue;
+			let depth = -1;
+			for (let at = frame; at.parentFrame(); at = at.parentFrame()) depth++;
+			let session;
+			try {
+				session = await page.context().newCDPSession(frame);
+			} catch (error) {
+				continue; // in its parent's process: read with it
+			}
+			try {
+				const { root } = await session.send('DOM.getDocument', {
+					depth: -1,
+					pierce: true,
+				});
+				hrefs.push({ depth, href: root.documentURL });
+				walkNode(root, depth);
+			} finally {
+				await session.detach().catch(() => {});
+			}
+		}
+		return { srcs: out, hrefs };
+	};
+	/** the frames at a step: each is the call page of its depth, and was at every step */
+	async function check(step, depths = 1) {
+		await sleep(400);
+		if (pool) return checkPool(step, depths);
+		const frames = await tree();
+		const bad = [];
+		for (const frame of frames) {
+			const src = frame.src === null ? null : strayOf(frame.src, frame.depth);
+			if (src) bad.push(`src ${frame.src} (${src})`);
+			if (frame.srcdoc !== null) bad.push('a srcdoc');
+			if (frame.crossOrigin) bad.push(`depth ${frame.depth} unreadable`);
+			else if (strayOf(frame.href, frame.depth))
+				bad.push(
+					`location ${frame.href} (${strayOf(frame.href, frame.depth)})`,
+				);
+			const urls = seen.get(frame.depth) ?? new Set();
+			urls.add(frame.href);
+			seen.set(frame.depth, urls);
+		}
+		// the browser's own view of every frame's location
+		for (const frame of page.frames()) {
+			if (frame === page.mainFrame()) continue;
+			let depth = -1;
+			for (let at = frame; at.parentFrame(); at = at.parentFrame()) depth++;
+			const why = strayOf(frame.url(), depth);
+			if (why && frame.url() !== 'about:blank')
+				bad.push(`frame ${frame.url()} (${why})`);
+		}
+		const reached = Math.max(-1, ...frames.map((frame) => frame.depth)) + 1;
+		ok(
+			`${label}${step}: every frame's src and location is the call page of its depth, ${depths} deep`,
+			!bad.length && reached >= depths,
+			bad.slice(0, 4).join('; ') || `${frames.length} frames, ${reached} deep`,
+		);
+	}
+	async function checkPool(step, depths) {
+		const { srcs, hrefs } = await slotTree();
+		const bad = [];
+		for (const frame of srcs) {
+			const src =
+				frame.src === null ? null : strayOf(frame.src, frame.depth, true);
+			if (src) bad.push(`src ${frame.src} (${src})`);
+			if (frame.srcdoc !== null) bad.push('a srcdoc');
+		}
+		for (const { depth, href } of hrefs) {
+			const why = strayOfFrame(href, depth);
+			if (agent(href)) {
+				if (why) bad.push(`agent ${href} (${why})`);
+				continue;
+			}
+			if (why && href !== 'about:blank') bad.push(`location ${href} (${why})`);
+			const parsed = new URL(href);
+			const urls = seen.get(depth) ?? new Set();
+			urls.add(`${parsed.pathname}${parsed.search}`);
+			seen.set(depth, urls);
+			if (SLOTS.includes(parsed.origin)) onSlots.add(parsed.origin);
+		}
+		for (const frame of page.frames()) {
+			if (frame === page.mainFrame()) continue;
+			let depth = -1;
+			for (let at = frame; at.parentFrame(); at = at.parentFrame()) depth++;
+			const why = strayOfFrame(frame.url(), depth);
+			if (why && frame.url() !== 'about:blank')
+				bad.push(`frame ${frame.url()} (${why})`);
+		}
+		const reached = Math.max(-1, ...srcs.map((frame) => frame.depth)) + 1;
+		ok(
+			`${label}${step}: every frame's src and location is the call page of its depth on an origin of the pool, ${depths} deep`,
+			!bad.length && reached >= depths,
+			bad.slice(0, 4).join('; ') ||
+				`${srcs.length} frames, ${reached} deep (${hrefs.length} read, ${page.frames().length - 1} in all)`,
+		);
+	}
+	const activeFrame = async () => {
+		const handle = await page.$('#browser .frame:not(.hidden)');
+		return handle ? handle.contentFrame() : null;
+	};
+	const inTab = async (fn, arg) => (await activeFrame()).evaluate(fn, arg);
+
+	let mark = reports.length;
+	await submitLanding(page, `${PAGES}dial-nest.html`);
+	ok(
+		`${label}a page with a frame with a frame of its own loads, three depths dialed`,
+		!!(await loadOf('nest', mark)) &&
+			!!(await loadOf('a1', mark)) &&
+			!!(await loadOf('child', mark, (r) => r.href.includes('?a1'))),
+	);
+	await check('three depths', 3);
+
+	mark = reports.length;
+	{
+		const nested = (await activeFrame()).childFrames()[0];
+		await nested.evaluate(() => document.getElementById('next').click());
+	}
+	ok(
+		`${label}a link in the nested frame shows its next document there`,
+		!!(await loadOf('a2', mark)),
+	);
+	await check('a navigation in a nested frame', 2);
+
+	mark = reports.length;
+	await submitOmni(page, `${PAGES}jcs-a2.html`);
+	ok(`${label}a typed address shows its page`, !!(await loadOf('a2', mark)));
+	await inTab(() => scrollTo(0, 700));
+	await sleep(500);
+	const left = await inTab(() => scrollY);
+	await check('a typed address');
+
+	mark = reports.length;
+	await inTab(() => document.getElementById('push').click());
+	await waitReport((r) => r.step === 'a2' && r.why === 'push', mark);
+	await check('a pushState');
+
+	mark = reports.length;
+	await inTab(() => document.getElementById('cross').click());
+	ok(
+		`${label}a link to another site shows it, with the frame its script makes`,
+		!!(await loadOf('b1', mark)) &&
+			!!(await loadOf('child', mark, (r) => r.href.includes('?b1'))),
+	);
+	await check('another site', 2);
+
+	mark = reports.length;
+	await page.goBack();
+	ok(
+		`${label}the browser's Back shows the pushed entry again`,
+		!!(await loadOf('a2', mark)),
+	);
+	await sleep(600);
+	const scrolled = await inTab(() => scrollY);
+	ok(
+		`${label}its scroll is where it was left, told over the port and restored by the document`,
+		Math.abs(scrolled - left) <= 2 && left > 0,
+		`${scrolled} (left at ${left}) ${await page.evaluate(() =>
+			Object.keys(sessionStorage)
+				.filter((key) => key.startsWith('just-call:'))
+				.map((key) =>
+					JSON.parse(sessionStorage[key]).entries.map((entry) => entry.scroll),
+				)
+				.join(' | '),
+		)}`,
+	);
+	await check('Back');
+
+	mark = reports.length;
+	await page.goForward();
+	ok(
+		`${label}the browser's Forward shows the other site again`,
+		!!(await loadOf('b1', mark)),
+	);
+	await check('Forward', 2);
+
+	mark = reports.length;
+	await inTab(() => location.reload());
+	ok(
+		`${label}a reload from inside the page shows it again`,
+		!!(await loadOf('b1', mark)),
+	);
+	await check('a reload of the page', 2);
+
+	mark = reports.length;
+	await page.reload();
+	await page.waitForFunction(
+		() =>
+			/^(Ready|Error|Loaded)/.test(
+				document.getElementById('logMsg').textContent,
+			),
+		null,
+		{ timeout: 45000 },
+	);
+	ok(
+		`${label}a reload of the host shows the tab again`,
+		!!(await loadOf('b1', mark)),
+	);
+	await check('a reload of the host', 2);
+
+	mark = reports.length;
+	await submitOmni(
+		page,
+		`http://127.0.0.1:${F}/redirect?to=${encodeURIComponent(`${PAGES}jcs-a1.html?redirected`)}`,
+	);
+	ok(
+		`${label}a redirect shows where it went`,
+		!!(await loadOf('a1', mark, (r) => r.href.includes('?redirected'))),
+	);
+	await check('a redirect', 2);
+
+	ok(
+		`${label}the tab's frames had one URL at every step, and each depth below one`,
+		[...seen.values()].every((urls) => urls.size === 1),
+		JSON.stringify([...seen].map(([depth, urls]) => [depth, [...urls]])),
+	);
+	const strayRequests = requests.filter((url) => {
+		const depth = Number(/\?(\d+)$/.exec(url)?.[1] ?? 0);
+		return !!strayOfFrame(url, depth);
+	});
+	ok(
+		`${label}every frame navigation the browser made was to a call page`,
+		requests.length > 0 && !strayRequests.length,
+		strayRequests.slice(0, 3).join(' ') || `${requests.length} requests`,
+	);
+	if (pool)
+		ok(
+			`${label}the documents were written on the content slots, two sites on two`,
+			onSlots.size >= 2,
+			JSON.stringify([...onSlots]),
+		);
+	return page;
 }
 
 const browser = await launch([], { backForwardCache: true });
-const page = await openDemo(browser, `${PROXY}?nopool&mode=just-call-stomp`);
-const reports = [];
-const requests = [];
-page.on('console', (message) => {
-	const text = message.text();
-	if (!text.startsWith('JCS:')) return;
-	try {
-		reports.push(JSON.parse(text.slice(4)));
-	} catch (error) {
-		// cut short
-	}
-});
-page.on('request', (request) => {
-	if (request.isNavigationRequest() && request.frame() !== page.mainFrame())
-		requests.push(request.url());
-});
-const waitReport = async (pred, from, timeout = 30000) => {
-	for (const start = Date.now(); Date.now() - start < timeout;) {
-		const found = reports.slice(from).find(pred);
-		if (found) return found;
-		await sleep(100);
-	}
-	return null;
-};
-const loadOf = (step, from, extra = () => true) =>
-	waitReport((r) => r.step === step && r.why === 'load' && extra(r), from);
-
-/** every dialed frame as the host realm reads it: real src and location, by depth */
-const tree = () =>
-	page.evaluate(() => {
-		const get = Element.prototype.getAttribute;
-		const all = Document.prototype.querySelectorAll;
-		const windowOf = Reflect.getOwnPropertyDescriptor(
-			HTMLIFrameElement.prototype,
-			'contentWindow',
-		).get;
-		const out = [];
-		const walk = (doc, selector, depth) => {
-			for (const element of Reflect.apply(all, doc, [selector])) {
-				const entry = {
-					depth,
-					src: Reflect.apply(get, element, ['src']),
-					srcdoc: Reflect.apply(get, element, ['srcdoc']),
-				};
-				out.push(entry);
-				try {
-					const win = Reflect.apply(windowOf, element, []);
-					entry.href = win.location.href;
-					walk(win.document, 'iframe, frame', depth + 1);
-				} catch (error) {
-					entry.crossOrigin = true;
-				}
-			}
-		};
-		walk(document, '#browser iframe', 0);
-		return out;
-	});
-
-const seen = new Map();
-/** the frames at a step: each is the call page of its depth, and was at every step */
-async function check(step, depths = 1) {
-	await sleep(400);
-	const frames = await tree();
-	const bad = [];
-	for (const frame of frames) {
-		const src = frame.src === null ? null : strayOf(frame.src, frame.depth);
-		if (src) bad.push(`src ${frame.src} (${src})`);
-		if (frame.srcdoc !== null) bad.push('a srcdoc');
-		if (frame.crossOrigin) bad.push(`depth ${frame.depth} unreadable`);
-		else if (strayOf(frame.href, frame.depth))
-			bad.push(`location ${frame.href} (${strayOf(frame.href, frame.depth)})`);
-		const urls = seen.get(frame.depth) ?? new Set();
-		urls.add(frame.href);
-		seen.set(frame.depth, urls);
-	}
-	// the browser's own view of every frame's location
-	for (const frame of page.frames()) {
-		if (frame === page.mainFrame()) continue;
-		let depth = -1;
-		for (let at = frame; at.parentFrame(); at = at.parentFrame()) depth++;
-		const why = strayOf(frame.url(), depth);
-		if (why && frame.url() !== 'about:blank')
-			bad.push(`frame ${frame.url()} (${why})`);
-	}
-	const reached = Math.max(-1, ...frames.map((frame) => frame.depth)) + 1;
-	ok(
-		`${step}: every frame's src and location is the call page of its depth, ${depths} deep`,
-		!bad.length && reached >= depths,
-		bad.slice(0, 4).join('; ') || `${frames.length} frames, ${reached} deep`,
-	);
-}
-const activeFrame = async () => {
-	const handle = await page.$('#browser .frame:not(.hidden)');
-	return handle ? handle.contentFrame() : null;
-};
-const inTab = async (fn, arg) => (await activeFrame()).evaluate(fn, arg);
-
-let mark = reports.length;
-await submitLanding(page, `${PAGES}dial-nest.html`);
-ok(
-	'a page with a frame with a frame of its own loads, three depths dialed',
-	!!(await loadOf('nest', mark)) &&
-		!!(await loadOf('a1', mark)) &&
-		!!(await loadOf('child', mark, (r) => r.href.includes('?a1'))),
-);
-await check('three depths', 3);
-
-mark = reports.length;
-{
-	const nested = (await activeFrame()).childFrames()[0];
-	await nested.evaluate(() => document.getElementById('next').click());
-}
-ok(
-	'a link in the nested frame shows its next document there',
-	!!(await loadOf('a2', mark)),
-);
-await check('a navigation in a nested frame', 2);
-
-mark = reports.length;
-await submitOmni(page, `${PAGES}jcs-a2.html`);
-ok('a typed address shows its page', !!(await loadOf('a2', mark)));
-await inTab(() => scrollTo(0, 700));
-await sleep(500);
-const left = await inTab(() => scrollY);
-await check('a typed address');
-
-mark = reports.length;
-await inTab(() => document.getElementById('push').click());
-await waitReport((r) => r.step === 'a2' && r.why === 'push', mark);
-await check('a pushState');
-
-mark = reports.length;
-await inTab(() => document.getElementById('cross').click());
-ok(
-	'a link to another site shows it, with the frame its script makes',
-	!!(await loadOf('b1', mark)) &&
-		!!(await loadOf('child', mark, (r) => r.href.includes('?b1'))),
-);
-await check('another site', 2);
-
-mark = reports.length;
-await page.goBack();
-ok(
-	"the browser's Back shows the pushed entry again",
-	!!(await loadOf('a2', mark)),
-);
-await sleep(600);
-const scrolled = await inTab(() => scrollY);
-ok(
-	'its scroll is where it was left, told over the port and restored by the document',
-	Math.abs(scrolled - left) <= 2 && left > 0,
-	`${scrolled} (left at ${left}) ${await page.evaluate(() =>
-		Object.keys(sessionStorage)
-			.filter((key) => key.startsWith('just-call:'))
-			.map((key) =>
-				JSON.parse(sessionStorage[key]).entries.map((entry) => entry.scroll),
-			)
-			.join(' | '),
-	)}`,
-);
-await check('Back');
-
-mark = reports.length;
-await page.goForward();
-ok(
-	"the browser's Forward shows the other site again",
-	!!(await loadOf('b1', mark)),
-);
-await check('Forward', 2);
-
-mark = reports.length;
-await inTab(() => location.reload());
-ok(
-	'a reload from inside the page shows it again',
-	!!(await loadOf('b1', mark)),
-);
-await check('a reload of the page', 2);
-
-mark = reports.length;
-await page.reload();
-await page.waitForFunction(
-	() =>
-		/^(Ready|Error|Loaded)/.test(document.getElementById('logMsg').textContent),
-	null,
-	{ timeout: 45000 },
-);
-ok('a reload of the host shows the tab again', !!(await loadOf('b1', mark)));
-await check('a reload of the host', 2);
-
-mark = reports.length;
-await submitOmni(
-	page,
-	`http://127.0.0.1:${F}/redirect?to=${encodeURIComponent(`${PAGES}jcs-a1.html?redirected`)}`,
-);
-ok(
-	'a redirect shows where it went',
-	!!(await loadOf('a1', mark, (r) => r.href.includes('?redirected'))),
-);
-await check('a redirect', 2);
-
-ok(
-	"the tab's frames had one URL at every step, and each depth below one",
-	[...seen.values()].every((urls) => urls.size === 1),
-	JSON.stringify([...seen].map(([depth, urls]) => [depth, [...urls]])),
-);
-const strayRequests = requests.filter(
-	(url) => strayOf(url, 0) && !/^\?\d+$/.test(url.slice(CALL.length)),
-);
-ok(
-	'every frame navigation the browser made was to a call page',
-	requests.length > 0 && !strayRequests.length,
-	strayRequests.slice(0, 3).join(' ') || `${requests.length} requests`,
-);
+const page = await walk('', `${PROXY}?nopool&mode=just-call-stomp`, false);
 
 // the token, past the hooks: an isolated world in the tab's called document
 const route = await page.evaluate(
@@ -307,7 +493,7 @@ const elsewhere = await page.evaluate(
 	(url) => window.controller.callToken(url),
 	other,
 );
-const tab = await activeFrame();
+const tab = await (await page.$('#browser .frame:not(.hidden)')).contentFrame();
 const attempts = await evaluateIsolated(
 	tab,
 	async ({ call, route, granted, twice, elsewhere }) => {
@@ -442,6 +628,21 @@ ok(
 );
 const dialErrors = [...page.errors];
 await page.close();
+
+// the same walk with the content slots on (no token check: the slots' calls
+// are the same calls, made from another origin)
+if (SLOTS.length) {
+	const slotted = await walk(
+		'content slots: ',
+		`${PROXY}?mode=just-call-stomp`,
+		true,
+	);
+	dialErrors.push(...slotted.errors);
+	await slotted.close();
+} else
+	console.log(
+		'# no content slots (CONTENT_SLOT_PORTS): the slots walk is not run',
+	);
 
 // default mode: no dial surface
 const plain = await openDemo(browser, `${PROXY}?nopool`);

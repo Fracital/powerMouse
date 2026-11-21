@@ -756,4 +756,60 @@ ok(
 	JSON.stringify(errors.slice(errorsBeforeGone)),
 );
 
+// --- a slot whose call page never says it is ready (its worker went, its
+// port answers with something else): the host gives up on it within the
+// call page's wait (no call went), leaves the slot out and writes the
+// document on its own origin. The fault: the host realm drops the first
+// {ready} its ports hear (fault injection, test-only) ---
+await page.evaluate(() => {
+	const setter = Reflect.getOwnPropertyDescriptor(
+		MessagePort.prototype,
+		'onmessage',
+	);
+	window.dropReady = 1;
+	Reflect.defineProperty(MessagePort.prototype, 'onmessage', {
+		...setter,
+		set(handler) {
+			setter.set.call(
+				this,
+				typeof handler === 'function'
+					? (event) => {
+							if (
+								window.dropReady > 0 &&
+								event.data?.ready === true &&
+								Object.keys(event.data).length === 1
+							) {
+								window.dropReady--;
+								return;
+							}
+							return handler(event);
+						}
+					: handler,
+			);
+		},
+	});
+});
+const started = Date.now();
+const unready = await call('slotted', `${B}${PAGE}?ready`, (url) =>
+	url.startsWith(`${PROXY}stomp/${CALL}`),
+);
+const unreadyMs = Date.now() - started;
+ok(
+	"a slot's call page that never says it is ready: the document is written in the host origin's call page",
+	(unready.frame?.url() ?? '').startsWith(`${PROXY}stomp/${CALL}`) &&
+		(await hrefOnce(unready.frame, (href) => href === `${B}${PAGE}?ready`)) ===
+			`${B}${PAGE}?ready`,
+	`${unready.frame?.url()} after ${unreadyMs} ms`,
+);
+ok(
+	'within the wait for its ready, and the slot is left out',
+	unreadyMs < 20000 &&
+		(await page.evaluate(
+			(slot) => window.slotted.siteOriginLeftOut(slot),
+			slotB,
+		)) &&
+		(await page.evaluate(() => window.dropReady)) === 0,
+	`${unreadyMs} ms`,
+);
+
 await done(browser, errors);

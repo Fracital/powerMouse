@@ -154,6 +154,10 @@ const SUITE_ENV = {
 	// dialing on four content slots of its own (STOMP_SLOT_PORTS), as
 	// production's four behind Cloudflare (docs/content-slots.md)
 	'jcs-slots': { STOMP_SLOT_PORTS: '4' },
+	// dialing's URLs on the host's origin, then again on four content slots
+	'dial-urls': { STOMP_SLOT_PORTS: '4' },
+	// the toolbar's dialing checks once more on content slots
+	toolbar: { STOMP_SLOT_PORTS: '4' },
 };
 // where the content blocker's default lists and resources live
 // (src/blocker/types.ts DEFAULT_LISTS, DEFAULT_RESOURCES)

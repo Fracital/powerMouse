@@ -45,10 +45,11 @@ so the call page may be on another origin than the host page.
 
 1. The host routes the URL and asks the controller for a token,
    `controller.callToken(routed)`: 32 lowercase hex digits from
-   `crypto.getRandomValues`, which the controller hands its worker over its
-   own channel (the `callToken` rpc). The worker keeps it for that route of
-   that controller for 45 seconds (`CALL_WAIT_MS`), and refuses it for a
-   controller that did not opt in.
+   `crypto.getRandomValues`, which the controller hands the worker of the
+   route's origin over its own channel (the `callToken` rpc; for a content
+   slot, through that slot's agent, `AgentBound.callToken`). The worker keeps
+   it for that route of that controller for 45 seconds (`CALL_WAIT_MS`), and
+   refuses it for a controller that did not opt in.
 2. The host makes the frame (`src` is the call page) and, once it has loaded,
    posts `{ $stomp$call: <token> }` with one `MessagePort` to the frame's
    origin.
@@ -73,9 +74,15 @@ so the call page may be on another origin than the host page.
    that frame's navigation to the route. It spends the token on the call: a
    client whose document is a call page, has not been written yet and
    presents a token held for exactly that route. A redirect within the scope
-   is the same call with the same token; one anywhere else ends it.
-6. The page answers `{ answered: { url, routed, status } }` or
-   `{ failed: <text> }`. The host shows the frame and sends
+   is the same call with the same token; one to another origin of the site
+   pool (a slot's, or the hub's) ends it as moved there, and one anywhere
+   else ends it.
+6. The page answers `{ answered: { url, routed, status } }`,
+   `{ moved: <route on another origin> }` (the host calls again from a call
+   page there, with a token for that origin's worker) or
+   `{ failed: <text> }`. A page that has not said it is ready within 10
+   seconds gets no call: on a content slot the host leaves the slot out and
+   calls from its own origin. The host shows the frame and sends
    `{ write: { url, session } }`; the page writes the answer into itself.
 7. From then on the port is the document's. It tells the host
    `{ op: 'navigate' | 'push' | 'replace' | 'step' | 'scroll' | 'token', ... }`
@@ -100,4 +107,8 @@ calledFrames.ts, and the call page's own checks).
 - A token lives in the worker's memory: a worker the browser restarts between
   the token and the call refuses the call, and the frame shows nothing (fail
   closed).
-- The demo's dialing mode has no site pool and no isolation mode yet.
+- The demo's isolation mode (`STOMP_PROXY_ORIGIN`, RemoteController) does not
+  dial yet. Its dialing mode uses the content slots when the server has them
+  (docs/content-slots.md); with them each site's call page is on its slot's
+  origin (the same path, `<directory><callPage>`), out of reach of a script
+  on the host's origin.

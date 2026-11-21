@@ -349,7 +349,7 @@ async function stopChecks(view, mode) {
 				form.requestSubmit();
 				if (!sent) press();
 			},
-			[instant, when === 'sent', mode === 'dialing'],
+			[instant, when === 'sent', mode.startsWith('dialing')],
 		);
 		await sleep(3000);
 		const notCommitted = await pageState(view);
@@ -639,10 +639,41 @@ await answerChecks(same, 'same-origin');
 // the call page, and Stop gives up a dial before or while it is answered
 const sameErrors = [...same.errors];
 await same.close();
-const dialing = await openDemo(browser, `${HOST}?mode=just-call-stomp`);
+const dialing = await openDemo(browser, `${HOST}?nopool&mode=just-call-stomp`);
 await submitLanding(dialing, ONE);
 await waitActive(dialing, () => document.title === 'HIST 1');
 await stopChecks(dialing, 'dialing');
 await answerChecks(dialing, 'dialing');
+const dialingErrors = [...dialing.errors];
+await dialing.close();
 
-await done(browser, [...errors, ...sameErrors, ...dialing.errors]);
+// the same on the content slots (test/run.mjs STOMP_SLOT_PORTS): each
+// document's call page is its site's slot's, whose worker the host reaches
+// through the slot's agent (a call's token, its Stop)
+let slotErrors = [];
+if (process.env.CONTENT_SLOT_PORTS) {
+	const slotted = await openDemo(browser, `${HOST}?mode=just-call-stomp`);
+	await submitLanding(slotted, ONE);
+	await waitActive(slotted, () => document.title === 'HIST 1');
+	ok(
+		'dialing on slots: the tab is on a content slot',
+		await slotted.evaluate(
+			() =>
+				window.controller.siteMode &&
+				window.controller.siteOrigins.includes(
+					new URL(document.querySelector('#browser .frame:not(.hidden)').src)
+						.origin,
+				),
+		),
+	);
+	await stopChecks(slotted, 'dialing-slots');
+	await answerChecks(slotted, 'dialing-slots');
+	slotErrors = slotted.errors;
+}
+
+await done(browser, [
+	...errors,
+	...sameErrors,
+	...dialingErrors,
+	...slotErrors,
+]);
