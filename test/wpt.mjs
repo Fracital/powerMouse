@@ -29,7 +29,7 @@ import {
 	writeFileSync,
 } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { done, FIXTURE, launch, ok, PROXY, sleep } from './lib.mjs';
+import { done, FIXTURE, launch, ok, PROXY } from './lib.mjs';
 import { metaOf, SAME_ORIGIN_HOST } from './wpt-server.mjs';
 
 const root = fileURLToPath(new URL('./wpt/', import.meta.url));
@@ -141,11 +141,11 @@ export function discover(roots, globals = ['window']) {
 	return tests;
 }
 
-async function takeReport(path) {
+async function takeReport(path, wait = 0) {
 	const response = await fetch(
 		`${FIXTURE}_wpt/results?take&path=${encodeURIComponent(path)}${
 			exactQuery.has(path) ? '' : '&anyquery'
-		}`,
+		}${wait > 0 ? `&wait=${Math.ceil(wait)}` : ''}`,
 	);
 	return response.status === 200 ? response.json() : null;
 }
@@ -208,8 +208,16 @@ async function readResults(frame) {
 async function awaitReport(path, fallback) {
 	const started = Date.now();
 	while (Date.now() - started < PAGE_BUDGET_MS) {
-		await sleep(POLL_MS);
-		const report = await takeReport(path);
+		// the fixture answers when the report comes: until the fallback is
+		// due, then every POLL_MS between reads of the window
+		const elapsed = Date.now() - started;
+		const report = await takeReport(
+			path,
+			Math.min(
+				PAGE_BUDGET_MS - elapsed,
+				elapsed < FALLBACK_AFTER_MS ? FALLBACK_AFTER_MS - elapsed : POLL_MS,
+			),
+		);
 		if (report) return report;
 		// the page's own report (posted to the fixture) is what counts; reading
 		// the window (readResults, with no user gesture) is the fallback for
@@ -229,15 +237,16 @@ async function awaitReport(path, fallback) {
 }
 
 /**
- * Run every test natively: `concurrency` tabs of one browser context, each
- * loading its share of the pages straight from the fixture.
+ * Run every test natively: `concurrency` tabs, each of a browser context of
+ * its own (its own jar and storage, as each proxied host page has), loading
+ * its share of the pages straight from the fixture.
  */
 async function runNative(browser, tests, concurrency) {
-	const context = await browser.newContext();
 	const results = new Map();
 	const queue = [...tests];
 	await Promise.all(
 		Array.from({ length: concurrency }, async () => {
+			const context = await browser.newContext();
 			// a page that crashed its tab is that page's failure: the next page
 			// gets a tab of its own
 			const open = async () => {
@@ -273,10 +282,9 @@ async function runNative(browser, tests, concurrency) {
 				progress('native', path, report, started);
 				await page.goto('about:blank').catch(() => {});
 			}
-			await page.close().catch(() => {});
+			await context.close();
 		}),
 	);
-	await context.close();
 	return results;
 }
 
@@ -533,8 +541,8 @@ function verdicts(report) {
 
 /**
  * Run the suite: `roots` are directories under test/wpt/, `concurrency` the
- * number of pages loading at once in each mode (1 where the tests share
- * the cookie jar or other state of the origin), `globals` the globals an
+ * number of pages loading at once in each mode, each in a browser context
+ * of its own (1 where the pages' timing is the measure), `globals` the globals an
  * .any.js test runs in (of `window`, `dedicatedworker`, `sharedworker`),
  * `skip` the pages left out (RegExps over the path and query; the README
  * says why for each), `budget` the milliseconds a page has to report,

@@ -827,6 +827,8 @@ function fixtureOf(port) {
 	const stash = new Map();
 	fixture = {
 		reports: new Map(),
+		// the /_wpt/results requests waiting for a report (`wait`)
+		waiting: new Set(),
 		stash,
 		handlers: { ...HANDLERS },
 		patterns: [],
@@ -864,11 +866,13 @@ const reportKey = (path, search) => path + (search || '');
 export async function wpt(req, res, port) {
 	const url = new URL(req.url, `http://${req.headers.host || 'x'}`);
 	const path = url.pathname;
-	const { reports, stash, handlers, patterns, patches } = fixtureOf(port);
+	const { reports, waiting, stash, handlers, patterns, patches } =
+		fixtureOf(port);
 	if (path === '/_wpt/report' && req.method === 'POST') {
 		try {
 			const body = JSON.parse(await readBody(req));
 			reports.set(reportKey(body.path, body.search), body);
+			for (const wake of waiting) wake();
 			json(res, 200, cors(req), '{"ok": true}');
 		} catch (error) {
 			json(res, 400, cors(req), JSON.stringify({ error: String(error) }));
@@ -879,12 +883,38 @@ export async function wpt(req, res, port) {
 		// `path` is the test as the suite names it, query included. A test
 		// without variants may have changed its own query on the way
 		// (`anyquery`): the report of that path under any query is its
-		let key = url.searchParams.get('path');
-		if (!reports.has(key) && url.searchParams.has('anyquery'))
-			key =
-				[...reports.keys()].find(
-					(known) => known.split('?')[0] === key.split('?')[0],
-				) ?? key;
+		const find = () => {
+			let key = url.searchParams.get('path');
+			if (!reports.has(key) && url.searchParams.has('anyquery'))
+				key =
+					[...reports.keys()].find(
+						(known) => known.split('?')[0] === key.split('?')[0],
+					) ?? key;
+			return key;
+		};
+		// `wait=<ms>`: answered when the report comes, or with none after
+		// that long, so a suite need not poll for it
+		const wait = Math.min(Number(url.searchParams.get('wait')) || 0, 60000);
+		if (wait && !reports.has(find()))
+			await new Promise((resolve) => {
+				const wake = () => {
+					if (!reports.has(find())) return;
+					clearTimeout(timer);
+					waiting.delete(wake);
+					resolve();
+				};
+				const timer = setTimeout(() => {
+					waiting.delete(wake);
+					resolve();
+				}, wait);
+				waiting.add(wake);
+				res.once('close', () => {
+					clearTimeout(timer);
+					waiting.delete(wake);
+					resolve();
+				});
+			});
+		const key = find();
 		const report = reports.get(key);
 		if (url.searchParams.has('take')) reports.delete(key);
 		if (!report) {
