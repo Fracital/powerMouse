@@ -401,11 +401,11 @@ if (process.env.STOMP_ISOLATION !== 'off')
 const pageConfig = {
 	...(externalWisp && { wisp: externalWisp }),
 	...(process.env.STOMP_PROXY_ORIGIN !== undefined && { proxyOrigin }),
-	// on unless turned off; a wisp server without UDP costs it nothing (the
-	// transport stays on HTTP/2, docs/http3.md)
 	// The UI must only offer Tor when the dedicated Tor gateway is ready.
 	// An external gateway's Tor egress is the deployer's responsibility.
 	...(torWisp?.external && { torWisp: torWisp.external }),
+	// on unless turned off; a wisp server without UDP costs it nothing (the
+	// transport stays on HTTP/2, docs/http3.md)
 	http3: process.env.STOMP_HTTP3 !== '0',
 	// the dialing mode's scopes and call page (STOMP_DIAL_DIRECTORY)
 	dial: DIAL,
