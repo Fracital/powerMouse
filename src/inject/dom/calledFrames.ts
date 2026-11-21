@@ -48,6 +48,7 @@ import { scopePrefix } from '../modules/Unroute';
 import type DocumentClient from './Client';
 import { addDocumentOpenListener } from './Client';
 import { frameWindow } from './freshContext';
+import { nativeElement } from './modules/DOMHooks';
 
 type Globals = typeof globalThis & Record<string, any>;
 
@@ -57,6 +58,10 @@ const READY_WAIT_MS = 10_000;
 const MAX_URL = 32_768;
 /** how many times one call may move to another slot */
 const MOVES = 8;
+/** the longest a frame's call holds this document's load (the worker's bound is longer: src/server/called.ts HOLD_MS) */
+const HOLD_MS = READY_WAIT_MS + CALL_WAIT_MS;
+/** how often a held frame is looked at: one taken out of the document holds nothing, as natively */
+const HOLD_CHECK_MS = 250;
 
 type How = {
 	type: CalledSession['type'];
@@ -100,6 +105,11 @@ interface Kid {
 	routed: string;
 	/** the call page the frame is called from next: this document's frames', or another slot's (a site of the pool) */
 	page: string;
+	/** the image that holds this document's load while the frame is called (`hold`) */
+	hold: Element | null;
+	holdTimer: ReturnType<typeof setInterval> | undefined;
+	/** the frame element of this document it is shown in (none yet for the parser's copy of one) */
+	frame: Element | null;
 }
 
 /** what a called frame's document tells (calledHooks.ts) */
@@ -299,9 +309,97 @@ export function calledFrames(
 		if (!kid) return undefined;
 		unplaced.delete(url);
 		kids.set(element, kid);
+		kid.frame = element;
 		return kid;
 	};
 	const id = () => crypto.randomUUID();
+
+	// A frame's document is part of this document's load, as natively. The
+	// call page's own load is over before the frame's document is even
+	// asked for, so the browser fires this document's load with the frame
+	// still on its call page: a page that reads its frame at its load (its
+	// document, its navigation) found another origin's stand-in, or nothing
+	// written yet. So while a frame of it is called before this document
+	// has loaded, an image the worker holds (src/server/called.ts callHold)
+	// keeps the load waiting, as a frame's document does, until the frame's
+	// document has loaded or its call ended. An image no document has, so
+	// the page sees no element (and no entry: its URL is no page's, which
+	// the timing hooks leave out); not under a policy of the page's, which
+	// could refuse it, and report that
+	const readyState = Reflect.getOwnPropertyDescriptor(
+		global.Document.prototype,
+		'readyState',
+	)!.get!;
+	const createElement = global.Document.prototype.createElement;
+	const { setInterval, clearInterval } = global;
+	const connected = Reflect.getOwnPropertyDescriptor(
+		global.Node.prototype,
+		'isConnected',
+	)!.get!;
+	const holdURL = () => {
+		const url = new URL(page);
+		url.hash = '';
+		url.search = `?hold=${id()}`;
+		return url.href;
+	};
+	const release = (kid: Kid) => {
+		const image = kid.hold;
+		if (!image) return;
+		kid.hold = null;
+		clearInterval(kid.holdTimer);
+		Reflect.apply(nativeElement.removeAttribute, image, ['src']);
+	};
+	const querySelectorAll = global.Document.prototype.querySelectorAll;
+	/** the element `kid` is shown in: the parser's, for a copy the hooks saw */
+	const frameOf = (kid: Kid): Element | null => {
+		if (kid.frame) return kid.frame;
+		for (const element of Reflect.apply(querySelectorAll, global.document, [
+			'iframe, frame',
+		]) as Element[])
+			if ((kids.get(element) ?? placed(element)) === kid)
+				return (kid.frame = element);
+		return null;
+	};
+	/** whether `element` runs no script: its call page never answers, and a hold would only wait out its bound */
+	const scriptless = (element: Element) => {
+		const sandbox = Reflect.apply(nativeElement.getAttribute, element, [
+			'sandbox',
+		]) as string | null;
+		return sandbox !== null && !/(^|\s)allow-scripts(\s|$)/i.test(sandbox);
+	};
+	const hold = (kid: Kid, element: Element) => {
+		if (kid.hold) return;
+		try {
+			const state = Reflect.apply(readyState, global.document, []);
+			if (
+				state === 'complete' ||
+				client.browserPolicies().length ||
+				// (a frame the hooks saw out of the document: the parser's copy,
+				// while the parser runs, which it puts in the document next)
+				(!Reflect.apply(connected, element, []) && state !== 'loading') ||
+				scriptless(element)
+			)
+				return;
+			const image = Reflect.apply(createElement, global.document, [
+				'img',
+			]) as Element;
+			Reflect.apply(nativeElement.setAttribute, image, ['src', holdURL()]);
+			kid.hold = image;
+			let checks = 0;
+			kid.holdTimer = setInterval(() => {
+				const frame = frameOf(kid);
+				if (
+					++checks * HOLD_CHECK_MS > HOLD_MS ||
+					(frame
+						? !Reflect.apply(connected, frame, []) || scriptless(frame)
+						: Reflect.apply(readyState, global.document, []) !== 'loading')
+				)
+					release(kid);
+			}, HOLD_CHECK_MS);
+		} catch (error) {
+			// no hold: the load is the browser's
+		}
+	};
 
 	const hrefOf = (win: Window | null) => {
 		try {
@@ -317,6 +415,7 @@ export function calledFrames(
 	 */
 	const reach = (element: Element, kid: Kid): string | true => {
 		kid.calling = null;
+		hold(kid, element);
 		const win = frameWindow(element);
 		if (!win || !kid.shown) {
 			kid.shown = true;
@@ -343,6 +442,21 @@ export function calledFrames(
 			waiting.has(receiver)) ||
 		hrefOf(receiver as Window).startsWith(pages);
 
+	// a frame sent to its call page whose window shows no document of the
+	// page's: its initial about:blank, which the browser keeps for a call
+	// page of this origin (so nothing may be injected into it), or the call
+	// page itself (modules/IFrame.ts)
+	client.callPending = (element, context) => {
+		const kid = kids.get(element) ?? placed(element);
+		if (!kid?.shown) return false;
+		try {
+			return !(client.names.client in context);
+		} catch (error) {
+			// another origin's
+			return true;
+		}
+	};
+
 	client.callFrame = (element, url, to) => {
 		if (element.nodeName !== 'IFRAME' && element.nodeName !== 'FRAME')
 			return false;
@@ -360,6 +474,7 @@ export function calledFrames(
 				kid.want = null;
 				kid.calling = null;
 				kid.shown = false;
+				release(kid);
 			}
 			return false;
 		}
@@ -376,6 +491,9 @@ export function calledFrames(
 				writing: false,
 				routed: '',
 				page: kidPage,
+				hold: null,
+				holdTimer: undefined,
+				frame: element.isConnected ? element : null,
 			};
 			kids.set(element, kid);
 		}
@@ -401,14 +519,22 @@ export function calledFrames(
 		if (!kid) return;
 		if (kid.writing) {
 			kid.writing = false;
+			release(kid);
 			return;
 		}
 		const win = frameWindow(element);
 		// (a frame of this origin on another page is no call page; one of
 		// another origin cannot be read, and its call page says it is one)
 		const href = hrefOf(win);
-		if (!win || !kid.want || (href !== '' && href !== kid.page)) return;
+		if (!win || !kid.want || (href !== '' && href !== kid.page)) {
+			release(kid);
+			return;
+		}
 		Reflect.apply(stop, event, []);
+		// (the frame of the markup, which the hooks saw as a copy, is held
+		// from its call page's load on: its load event comes before this
+		// document's own is decided)
+		hold(kid, element);
 		void call(element, kid, win);
 	};
 	const listen = () =>
@@ -427,6 +553,7 @@ export function calledFrames(
 		kid.calling = port;
 		const token = await want.token;
 		if (kid.calling !== port || !token) {
+			if (kid.calling === port) release(kid);
 			port.close();
 			return;
 		}
@@ -469,6 +596,7 @@ export function calledFrames(
 		const answer = await answered;
 		port.onmessage = null;
 		if (kid.calling !== port || !answer || 'failed' in answer) {
+			if (kid.calling === port) release(kid);
 			port.close();
 			return;
 		}
@@ -481,9 +609,9 @@ export function calledFrames(
 			port.close();
 			const moved = routeOn(answer.moved);
 			const moves = (want.moves ?? 0) + 1;
-			if (!moved || moves > MOVES) return;
+			if (!moved || moves > MOVES) return release(kid);
 			const at = new URL(moved).origin;
-			if (at === new URL(kid.page).origin) return;
+			if (at === new URL(kid.page).origin) return release(kid);
 			kid.page = pageOn(at);
 			kid.want = {
 				...want,

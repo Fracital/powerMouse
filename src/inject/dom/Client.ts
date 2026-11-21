@@ -602,6 +602,14 @@ export default class DocumentClient extends Client {
 		url: string,
 		routed: string,
 	) => string | boolean;
+	/**
+	 * Just call stomp: whether `element` is a frame of this called document
+	 * on its way to its call page or on it (calledFrames.ts), whose window
+	 * `context` shows no document of the page's yet: nothing of this
+	 * document goes into it, and the page reads it as another origin's
+	 * (modules/IFrame.ts)
+	 */
+	callPending?: (element: Element, context: object) => boolean;
 	constructor(init: ParsedConfig, global: typeof globalThis) {
 		super(init, global);
 		const called = Reflect.getOwnPropertyDescriptor(global, CALLED_KEY)?.value;

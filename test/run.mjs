@@ -171,6 +171,8 @@ const SUITE_ENV = {
 	'jcs-slots': { STOMP_SLOT_PORTS: '4' },
 	// dialing's URLs on the host's origin, then again on four content slots
 	'dial-urls': { STOMP_SLOT_PORTS: '4' },
+	// a dialed document's frames read before they are dialed, on slots too
+	'dial-frames': { STOMP_SLOT_PORTS: '4' },
 	// the toolbar's dialing checks once more on content slots
 	toolbar: { STOMP_SLOT_PORTS: '4' },
 	// a dialed tab's history and Navigation API, on content slots too

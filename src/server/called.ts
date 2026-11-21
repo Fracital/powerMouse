@@ -434,10 +434,49 @@ export function callPageResponse(pathname: string): Response | null {
 	});
 }
 
-/** the call page, for a navigation to it; whether it was answered */
-export function callPage(event: FetchEvent, pathname: string): boolean {
-	if (event.request.mode !== 'navigate' || event.request.method !== 'GET')
+/** the longest a called document's load is held for a frame of it (callHold) */
+const HOLD_MS = CALL_WAIT_MS + 15_000;
+/** a hold's query: `?hold=` and the document's name for it */
+const HOLD_SHAPE = /^\?hold=[0-9a-f-]{1,64}$/;
+
+/**
+ * An image a called document loads while a frame of it is called before
+ * the document has loaded (src/inject/dom/calledFrames.ts hold), which keeps
+ * its load waiting as the frame's document natively would: answered when the
+ * document lets go of it (the request is aborted), or empty after HOLD_MS.
+ * Whether it was one.
+ */
+function callHold(event: FetchEvent, pathname: string): boolean {
+	const { request } = event;
+	if (
+		request.method !== 'GET' ||
+		request.destination !== 'image' ||
+		!HOLD_SHAPE.test(new URL(request.url).search) ||
+		!isCallPagePath(pathname)
+	)
 		return false;
+	event.respondWith(
+		new Promise<Response>((resolve) => {
+			const done = () => {
+				clearTimeout(timer);
+				resolve(
+					new Response(null, {
+						status: 204,
+						headers: { 'cache-control': 'no-store' },
+					}),
+				);
+			};
+			const timer = setTimeout(done, HOLD_MS);
+			request.signal?.addEventListener('abort', done, { once: true });
+		}),
+	);
+	return true;
+}
+
+/** the call page, for a navigation to it (or a called document's hold); whether it was answered */
+export function callPage(event: FetchEvent, pathname: string): boolean {
+	if (event.request.mode !== 'navigate') return callHold(event, pathname);
+	if (event.request.method !== 'GET') return false;
 	const response = callPageResponse(pathname);
 	if (!response) return false;
 	event.respondWith(response);

@@ -97,6 +97,31 @@ Each end checks the shape of everything it hears and drops what does not fit
 (`toldOf` and `callAnswerOf` in justCallStomp.ts, their twins in
 calledFrames.ts, and the call page's own checks).
 
+## A dialed document's frames
+
+A frame of a dialed document is called by that document as the tab's frame
+is by the host (`calledFrames.ts`). Two things are its own:
+
+- Until its document is written, the frame shows its initial about:blank
+  and then its call page, neither of them a document of the page's. The
+  browser keeps the initial about:blank's window for a call page of the
+  same origin, so nothing may be injected into it (the call page would run
+  in the page's realm and refuse its call), and a raw window would run
+  nothing of the proxy's. The page's read of the frame's `contentWindow`
+  or `contentDocument` then gives another origin's stand-in (the
+  document null), and the next read after the frame's document is written
+  gives its window (`callPending`, modules/IFrame.ts).
+- The call page's own load is over before the frame's document is asked
+  for, so the browser would fire the page's `load` with the frame still
+  empty. While a frame is called before the page has loaded, the page's
+  document loads an image (an element no document has) from the call
+  page's path with `?hold=<id>`, which the worker answers only when the
+  document lets go of it, or empty after a minute (`callHold`,
+  src/server/called.ts): the page's `load` waits until the frame's
+  document has loaded or its call ended, as natively. The timing hooks
+  leave its entry out (its URL is no page's). A page under a policy of its
+  own is not held: the policy could refuse the image, and report it.
+
 ## What it does not do
 
 - On the host's own origin (no slot of its own), a script of that origin that
@@ -105,6 +130,10 @@ calledFrames.ts, and the call page's own checks).
   keeps such a script from making calls of its own, not from reading a
   dialed document of its own origin. Only a call page on another origin is
   out of its reach.
+- A frame's window the page read before the frame's document was written
+  stays another origin's stand-in (natively it is the frame's window from
+  the start), and a page under a policy of its own may still see its
+  `load` before its frames' documents have loaded.
 - A token lives in the worker's memory: a worker the browser restarts between
   the token and the call, or a new worker that took the scope over (a Tor
   profile's, registered again by a new session), refuses the call. The host

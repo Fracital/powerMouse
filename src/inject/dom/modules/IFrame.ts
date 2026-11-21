@@ -612,6 +612,16 @@ export default class IFrameModule extends Module<DocumentClient> {
 					// injected by this page (its own shell injects it)
 					return windowModule.restrictOpaque(context);
 
+				// just call stomp: a frame on its way to its call page (its
+				// initial about:blank, which the browser keeps for the call page
+				// of this origin) or on it. Injected, the call page would run
+				// in this document's realm, its hooks and all, and never take
+				// its call; raw, the page would hold a window that runs nothing
+				// of the proxy's. Another origin's to the page until the frame's
+				// document is written (the next read hands that one out)
+				if (context && moduleClient.callPending?.(element, context))
+					return windowModule.restrictOpaque(context);
+
 				if (context) {
 					moduleClient.heldBlank?.(element, context);
 					// still on its initial about:blank while the document its src

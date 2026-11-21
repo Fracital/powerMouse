@@ -1,0 +1,116 @@
+<!doctype html>
+<html data-step="early">
+	<head>
+		<title>Dial early</title>
+		<script src="jcs-probe.js"></script>
+	</head>
+	<body>
+		<!-- frames whose window and document the page reads before their
+		documents arrive (test/suites/dial-frames.mjs): a frame of the markup,
+		one a script makes, and one of another origin -->
+		<iframe id="markup" src="jcs-child.html?early-markup"></iframe>
+		<script>
+			(() => {
+				const out = {};
+				const report = (why) =>
+					console.log(`EARLY:${JSON.stringify({ why, ...out })}`);
+				const loads = (name, frame) => {
+					out[`${name}Loads`] = 0;
+					frame.addEventListener('load', () => {
+						out[`${name}Loads`]++;
+						report(`${name}-load`);
+					});
+				};
+				const early = (name, frame) => {
+					const win = frame.contentWindow;
+					const doc = frame.contentDocument;
+					out[`${name}Early`] = [
+						win === null ? 'null' : typeof win,
+						doc === null ? 'null' : typeof doc,
+					];
+					return win;
+				};
+				const markup = document.getElementById('markup');
+				loads('markup', markup);
+				const markupWindow = early('markup', markup);
+
+				const made = document.createElement('iframe');
+				made.src = 'jcs-child.html?early-made';
+				document.body.append(made);
+				loads('made', made);
+				const madeWindow = early('made', made);
+
+				const other = document.createElement('iframe');
+				other.src = `http://localhost:${location.port}/pages/jcs-child.html?early-other`;
+				document.body.append(other);
+				loads('other', other);
+				const otherWindow = early('other', other);
+
+				// what the page reads of each at its own load, when natively every
+				// frame's document has loaded
+				addEventListener('load', () => {
+					const read = (fn) => {
+						try {
+							return fn();
+						} catch (error) {
+							return `throws ${error.name}`;
+						}
+					};
+					for (const [name, frame, win] of [
+						['markup', markup, markupWindow],
+						['made', made, madeWindow],
+					]) {
+						out[`${name}AtLoad`] = {
+							title: read(() => frame.contentDocument.title),
+							same: read(() => frame.contentWindow === win),
+							earlyTitle: read(() => win.document.title),
+							navigation: read(
+								() => typeof frame.contentWindow.navigation.currentEntry,
+							),
+							earlyNavigation: read(() => typeof win.navigation.currentEntry),
+						};
+					}
+					out.otherAtLoad = {
+						document: read(() =>
+							other.contentDocument === null ? 'null' : 'a document',
+						),
+						title: read(() => other.contentWindow.document.title),
+						earlyTitle: read(() => otherWindow.document.title),
+						same: read(() => other.contentWindow === otherWindow),
+						eval: read(() => typeof otherWindow.eval),
+						navigation: read(() => typeof otherWindow.navigation),
+					};
+					report('load');
+					// the frame's next document, through the window the page holds:
+					// what the page can read while the frame is on its call page
+					// again (never the call page's document, never a window that
+					// runs nothing of the proxy's)
+					const held = markup.contentWindow;
+					const seen = new Set();
+					let polls = 0;
+					const poll = () => {
+						polls++;
+						seen.add(
+							read(() => {
+								const doc = held.document;
+								const text = [...doc.scripts].map((s) => s.text).join('');
+								return text.includes('$stomp$call')
+									? 'the call page'
+									: `${typeof held.eval} ${doc.title}`;
+							}),
+						);
+						if (polls < 4000 && out.markupLoads < 2) setTimeout(poll, 0);
+						else {
+							out.heldSeen = [...seen];
+							out.heldTitle = read(() => held.document.title);
+							out.nowTitle = read(() => markup.contentDocument.title);
+							report('second');
+						}
+					};
+					markup.src = 'jcs-child.html?early-second';
+					poll();
+				});
+			})();
+		</script>
+	</body>
+</html>
