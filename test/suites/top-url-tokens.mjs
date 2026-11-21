@@ -353,7 +353,7 @@ for (const [mode, query] of [
 	const disk = record.disk ?? {};
 	if (!Array.isArray(disk.visits) || !Array.isArray(disk.visitedLinks)) {
 		ok(
-			`${mode}: the History database could be read (sqlite3)`,
+			`${mode}: the History database could be read`,
 			false,
 			JSON.stringify(disk.visits ?? disk.visitedLinks).slice(0, 200),
 		);

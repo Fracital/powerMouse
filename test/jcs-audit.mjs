@@ -288,16 +288,37 @@ function walkFiles(root) {
 	return out;
 }
 
+// Node's own SQLite (node:sqlite, Node 22.13 and later without a flag; CI
+// runs 24), so the runner needs no sqlite3 binary; an older Node falls back
+// to the binary where there is one
+const nodeSqlite = await import('node:sqlite').catch(() => null);
+
+/** the rows of `query` on a copy of the database at `path`, or `{ error }` */
 function sqlite(path, query) {
+	const copy = `${path}.copy`;
 	try {
-		const copy = `${path}.copy`;
 		writeFileSync(copy, readFileSync(path));
+		if (nodeSqlite) {
+			const db = new nodeSqlite.DatabaseSync(copy, { readOnly: true });
+			try {
+				return db
+					.prepare(query)
+					.all()
+					.map((row) => ({ ...row }));
+			} finally {
+				db.close();
+			}
+		}
 		const text = execFileSync('sqlite3', ['-json', copy, query], {
 			encoding: 'utf8',
 		});
 		return text.trim() ? JSON.parse(text) : [];
 	} catch (error) {
-		return { error: String(error.message).slice(0, 200) };
+		return {
+			error: `${nodeSqlite ? 'node:sqlite' : 'no node:sqlite, sqlite3'}: ${String(error.message).slice(0, 200)}`,
+		};
+	} finally {
+		rmSync(copy, { force: true });
 	}
 }
 
