@@ -404,8 +404,12 @@ What the worker enforces today:
   the tab's site (they block third-party trackers only) and still asks the
   user's own filters. The inline lists are compiled again on their own for
   this the first time a first-party request is asked about (a few
-  milliseconds). A WebSocket or WebTransport session to its page's site is
-  judged the same way. Lists the host names by URL count as default lists
+  milliseconds); a failed compile is the blocker's `ownError`, apart from
+  the engine's `lastError`. A WebSocket or WebTransport session to the site
+  of its top-level page is judged the same way: the controller names the
+  document that opens it, and the worker finds that document's top as it
+  does for a request (a socket whose document it cannot place is judged
+  by the document's own site). Lists the host names by URL count as default lists
   here, where Brave asks the lists a user subscribed to of first-party
   requests too. A host with no entry for the site (no shields) is judged
   by every list, as before shields existed. This is what kept wisp.baby at

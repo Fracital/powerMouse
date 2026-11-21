@@ -1,0 +1,44 @@
+<!doctype html>
+<title>adblock socket party</title>
+<script src="/pages/adblock-ws.js"></script>
+<script>
+	// test/suites/adblock-socket-party.mjs. Loaded at the top on one site, it
+	// frames itself from the other (`?frame`), and both open the same two
+	// sockets, one to each site, under a rule of the lists for any party
+	// (/ws-echo?k=adblock-ws-blocked$websocket, adblock-list.txt). `?tag=`
+	// keeps one load's sockets apart in the fixture's record of them
+	const params = new URLSearchParams(location.search);
+	const tag = params.get('tag') || 'none';
+	const where = params.has('frame') ? 'frame' : 'top';
+	const here = location.host;
+	const other = here.includes('127.0.0.1')
+		? here.replace('127.0.0.1', 'localhost')
+		: here.replace('localhost', '127.0.0.1');
+	const socketURL = (host, to) =>
+		`ws://${host}/ws-echo?k=adblock-ws-blocked.${tag}.${where}-${to}`;
+	const sockets = async () => ({
+		own: await self.__socketSequence(socketURL(here, 'own')),
+		other: await self.__socketSequence(socketURL(other, 'other')),
+	});
+	if (where === 'frame') {
+		// a frame of another site: its answer goes to its parent by message
+		sockets().then((answer) => parent.postMessage({ sockets: answer }, '*'));
+	} else {
+		window.__adblockReport = async () => {
+			const top = await sockets();
+			const frame = document.createElement('iframe');
+			const answered = new Promise((resolve) => {
+				const timer = setTimeout(() => resolve(null), 30000);
+				addEventListener('message', (event) => {
+					if (event.source !== frame.contentWindow || !event.data?.sockets)
+						return;
+					clearTimeout(timer);
+					resolve(event.data.sockets);
+				});
+			});
+			frame.src = `${location.protocol}//${other}/pages/adblock-ws-party.html?frame&tag=${tag}`;
+			document.body.append(frame);
+			return { top, frame: await answered };
+		};
+	}
+</script>

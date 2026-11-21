@@ -1369,6 +1369,146 @@ function shellSites(
 	return sites;
 }
 
+/** what this worker knows of a request's service worker client */
+interface ClientFacts {
+	/** its real URL (an origin is all a request reads of it) */
+	client: URL | null;
+	/** its routed URL, when it is a routed document or worker */
+	clientRoute: string | null;
+	/**
+	 * a blob: worker whose minting page this worker does not know (it
+	 * restarted since, which empties what it was told, or the blob was
+	 * minted inside a worker): judged as another site, never as the
+	 * target's own, so it gets no same-origin credentials or Strict cookies
+	 */
+	unknownBlob: boolean;
+	/**
+	 * a client whose URL names no origin this worker can read (an
+	 * about:srcdoc document): judged by its Referer, else as an opaque one
+	 */
+	unknownClient: boolean;
+	/**
+	 * the top-level site of a partitioned blob: worker or inline document,
+	 * which its URL does not name (its creator's, as the worker recorded it)
+	 */
+	clientTopSite: string | null;
+}
+const NO_CLIENT: ClientFacts = {
+	client: null,
+	clientRoute: null,
+	unknownBlob: false,
+	unknownClient: false,
+	clientTopSite: null,
+};
+
+/**
+ * What the worker knows of client `id`, kept per client once known. `wait`:
+ * an about:srcdoc document that has not claimed its ancestor yet is waited
+ * for a little (when no Referer says whose the request is)
+ */
+async function clientFacts(
+	id: string,
+	decode: (routed: string) => URL | null,
+	routedPrefix: string,
+	wait: boolean,
+): Promise<ClientFacts> {
+	if (typeof clients === 'undefined') return NO_CLIENT;
+	let client = clientURLs.get(id) ?? null;
+	let clientRoute = clientRoutes.get(id) ?? null;
+	let clientTopSite = clientTopSites.get(id) ?? null;
+	let unknownBlob = false;
+	let unknownClient = false;
+	if (!client)
+		try {
+			const found = await clients.get(id);
+			// a blob: worker's URL is the blob: URL, an inline document's
+			// its route: judged as the document that minted it, or as the
+			// document served there, when the worker knows it
+			const decoded = found ? decode(found.url) : null;
+			if (decoded && found) clientRoute = found.url;
+			client = found
+				? ((found.url.startsWith('blob:') ||
+					found.url.startsWith(`${routedPrefix}inline:`)
+						? await knownOriginOf(found.url)
+						: null) ?? decoded)
+				: null;
+			// an about:srcdoc document a routed ancestor vouched for is of
+			// that ancestor's origin and partition (srcdocVouches); waited
+			// for only when no Referer says whose the request is (Chrome
+			// reports the client's URL as empty until it has parsed); and a
+			// call page's written document (./called.ts), by its call
+			if (
+				!client &&
+				found &&
+				found.type === 'window' &&
+				(found.url === '' ||
+					found.url.startsWith('about:srcdoc') ||
+					isCallPage(found.url))
+			) {
+				const bound = await boundClient(id, wait);
+				if (bound) {
+					client = bound.client;
+					clientTopSite = bound.top;
+				}
+			}
+			unknownBlob = !client && !!found?.url.startsWith('blob:');
+			unknownClient = !client && !!found && !unknownBlob;
+			if (
+				client &&
+				(found?.url.startsWith('blob:') ||
+					found?.url.startsWith(`${routedPrefix}inline:`))
+			)
+				clientTopSite = await knownTopSiteOf(found.url);
+		} catch (error) {
+			// the client is gone
+		}
+	if (client && !clientURLs.has(id)) {
+		if (clientURLs.size >= CLIENT_URLS_KEPT) {
+			const oldest = clientURLs.keys().next().value!;
+			clientURLs.delete(oldest);
+			clientRoutes.delete(oldest);
+			clientTopSites.delete(oldest);
+		}
+		clientURLs.set(id, client);
+		if (clientRoute) clientRoutes.set(id, clientRoute);
+		if (clientTopSite) clientTopSites.set(id, clientTopSite);
+	}
+	return { client, clientRoute, unknownBlob, unknownClient, clientTopSite };
+}
+
+/**
+ * The top-level site of service worker client `id` of the controller at
+ * `directory`, as a subresource request of the client finds it (the
+ * route's `topSite`, without a Referer), or null when the worker cannot
+ * tell. A socket never passes this worker: the controller names the
+ * client that opens it, and its party is judged by this site, as a
+ * request's is.
+ */
+export async function clientTopSiteOf(
+	id: string,
+	directory: string,
+	codec: GenericCodec,
+): Promise<string | null> {
+	const routedPrefix = `${location.origin}${directory}`;
+	const { client, clientRoute, clientTopSite } = await clientFacts(
+		id,
+		(routed) => {
+			try {
+				return parseRoutedURL(routed, codec, routedPrefix).url.url;
+			} catch (error) {
+				return null;
+			}
+		},
+		routedPrefix,
+		true,
+	);
+	return (
+		clientTopSite ??
+		(clientRoute ? routeTopSite(clientRoute, directory, codec) : null) ??
+		(client && client.origin !== 'null' ? siteOf(client, publicSuffix) : null)
+	);
+}
+
 /**
  * The top-level site a routed URL's kind names: a nested document's (its
  * top origin's site), a partitioned worker's; null for any other
@@ -2040,81 +2180,16 @@ function genericForward(
 		// the request's client, by its real URL. Never for a navigation: its
 		// client id is the document being created, and asking for it would
 		// wait on this very response
-		let client: URL | null = null;
-		// its routed URL, when it is a routed document or worker
-		let clientRoute: string | null = null;
-		// a blob: worker whose minting page this worker does not know (it
-		// restarted since, which empties what it was told, or the blob was
-		// minted inside a worker): judged as another site, never as the
-		// target's own, so it gets no same-origin credentials or Strict cookies
-		let unknownBlob = false;
-		// a client whose URL names no origin this worker can read (an
-		// about:srcdoc document): judged by its Referer, else as an opaque one
-		let unknownClient = false;
-		// the top-level site of a partitioned blob: worker or inline document,
-		// which its URL does not name (its creator's, as the worker recorded it)
-		let clientTopSite: string | null = null;
-		if (!navigation && context?.clientId && typeof clients !== 'undefined') {
-			const id = context.clientId;
-			client = clientURLs.get(id) ?? null;
-			clientRoute = clientRoutes.get(id) ?? null;
-			clientTopSite = clientTopSites.get(id) ?? null;
-			if (!client)
-				try {
-					const found = await clients.get(id);
-					// a blob: worker's URL is the blob: URL, an inline document's
-					// its route: judged as the document that minted it, or as the
-					// document served there, when the worker knows it
-					const decoded = found ? decode(found.url) : null;
-					if (decoded && found) clientRoute = found.url;
-					client = found
-						? ((found.url.startsWith('blob:') ||
-							found.url.startsWith(`${routedPrefix}inline:`)
-								? await knownOriginOf(found.url)
-								: null) ?? decoded)
-						: null;
-					// an about:srcdoc document a routed ancestor vouched for is of
-					// that ancestor's origin and partition (srcdocVouches); waited
-					// for only when no Referer says whose the request is (Chrome
-					// reports the client's URL as empty until it has parsed); and a
-					// call page's written document (./called.ts), by its call
-					if (
-						!client &&
-						found &&
-						found.type === 'window' &&
-						(found.url === '' ||
-							found.url.startsWith('about:srcdoc') ||
-							isCallPage(found.url))
-					) {
-						const bound = await boundClient(id, !referrer);
-						if (bound) {
-							client = bound.client;
-							clientTopSite = bound.top;
-						}
-					}
-					unknownBlob = !client && !!found?.url.startsWith('blob:');
-					unknownClient = !client && !!found && !unknownBlob;
-					if (
-						client &&
-						(found?.url.startsWith('blob:') ||
-							found?.url.startsWith(`${routedPrefix}inline:`))
-					)
-						clientTopSite = await knownTopSiteOf(found.url);
-				} catch (error) {
-					// the client is gone
-				}
-			if (client && !clientURLs.has(id)) {
-				if (clientURLs.size >= CLIENT_URLS_KEPT) {
-					const oldest = clientURLs.keys().next().value!;
-					clientURLs.delete(oldest);
-					clientRoutes.delete(oldest);
-					clientTopSites.delete(oldest);
-				}
-				clientURLs.set(id, client);
-				if (clientRoute) clientRoutes.set(id, clientRoute);
-				if (clientTopSite) clientTopSites.set(id, clientTopSite);
-			}
-		}
+		const {
+			client,
+			clientRoute,
+			unknownBlob,
+			unknownClient,
+			clientTopSite,
+		}: ClientFacts =
+			!navigation && context?.clientId
+				? await clientFacts(context.clientId, decode, routedPrefix, !referrer)
+				: NO_CLIENT;
 
 		// the Referer's source: the browser's routed Referer decoded, when it
 		// kept the full URL; when the policy made it send the proxy origin

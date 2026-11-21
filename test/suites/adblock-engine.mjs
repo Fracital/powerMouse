@@ -566,6 +566,102 @@ ok(
 	JSON.stringify(given),
 );
 
+// standard mode's first-party requests (Blocker.#askOwn, docs/adblock.md
+// "mode"): only the host's own filters judge them, which are its inline
+// lists (the custom-filters editor's); a list the host names by URL counts
+// as a default list there. The own filters are compiled apart, and their
+// failure is theirs (ownError), never the engine's lastError
+const ownLists = (filters) =>
+	init([
+		{ url: `${SITE}/pages/adblock-list.txt`, trusted: true },
+		...(filters === undefined
+			? []
+			: [{ url: 'stomp-filters:my-filters', filters, trusted: false }]),
+	]);
+const firstParty = (engine, path) =>
+	engine.decide({
+		url: `${SITE}${path}`,
+		source: page,
+		destination: 'script',
+		navigation: false,
+		topLevel: false,
+		method: 'GET',
+		firstParty: true,
+	});
+const urlOnly = new Blocker(ownLists(), fromPages, async () => module);
+await urlOnly.settled();
+ok(
+	"a first-party request is not judged by a list the host names by URL, which judges it as any other's",
+	firstParty(urlOnly, '/pages/adblock-blocked.js') === null &&
+		same(
+			urlOnly.decide({
+				url: `${SITE}/pages/adblock-blocked.js`,
+				source: page,
+				destination: 'script',
+				navigation: false,
+				topLevel: false,
+				method: 'GET',
+			}),
+			{ block: true },
+		),
+);
+const withOwn = new Blocker(
+	ownLists('/own-only.js\n'),
+	fromPages,
+	async () => module,
+);
+await withOwn.settled();
+ok(
+	"the host's inline list judges a first-party request, and the lists it names by URL still do not",
+	same(firstParty(withOwn, '/pages/own-only.js'), { block: true }) &&
+		firstParty(withOwn, '/pages/adblock-blocked.js') === null,
+);
+// the own filters' compile fails (the engine's call answers it failed):
+// the engine that serves every other request is untouched, and says nothing
+const failing = new Blocker(
+	ownLists('/own-only.js\n'),
+	fromPages,
+	async () => module,
+);
+await failing.settled();
+const engineError = failing.lastError;
+const realCall = BlockerInstance.prototype.call;
+BlockerInstance.prototype.call = function (input, flags) {
+	return flags === OP.build ? 1 : realCall.call(this, input, flags);
+};
+let ownFailed;
+try {
+	ownFailed = firstParty(failing, '/pages/own-only.js');
+} finally {
+	BlockerInstance.prototype.call = realCall;
+}
+ok(
+	'a failed build of the own filters is ownError (none for one that built), leaves lastError as it was, and the engine still answers',
+	withOwn.ownError === null &&
+		ownFailed === null &&
+		/could not be compiled/.test(failing.ownError ?? '') &&
+		failing.lastError === engineError &&
+		failing.ready &&
+		same(
+			failing.decide({
+				url: `${OTHER}/pages/adblock-third.js`,
+				source: page,
+				destination: 'script',
+				navigation: false,
+				topLevel: false,
+				method: 'GET',
+			}),
+			{ block: true },
+		),
+	JSON.stringify([
+		withOwn.ownError,
+		ownFailed,
+		failing.ownError,
+		engineError,
+		failing.lastError,
+	]),
+);
+
 // timings, on the fixture list and on a list of real size when one is named
 const time = (label, run, times) => {
 	const started = performance.now();

@@ -315,6 +315,12 @@ export class Blocker implements BlockerLike {
 	} | null = null;
 	/** a host-visible note of what went wrong, for the request log */
 	lastError: string | null = null;
+	/**
+	 * why the host's own filters could not be compiled apart (#askOwn), null
+	 * once they are: the engine itself may still serve, so this is never
+	 * `lastError`, which says why the engine does not
+	 */
+	ownError: string | null = null;
 
 	/** `module` settles with the thread's compiled blocker module, or null when it has none */
 	constructor(
@@ -742,19 +748,27 @@ export class Blocker implements BlockerLike {
 		}
 		return this.#builtElsewhere;
 	}
-	/** the engine of `lists` compiled on this thread (one call of 220 to 280 ms for the default lists) */
-	#buildHere(lists: EngineList[]): Uint8Array<ArrayBuffer> | null {
+	/**
+	 * the engine of `lists` compiled on this thread (one call of 220 to 280
+	 * ms for the default lists); `failed` hears why it could not be
+	 */
+	#buildHere(
+		lists: EngineList[],
+		failed = (error: string) => {
+			this.lastError = error;
+		},
+	): Uint8Array<ArrayBuffer> | null {
 		try {
 			const builder = new BlockerInstance(this.#module!);
 			for (const { text, flags } of lists)
 				builder.call(text, OP.addList | flags);
 			if (builder.call('', OP.build) !== 0) {
-				this.lastError = 'the lists could not be compiled';
+				failed('the lists could not be compiled');
 				return null;
 			}
 			return builder.bytes();
 		} catch (error) {
-			this.lastError = `the lists could not be compiled: ${String(error)}`;
+			failed(`the lists could not be compiled: ${String(error)}`);
 			return null;
 		}
 	}
@@ -835,12 +849,16 @@ export class Blocker implements BlockerLike {
 	 * What the host's own filters answer for a check, or null when it gave
 	 * none. Brave's standard mode asks its default lists nothing of a request
 	 * to the site of the tab's page (it blocks third-party trackers only) and
-	 * still asks the filters the user added (custom filters, the lists they
-	 * subscribed to); aggressive mode asks both of every request. The lists
-	 * here are one engine, so the inline lists the host gave as text are
-	 * compiled again on their own (a few milliseconds: they are short) the
-	 * first time a first-party request is asked about, and again when the
-	 * lists or the resources change.
+	 * still asks the filters the user added; aggressive mode asks every list
+	 * of every request. The host's own filters here are its inline lists
+	 * only (the custom-filters editor's, given as text): a list the host
+	 * names by URL counts as a default list, so this asks it nothing, where
+	 * Brave asks the lists a user subscribed to as well (docs/adblock.md,
+	 * "mode"). The lists are one engine, so the inline lists are compiled
+	 * again on their own (a few milliseconds: they are short) the first time
+	 * a first-party request is asked about, and again when the lists or the
+	 * resources change. Their failure is `ownError`, never `lastError`: the
+	 * engine that serves every other request is not the one that failed.
 	 */
 	#askOwn(input: string): string | null {
 		if (!this.#ready || !this.#module) return null;
@@ -849,6 +867,7 @@ export class Blocker implements BlockerLike {
 		if (this.#own?.lists !== lists || this.#own.resources !== resources) {
 			const inline = lists.filter((list) => list.filters?.trim());
 			let instance: BlockerInstance | null = null;
+			let failure: string | null = null;
 			const built = inline.length
 				? this.#buildHere(
 						inline.map((list) => ({
@@ -856,6 +875,9 @@ export class Blocker implements BlockerLike {
 							// the user's own rules never get the trusted scriptlets
 							flags: list.format === 'hosts' ? FLAG_HOSTS : 0,
 						})),
+						(error) => {
+							failure = error;
+						},
 					)
 				: null;
 			if (built)
@@ -864,11 +886,15 @@ export class Blocker implements BlockerLike {
 					if (
 						instance.call(resources || '[]', OP.resources) !== 0 ||
 						instance.call(built, OP.load) !== 0
-					)
+					) {
 						instance = null;
+						failure = "the host's own filters could not be loaded";
+					}
 				} catch (error) {
 					instance = null;
+					failure = `the host's own filters could not be loaded: ${String(error)}`;
 				}
+			this.ownError = failure;
 			this.#own = { lists, resources, instance };
 		}
 		const instance = this.#own.instance;

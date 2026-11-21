@@ -589,15 +589,26 @@ function registerController(
 					type,
 					typeof client === 'string' ? client : undefined,
 				);
-				// standard mode leaves a socket of its page's site to the host's
-				// own filters (Blocker.decide says why)
+				// standard mode leaves a socket of its top-level page's site to
+				// the host's own filters (Blocker.decide says why), as it does an
+				// HTTP request (rewrites.ts): a frame of another site that opens
+				// one to its own site is a third party, and the lists judge it.
+				// The top is its client's, as the worker finds a request's; a
+				// socket whose client the worker cannot place is judged by the
+				// document's own site (a top-level document's is its top)
 				let firstParty = false;
 				try {
 					const suffix = (host: string) => getPublicSuffix(host, true);
+					const topSite =
+						srv.shields.standard(socketHost) && typeof client === 'string'
+							? await srv.topSiteOf(client)
+							: null;
 					firstParty =
 						srv.shields.standard(socketHost) &&
 						registrableDomain(new URL(url).hostname, suffix) ===
-							registrableDomain(socketHost, suffix);
+							(topSite !== null
+								? topSite.slice(topSite.indexOf('//') + 2)
+								: registrableDomain(socketHost, suffix));
 				} catch (error) {
 					// no URL: every list judges it
 				}

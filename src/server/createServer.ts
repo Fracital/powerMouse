@@ -58,7 +58,7 @@ import { registerPermissionRoute, usePermissionsRemote } from './permissions';
 import { dedicatedOwnerOf } from './requestClients';
 import { RewriteCache } from './rewriteCache';
 import type { RewritePool } from './rewritePool';
-import { registerRewrites } from './rewrites';
+import { clientTopSiteOf, registerRewrites } from './rewrites';
 import Router, { json } from './Router';
 import { serviceWorkers } from './serviceWorkers';
 import { ShieldsStore } from './shields';
@@ -132,6 +132,12 @@ export interface StompServer {
 	linkRoute(context: VisitedContext, url: URL): string;
 	/** the key of this server's codec (the site pool hands the host's to every slot's worker) */
 	codecKey: string;
+	/**
+	 * the top-level site (`https://example.com`) of a service worker client
+	 * of this controller, as its requests are judged by, or null when the
+	 * worker cannot tell (rewrites.ts clientTopSiteOf)
+	 */
+	topSiteOf(client: string): Promise<string | null>;
 }
 
 /** the public suffix of a host, private registries counted, as Chrome's sites have it */
@@ -718,6 +724,7 @@ export default async function createServer(
 			return `${prefix}${kind}/${new StompURL(url, init.codec, prefix).encode()}`;
 		},
 		linkOf,
+		topSiteOf: (client) => clientTopSiteOf(client, init.directory, init.codec),
 		codecKey,
 		linkRoute: (context, url) =>
 			linkRoute(
