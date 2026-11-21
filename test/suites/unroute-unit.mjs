@@ -61,6 +61,8 @@ const client = {
 	scope: '/stomp/',
 	codec,
 	url: { url: new URL('https://example.com/') },
+	// (src/inject/Client.ts: a served realm's routes are on its own origin)
+	originOf: (location) => location.origin,
 };
 const page = 'https://example.com/pages/import404.js?ms=3009';
 const routed = `${origin}/stomp/abc/js:generic/${codec.encode(page)}`;
