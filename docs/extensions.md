@@ -317,6 +317,44 @@ controller.extensions  --RPC-->  ExtensionHub (with the controller)    Extension
   dropped. Of several verdicts, a cancel wins, then the first redirect,
   then the last headers.
 
+### Content scripts on the slots
+
+Under a site pool (docs/site-pool.md) and dialing's content slots
+(docs/content-slots.md) a site's documents are on another origin, whose
+worker keeps no extensions: the packages, their state and the documents'
+tokens are the hub's worker's, and an extension's background and pages
+stay on the hub's origin. A slot's documents run the content scripts all
+the same, as the hub's would, with two bridges the hub's page hands each
+slot's agent:
+
+- **The worker's.** A port between the slot's worker and the hub's
+  (`src/server/remoteExtensions.ts`, as the blocker's questions go,
+  `EXTENSIONS_SERVE`). A document the slot serves asks the hub's worker
+  for its shell's part, which the hub matches as its own: on the
+  document's real URL (matches, exclude_matches, globs), whether it is its
+  frame's top (all_frames), and the extension's site access, with its
+  token for the slot's client. The entries' scripts, an isolated world's
+  modules and the contexts' `extapi` calls are asked the same way; the
+  slot's worker only carries the answers. While the hub's worker has no
+  extension it says so, and the slot's documents ask nothing. An answer
+  that does not come (2 s for a shell, 30 s for a script or a call) is no
+  content script, and the port is asked for again through the agent.
+- **The channels.** An extension's contexts meet on a BroadcastChannel of
+  their origin, so the slot's agent opens the slot origin's channel of
+  each extension the hub has on and relays it to the hub's page
+  (`relayExtensionBuses`, `ExtensionHub.bridge`), which puts each message
+  on its own origin's channel, hands it to the other slots' agents and
+  hears it as its own. A channel never hears its own messages, so nothing
+  is relayed twice. runtime.sendMessage, tabs.sendMessage, ports, a user
+  script's messages and the hub's calls (where a content script is: its
+  tab and frame) cross that way.
+
+The ext-slot-content-scripts suite runs a probe with each run_at, both
+worlds, all_frames, exclude_matches on the real host and a user script in
+a page with a frame of its site, a frame of another site (another slot)
+and an excluded frame: on the same-origin host without a pool, both hosts
+on the pool, and dialing with and without content slots.
+
 ### Isolated worlds
 
 In Chrome an ISOLATED content script shares the page's DOM and nothing
@@ -723,9 +761,12 @@ they are now.
   and `link` for any other new entry, whatever made it (a form, a script,
   a redirect), and its qualifiers only `forward_back` and a reload's
   `client_redirect`. A navigation that fails tells no `onErrorOccurred`.
-  Under a site pool no content script runs in a document of a slot (the
-  slots' workers keep no extensions).
   `onCreated` gives no `openerTabId`.
+- Under a site pool a slot's worker keeps no extensions (Content scripts
+  on the slots): an extension's webRequest listeners and its
+  declarativeNetRequest rules see no request of a document a slot shows,
+  and the Web Store's page on a slot has its API from the slot's own
+  worker.
 - A main frame's request that neither the host nor a hooked document
   announced (one that leaves an image document, or an about:blank one the
   page wrote) is matched with tab id -1, so a `tabIds` condition misses it

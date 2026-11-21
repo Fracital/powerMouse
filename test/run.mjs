@@ -160,6 +160,8 @@ const SUITE_ENV = {
 	'site-pool-tabs': { STOMP_SITE_POOL: '5' },
 	// production's host page with a pool (the extensions' tabs on its slots)
 	'ext-tab-status': { STOMP_ISOLATION: 'on', STOMP_SITE_POOL: '3' },
+	// content scripts in the pool's slots and in dialing's content slots
+	'ext-slot-content-scripts': { STOMP_SITE_POOL: '3', STOMP_SLOT_PORTS: '2' },
 	// production's host page (cross-origin isolated) with its pool
 	'site-pool-coep': { STOMP_ISOLATION: 'on', STOMP_SITE_POOL: '5' },
 	// dialing on four content slots of its own (STOMP_SLOT_PORTS), as

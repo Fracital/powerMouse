@@ -55,6 +55,7 @@ import { RemoteJar, type JarPort } from './jarDB';
 import { registerKeptLoads } from './keptLoads';
 import { registerMediaLoads } from './mediaLoads';
 import { registerPermissionRoute, usePermissionsRemote } from './permissions';
+import type { ExtensionsServe, RemoteExtensions } from './remoteExtensions';
 import { dedicatedOwnerOf } from './requestClients';
 import { RewriteCache } from './rewriteCache';
 import type { RewritePool } from './rewritePool';
@@ -124,6 +125,8 @@ export interface StompServer {
 	shields: ShieldsStore;
 	/** the extensions' declarativeNetRequest rules (src/server/dnr.ts, the controller's `dnr` RPC) */
 	dnr: DnrHost;
+	/** what a slot's worker of the site pool is answered for its documents' content scripts (src/server/remoteExtensions.ts) */
+	extensionsServe?: ExtensionsServe;
 	/** replace the per-site shields allowlist (the controller's `shields` RPC) */
 	setShields(list: SiteShields[], seed?: number): void;
 	/** the context and real URL of a link route (src/visited.ts), or null */
@@ -413,6 +416,8 @@ export default async function createServer(
 	tellApartServed?: () => void,
 	/** asks the controller's document whether a waiting page stops this worker (./syncFrozen.ts) */
 	askSyncFreezes?: () => Promise<boolean | null>,
+	/** a slot of the site pool: the hub's worker's extensions, whose content scripts its documents run (src/server/remoteExtensions.ts) */
+	remoteExtensions?: RemoteExtensions,
 ): Promise<StompServer> {
 	// a worker keeps one profile's stores (src/profile.ts): a controller
 	// of another would read and write them as its own
@@ -646,6 +651,7 @@ export default async function createServer(
 		tellApartServed,
 		dnr,
 		extensionRegistry,
+		remoteExtensions,
 	);
 	if (blocker) registerBlocker(router, blocker);
 	registerStorage(router, stores.storage, init.codec);

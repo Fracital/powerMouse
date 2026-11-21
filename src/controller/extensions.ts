@@ -452,7 +452,9 @@ export function framesAsTabs<F extends TabFrame>(
 			const frame = host.frameOf(client);
 			if (!frame) return null;
 			let frameId = 0;
-			if (!host.isTop(frame, client)) {
+			// (the feed hears a top document's report before its frame does
+			// under the site pool, which waits for the slot's agent)
+			if (!host.isTop(frame, client) && seen.get(frame)?.client !== client) {
 				let known = frameIds.get(client);
 				if (known === undefined) {
 					const asked = Number(await host.frameIdOf?.(client).catch(() => -1));
@@ -780,14 +782,20 @@ export class ExtensionHub {
 					contentRules: null,
 					contentState: new Map(),
 				};
-				ext.bus.onmessage = (event) => this.#receive(ext, event.data);
+				ext.bus.onmessage = (event) => {
+					this.#relay(ext.info.id, event.data);
+					void this.#receive(ext, event.data);
+				};
 				this.#extensions.set(info.id, ext);
+				// (the slots relay its channel before anything is said on it)
+				if (this.#bridges.size) this.#tellBridges();
 				// (pages open from before, a controller's reload: they say who they are again)
 				this.#post(ext, { t: 'roll' });
 				this.#startBackground(ext);
 			}
 			for (const [id, ext] of this.#extensions)
 				if (!seen.has(id)) this.#drop(ext);
+			if (this.#bridges.size) this.#tellBridges();
 		};
 		const next = (this.#refreshing ?? Promise.resolve()).then(run, run);
 		this.#refreshing = next.catch(() => {});
@@ -848,6 +856,50 @@ export class ExtensionHub {
 
 	#post(ext: HubExtension, message: Record<string, unknown>) {
 		ext.bus.postMessage(message);
+		this.#relay(ext.info.id, message);
+	}
+
+	/** the site pool's agents that relay the extensions' channels of their slots (bridge) */
+	#bridges = new Set<MessagePort>();
+
+	/** hand a message of an extension's channel to the slots' channels (but `from`'s) */
+	#relay(id: string, message: unknown, from?: MessagePort) {
+		for (const port of this.#bridges)
+			if (port !== from) port.postMessage({ id, m: message });
+	}
+
+	/** tell the slots which channels to relay: the enabled extensions' */
+	#tellBridges(only?: MessagePort) {
+		const open = [...this.#extensions.keys()];
+		for (const port of only ? [only] : this.#bridges)
+			port.postMessage({ open });
+	}
+
+	/**
+	 * A slot's agent of the site pool relays its origin's channels of the
+	 * extensions on `port` (src/controller/site.ts relayExtensionBuses): a
+	 * content script of a document a slot shows is on its slot's channel,
+	 * its extension's background and pages on this origin's. What it says
+	 * is put on this origin's channel and handed to the other slots, as
+	 * every message of this origin's goes to it, and the hub hears it as
+	 * one of its own
+	 */
+	bridge(port: MessagePort) {
+		this.#bridges.add(port);
+		port.addEventListener('message', (event) => {
+			const { id, m } = (event.data ?? {}) as { id?: unknown; m?: unknown };
+			const ext = typeof id === 'string' ? this.#extensions.get(id) : undefined;
+			if (!ext || typeof m !== 'object' || m === null) return;
+			ext.bus.postMessage(m);
+			this.#relay(ext.info.id, m, port);
+			void this.#receive(ext, m as Record<string, unknown>);
+		});
+		port.addEventListener('close', () => this.#bridges.delete(port));
+		port.start();
+		this.#tellBridges(port);
+		// (the slot's contexts from before the bridge say who they are)
+		for (const id of this.#extensions.keys())
+			port.postMessage({ id, m: { t: 'roll' } });
 	}
 
 	async #receive(ext: HubExtension, message: Record<string, unknown>) {

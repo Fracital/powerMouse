@@ -34,7 +34,26 @@ declare const self: ServiceWorkerGlobalScope;
 export interface ExtensionShell {
 	/** the markup that goes before the inject bundle's script */
 	head(loading: string, attribute: string): string;
+	/** what the markup is made of (a slot's worker is handed it: ../remoteExtensions.ts) */
+	parts: ShellParts;
 }
+
+/** a document's shell part as data: the runtime's URL, its payload and the entries' routes */
+export interface ShellParts {
+	runtime: string;
+	/** the payload, as the script's text writes it */
+	json: string;
+	routes: string[];
+}
+
+/** the shell part of `parts` */
+export const shellOf = (parts: ShellParts): ExtensionShell => ({
+	parts,
+	head: (loading, attribute) =>
+		`<script${loading} src="${parts.runtime}"></script><script${attribute}>self.${RUNTIME_GLOBAL}?.prepare(${parts.json});</script>${parts.routes
+			.map((route) => `<script${loading} src="${route}"></script>`)
+			.join('')}`,
+});
 
 /** what the worker knows of a document it is about to serve */
 export interface ShellDocument {
@@ -246,13 +265,11 @@ export async function documentShell(
 		if (content.length) payload.content = content;
 		else if (!store) return null;
 	}
-	const json = escapeScript(JSON.stringify(payload));
-	return {
-		head: (loading, attribute) =>
-			`<script${loading} src="${deps.runtime}"></script><script${attribute}>self.${RUNTIME_GLOBAL}?.prepare(${json});</script>${routes
-				.map((route) => `<script${loading} src="${route}"></script>`)
-				.join('')}`,
-	};
+	return shellOf({
+		runtime: deps.runtime,
+		json: escapeScript(JSON.stringify(payload)),
+		routes,
+	});
 }
 
 /** an entry's stylesheets, rewritten for the document's address, kept per worker start */

@@ -327,6 +327,7 @@ import {
 	contentScriptResponse,
 	documentShell,
 	type ExtensionShell,
+	type ShellDocument,
 } from './extensions/contentScripts';
 import { fetchEvents, workerOf } from './extensions/fetchEvents';
 import {
@@ -389,6 +390,11 @@ import {
 	orbSniff,
 	peekBody,
 } from './orb';
+import type {
+	ExtensionsServe,
+	RemoteExtensions,
+	ServedResponse,
+} from './remoteExtensions';
 import { queueReport, reportingEndpoints } from './reportUploads';
 import { blobCreatorOf, creatorOf, requestOwner } from './requestClients';
 import type { RewriteCache, RewriteCacheOutcome } from './rewriteCache';
@@ -1234,6 +1240,8 @@ interface Rewriter {
 	blocker?: BlockerLike;
 	/** the scope's extensions (docs/extensions.md) */
 	extensions?: ExtensionRegistry;
+	/** a slot of the site pool: the hub's worker's extensions, which its documents' content scripts are (./remoteExtensions.ts) */
+	remoteExtensions?: RemoteExtensions;
 	/** what the request path asks of them */
 	pipeline?: ExtensionPipeline;
 	/** the host asked for the blocker: the first navigation waits for its lists (on by default, for the snapshot alone) */
@@ -6944,6 +6952,8 @@ export function registerRewrites(
 	dnr?: DnrHost,
 	/** the scope's extensions (docs/extensions.md) */
 	extensions?: ExtensionRegistry,
+	/** a slot of the site pool: the hub's worker's extensions (./remoteExtensions.ts) */
+	remoteExtensions?: RemoteExtensions,
 ) {
 	const pipeline = extensions
 		? new ExtensionPipeline(extensions, init.directory)
@@ -7015,6 +7025,7 @@ export function registerRewrites(
 		rules: [],
 		blocker,
 		extensions,
+		remoteExtensions,
 		pipeline,
 		blockerAsked,
 		shields,
@@ -7050,14 +7061,58 @@ export function registerRewrites(
 
 	// the extensions' routes (docs/extensions.md): their content scripts'
 	// functions, and their contexts' calls
-	if (extensions) {
-		const rewriteScript = (source: string, file: string) =>
-			modifyJS(
-				source,
-				new StompURL(file, rewriter.codec, rewriter.directory),
-				rewriter.config,
-				'generic',
-			);
+	// the requesting document's real origin, by its client
+	const clientOrigin = async (id: string | undefined) => {
+		if (!id) return null;
+		const known = clientURLs.get(id);
+		if (known) return known.origin;
+		const found = typeof clients !== 'undefined' ? await clients.get(id) : null;
+		if (!found) return null;
+		try {
+			return parseRoutedURL(
+				found.url,
+				rewriter.codec,
+				`${new URL(found.url).origin}${rewriter.directory}`,
+			).url.url.origin;
+		} catch (error) {
+			// a client at no routed URL names no origin
+			return null;
+		}
+	};
+	const rewriteContentScript = (source: string, file: string) =>
+		modifyJS(
+			source,
+			new StompURL(file, rewriter.codec, rewriter.directory),
+			rewriter.config,
+			'generic',
+		);
+	const rewriteStylesheet = (css: string, file: string) =>
+		modifyCSS(css, new StompURL(file, rewriter.codec, rewriter.directory));
+	const realURL = (routed: string) => {
+		try {
+			return parseRoutedURL(
+				routed,
+				rewriter.codec,
+				`${new URL(routed).origin}${rewriter.directory}`,
+			).url.toString();
+		} catch (error) {
+			return routed;
+		}
+	};
+	if (remoteExtensions) {
+		// a slot of the site pool: its documents' content scripts and their
+		// calls are the hub's worker's, which this worker only carries
+		router.routes.set(
+			new RegExp(`^/${CONTENT_SCRIPT_ROUTE}/`),
+			async (request, _path, context) =>
+				remoteExtensions.script(request, await clientOrigin(context?.clientId)),
+		);
+		router.routes.set(
+			new RegExp(`^/${EXTENSION_API_ROUTE}$`),
+			(request, _path, context) =>
+				remoteExtensions.api(request, context?.clientId),
+		);
+	} else if (extensions) {
 		router.routes.set(
 			new RegExp(`^/${CONTENT_SCRIPT_ROUTE}/`),
 			(request, path, context) =>
@@ -7065,27 +7120,8 @@ export function registerRewrites(
 					extensions,
 					request,
 					path,
-					rewriteScript,
-					// the requesting document's real origin, by its client
-					async () => {
-						const id = context?.clientId;
-						if (!id) return null;
-						const known = clientURLs.get(id);
-						if (known) return known.origin;
-						const found =
-							typeof clients !== 'undefined' ? await clients.get(id) : null;
-						if (!found) return null;
-						try {
-							return parseRoutedURL(
-								found.url,
-								rewriter.codec,
-								`${new URL(found.url).origin}${rewriter.directory}`,
-							).url.url.origin;
-						} catch (error) {
-							// a client at no routed URL names no origin
-							return null;
-						}
-					},
+					rewriteContentScript,
+					() => clientOrigin(context?.clientId),
 				),
 		);
 		router.routes.set(
@@ -7096,26 +7132,79 @@ export function registerRewrites(
 					request,
 					context?.clientId,
 					rewriter.directory,
-					(routed) => {
-						try {
-							return parseRoutedURL(
-								routed,
-								rewriter.codec,
-								`${new URL(routed).origin}${rewriter.directory}`,
-							).url.toString();
-						} catch (error) {
-							return routed;
-						}
-					},
-					rewriteScript,
-					(css, file) =>
-						modifyCSS(
-							css,
-							new StompURL(file, rewriter.codec, rewriter.directory),
-						),
+					realURL,
+					rewriteContentScript,
+					rewriteStylesheet,
 				),
 		);
 	}
+	/**
+	 * What this worker answers the slots' workers of its site pool with
+	 * (./remoteExtensions.ts): what it would answer a document of its own.
+	 * A route is taken on this worker's origin, where its injections are kept
+	 */
+	const served = async (response: Response): Promise<ServedResponse> => ({
+		status: response.status,
+		type: response.headers.get('content-type') ?? 'text/javascript',
+		cache: response.headers.get('cache-control'),
+		body: await response.text(),
+	});
+	const extensionsServe: ExtensionsServe | undefined = extensions
+		? {
+				any: () => extensions.any,
+				ready: () => extensions.ready(),
+				onChange: (listener) => extensions.onChange(listener),
+				shell: async (doc, runtime, access) =>
+					// (the Web Store's pages are each worker's own: storeCall
+					// reads the page's client, which only its worker has)
+					isStoreURL(doc.url)
+						? null
+						: ((
+								await documentShell(extensions, doc, {
+									runtime,
+									access,
+									rewriteCSS: rewriteStylesheet,
+								})
+							)?.parts ?? null),
+				script: async (url, origin) => {
+					const at = new URL(url);
+					const here = new URL(`${at.pathname}${at.search}`, location.origin);
+					if (!here.pathname.startsWith(rewriter.directory))
+						return served(new Response(null, { status: 404 }));
+					return served(
+						await contentScriptResponse(
+							extensions,
+							new Request(here),
+							here.pathname.slice(rewriter.directory.length - 1),
+							rewriteContentScript,
+							async () => origin,
+						),
+					);
+				},
+				api: async (body, client) =>
+					served(
+						await extensionApi(
+							extensions,
+							new Request(
+								new URL(
+									`${rewriter.directory}${EXTENSION_API_ROUTE}`,
+									location.origin,
+								),
+								{
+									method: 'POST',
+									headers: { 'content-type': 'application/json' },
+									body,
+								},
+							),
+							client,
+							rewriter.directory,
+							realURL,
+							rewriteContentScript,
+							rewriteStylesheet,
+						),
+					),
+			}
+		: undefined;
 
 	// binary:set is a srcset candidate (routeImageSet), loaded the same way.
 	// A file's route hands on the body as the site sent it: a frame that
@@ -8245,30 +8334,37 @@ export function registerRewrites(
 				// the extensions whose content scripts the document runs, or
 				// the extension page it is (docs/extensions.md): nothing for a
 				// document no extension reaches
-				const extensionShellOf = (documentType?: string) =>
-					documentShell(
-						rewriter.extensions!,
-						{
-							url: url.url.href,
-							client: request.clientId ?? '',
-							navigationClient:
-								request.mode === 'navigate'
-									? request.resultingClientId
-									: undefined,
-							top,
-							directory: rewriter.directory,
-							...(documentType ? { contentType: documentType } : {}),
-						},
-						{
-							runtime: extensionsRuntimeJS(url, rewriter.config),
-							access: helperNames(rewriter.config).access,
-							rewriteCSS: (css, file) =>
-								modifyCSS(
-									css,
-									new StompURL(file, rewriter.codec, rewriter.directory),
-								),
-						},
-					);
+				// (a slot of the site pool asks the hub's worker, whose the
+				// extensions are; the Web Store's pages are its own)
+				const remote =
+					rewriter.remoteExtensions && !isStoreURL(url.url.href)
+						? rewriter.remoteExtensions
+						: undefined;
+				const extensionShellOf = (documentType?: string) => {
+					const doc: ShellDocument = {
+						url: url.url.href,
+						client: request.clientId ?? '',
+						navigationClient:
+							request.mode === 'navigate'
+								? request.resultingClientId
+								: undefined,
+						top,
+						directory: rewriter.directory,
+						...(documentType ? { contentType: documentType } : {}),
+					};
+					const runtime = extensionsRuntimeJS(url, rewriter.config);
+					const access = helperNames(rewriter.config).access;
+					if (remote) return remote.shell(doc, runtime, access);
+					return documentShell(rewriter.extensions!, doc, {
+						runtime,
+						access,
+						rewriteCSS: (css, file) =>
+							modifyCSS(
+								css,
+								new StompURL(file, rewriter.codec, rewriter.directory),
+							),
+					});
+				};
 				// a text document Chrome renders (JSON, plain text, a script)
 				// that an extension reaches is served as the HTML Chrome makes
 				// of it, so the extension's content scripts run there as
@@ -8277,7 +8373,7 @@ export function registerRewrites(
 				// downloads, a fetch and an extension's own file pass through
 				// untouched
 				const textKind =
-					rewriter.extensions?.any &&
+					(remote?.any || rewriter.extensions?.any) &&
 					(request.mode === 'navigate' || request.navigation) &&
 					/^https?:$/.test(url.url.protocol) &&
 					!/^\s*attachment/i.test(
@@ -8670,7 +8766,8 @@ export function registerRewrites(
 						: rewriter.config;
 				const extensionShell: ExtensionShell | null =
 					textShell ??
-					(rewriter.extensions?.any ||
+					(remote?.any ||
+					rewriter.extensions?.any ||
 					(rewriter.extensions && isStoreURL(url.url.href))
 						? await extensionShellOf()
 						: null);
@@ -9190,6 +9287,7 @@ export function registerRewrites(
 
 	return {
 		route,
+		extensionsServe,
 		setRules(rules: RequestRule[]) {
 			rewriter.rules = compileRules(rules);
 			forgetRecentOutputs();

@@ -935,6 +935,12 @@ fetches and 50 navigations in Chrome 152; 2.3 against 2.3 and 6.6 against
 first visit of the page of five sites and 649 MB 30 s later, with 48% of
 a core, mostly the engine's build in each slot.
 
+Nor does a slot's worker keep extensions: a document it serves asks the
+hub's worker for its content scripts over another port the agent hands it
+(src/server/remoteExtensions.ts), matched there on the document's real
+URL, and the agent relays the extensions' channels of its origin to the
+hub's page (docs/extensions.md, "Content scripts on the slots").
+
 A worker that only relays every fetch to the hub's would be smaller
 still (about 1 MB of heap, a tiny script, nothing to compile), but the
 hub's worker would then answer for clients of another origin, which it

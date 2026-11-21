@@ -95,6 +95,10 @@ export type HubBound = {
 	jar: [MessagePort];
 	/** answer the agent's worker's blocker questions on this port (src/server/remoteBlocker.ts) */
 	blocker: [MessagePort];
+	/** answer the agent's worker's extension questions on this port (src/server/remoteExtensions.ts) */
+	extensions: [MessagePort];
+	/** relay the extensions' channels of the agent's origin on this port (ExtensionHub.bridge) */
+	extensionBus: [MessagePort];
 	/** a proxied request completed (the host's request log) */
 	request: [RequestInfo];
 	/** the slot's worker answered a navigation to this routed URL with no document (a 204, a download): the frame sent there stays */
@@ -217,6 +221,8 @@ export interface SiteAgentHooks {
 	jar(): MessagePort;
 	/** a port that asks the hub's worker's blocker, for a handshake (a slot's worker builds no engine) */
 	blocker: () => MessagePort;
+	/** a port that asks the hub's worker's extensions, for a handshake (a slot's worker keeps none) */
+	extensions: () => MessagePort;
 	request(info: RequestInfo): void;
 	/** HubBound.stayed */
 	stayed?(routed: string): void;
@@ -373,6 +379,10 @@ export interface HubHost {
 	jar(port: MessagePort): void;
 	/** answer a slot's worker's blocker questions on `port`, from the host's worker */
 	blocker(port: MessagePort): void;
+	/** answer a slot's worker's extension questions on `port`, from the host's worker */
+	extensions(port: MessagePort): void;
+	/** relay the extensions' channels of a slot's origin on `port` (the agent's other end) */
+	extensionBus(port: MessagePort): void;
 	rewritePorts(ports: MessagePort[]): void;
 	/** a navigation from a slot's worker comes to the host's own worker (its slot is left out) */
 	arrive(arrival: SiteArrival): Promise<void>;
@@ -960,6 +970,8 @@ export class SiteHub {
 				],
 				jar: async (port) => host.jar(port),
 				blocker: async (port) => host.blocker(port),
+				extensions: async (port) => host.extensions(port),
+				extensionBus: async (port) => host.extensionBus(port),
 				request: async (info) => host.request(info),
 				stayed: async (routed) => host.stayed(routed),
 				permission: async (info) => [await host.permission(info), []],

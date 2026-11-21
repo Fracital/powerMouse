@@ -5,6 +5,7 @@
 // and cookie jar are the hub's.
 import { SITE_FOCUS } from '../config';
 import { helperNames } from '../helperNames';
+import { EXTENSION_BUS_PREFIX } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
 import { shareGeometry } from './geometry';
 import {
@@ -268,6 +269,18 @@ function start(init: SiteAgentInit, port: MessagePort, host: string) {
 					);
 				return channel.port2;
 			},
+			extensions: () => {
+				const channel = new MessageChannel();
+				hub
+					.call('extensions', channel.port1, [channel.port1])
+					.catch((error) =>
+						console.error(
+							'Stomp: the hub could not serve the extensions',
+							error,
+						),
+					);
+				return channel.port2;
+			},
 			request: (info) => {
 				hub.call('request', info).catch(() => {});
 			},
@@ -321,6 +334,7 @@ function start(init: SiteAgentInit, port: MessagePort, host: string) {
 		// before the hub hears the slot is ready, so before any document of
 		// it exists: the library its frames of another slot's page share
 		shareSlotLibrary(controller.libraryText, controller.config);
+		relayExtensionBuses(hub, controller.config.directory);
 	})();
 	started.catch((error) => {
 		failed = true;
@@ -362,4 +376,65 @@ function proxiedWindow(
 		// a document of another origin
 		return null;
 	}
+}
+
+/** what crosses the hub's bridge of the extensions' channels (ExtensionHub.bridge) */
+export interface BusRelayMessage {
+	/** the hub's enabled extensions: the channels to relay */
+	open?: string[];
+	/** a message of the extension `id`'s channel */
+	id?: string;
+	m?: unknown;
+}
+
+/**
+ * The extensions' channels of this slot's origin, joined to the hub's
+ * (docs/extensions.md, "Content scripts on the slots"). An extension's
+ * contexts meet on a BroadcastChannel of their origin, and its background,
+ * pages and the hub are on the hub's: a content script of a document this
+ * slot shows would talk to nobody. Each message of this origin's channel
+ * goes to the hub's page, which puts it on its own channel and hands it to
+ * the other slots, and what is said there comes back here. A channel never
+ * hears its own messages, so nothing is relayed twice.
+ */
+function relayExtensionBuses(
+	hub: RpcHelper<AgentBound, HubBound>,
+	directory: string,
+) {
+	const channel = new MessageChannel();
+	const port = channel.port2;
+	const buses = new Map<string, BroadcastChannel>();
+	port.addEventListener('message', (event) => {
+		const message = event.data as BusRelayMessage | null;
+		if (typeof message !== 'object' || message === null) return;
+		if (Array.isArray(message.open)) {
+			const open = new Set(message.open.map(String));
+			for (const [id, bus] of buses)
+				if (!open.has(id)) {
+					bus.close();
+					buses.delete(id);
+				}
+			for (const id of open) {
+				if (buses.has(id)) continue;
+				const bus = new BroadcastChannel(
+					`${EXTENSION_BUS_PREFIX}${directory}|${id}`,
+				);
+				bus.onmessage = (event) =>
+					port.postMessage({ id, m: event.data } satisfies BusRelayMessage);
+				buses.set(id, bus);
+			}
+			return;
+		}
+		if (typeof message.id === 'string')
+			buses.get(message.id)?.postMessage(message.m);
+	});
+	port.start();
+	hub
+		.call('extensionBus', channel.port1, [channel.port1])
+		.catch((error) =>
+			console.error(
+				"Stomp: the hub could not relay the extensions' messages",
+				error,
+			),
+		);
 }

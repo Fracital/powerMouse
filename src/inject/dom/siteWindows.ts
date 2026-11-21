@@ -382,8 +382,12 @@ function makeSiteWindows() {
 			}
 			// (a parent in reach first: most frames have one)
 			if (!reached && !isHub(global, parent, sites.hub)) {
+				const here = Reflect.apply(nativeLocation!, global, []) as Location;
+				// (a called document's location is its call page's: its route
+				// is the one the call named, which its parent marked)
+				const routed = client.called?.session.routed;
 				const text = nestedMarkOf(
-					(Reflect.apply(nativeLocation!, global, []) as Location).pathname,
+					routed ? new URL(routed, here.href).pathname : here.pathname,
 					client.directory,
 					client.codec,
 				);

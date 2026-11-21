@@ -47,6 +47,8 @@ import {
 	ControllerInitMessage,
 	ControllerModulesMessage,
 	EXTENSION_CHANGES,
+	EXTENSIONS_SERVE,
+	ExtensionsServeMessage,
 	HARD_LOADED,
 	IMAGES_SEEN,
 	INIT_PAGE_MODULES,
@@ -150,6 +152,7 @@ import {
 	SIMULATED_PERMISSIONS,
 } from './permissions';
 import { RemoteBlocker, serveBlocker } from './remoteBlocker';
+import { RemoteExtensions, serveExtensions } from './remoteExtensions';
 import {
 	goneClients,
 	noteBlobWorker,
@@ -285,6 +288,8 @@ const SLOT_MEMORY_LIMIT = 16 * 1024 * 1024;
  * newest handshake's port
  */
 const remoteBlockers = new Map<string, RemoteBlocker>();
+/** and its extensions (./remoteExtensions.ts): a slot's worker keeps none */
+const remoteExtensions = new Map<string, RemoteExtensions>();
 
 /** the time a handshake's modules get to follow on its port (ControllerInitMessage.modulesOnPort) */
 const PORT_MODULES_MS = 10000;
@@ -368,9 +373,9 @@ function registerController(
 		rewritePool && rewritePool.ports > 0
 			? ports.splice(Math.max(1, ports.length - rewritePool.ports))
 			: [];
-	// (a slot of the site pool: then the host's cookie jar's and the hub's
-	// blocker's)
-	const [port, transportPort, jarPort, blockerPort] = ports;
+	// (a slot of the site pool: then the host's cookie jar's, the hub's
+	// blocker's and the hub's extensions')
+	const [port, transportPort, jarPort, blockerPort, extensionsPort] = ports;
 	// the slots' workers write the hub's jar through its jar server
 	if (slot || pooled) jarWrittenElsewhere();
 	// the pool's workers share one process: each slot keeps its share of
@@ -390,6 +395,12 @@ function registerController(
 		remoteBlocker = remoteBlockers.get(directory) ?? new RemoteBlocker();
 		remoteBlockers.set(directory, remoteBlocker);
 		remoteBlocker.bind(blockerPort);
+	}
+	let slotExtensions: RemoteExtensions | undefined;
+	if (slot && extensionsPort) {
+		slotExtensions = remoteExtensions.get(directory) ?? new RemoteExtensions();
+		remoteExtensions.set(directory, slotExtensions);
+		slotExtensions.bind(extensionsPort);
 	}
 	const pool = poolPorts.length
 		? new RewritePool(poolPorts, rewritePool!.timeout)
@@ -474,6 +485,7 @@ function registerController(
 		(client) => void rpc.call('isolationWanted', client).catch(() => {}),
 		() => void rpc.call('apartServed', undefined).catch(() => {}),
 		() => rpc.call('syncFreezes', undefined),
+		slotExtensions,
 	);
 
 	const rpc = new RpcHelper<SWbound, Controllerbound>(
@@ -726,6 +738,9 @@ function registerController(
 	// a slot: a port of the hub's blocker that closed is asked for again
 	if (remoteBlocker)
 		remoteBlocker.renew = () => rpc.call('blockerPort', undefined);
+	// and of its extensions
+	if (slotExtensions)
+		slotExtensions.renew = () => rpc.call('extensionsPort', undefined);
 	port.start();
 	// which run of the worker has this controller: its revive, on its way or
 	// still to come, is not for it (a controller of an earlier build has no
@@ -1821,6 +1836,21 @@ function handleMessage(event: ExtendableMessageEvent) {
 			const blocker = controllers.get(directory)?.ready?.blocker;
 			return blocker instanceof Blocker ? blocker : undefined;
 		});
+	} else if (EXTENSIONS_SERVE in data) {
+		// the same for the extensions a slot's documents run: from the
+		// registering tab only
+		const { directory } = data[EXTENSIONS_SERVE] as ExtensionsServeMessage;
+		const [port] = event.ports;
+		const ref = controllers.get(directory);
+		if (!port) return;
+		if (!ref || ref.owner !== sender) {
+			port.close();
+			return;
+		}
+		serveExtensions(
+			port,
+			async () => (await controllers.get(directory)?.server)?.extensionsServe,
+		);
 	} else if (CONTROLLER_MODULES in data) {
 		// the modules compiled after the handshake: from the registering tab
 		// only, as for every other message that acts on a controller

@@ -92,6 +92,8 @@ import {
 	CookieCommand,
 	CookieRecord,
 	CookieResult,
+	EXTENSIONS_SERVE,
+	ExtensionsServeMessage,
 	FRAME_ENTRY,
 	FRAME_MOVED,
 	HANDSHAKE_REFUSED,
@@ -1862,6 +1864,25 @@ export class StompController extends EventTarget {
 							() => port.close(),
 						);
 					},
+					extensions: (port) => {
+						// nor keep extensions: this page's worker answers what
+						// their documents' content scripts ask of them
+						this.#ready.then(
+							() =>
+								this.serviceworker.postMessage(
+									{
+										[EXTENSIONS_SERVE]: {
+											directory: this.config.directory,
+										} satisfies ExtensionsServeMessage,
+									},
+									[port],
+								),
+							() => port.close(),
+						);
+					},
+					// and their extension contexts' messages cross through this
+					// page's hub (the agent relays its origin's channels)
+					extensionBus: (port) => this.#extensionHub.bridge(port),
 					rewritePorts: (ports) => {
 						if (this.#rewriteWorkers instanceof RewriteWorkers)
 							this.#rewriteWorkers.servePorts(ports);
@@ -2938,6 +2959,10 @@ export class StompController extends EventTarget {
 					const blocker = this.#init.agent?.blocker?.() ?? null;
 					return [blocker, blocker ? [blocker] : []];
 				},
+				extensionsPort: async () => {
+					const extensions = this.#init.agent?.extensions?.() ?? null;
+					return [extensions, extensions ? [extensions] : []];
+				},
 				passkeyPrompt: async ({ request, port }) => [
 					await this.#passkeyPrompt(request, port),
 					[],
@@ -3138,10 +3163,14 @@ export class StompController extends EventTarget {
 		if (this.#standby?.port === port) this.#standby.stopServing = stopServing;
 		else this.#stopServing = stopServing;
 
-		// a slot's agent: the hub's cookie jar and blocker, for the slot's
-		// worker
+		// a slot's agent: the hub's cookie jar, blocker and extensions, for
+		// the slot's worker
 		if (this.#init.agent)
-			transfer.push(this.#init.agent.jar(), this.#init.agent.blocker());
+			transfer.push(
+				this.#init.agent.jar(),
+				this.#init.agent.blocker(),
+				this.#init.agent.extensions(),
+			);
 
 		// the rewrite workers' ports come last (see ControllerInitMessage)
 		const rewritePorts = this.#rewriteWorkers?.ports() ?? [];

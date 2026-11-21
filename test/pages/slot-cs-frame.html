@@ -1,0 +1,14 @@
+<!doctype html>
+<html>
+	<head>
+		<title>Slot content scripts frame</title>
+		<script>
+			document.documentElement.dataset.pageScript = 'ran';
+			window.pageGlobal = 'page';
+		</script>
+		<script src="slot-cs.js"></script>
+	</head>
+	<body>
+		<p>frame</p>
+	</body>
+</html>

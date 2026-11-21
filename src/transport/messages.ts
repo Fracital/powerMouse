@@ -1266,7 +1266,9 @@ export interface ControllerInitMessage {
 	 * the site pool: this worker's origin is a slot. The handshake's third
 	 * port (after the rpc's and the transport's) asks the host's cookie jar
 	 * (src/server/jarDB.ts), the fourth the hub's worker's blocker: a slot's
-	 * worker builds no engine of its own (src/server/remoteBlocker.ts)
+	 * worker builds no engine of its own (src/server/remoteBlocker.ts), and
+	 * the fifth the hub's worker's extensions, of which it keeps none
+	 * (src/server/remoteExtensions.ts)
 	 */
 	slot?: boolean;
 	/**
@@ -1372,6 +1374,15 @@ export const CONTROLLER_MODULES = '$stomp$controllerModules';
  */
 export const BLOCKER_SERVE = '$stomp$blockerServe';
 export interface BlockerServeMessage {
+	directory: string;
+}
+/**
+ * the hub's controller of a site pool -> its own SW: answer what a slot's
+ * worker asks of the extensions for its documents (their content scripts,
+ * their calls) on the port it carries (src/server/remoteExtensions.ts)
+ */
+export const EXTENSIONS_SERVE = '$stomp$extensionsServe';
+export interface ExtensionsServeMessage {
 	directory: string;
 }
 export interface ControllerModulesMessage {
@@ -1816,6 +1827,11 @@ export type Controllerbound = {
 	 * (the one before closed or went silent); null when there is none
 	 */
 	blockerPort: [undefined, MessagePort | null];
+	/**
+	 * a slot of the site pool: a new port to the hub's worker's extensions
+	 * (the one before closed or went silent); null when there is none
+	 */
+	extensionsPort: [undefined, MessagePort | null];
 	/**
 	 * the site pool: a navigation leaves for `site`, which another slot
 	 * shows; the controller makes sure that slot's worker is up, hands it
