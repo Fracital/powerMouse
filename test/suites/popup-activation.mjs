@@ -20,6 +20,7 @@
 // On a loaded runner Playwright's click came within that moment: in about
 // one CI run in eight one isolated step opened nothing, and when it was the
 // inline link, its handler had not run either (2026-11-19).
+/* global tabs, activateTab -- pm/main.js's, read in the demo's page */
 import {
 	done,
 	evaluateIsolated,
@@ -221,14 +222,15 @@ for (const [mode, base] of [
 			return names;
 		},
 		// the demo shows each tab it opened: the page's tab is shown again
-		// for the user's next click, once the host's page has drawn that and
-		// the mouse has reached it. The browser sends a click to the frame of
-		// another process it last saw drawn at that point (isolated mode): on
-		// a busy machine one sent at once reached the tab just hidden
+		// for the user's next click, as the demo shows a tab (activateTab:
+		// the others hidden and inert, a background tab's frame keeping its
+		// layout box), once the host's page has drawn that and the mouse has
+		// reached it. The browser sends a click to the frame of another
+		// process it last saw drawn at that point (isolated mode): on a busy
+		// machine one sent at once reached the tab just hidden
 		async (step) => {
 			await element.evaluate(async (own) => {
-				for (const other of document.querySelectorAll('.frame'))
-					other.classList.toggle('hidden', other !== own);
+				activateTab(tabs.find((tab) => tab.element === own));
 				for (let i = 0; i < 2; i++)
 					await new Promise((resolve) => requestAnimationFrame(resolve));
 			});
