@@ -389,14 +389,22 @@ for (const [mode, base, pooled] of arms) {
 		);
 		if (native.skipped) continue;
 		const want = native.steps[index];
-		// (the icon of an entry Chrome's favicons have is told while the
-		// document loads, before or after its DOMContentLoaded as their
+		// (the icon of an entry Chrome's favicons have is told as their
 		// lookup comes back: its place among the loading's events is no
-		// order of Chrome's, whether it is told while loading or after is)
+		// order of Chrome's, and for a document loaded again (a traversal
+		// across documents, a reload) neither is whether that is while it
+		// loads or after it is complete. Natively the browser's Back told it
+		// while loading in one run and after complete in the next, Chrome
+		// 157 on a busy runner. A new entry's (the link) is told after
+		// complete, and a move within the document's once it is complete:
+		// those keep their state)
 		const icon = (word) => word.startsWith('onUpdated favIconUrl=');
+		const again = step.what !== 'link' && STEPS[index][1];
+		const iconWord = (word) =>
+			again ? word.replace(/ \((loading|complete)\)$/, '') : word;
 		const order = (log) => [
 			...log.filter((word) => !icon(word)),
-			...log.filter(icon),
+			...log.filter(icon).map(iconWord),
 		];
 		ok(
 			`${mode}: step ${index + 1} (${step.what}) tells what Chrome tells, in its order`,
