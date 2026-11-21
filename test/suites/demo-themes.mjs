@@ -5,6 +5,9 @@
 //    UPDATE_EXPECTED=1 writes it from the run);
 //  - every --pm- token main.css defines or uses is one PMTheme.TOKENS names,
 //    and the other way round;
+//  - Dark is Default in every view (every element's colours and
+//    backgrounds, the color-scheme too) but for the browser's bar (.chrome,
+//    and its copy on a tab card), which is solid black with no picture;
 //  - Light and Dark put their values on the page, and Follow system takes
 //    Light or Dark from prefers-color-scheme, also when the system's
 //    changes while the page is open;
@@ -45,7 +48,7 @@ const UPDATE = process.env.UPDATE_EXPECTED === '1';
 const PAGE = `${FIXTURE}pages/bookmark-a.html`;
 const LIGHT_PAGE = 'rgb(228, 230, 225)'; // main.css, Light's --pm-page
 const DEFAULT_PAGE = 'rgb(0, 0, 0)';
-const DARK_PAGE = DEFAULT_PAGE; // Dark keeps the original black homepage
+const DARK_PAGE = DEFAULT_PAGE; // Dark keeps Default's homepage
 // a 1x1 PNG, for a theme's pictures
 const PNG =
 	'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
@@ -173,7 +176,10 @@ const barAppearance = () => {
 	card.className = 'cardChrome';
 	document.body.append(card);
 	const cardStyle = getComputedStyle(card);
+	const top = getComputedStyle(document.querySelector('.bookmarksTop'));
 	const view = {
+		navbar: [nav.backgroundColor, nav.backgroundImage, navIcon.color],
+		bookmarks: [top.backgroundColor, top.backgroundImage, top.color],
 		bar: bar.backgroundColor,
 		image: bar.backgroundImage,
 		card: cardStyle.backgroundColor,
@@ -345,20 +351,31 @@ function differences(want, got) {
 	return out;
 }
 
-{
-	const ctx = await context();
-	const page = await open(ctx);
+/** the home page, the browser view and the Shields panel, each dumped */
+async function viewsOf(page) {
 	const views = {};
 	await page.evaluate(() => document.activeElement?.blur());
 	await settle(page);
+	await calm(page);
 	views.landing = await dump(page);
 	await browse(page);
 	await settle(page);
+	await calm(page);
 	views.browser = await dump(page);
 	await page.click('#toolShields');
 	await settle(page);
+	await calm(page);
 	views.shields = await dump(page);
 	await page.keyboard.press('Escape');
+	return views;
+}
+
+let defaultViews;
+{
+	const ctx = await context();
+	const page = await open(ctx);
+	const views = await viewsOf(page);
+	defaultViews = views;
 	await ctx.close();
 
 	const measured = Object.fromEntries(
@@ -388,6 +405,44 @@ function differences(want, got) {
 			`Default: the ${name} view's colours are the fixture's`,
 			diff.length === 0,
 			diff.slice(0, 8).join('; '),
+		);
+	}
+}
+
+// ---- Dark: Default with a solid black browser bar --------------------------
+
+{
+	const ctx = await context();
+	const setup = await ctx.newPage();
+	await setup.goto(HOST);
+	await setup.evaluate(() => localStorage.setItem('stomp-demo:theme', 'dark'));
+	await setup.close();
+	const page = await open(ctx);
+	const views = await viewsOf(page);
+	await ctx.close();
+	// the bar (.chrome) loses its picture; nothing else of any view differs
+	const bar = (path) => /(^|>)div\.chrome(:\d+)?$/.test(path);
+	for (const [name, rows] of Object.entries(views)) {
+		const want = defaultViews[name];
+		const out = [];
+		for (const path of new Set([...Object.keys(want), ...Object.keys(rows)])) {
+			if (!(path in rows)) out.push(`${path} is gone`);
+			else if (!(path in want)) out.push(`${path} is new`);
+			else
+				for (const prop of Object.keys(want[path])) {
+					const was = want[path][prop];
+					const is = rows[path][prop];
+					if (bar(path) && prop === 'background-image') {
+						if (is !== 'none') out.push(`${path} ${prop}: ${short(is)}`);
+					} else if (was !== is)
+						out.push(`${path} ${prop}: ${short(was)} -> ${short(is)}`);
+				}
+		}
+		const bars = Object.keys(rows).filter(bar);
+		ok(
+			`Dark: the ${name} view is Default's but for the bar's picture`,
+			out.length === 0 && (name === 'landing' || bars.length === 1),
+			JSON.stringify({ bars, out: out.slice(0, 12) }),
 		);
 	}
 }
@@ -474,6 +529,7 @@ const page = await open(ctx);
 	);
 
 	await browse(page);
+	const defaultBar = await page.evaluate(barAppearance);
 	await page.click('#toolMenu');
 	await settle(page, 100);
 	await page.click('#menuSettings');
@@ -539,25 +595,29 @@ const page = await open(ctx);
 		() => document.activeElement?.dataset.theme,
 	);
 	ok(
-		'ArrowDown in the picker chooses Dark',
+		"ArrowDown in the picker chooses Dark, in Default's color-scheme",
 		now.theme === 'dark' &&
 			now.body === DARK_PAGE &&
-			now.scheme === 'dark' &&
+			now.scheme === 'normal' &&
 			now.stored === 'dark' &&
 			focused === 'dark',
 		JSON.stringify({ now, focused }),
 	);
 	const darkHome = await page.evaluate(homeAppearance);
 	const darkBar = await page.evaluate(barAppearance);
+	const darkPageScheme = await page.evaluate(() => PMTheme.pageScheme());
 	ok(
-		'Dark keeps the original powerMouse homepage with solid black bars',
+		"Dark keeps Default's homepage and navigation bar, its browser bar solid black",
 		JSON.stringify(darkHome) === JSON.stringify(originalHome) &&
+			darkPageScheme === 'dark' &&
 			darkBar.bar === 'rgb(0, 0, 0)' &&
 			darkBar.card === darkBar.bar &&
-			darkBar.nav === darkBar.bar &&
 			darkBar.image === 'none' &&
-			darkBar.cardImage === 'none',
-		JSON.stringify({ darkHome, darkBar, originalHome }),
+			darkBar.cardImage === 'none' &&
+			JSON.stringify(darkBar.navbar) === JSON.stringify(defaultBar.navbar) &&
+			JSON.stringify(darkBar.bookmarks) ===
+				JSON.stringify(defaultBar.bookmarks),
+		JSON.stringify({ darkHome, darkBar, defaultBar, originalHome }),
 	);
 	const fired = await events.jsonValue();
 	ok(

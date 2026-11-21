@@ -199,6 +199,8 @@
 			id: 'dark',
 			name: 'Dark',
 			scheme: 'dark',
+			// Default's swatch: Dark is Default but for the bar's picture,
+			// which no swatch draws
 			preview: preview('#000', '#000', '#000', '#e8ed58', '#fff'),
 		},
 		{

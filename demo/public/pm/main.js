@@ -8174,7 +8174,7 @@ function themeNote(theme) {
 	if (theme.id === 'system')
 		return `Light or Dark, as your system is set (${theme.scheme} now)`;
 	if (theme.id === 'default') return 'The powerMouse look';
-	if (theme.id === 'dark') return 'Original black homepage, solid black bars';
+	if (theme.id === 'dark') return 'The powerMouse look, solid black top bar';
 	if (theme.id === 'systemya-light')
 		return 'Original black homepage, solid white bars';
 	if (theme.source === 'builtin') return 'Built in';

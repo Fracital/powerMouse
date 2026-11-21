@@ -312,13 +312,15 @@
 	--pm-shadow-k: 0.35;
 }
 
-/* Dark keeps the original black powerMouse homepage. Only the browser and
-   navigation bars lose the Default theme's striped header image. */
-:root[data-pm-theme='dark'] {
+/* Dark is Default (its tokens on :root) with the browser's bar, the toolbar
+   with the tabs and the address box and its copies on the tab cards, solid
+   black without the striped header picture (the rule after .cardChrome).
+   The home page, the navigation bar, the panels and every colour are
+   Default's, as is the used color-scheme. An installed theme of the dark
+   scheme (data-pm-custom) is built on the same tokens, in color-scheme
+   dark. */
+:root[data-pm-theme='dark'][data-pm-custom] {
 	color-scheme: dark;
-	--pm-toolbar: #000;
-	--pm-toolbar-image: none;
-	--pm-navbar: #000;
 }
 
 /* SystemYA Light keeps the original black homepage and paints both bars flat
@@ -344,8 +346,14 @@
 	filter: brightness(0.55);
 }
 
-/* the window behind another (Chrome's inactive frame); pm/theme.js sets it */
-:root[data-pm-theme][data-pm-inactive] .head {
+/* the window behind another (Chrome's inactive frame); pm/theme.js sets it.
+   Not in built-in Dark, whose .head is Default's (below) */
+:root:is(
+		[data-pm-theme='light'],
+		[data-pm-theme='systemya-light'],
+		[data-pm-custom]
+	)[data-pm-inactive]
+	.head {
 	background-color: var(--pm-frame-inactive);
 }
 
@@ -477,15 +485,22 @@ a span:active,
 	color: var(--pm-frame-text);
 	padding: 5px;
 }
-:root[data-pm-theme] .head {
+/* the themes' title bar: built-in Dark matches none of these rules and has
+   Default's .head as it is (a rule of its own, even with the same literal
+   value, antialiases the rounded corners a shade differently) */
+:root:is(
+		[data-pm-theme='light'],
+		[data-pm-theme='systemya-light'],
+		[data-pm-custom]
+	)
+	.head {
 	background:
 		var(--pm-frame-overlay) left top no-repeat,
 		var(--pm-frame) var(--pm-frame-image);
 }
-/* Built-in Dark and SystemYA Light use the original home's literal header
-   background, including its rounded-corner rendering. Installed themes
-   still use the frame and picture their manifest supplied. */
-:root[data-pm-theme='dark']:not([data-pm-custom]) .head,
+/* SystemYA Light uses the original home's literal header background.
+   Installed themes still use the frame and picture their manifest
+   supplied. */
 :root[data-pm-theme='systemya-light'] .head {
 	background: #000 url('/pm/header-background.png');
 }
@@ -514,7 +529,6 @@ a span:active,
 	line-height: 25px;
 	transition: none;
 }
-:root[data-pm-theme='dark']:not([data-pm-custom]) .listing,
 :root[data-pm-theme='systemya-light'] .listing {
 	background: #000;
 }
@@ -1605,6 +1619,13 @@ body.recents .frames .frame.gone,
 	background: var(--pm-toolbar) var(--pm-toolbar-image);
 	border-bottom: 1px solid var(--pm-border);
 	pointer-events: none;
+}
+
+/* built-in Dark: the bar and its copies on the cards in Default's black
+   (--pm-toolbar, the installed app's title bar too) with no picture; the
+   bookmarks' head keeps Default's */
+:root[data-pm-theme='dark']:not([data-pm-custom]) :is(.chrome, .cardChrome) {
+	background: var(--pm-toolbar);
 }
 
 /* Back, Forward and Reload as pictures: spans with the buttons' box (a

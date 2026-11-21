@@ -1,8 +1,8 @@
 # Themes in the demo
 
 The demo UI (demo/public) has themes: Default (powerMouse's own look, black
-with the noise and the striped header), Light (Tango's colours), Dark (the
-original black homepage with a solid black browser bar), SystemYA Light (the
+with the noise and the striped header), Light (Tango's colours), Dark (Default
+with a solid black browser bar and no striped picture on it), SystemYA Light (the
 original black homepage with a solid white browser bar), Follow system (Light
 or Dark as the system's `prefers-color-scheme` is), and Chrome Web Store themes.
 The menu's Settings has the picker. The theme system
@@ -19,9 +19,15 @@ Every colour and background of the UI is a CSS custom property, a token,
 named `--pm-<name>`. `:root` in `pm/main.css` holds the Default theme's
 values. `:root[data-pm-theme='light']`, `:root[data-pm-theme='dark']` and
 `:root[data-pm-theme='systemya-light']` hold the other built-in variants.
-Dark inherits the original black homepage, and SystemYA Light keeps it while
-painting the browser and navigation bars white. An installed theme is Light
-or Dark (its `scheme`) with
+Dark is Default in everything (the home page, the navigation bar, the
+panels, every colour and the used `color-scheme`) but the browser's bar: the
+toolbar with the tabs and the address box, and its copies on the tab
+manager's cards (`.chrome`, `.cardChrome`), are solid black (`--pm-toolbar`,
+which is also the installed app's title bar) with no picture. Its rule sets
+no token, so the bookmarks sidebar's head keeps Default's picture. SystemYA
+Light keeps the original black homepage while painting the browser and
+navigation bars white. An installed theme is Light or Dark (its `scheme`,
+and `color-scheme: dark` for Dark) with
 its own values for the tokens it sets. `pm/theme.js` writes those values into
 a rule of its own, `:root[data-pm-theme][data-pm-custom]` in
 `<style id="pmTheme">`, one `setProperty` call per token.
@@ -72,9 +78,14 @@ Two rules keep Default's literal backgrounds rather than `var()`: `.head`
 (the home page's title bar) and the base of `.listing`. Chrome antialiases
 the rounded corners of a `display: table` box a shade differently once its
 background comes through `var()`, or has an explicit position, size or
-repeat. The themed rules (`:root[data-pm-theme] .head`,
-`:root[data-pm-ntp-image] .listing`) carry the tokens instead. Dark and
-SystemYA Light retain the original literal home header and card backgrounds.
+repeat. The themed rules (`:root:is(...) .head`, for Light, SystemYA Light
+and installed themes, and `:root[data-pm-ntp-image] .listing`) carry the
+tokens instead. Built-in Dark
+matches none of the themed `.head` rules and so draws Default's own `.head`
+and `.listing`: a rule of its own for them, even one with the same literal
+value, antialiases the header's corners a shade differently. SystemYA Light
+writes the original header and card backgrounds literally in rules of its
+own.
 
 Focus rings come from the tokens too. No element of the UI draws the
 browser's own ring (the auto outline), for a click or a key; as in Chrome's
@@ -364,6 +375,11 @@ with `--disable-default-apps`. Without the key the page uses its own list.
   rewrites it from a run after a deliberate change to Default.
 - `PMTheme.TOKENS` matches the tokens `main.css` defines and uses, and each
   built-in theme gives every token a value.
+- Dark against Default: every element's computed colours and backgrounds
+  on the home page, the browser view and the Shields panel are the same as
+  in Default's run, `color-scheme` included, but for the browser bar's
+  picture, which is `none`; the card's copy of the bar is black with no
+  picture, the navigation bar and the bookmarks' head are Default's.
 - Light, Dark, SystemYA Light and Follow system, through the picker and its arrow keys, on a
   dark system that turns light, and in another window.
 - The theme after a reload, from the first frame.
