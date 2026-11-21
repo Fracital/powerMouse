@@ -190,6 +190,17 @@ const PART_LIMIT_KB = Number(process.env.FRAME_HEAP_PART_LIMIT_KB) || 1102;
 // (src/prewrite.ts), keep it to a few KB (11 KB when the page rewrote and
 // placed it, 3.5 to 4 KB measured)
 const HANDLER_EXTRA_KB = Number(process.env.FRAME_HEAP_HANDLER_EXTRA_KB) || 6;
+// That cost is a difference of two measures of about 1,090 KB, each in a
+// browser of its own, and one measure moves by a few KB from launch to
+// launch: on 058c7e729, five runs of this suite alone (Chrome 157) read the
+// difference as 0.1, 5.7, 6.0, 2.0 and 4.6 KB, and the runner read 4.3 KB
+// there and 6.0 and 6.9 KB at 32d2f2b6c, though no commit between them
+// changed what a handler costs (medians of 4.6, 4.2, 4.2, 4.2, 4.2 and
+// 2.8 KB at the six commits measured). The check was the first measure
+// against the last of the suite. It is now the median of HANDLER_PAIRS
+// pairs, each a frame without the attribute and one with it, measured one
+// after the other
+const HANDLER_PAIRS = Number(process.env.FRAME_HEAP_HANDLER_PAIRS) || 5;
 // a frame under a script policy of nonces and 'strict-dynamic' (Google's
 // shape): the inject enforces it, and the bundle loads by its URL as in
 // any frame (a bundle that carried the document's nonce was compiled again
@@ -317,19 +328,36 @@ ok(
 	`${policed.heapKB.toFixed(0)} KB, ${policed.rssKB.toFixed(0)} KB RSS (${FRAMES} frames)`,
 );
 
-const handled = await measureFrames({
-	proxied: true,
-	frames: FRAMES,
-	child: 'pages/frame-memory-handler.html',
-});
+const pairs = [];
+for (let i = 0; i < HANDLER_PAIRS; i++) {
+	const without = await measureFrames({ proxied: true, frames: FRAMES });
+	const handled = await measureFrames({
+		proxied: true,
+		frames: FRAMES,
+		child: 'pages/frame-memory-handler.html',
+	});
+	pairs.push({ without, handled, extra: handled.heapKB - without.heapKB });
+}
 ok(
-	`all ${FRAMES} proxied frames with a handler attribute ran their script`,
-	handled.loaded === FRAMES,
-	`${handled.loaded} did`,
+	`all ${FRAMES} proxied frames with a handler attribute, and without, ran their script in each of ${HANDLER_PAIRS} pairs`,
+	pairs.every(
+		({ without, handled }) =>
+			without.loaded === FRAMES && handled.loaded === FRAMES,
+	),
+	pairs
+		.map(({ without, handled }) => `${handled.loaded}/${without.loaded}`)
+		.join(', '),
 );
+const extras = pairs.map(({ extra }) => extra).sort((a, b) => a - b);
+const medianExtra = extras[Math.floor(extras.length / 2)];
 ok(
-	`a proxied frame whose markup has a handler attribute costs at most ${HANDLER_EXTRA_KB} KB of heap more than one without`,
-	handled.heapKB - result.heapKB <= HANDLER_EXTRA_KB,
-	`${handled.heapKB.toFixed(1)} KB, ${result.heapKB.toFixed(1)} KB without (${FRAMES} frames)`,
+	`a proxied frame whose markup has a handler attribute costs at most ${HANDLER_EXTRA_KB} KB of heap more than one without (the median of ${HANDLER_PAIRS} pairs)`,
+	medianExtra <= HANDLER_EXTRA_KB,
+	`${medianExtra.toFixed(1)} KB (${pairs
+		.map(
+			({ without, handled }) =>
+				`${handled.heapKB.toFixed(1)} - ${without.heapKB.toFixed(1)}`,
+		)
+		.join(', ')}; ${FRAMES} frames)`,
 );
 await done(null);
