@@ -20,6 +20,12 @@ npm run build          # produces dist/
 npm run demo           # http://localhost:8080
 ```
 
+With the vibeOS submodule checked out (`git submodule update --init`, then
+`npm ci --prefix vendor/vibeOS --omit=dev --ignore-scripts`), the build also
+makes `dist/vibeos/` and the page can switch to vibeOS's desktop, every tab a
+window of it; without it the page has no vibeOS switch. See "vibeOS" below and
+[`docs/vibeos.md`](../docs/vibeos.md).
+
 Environment variables:
 
 | Variable                  | Default        | Meaning                                                                                                                                                                                                                                                                                                                                                                   |
@@ -877,6 +883,18 @@ copy nothing for it. The scope it lives under is the host's `directory`, which
 should be neutral too (`/vendor/rt/` is). The demo's page dials by default,
 so a host of the page that gives it no `dial` config dials on its own
 `directory`.
+
+## vibeOS
+
+The tab manager's desktop button and the menu's vibeOS item switch the page to
+vibeOS (the `vendor/vibeOS` submodule, built into `dist/vibeos/` and served
+under `/vibeos/`; `config.js` says `vibeos` only when the build has it).
+Nothing of it loads before the first switch, which imports its module. Each
+tab becomes a window of vibeOS's browser holding the tab's own frame element,
+moved there with `moveBefore`, so no tab reloads either way; the browser's tabs
+are the page's tabs (`vibeHost` in pm/main.js), and its menu is the page's
+menu. Without `moveBefore` the frames stay in `#frames` and are laid over
+their windows. Details in [`docs/vibeos.md`](../docs/vibeos.md).
 
 ## Deploying somewhere real
 

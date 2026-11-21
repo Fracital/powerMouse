@@ -183,7 +183,13 @@
 //                       demo/public/pm/dev.js
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readdirSync, readFileSync, statSync, watch } from 'node:fs';
+import {
+	existsSync,
+	readdirSync,
+	readFileSync,
+	statSync,
+	watch,
+} from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
@@ -497,6 +503,12 @@ if (wisp && webTransport)
 			res.sendStatus(502);
 		}
 	});
+// vibeOS, the desktop the page can switch to (scripts/vibeos.mjs builds it
+// into dist/vibeos/ when its submodule is checked out): the page offers it
+// when the build has it, looked at on each request, as a rebuild adds it
+// or leaves it out under a running server
+const VIBEOS_DIR = join(stompPath, 'vibeos');
+const vibeosBuilt = () => existsSync(join(VIBEOS_DIR, 'embed.js'));
 app.get('/config.js', (req, res) => {
 	const sitePool = slotPorts(req);
 	const contentSlots = slotPorts(req, contentPorts, publicContentPorts);
@@ -506,7 +518,7 @@ app.get('/config.js', (req, res) => {
 	res.set('Cache-Control', 'no-store');
 	res.type('application/javascript');
 	res.send(
-		`window.STOMP_CONFIG = ${JSON.stringify({ ...pageConfig, ...localTor, transports: transportPaths(), ...(sitePool.length && { sitePool }), ...(contentSlots.length && { contentSlots }) })};\n`,
+		`window.STOMP_CONFIG = ${JSON.stringify({ ...pageConfig, ...localTor, ...(vibeosBuilt() && { vibeos: '/vibeos/' }), transports: transportPaths(), ...(sitePool.length && { sitePool }), ...(contentSlots.length && { contentSlots }) })};\n`,
 	);
 });
 
@@ -583,6 +595,9 @@ const fresh = {
 const cached = { maxAge: '1d', immutable: false };
 const KEPT = 'public, max-age=31536000, immutable';
 const publicDir = fileURLToPath(new URL('./public/', import.meta.url));
+// vibeOS's module, stylesheet and files (none of them asked for before the
+// page's first switch to it)
+app.use('/vibeos/', express.static(VIBEOS_DIR, fresh));
 // (`?<hash>`, or a first parameter of its own: `controllerFrame.html?<hash>&script=`)
 const askedByHash = (res, path) => {
 	const asked = /\?([0-9a-f]{16})(?:&|$)/.exec(res.req.originalUrl);

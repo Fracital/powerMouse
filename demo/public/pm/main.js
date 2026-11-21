@@ -467,6 +467,9 @@ let controller;
 /** @type {{ frame: Frame, element: HTMLIFrameElement, url: string }[]} */
 const tabs = [];
 let activeTab = null;
+/** vibeOS's desktop once loaded (pm/main.js "vibeOS"), and a tab its browser asks for */
+let vibe = null;
+let vibeCreating = false;
 
 // hooks for the live reload client (/pm/dev.js, loaded by index.html under
 // `npm run dev` only): it reloads the proxied frames when an inject bundle or
@@ -1130,6 +1133,8 @@ function browserKeyOf(event, mac) {
  */
 function runBrowserKey(command, repeat = false) {
 	if (repeat) return;
+	// vibeOS's browser window on top has the key
+	if (vibeShown()) return vibe.runKey(command);
 	const inTab = !browser.classList.contains('hidden') && activeTab;
 	if (command === 'reload' || command === 'hardReload') {
 		// (the home screen is the new tab page: nothing to reload)
@@ -1143,6 +1148,9 @@ function runBrowserKey(command, repeat = false) {
 function onBrowserKey(event) {
 	const command = browserKeyOf(event, MAC);
 	if (!command) return;
+	// a key on this page while vibeOS shows is the desktop's own (its
+	// browser's shortcuts); a frame's, before its first document, is run here
+	if (vibeShown() && event.currentTarget === window) return;
 	event.preventDefault();
 	runBrowserKey(command, event.repeat);
 }
@@ -1812,6 +1820,12 @@ function createTab(id = 0, at = tabs.length) {
 	session.tab = Math.max(session.tab, tab.sid);
 	tabs.splice(Math.min(Math.max(at, 0), tabs.length), 0, tab);
 	keepTabs();
+	// while vibeOS shows, a tab opened here (a page's window.open) is a tab
+	// of its browser's, as its own new tabs are (vibeHost.createTab)
+	if (vibeShown() && !vibeCreating) {
+		element.classList.remove('hidden');
+		vibe.adopt(hostTabOf(tab));
+	}
 	return tab;
 }
 
@@ -1914,7 +1928,8 @@ function step(tab, direction) {
 const goBack = (tab) => step(tab, 'back');
 const goForward = (tab) => step(tab, 'forward');
 
-function activateTab(tab) {
+/** the tab the browser's state is about (vibeOS's focused window shows it) */
+function useTab(tab) {
 	if (tab !== activeTab) extTabChanged();
 	activeTab = tab;
 	keepTabs();
@@ -1922,6 +1937,12 @@ function activateTab(tab) {
 	// the extensions' buttons show
 	if (controller) controller.activeTab = tab.frame;
 	syncExtensions();
+}
+
+function activateTab(tab) {
+	useTab(tab);
+	// vibeOS's windows show the tabs: none is hidden, the view stays
+	if (vibeShown()) return;
 	for (const other of tabs)
 		other.element.classList.toggle('hidden', other !== tab);
 	landing.classList.add('hidden');
@@ -2004,6 +2025,7 @@ function closeTab(tab, { stayInRecents = false } = {}) {
 	if (tab === activeTab) activeTab = tabs[Math.max(0, index - 1)] || null;
 	if (!activeTab) controller.activeTab = null;
 	keepTabs();
+	if (vibeShown()) return void tabChanged(tab);
 	if (stayInRecents) {
 		recentsIndex = Math.min(recentsIndex, Math.max(0, tabs.length - 1));
 		if (tabs.length) renderRecents();
@@ -2189,6 +2211,7 @@ const TOOL_IDS = ['toolBack', 'toolForward', 'toolReload', 'toolSaved'];
 
 /** the card's bar copy shows what the live bar would for this tab */
 function syncCardBar(tab) {
+	tabChanged(tab);
 	const label = labelFor.get(tab);
 	if (!label) return;
 	// landing on the live bar: it must match that, whatever the tab does
@@ -2754,7 +2777,7 @@ document.addEventListener('auxclick', proxyLink);
 /** a page was asked for before the controller was up (navigate) */
 let pressedEarly = false;
 
-async function navigate(input, { newTab = false, at } = {}) {
+async function navigate(input, { newTab = false, at, tab: into = null } = {}) {
 	const typed = input.trim();
 	// an extension's page, as the bar shows it (chrome-extension://<id>/...)
 	// or as its extension serves it, opens as that page: no search for it
@@ -2765,7 +2788,7 @@ async function navigate(input, { newTab = false, at } = {}) {
 			? extensions.resolveUrl(typed)
 			: SEARCH.query(typed),
 	);
-	if (!controller) {
+	if (!controller && !vibeShown()) {
 		// still booting (service worker, transport module): a press must switch
 		// to the browser view at once, not get dropped. Show the view now and
 		// open the tab once the controller is up; the frame loads in view.
@@ -2781,10 +2804,18 @@ async function navigate(input, { newTab = false, at } = {}) {
 	// a site opened from the tab manager (a dock link, a page's popup) shows
 	// on the next frame: the manager goes at once, no card animating up to
 	// full screen while the bar is still hidden
-	if (document.body.classList.contains('recents')) teardownRecents();
-	if (newTab || !activeTab) activateTab(createTab(0, at));
-	else showBrowser();
-	const tab = activeTab;
+	if (vibeShown()) {
+		// vibeOS's window of the tab shows it: the view stays as it is
+		await booted.catch(() => {});
+		if (!controller) return;
+		if (!into) into = newTab || !activeTab ? createTab(0, at) : activeTab;
+	} else {
+		if (document.body.classList.contains('recents')) teardownRecents();
+		if (into) activateTab(into);
+		else if (newTab || !activeTab) activateTab(createTab(0, at));
+		else showBrowser();
+	}
+	const tab = into ?? activeTab;
 	// the page the tab is on: what the bar shows once this navigation is
 	// over without committing (a navigation still on its way never committed)
 	const from = tab.goingTo ? tab.goingTo.from : normalizeUrl(shownUrl(tab));
@@ -2802,7 +2833,7 @@ async function navigate(input, { newTab = false, at } = {}) {
 	if (!sameDocument) setLoading(tab, true);
 	// a fresh navigation: the blocked count starts over for this tab's page
 	blockedCounts.set(tab.frame, 0);
-	omni.url.value = barUrl(url);
+	if (tab === activeTab) omni.url.value = barUrl(url);
 	syncToolbar();
 	syncCardBar(tab);
 	// the page a browser navigates to from its address bar has focus (its
@@ -7578,12 +7609,18 @@ const menuItems = () =>
 // the menu is the tab's: its button is on the tab's bar, and the tab
 // manager has none (only its new-tab button)
 const menuButton = $('toolMenu');
-menuButton.addEventListener('click', () => {
+/** the button the menu was opened from (the bar's, or a vibeOS window's) */
+let menuAnchor = menuButton;
+function openMenu(anchor) {
 	if (menuPopover.isOpen()) return menuPopover.close();
 	syncFullscreenItem();
-	menuPopover.open(menuButton);
+	syncThemesItem();
+	syncVibeItem();
+	menuAnchor = anchor;
+	menuPopover.open(anchor);
 	menuItems()[0]?.focus();
-});
+}
+menuButton.addEventListener('click', () => openMenu(menuButton));
 
 // a menu's keys: the arrows, Home and End move between the items, Tab
 // leaves the menu, and while it is open no key reaches the tab manager
@@ -7621,6 +7658,212 @@ menuAbout.addEventListener('click', () => {
 	menuPopover.close();
 	openShieldsPage('about');
 });
+
+// ---- vibeOS -------------------------------------------------------------------
+// vibeOS (Fracital/vibeOS, the submodule at vendor/vibeOS, built into
+// dist/vibeos/ by scripts/vibeos.mjs) is a desktop this page can switch to:
+// the tab manager's vibeOS button and the menu's vibeOS item. Nothing of it
+// loads before the first switch: config.js names its directory when the
+// server has it, and the switch imports its module then. Each tab becomes a
+// window of its browser that shows the tab's own frame element, moved there
+// with an atomic move (moveBefore), which keeps its document alive: the page,
+// its scroll, what was typed, its timers and its frames go on as they were,
+// and come back the same way. A browser without moveBefore keeps the frames
+// where they are and vibeOS lays each one over its window (body.vibeos-overlay).
+// The tabs of its browser are this page's tabs (vibeHost.createTab): there is
+// one list of tabs, shown two ways.
+const VIBEOS = !OFFLINE && typeof CFG.vibeos === 'string' ? CFG.vibeos : null;
+const ATOMIC_MOVE = typeof Element.prototype.moveBefore === 'function';
+const vibeShown = () => !!vibe?.shown();
+let vibeLoading = null;
+
+/** what vibeOS's browser knows of a tab (vibeOS src/dom/types.ts HostTab) */
+const hostTabs = new WeakMap();
+const tabOfHost = new WeakMap();
+const tabWatchers = new WeakMap();
+function hostTabOf(tab) {
+	let host = hostTabs.get(tab);
+	if (host) return host;
+	host = {
+		get element() {
+			return tab.element;
+		},
+		url: () => barUrl(normalizeUrl(shownUrl(tab)) || ''),
+		title: () => tabTitle(tab),
+		icon: () => null,
+		loading: () => tab.loading,
+		canGoBack: () => canStep(tab, 'back'),
+		canGoForward: () => canStep(tab, 'forward'),
+		navigate: (url) => {
+			useTab(tab);
+			navigate(url, { tab });
+		},
+		back: () => goBack(tab),
+		forward: () => goForward(tab),
+		reload: (hard = false) => {
+			useTab(tab);
+			reloadActiveTab({ bypassCache: hard });
+		},
+		stop: () => stopTab(tab),
+		close: () => closeTab(tab),
+		closed: () => !tabs.includes(tab),
+		watch: (callback) => {
+			const set = tabWatchers.get(tab) ?? new Set();
+			tabWatchers.set(tab, set);
+			set.add(callback);
+			return () => set.delete(callback);
+		},
+	};
+	hostTabs.set(tab, host);
+	tabOfHost.set(host, tab);
+	return host;
+}
+
+/** the tab's window follows what it shows (and that it closed) */
+function tabChanged(tab) {
+	for (const callback of [...(tabWatchers.get(tab) ?? [])]) callback();
+}
+
+const vibeHost = {
+	leaveLabel: 'powerMouse',
+	leave: () => leaveVibe(),
+	controller: async () => {
+		await booted;
+		if (!controller) throw new Error('the proxy did not start');
+		return controller;
+	},
+	createTab: (url) => {
+		vibeCreating = true;
+		let tab;
+		try {
+			tab = createTab();
+		} finally {
+			vibeCreating = false;
+		}
+		tab.element.classList.remove('hidden');
+		useTab(tab);
+		navigate(url, { tab });
+		return hostTabOf(tab);
+	},
+	activate: (host) => {
+		const tab = tabOfHost.get(host);
+		if (tab && tabs.includes(tab) && tab !== activeTab) useTab(tab);
+	},
+	// back among the frames, the frame its document will swap in (a dialed
+	// tab's next document, loading beside it) with it
+	returnTab: (host) => {
+		const tab = tabOfHost.get(host);
+		const from = tab?.element.parentNode;
+		if (!tab || !from || from === framesContainer || !ATOMIC_MOVE) return;
+		for (const frame of [...from.children])
+			if (frame.localName === 'iframe') framesContainer.moveBefore(frame, null);
+	},
+	openMenu: (anchor) => openMenu(anchor),
+	// an installed web app's window: a frame of the proxy's that is no tab
+	mountWebview: async (element, url) => {
+		await booted;
+		const frame = controller.createFrame(element);
+		if (JUST_CALL)
+			await StompController.justCallStomp(frame, undefined, {
+				key: `app-${crypto.randomUUID()}`,
+			});
+		await frame.go(url);
+		return () => {
+			const at = controller.frames.indexOf(frame);
+			if (at !== -1) controller.frames.splice(at, 1);
+		};
+	},
+};
+
+/** vibeOS's module and stylesheet, fetched the first time only */
+function loadVibe() {
+	vibeLoading ??= (async () => {
+		const sheet = document.createElement('link');
+		sheet.rel = 'stylesheet';
+		sheet.href = `${VIBEOS}embed.css`;
+		const styled = new Promise((resolve, reject) => {
+			sheet.onload = resolve;
+			sheet.onerror = () => reject(new Error('its stylesheet did not load'));
+		});
+		document.head.append(sheet);
+		const [module] = await Promise.all([import(`${VIBEOS}embed.js`), styled]);
+		await booted;
+		vibe = module.mountDesktop(vibeHost);
+		return vibe;
+	})().catch((error) => {
+		vibeLoading = null;
+		setStatus(`vibeOS did not load: ${error.message}`, true);
+		return null;
+	});
+	return vibeLoading;
+}
+
+/** the desktop takes the page, each tab in its window, at once */
+async function enterVibe() {
+	if (vibeShown() || !(await loadVibe()) || vibeShown()) return;
+	const inRecents = document.body.classList.contains('recents');
+	// the tab the tab manager shows in the middle, or the one on screen
+	const focus = inRecents
+		? (tabs[recentsIndex] ?? activeTab)
+		: browser.classList.contains('hidden')
+			? null
+			: activeTab;
+	closePopovers();
+	// no card goes back to full screen: the stage goes, the frames stay live
+	if (inRecents) teardownRecents();
+	for (const tab of tabs) tab.element.classList.remove('hidden');
+	document.body.classList.add('vibeos');
+	document.body.classList.toggle('vibeos-overlay', !ATOMIC_MOVE);
+	landing.inert = true;
+	browser.inert = ATOMIC_MOVE;
+	vibe.show(tabs.map(hostTabOf), focus && hostTabOf(focus));
+	if (focus) useTab(focus);
+	syncVibeItem();
+}
+
+/** this page's own view again, the tab of vibeOS's window on top showing */
+function leaveVibe() {
+	if (!vibeShown()) return;
+	closePopovers();
+	const { focus } = vibe.hide();
+	document.body.classList.remove('vibeos', 'vibeos-overlay');
+	landing.inert = false;
+	browser.inert = false;
+	const tab = (focus && tabOfHost.get(focus)) || activeTab;
+	if (tab && tabs.includes(tab)) activateTab(tab);
+	else showLanding();
+	syncVibeItem();
+}
+
+const toggleVibe = () => (vibeShown() ? leaveVibe() : enterVibe());
+
+Object.assign(SHIELD_ICONS, {
+	// a desktop: a screen on its stand, a window on it
+	desktop:
+		'<path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M4.5 4h15A1.5 1.5 0 0 1 21 5.5v10a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 15.5v-10A1.5 1.5 0 0 1 4.5 4M9 20h6M12 17v3M7 8h6v5H7z"/>',
+});
+const vibeSwitch = $('vibeSwitch');
+const menuVibe = element('button', 'pmMenuItem');
+menuVibe.id = 'menuVibe';
+menuVibe.type = 'button';
+menuVibe.tabIndex = -1;
+menuVibe.setAttribute('role', 'menuitem');
+menuVibe.hidden = !VIBEOS;
+menuSettings.before(menuVibe);
+/** the menu's vibeOS item says which way it switches */
+function syncVibeItem() {
+	menuVibe.innerHTML = `${shieldIcon('desktop')}<span>${vibeShown() ? 'Leave vibeOS' : 'vibeOS'}</span>`;
+}
+syncVibeItem();
+menuVibe.addEventListener('click', () => {
+	menuPopover.close();
+	toggleVibe();
+});
+if (VIBEOS) {
+	vibeSwitch.hidden = false;
+	vibeSwitch.innerHTML = shieldIcon('desktop');
+	vibeSwitch.addEventListener('click', () => enterVibe());
+}
 
 // ---- the installed app ---------------------------------------------------------
 // powerMouse installs as an app with a window of its own (demo/README.md
@@ -7866,8 +8109,8 @@ function appExtensionsMenu() {
 				info.name,
 				() =>
 					action
-						? runExtAction(info.id, menuButton)
-						: openExtMenu(info.id, extAnchor(menuButton)),
+						? runExtAction(info.id, menuAnchor)
+						: openExtMenu(info.id, extAnchor(menuAnchor)),
 				{
 					icon: extIcon(
 						info.name,
@@ -7883,7 +8126,7 @@ function appExtensionsMenu() {
 				event.preventDefault();
 				openExtMenu(
 					info.id,
-					extAnchor(menuButton),
+					extAnchor(menuAnchor),
 					{ x: event.clientX, y: event.clientY },
 					'menu',
 				);
@@ -7962,19 +8205,15 @@ async function resetAppTheme() {
 // Themes shows while the theme system is there (it is read as the menu
 // opens), and its submenu follows the theme shown
 const themesWatched = new WeakSet();
-menuButton.addEventListener(
-	'click',
-	() => {
-		const themes = globalThis.PMTheme;
-		menuThemes.hidden = !themes;
-		if (!themes || themesWatched.has(themes)) return;
-		themesWatched.add(themes);
-		themes.addEventListener('change', () => {
-			if (subMenuOwner === menuThemes) refreshSubmenu();
-		});
-	},
-	{ capture: true },
-);
+function syncThemesItem() {
+	const themes = globalThis.PMTheme;
+	menuThemes.hidden = !themes;
+	if (!themes || themesWatched.has(themes)) return;
+	themesWatched.add(themes);
+	themes.addEventListener('change', () => {
+		if (subMenuOwner === menuThemes) refreshSubmenu();
+	});
+}
 menuThemes.hidden = !globalThis.PMTheme;
 
 let extPopupHandle = null;
@@ -8211,7 +8450,7 @@ const extAnchor = (button) =>
 		? button
 		: extButton.getClientRects().length
 			? extButton
-			: menuButton;
+			: menuAnchor;
 
 /** the extension's button on the bar, popped out when it is not pinned (Chrome's) */
 function extBarButton(id) {

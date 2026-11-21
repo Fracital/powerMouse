@@ -51,6 +51,8 @@ export default defineConfig([
 			'dist/',
 			'lib/',
 			'node_modules/',
+			// the vibeOS submodule, its own project (docs/vibeos.md)
+			'vendor/',
 			'demo/public/pm/main.js',
 			// esbuild bundles written by the rewriter-unit suite
 			'test/out/',

@@ -40,6 +40,8 @@ STomp and embed it in your own site:
   every option, method and event
 - [Transports and Wisp](https://github.com/Fracital/powerMouse/wiki/Transports-and-Wisp)
   and [Troubleshooting](https://github.com/Fracital/powerMouse/wiki/Troubleshooting)
+- [vibeOS](https://github.com/Fracital/powerMouse/wiki/vibeOS): the demo's
+  desktop mode, every tab a live window, and building with the submodule
 
 The sections below are the reference for this commit.
 
@@ -502,12 +504,20 @@ work.
 ## Development
 
 ```sh
+git clone --recurse-submodules https://github.com/Fracital/powerMouse.git
 npm install
 npm run build   # type-check, bundle with esbuild, emit declarations
 npm run dev     # rebuild on change
 npm run demo    # http://localhost:8080 with holyWisp, epoxy and libcurl
 npm run lint
 ```
+
+vibeOS, the desktop the demo can switch to, is a git submodule at
+`vendor/vibeOS`. In a clone made without `--recurse-submodules`, run `git
+submodule update --init`, then `npm ci --prefix vendor/vibeOS --omit=dev
+--ignore-scripts` before the build. Without it everything builds and runs, the
+demo just has no vibeOS switch, and the build log says so
+([`docs/vibeos.md`](docs/vibeos.md)).
 
 ## Credits
 

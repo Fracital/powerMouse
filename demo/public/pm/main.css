@@ -1612,6 +1612,42 @@ body.recents .frames .frame.gone,
 	background: var(--pm-tab-hover);
 }
 
+.recentsVibe {
+	display: grid;
+	place-items: center;
+}
+
+.recentsVibe[hidden] {
+	display: none;
+}
+
+.recentsVibe svg {
+	width: 26px;
+	height: 26px;
+}
+
+/* vibeOS's desktop (pm/main.js "vibeOS") over this page: the menus, their
+   submenus and the settings dialog stay above it. Without moveBefore the
+   tabs' frames stay in .frames and vibeOS lays each over its window: the
+   browser view is drawn (above the desktop, under the menus) but only the
+   frames in it are seen */
+#vibeos-root {
+	z-index: 50;
+}
+
+body.vibeos-overlay .browser {
+	display: flex !important;
+	visibility: hidden;
+	position: fixed;
+	inset: 0;
+	z-index: 55;
+	pointer-events: none;
+}
+
+body.vibeos-overlay .frames .frame.vibe-browser-frame {
+	pointer-events: auto;
+}
+
 /* the tab manager's own action: a new tab (the menu is the tab's, on its bar) */
 .recentsActions {
 	display: flex;

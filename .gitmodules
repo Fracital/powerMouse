@@ -1,0 +1,3 @@
+[submodule "vibeOS"]
+	path = vendor/vibeOS
+	url = https://github.com/Fracital/vibeOS.git

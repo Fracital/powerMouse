@@ -28,6 +28,7 @@ import {
 } from './scripts/memberNames.mjs';
 import { ownIterationPlugin } from './scripts/ownIteration.mjs';
 import { ownMethodsFrom, ownMethodsSource } from './scripts/ownMethods.mjs';
+import { buildVibeOS } from './scripts/vibeos.mjs';
 
 const pkg = JSON.parse(await readFile('package.json', 'utf8'));
 const dev = process.argv.includes('--dev');
@@ -2025,6 +2026,9 @@ await writeFile(
 	'dist/build.json',
 	`${JSON.stringify(buildInfo(), null, '\t')}\n`,
 );
+// the desktop the demo can switch to, when its submodule is checked out
+// (scripts/vibeos.mjs); the log says when it is left out
+await buildVibeOS();
 
 /**
  * Tell the dev server what a build produced. The server may be down or

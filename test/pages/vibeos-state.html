@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>vibeOS state</title>
+	</head>
+	<!-- demo-vibeos: what a tab keeps as it moves into a vibeOS window and
+	     back: a counter its timer runs, a typed input, its scroll and a
+	     nested frame with a timer of its own -->
+	<body style="height: 4000px; margin: 0">
+		<input id="typed" />
+		<p id="count">0</p>
+		<iframe id="nested" src="vibeos-state-inner.html"></iframe>
+		<script>
+			window.loads = (window.loads || 0) + 1;
+			window.count = 0;
+			setInterval(() => {
+				window.count++;
+				document.getElementById('count').textContent = window.count;
+			}, 25);
+		</script>
+	</body>
+</html>
