@@ -155,18 +155,9 @@ let commits = null;
 try {
 	const log = execFileSync(
 		'git',
-		['-C', root, 'log', '-30', '--format=%H%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e'],
+		['-C', root, 'log', '-30', '--format=%H%x1f%an%x1f%aI%x1f%s%x1e'],
 		{ encoding: 'utf8' },
 	);
-	// GitHub's, at the size the page shows (the demo's server serves its own)
-	const avatarOf = (email) => {
-		const noreply = /^(\d+)\+[^@]+@users\.noreply\.github\.com$/i.exec(email);
-		if (noreply)
-			return `https://avatars.githubusercontent.com/u/${noreply[1]}?v=4&s=48`;
-		return email
-			? `https://avatars.githubusercontent.com/u/e?email=${encodeURIComponent(email)}&s=48`
-			: null;
-	};
 	commits = {
 		repo: REPO,
 		url: `https://github.com/${REPO}`,
@@ -175,13 +166,16 @@ try {
 			.map((line) => line.trim())
 			.filter(Boolean)
 			.map((line) => {
-				const [sha, author, email, date, message] = line.split('\x1f');
+				const [sha, author, date, message] = line.split('\x1f');
 				return {
 					sha: sha.slice(0, 7),
 					url: `https://github.com/${REPO}/commit/${sha}`,
 					message,
 					author,
-					avatar: avatarOf(email),
+					// none: with no server of its own, an avatar would be a
+					// request from the visitor's machine to GitHub's avatar
+					// host (the row shows the empty span)
+					avatar: null,
 					date,
 				};
 			}),

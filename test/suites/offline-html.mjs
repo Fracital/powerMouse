@@ -136,6 +136,27 @@ ok(
 	),
 );
 
+// the home page's commit list: no avatar, which with no server of the file's
+// own would be the visitor's machine asking GitHub's avatar host
+await page
+	.waitForFunction(() => document.querySelector('#commitList li'), null, {
+		timeout: 10000,
+	})
+	.catch(() => {});
+const avatars = await page.evaluate(() => ({
+	rows: document.querySelectorAll('#commitList li').length,
+	images: document.querySelectorAll('#commitList img').length,
+	spans: document.querySelectorAll('#commitList span.commitAvatar').length,
+}));
+ok(
+	'the commit list has no avatars, an empty span in each row, and the file names no avatar host',
+	avatars.rows > 0 &&
+		avatars.images === 0 &&
+		avatars.spans === avatars.rows &&
+		!readFileSync(file, 'utf8').includes('avatars.githubusercontent.com'),
+	JSON.stringify(avatars),
+);
+
 const one = `${FIXTURE}pages/offline-html.html`;
 const before = (await (await fetch(`${FIXTURE}requests`)).json()).length;
 await submitLanding(page, one);
