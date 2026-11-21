@@ -68,8 +68,11 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 		class XMLHttpRequestUploadProxy extends XMLHttpRequestEventTargetProxy {}
 
 		// an upload object with listeners sets the CORS-preflight flag
-		const uploads = trackUploadListeners(that.client.global, proxyModule, () =>
-			that.client.getModule(UnrouteModule)?.noteReportSite(),
+		const uploads = trackUploadListeners(
+			that.client.global,
+			proxyModule,
+			() => that.client.getModule(UnrouteModule)?.noteReportSite(),
+			that.client,
 		);
 
 		this.listeners = uploads;

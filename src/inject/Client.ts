@@ -281,6 +281,11 @@ export default class Client {
 	syncSeed?: SyncSeed;
 	applied: boolean;
 	/**
+	 * @internal the host's hook runs (runHook): a listener it adds is the
+	 * host's, never counted as the page's (src/inject/uploadListeners.ts)
+	 */
+	hookRuns = false;
+	/**
 	 * @internal called after a response reached this context (fetch, XHR),
 	 * with the hosts it changed the jar for: caches that depend on the jar
 	 * drop
@@ -1871,12 +1876,19 @@ export default class Client {
 			});
 		};
 		try {
-			const result: unknown = Reflect.apply(
+			const hook =
 				this.compile(['stomp'], source) ??
-					new this.#nativeFunction('stomp', source),
-				this.global,
-				[context],
-			);
+				new this.#nativeFunction('stomp', source);
+			// (what it registers as it runs is the host's: the demo's hook
+			// listens for `navigate`, which counted as the page's turned link
+			// routes off in every document, src/inject/dom/modules/Visited.ts)
+			let result: unknown;
+			this.hookRuns = true;
+			try {
+				result = Reflect.apply(hook, this.global, [context]);
+			} finally {
+				this.hookRuns = false;
+			}
 			if (
 				typeof result === 'object' &&
 				result !== null &&

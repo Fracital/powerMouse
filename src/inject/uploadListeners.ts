@@ -9,7 +9,9 @@ import { LazyWeakMap } from './ownCollections';
  * (PREFLIGHT_HEADER). The browser does not say which listeners a target
  * has, so they are counted where they are added and removed, on the
  * realm's EventTarget, for upload objects only (an `on*` setter adds its
- * listener the same way). Every other target's call goes straight on.
+ * listener the same way). Every other target's call goes straight on, and
+ * so does one a host's hook makes as it runs (`client.hookRuns`): its
+ * listener is no page's (natively there is none).
  */
 export function trackUploadListeners(
 	global: typeof globalThis,
@@ -21,6 +23,8 @@ export function trackUploadListeners(
 	 * (Unroute's noteReportSite)
 	 */
 	reportProne?: () => void,
+	/** the realm's client, which says when a host's hook runs */
+	client?: { hookRuns: boolean },
 ) {
 	/** per upload object: its listeners, by type, capture and callback */
 	const listeners = new WeakMap<object, Set<string>>();
@@ -63,7 +67,7 @@ export function trackUploadListeners(
 					self !== null && typeof self === 'object'
 						? listeners.get(self)
 						: undefined;
-				if (!own) {
+				if (!own || client?.hookRuns) {
 					if (add && reportProne && args[0] === 'unload') reportProne();
 					return Reflect.apply(target, self, args);
 				}

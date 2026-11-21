@@ -137,8 +137,8 @@ export default class VisitedModule extends Module<DocumentClient> {
 		};
 
 		// the page's listeners on `navigation` are counted from here on (the
-		// inject's own were added before, or natively), its handler
-		// attributes read when asked
+		// inject's own were added before, or natively, and a host's hook's
+		// are not counted), its handler attributes read when asked
 		const tracker = client.getModule(XMLHttpRequestModule)?.listeners;
 		const navigationProto = Reflect.getPrototypeOf(navigation)!;
 		const handlers = HANDLERS.map((name) => getter(navigationProto, name));

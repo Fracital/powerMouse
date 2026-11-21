@@ -51,7 +51,12 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 		class XMLHttpRequestUploadProxy extends XMLHttpRequestEventTargetProxy {}
 
 		// an upload object with listeners sets the CORS-preflight flag
-		const uploads = trackUploadListeners(that.client.global, proxyModule);
+		const uploads = trackUploadListeners(
+			that.client.global,
+			proxyModule,
+			undefined,
+			that.client,
+		);
 
 		const decoder = new TextDecoder('utf-8');
 		// the realm's JSON.parse, before page code can replace it: a json
