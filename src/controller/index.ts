@@ -124,6 +124,7 @@ import RemoteTransport from '../transport/RemoteTransport';
 import { connectionLost } from '../transport/RevivingTransport';
 import { RpcHelper } from '../transport/rpc';
 import serveTransport from '../transport/serveTransport';
+import { withSharedWorker } from '../transport/sharedWorker';
 import {
 	transportLog,
 	watchTransportNotes,
@@ -2355,7 +2356,11 @@ export class StompController extends EventTarget {
 			if (this.#debugTransport) worker.debugTransport(true);
 			const host = this.#carrierHost(descriptor);
 			if (host) worker.carrierHost(host);
-			await worker.init(resolvedModule(descriptor));
+			const shared = withSharedWorker(
+				resolvedModule(descriptor),
+				location.href,
+			);
+			await worker.init(shared.descriptor, shared.transfer);
 			this.#worker = worker;
 			// the host's own view of the transport, served by the worker like
 			// the service worker's
@@ -2418,7 +2423,9 @@ export class StompController extends EventTarget {
 		const host = this.#carrierHost(descriptor);
 		if (host) useCarrierHost(host);
 		try {
-			this.transport = await importTransport(descriptor);
+			this.transport = await importTransport(
+				withSharedWorker(descriptor, location.href).descriptor,
+			);
 		} catch (error) {
 			console.error('Stomp: the transport module could not be imported', error);
 			this.transport = failingTransport(error);
@@ -3567,7 +3574,8 @@ export class StompController extends EventTarget {
 				throw new TypeError(
 					'Stomp: this controller hosts its transport in the page; setTransport() takes a ProxyTransport instance',
 				);
-			await this.#worker.setTransport(resolvedModule(transport));
+			const shared = withSharedWorker(resolvedModule(transport), location.href);
+			await this.#worker.setTransport(shared.descriptor, shared.transfer);
 		} else {
 			if (this.#worker)
 				throw new TypeError(

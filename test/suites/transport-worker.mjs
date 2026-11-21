@@ -5,9 +5,10 @@
 // instance, measured first); setTransport(descriptor) swaps epoxy for libcurl
 // in the worker; a module that cannot be imported there, or a worker script
 // that cannot start, falls back to the page with a `transporthost` event and
-// never a dead controller; a page WebSocket is served off-thread too. The
-// host page is test/pages/transport-host.html on the fixture origin, the
-// bundle the renamed one under /neutral/.
+// never a dead controller; a page WebSocket is served off-thread too; a
+// descriptor's sharedWorker gives every tab's transport a port to one
+// SharedWorker. The host page is test/pages/transport-host.html on the
+// fixture origin, the bundle the renamed one under /neutral/.
 import { done, FIXTURE, launch, ok, PORT } from '../lib.mjs';
 
 const WISP = `ws://127.0.0.1:${PORT}/wisp/`;
@@ -18,8 +19,8 @@ const browser = await launch();
 const errors = [];
 
 /** a host page booted the way `params` say; resolves with the page and its boot record */
-async function boot(params = {}) {
-	const page = await browser.newPage();
+async function boot(params = {}, context = browser) {
+	const page = await context.newPage();
 	page.on('pageerror', (error) => errors.push(error.message));
 	const query = new URLSearchParams({ wisp: WISP, ...params });
 	await page.goto(`${FIXTURE}pages/transport-host.html?${query}`);
@@ -243,6 +244,47 @@ const swapError = (page, code) =>
 		JSON.stringify(working.fetch),
 	);
 	await page.close();
+}
+
+// ---- sharedWorker: one SharedWorker for every tab's transport ------------
+
+{
+	// two tabs of one browser context (browser.newPage() makes a context
+	// for each page)
+	const context = await browser.newContext();
+	const first = await boot({ shared: '1' }, context);
+	const second = await boot({ shared: '1' }, context);
+	const heard = await first.page
+		.waitForFunction(
+			() => {
+				const words = window.__th.shared;
+				return new Set(words.map(({ connection }) => connection)).size >= 2
+					? words
+					: null;
+			},
+			null,
+			{ timeout: 30000 },
+		)
+		.then((handle) => handle.jsonValue())
+		.catch(() => first.page.evaluate(() => window.__th.shared));
+	const instances = new Set(heard.map(({ instance }) => instance));
+	ok(
+		"two tabs' worker-hosted transports are given ports to one SharedWorker (TransportDescriptor.sharedWorker)",
+		first.record.ready &&
+			second.record.ready &&
+			first.record.host === 'worker' &&
+			instances.size === 1 &&
+			new Set(heard.map(({ connection }) => connection)).size >= 2 &&
+			heard.every(({ realm }) => realm === 'worker'),
+		JSON.stringify({ heard, first: first.record, second: second.record }),
+	);
+	const working = await probe(second.page, 'fetch');
+	ok(
+		'a request succeeds on the transport with a SharedWorker',
+		working.fetch?.status === 200,
+		JSON.stringify(working.fetch),
+	);
+	await context.close();
 }
 
 await done(browser, errors.filter((e) => !/404|missing/.test(e)).slice(0, 5));

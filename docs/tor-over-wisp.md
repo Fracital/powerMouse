@@ -353,18 +353,28 @@ STomp needs no code for that.
   tor's OpenSSL ClientHello; a guard (or a watcher of the link) can tell an
   arti client. Arti native has the same property.
 - **Two tabs, two clients**: each transport worker would run a client and
-  pick circuits apart; one client per origin and profile in a SharedWorker
-  (as the carrier host is) is the remedy ("Remaining work").
+  pick circuits apart. One client per origin runs in a SharedWorker
+  (`demo/public/tor-client/shared.mjs`, "Prototype"); where none starts
+  (Chrome for Android has no SharedWorker) each tab still runs its own.
 
 ## Prototype
 
 Tor mode (`STOMP_TOR_CLIENT=0` turns it off, and the Tor toggle with it;
 `STOMP_TOR_CLIENT=stand-in`, for the suites, which reach no Tor network,
 answers Tor mode with epoxy over `/wisp/`). Tor mode's transport is
-`demo/public/tor-client/transport.mjs`: tor-js 0.4.4 (`node_modules/tor-js`, served at
+`demo/public/tor-client/transport.mjs`, a client of the one Tor client
+every tab of the origin shares: its descriptor's `sharedWorker`
+(TransportDescriptor.sharedWorker, a library hook: a dedicated worker cannot
+start a SharedWorker, so the controller starts it and gives the transport a
+port to it) is `demo/public/tor-client/shared.mjs`, which runs the client
+(`service.mjs`) and answers every tab's requests over its port, each
+response's body on a port of its own, a chunk for each pull
+(`remote.mjs`). Where no SharedWorker starts, or it does not answer in 15 s,
+the tab runs a client of its own in its transport worker. The client ends
+with the origin's last page. The client is tor-js 0.4.4 (`node_modules/tor-js`, served at
 `/tor-client/tor-js/`), its socket provider a Wisp v1 client of its own over
 the demo's ordinary `/wisp/`, its storage IndexedDB `stomp-tor-client` (the
-transport worker's origin; not the `tor` profile's, so it survives the
+app's origin; not the `tor` profile's, so it survives the
 profile), `request()` tor-js's `fetch` with an isolation key per top-level
 site (`$stomp$network`) and session nonce, `connect()` refused.
 The transport tells the page its bootstrap on a BroadcastChannel the page
@@ -426,6 +436,13 @@ run on the isolated mode had check.torproject.org's circuit stall (no answer
 for 240 s, then a 502): a request with no answer's head in 30 s is now tried
 once more on a new circuit for its site (GET, HEAD and OPTIONS only).
 
+With the shared client (the same day, the same smoke with a second tab of
+the same browser context): the second tab heard the first tab's client
+ready in 320 ms, its instance and bootstrap the first's (6.4 s and a
+bootstrap of its own before); once both pages were gone, a fresh page's
+client started again from the kept state (2.2 s) and went to the first
+one's guards.
+
 What the client does not do yet:
 
 - **No connection reuse**: tor-js's `fetch` opens a new Tor stream and a new
@@ -438,8 +455,9 @@ What the client does not do yet:
   says "Tor route selected" and the items are not offered.
 - **A long wait for an answer's head** (over 30 s, a long poll) is cut and
   tried again once, for GET, HEAD and OPTIONS.
-- **One client per transport worker**: two tabs run two clients (the second
-  without the storage's lock keeps its state in memory only).
+- **A reload starts the client again** where it was the origin's only page
+  (the SharedWorker ends with it): a warm bootstrap, 1 to 2 s. The carrier
+  host's `extendedLifetime` (Chrome 157) would keep it across reloads.
 - **The ordinary `/wisp/`**: no Tor-only endpoint on the server (the worker's
   own check refuses non-relays, "Which relays the worker may reach").
 - Not covered: the sync relay of WebKit's frozen pages (Tor mode's
@@ -462,9 +480,7 @@ about a day and a half: some 40 lines of Rust (`fetch_impl` in
 `client.connect((host, port))` and wraps streams with `wasm_streams`), a
 first reproducible container build of arti to wasm (30 to 60 minutes on
 this machine, more under load), the in-worker Wisp server (some 250 lines)
-and suites. One client for all tabs (3) needs a library hook: a dedicated
-worker cannot start a SharedWorker, so the controller starts it and hands
-its port to the transport worker, as it does the carrier host's.
+and suites.
 
 1. **Stream API in tor-js** (M): `connect(host, port, isolationKey)` and
    `resolve()` bindings in `crates/tor-js`, built from source in a container
@@ -473,8 +489,9 @@ its port to the transport worker, as it does the carrier host's.
 2. **epoxy over Tor streams** (M): the in-worker Wisp server for epoxy's
    function transport, credit and CLOSE mapping, UDP refusal; Tor mode's
    descriptor becomes epoxy with that function transport.
-3. **One client per profile** (M): the Tor client in a SharedWorker (the
-   carrier host's pattern), the transport workers of every tab its clients.
+3. **One client per profile** (done; S left): the Tor client in a
+   SharedWorker (`sharedWorker` on the descriptor), the transport workers of
+   every tab its clients; left: `extendedLifetime`, so a reload keeps it.
 4. **Bootstrap UI** (done; S left): progress on the Tor chip from arti's log;
    left: arti's own `bootstrap_events()` through tor-js, an error state with
    the blocker ("cannot reach any relay", "clock skew"), the isolated mode.

@@ -74,7 +74,12 @@ const PAGE_MS = 240000;
 // the demo server starts slowly on a loaded machine
 await waitForServer(HOST, 600);
 const browser = await launch();
-const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+// a context of its own, so a second tab shares its SharedWorkers
+// (browser.newPage() makes a context for each page)
+const context = await browser.newContext({
+	viewport: { width: 1280, height: 800 },
+});
+const page = await context.newPage();
 const logs = [];
 const refusals = [];
 const keep = (message) => {
@@ -204,6 +209,30 @@ try {
 		JSON.stringify(progress),
 	);
 
+	// a second tab: the first tab's Tor client (the SharedWorker's,
+	// tor-client/shared.mjs), ready with no bootstrap of its own
+	const second = await context.newPage();
+	second.on('console', keep);
+	const secondStart = Date.now();
+	await second.goto(`${HOST}?tor=1`);
+	await second
+		.waitForFunction(() => window.__pmTorClient?.state === 'ready', null, {
+			timeout: PAGE_MS,
+		})
+		.catch(() => {});
+	const shared = await second.evaluate(() => window.__pmTorClient ?? null);
+	ok(
+		"a second tab shares the first tab's Tor client",
+		!!shared?.instance &&
+			shared.instance === progress.client?.instance &&
+			shared.bootstrapMs === progress.client?.bootstrapMs,
+		JSON.stringify({ first: progress.client, second: shared }),
+	);
+	console.log(
+		`second tab: the shared client ready to it in ${Date.now() - secondStart} ms`,
+	);
+	await second.close();
+
 	const otherStart = Date.now();
 	await submitOmni(page, 'https://api.ipify.org/?format=json');
 	const other = await frameText(/"ip"/);
@@ -240,12 +269,15 @@ try {
 		`new circuit for the site: ${Date.now() - circuitStart} ms, exit ${renewed?.IP} (before: ${again?.IP})`,
 	);
 
-	// a fresh host page: a new transport worker and client, its directory
+	// a fresh host page (the last one gone): a new client, its directory
 	// and guards read back from IndexedDB
 	// arti writes its guards to storage on its own schedule (a minute or
 	// so after it picked them); a visit shorter than that keeps none
 	await sleep(Number(process.env.TOR_SMOKE_KEEP_MS ?? 90000));
 	const coldStreams = streams.length;
+	// the shared client ends with the last page of the origin
+	await page.goto('about:blank');
+	await sleep(3000);
 	const warmStart = Date.now();
 	await openHost();
 	await submitLanding(page, 'https://check.torproject.org/api/ip?warm');

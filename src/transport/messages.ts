@@ -2007,6 +2007,8 @@ export interface TransportModule {
 	webTransport?: boolean | WispWebTransportOptions;
 	/** TransportDescriptor.shards */
 	shards?: ShardsOption;
+	/** TransportDescriptor.sharedWorker (its port is in the first option by now) */
+	sharedWorker?: string;
 }
 
 /** implemented by the transport worker (src/transport/worker.ts), called by the controller */

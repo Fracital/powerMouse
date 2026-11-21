@@ -85,9 +85,12 @@ export default class TransportWorker {
 	 * when the worker cannot start, the module cannot be imported there, the
 	 * constructor throws, or nothing answers within BOOT_TIMEOUT_MS.
 	 */
-	init(descriptor: TransportModule): Promise<void> {
+	init(
+		descriptor: TransportModule,
+		transfer: Transferable[] = [],
+	): Promise<void> {
 		return Promise.race([
-			this.#rpc.call('init', descriptor),
+			this.#rpc.call('init', descriptor, transfer),
 			this.#failed,
 			new Promise<never>((_, reject) =>
 				setTimeout(
@@ -103,8 +106,11 @@ export default class TransportWorker {
 		]);
 	}
 	/** replace the transport; in-flight requests finish on the old one */
-	setTransport(descriptor: TransportModule): Promise<void> {
-		return this.#rpc.call('setTransport', descriptor);
+	setTransport(
+		descriptor: TransportModule,
+		transfer: Transferable[] = [],
+	): Promise<void> {
+		return this.#rpc.call('setTransport', descriptor, transfer);
 	}
 	/** hand the worker a port to serve the transport on (the other end holds a RemoteTransport) */
 	servePort(port: MessagePort) {

@@ -91,6 +91,19 @@ export interface TransportDescriptor {
 	 * own thread; none from the start.
 	 */
 	shards?: ShardsOption;
+	/**
+	 * A SharedWorker script (an ES module, resolved as `module` is) that the
+	 * transports of every tab of the origin share: the controller starts it
+	 * and gives the transport a port to it as its first option's
+	 * `sharedWorker` (a MessagePort), so the module can run what should
+	 * exist once per browser there (one Tor client for all tabs) and its
+	 * transports be its clients. A dedicated worker cannot start a
+	 * SharedWorker, which is why the controller does. Where none starts
+	 * (no SharedWorker, as on Chrome for Android) the option is absent and
+	 * the transport runs alone; the first option must be an object or
+	 * absent. Each construction gets a port of its own.
+	 */
+	sharedWorker?: string;
 }
 
 export interface ControllerFrameInit {

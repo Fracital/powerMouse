@@ -10,13 +10,18 @@
 	               constructed here, the path every host used before)
 	  module=      replaces the descriptor's module URL (a 404 for the fallback)
 	  worker=      the transportWorker asset name (a 404 for the fallback)
+	  shared=1     the descriptor's module is shared-transport.js, with its
+	               SharedWorker (shared-transport-worker.js); what that
+	               worker tells is in window.__th.shared
 	window.__th records the boot; probe() runs transport-probe.html in a frame.
 -->
 <script src="/neutral/ctl.js"></script>
 <script type="module">
 	const query = new URLSearchParams(location.search);
 	const wisp = query.get('wisp');
-	const out = (window.__th = { events: [] });
+	const out = (window.__th = { events: [], shared: [] });
+	new BroadcastChannel('stomp-shared-transport').onmessage = ({ data }) =>
+		out.shared.push(data);
 	const assets = {
 		serviceWorker: 'sw.js',
 		injectDocument: 'doc.js',
@@ -47,6 +52,10 @@
 		else {
 			transport = describe('epoxy');
 			if (query.has('module')) transport.module = query.get('module');
+			if (query.has('shared')) {
+				transport.module = '/pages/shared-transport.js';
+				transport.sharedWorker = '/pages/shared-transport-worker.js';
+			}
 			if (mode === 'page') transport.host = 'page';
 		}
 		const controller = (window.controller = new StompController({
