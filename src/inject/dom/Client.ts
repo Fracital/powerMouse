@@ -652,10 +652,16 @@ export default class DocumentClient extends Client {
 				told = true;
 				this.postToWorker({ [HARD_LOADED]: true });
 			};
-			const listen = () =>
+			// (not the shell's own load, which comes first where the shell
+			// writes the page from its timer, a written document's: a dialed
+			// one's. Its page has asked for nothing yet)
+			const listen = (): void =>
 				this.global.addEventListener(
 					'load',
-					() => Reflect.apply(setTimeout, this.global, [ended, 0]),
+					() =>
+						this.shellPending
+							? listen()
+							: Reflect.apply(setTimeout, this.global, [ended, 0]),
 					{ once: true },
 				);
 			listen();

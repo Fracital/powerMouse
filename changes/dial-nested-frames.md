@@ -22,3 +22,7 @@
   the frame's document goes past the caches too, as natively. A
   document under a policy of the page's (which could refuse the image and
   report it) is not held.
+- A hard reload's document whose shell writes the page from its timer (a
+  dialed document, written into its call page) no longer tells the worker
+  its load is over at the shell's own load, before the page had asked for
+  anything: a dialed frame's scripts on a hard reload went to the caches.
