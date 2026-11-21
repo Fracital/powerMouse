@@ -566,6 +566,15 @@ export class Connection {
 	#consent = 0;
 	#consentDue = 0;
 	#consentTimer: ReturnType<typeof setTimeout> | undefined;
+	/**
+	 * When the peer closed its end, its consent's first unanswered check: it
+	 * counts from then whatever comes after. A check the peer answered on
+	 * its way out (its agent can answer a moment after its abort, longer on
+	 * a busy machine), or a last packet on another pair, cleared the clock,
+	 * and with no checks after the close to start it again the connection
+	 * read connected for good
+	 */
+	#peerGone: number | null = null;
 	/** the stack's bandwidth estimate, and what it was last told the encoders want */
 	#estimate = START_BITRATE;
 	#told = '';
@@ -1525,7 +1534,12 @@ export class Connection {
 
 	/** a check on the selected pair was answered: consent is fresh again */
 	#consentBack() {
-		if (!this.#consent || this.#stats.unanswered !== null) return;
+		if (
+			!this.#consent ||
+			this.#peerGone !== null ||
+			this.#stats.unanswered !== null
+		)
+			return;
 		this.#consent = 0;
 		this.#setIce('connected');
 		this.#setConnection('connected');
@@ -1533,7 +1547,7 @@ export class Connection {
 
 	/** the next step of consent, when the selected pair's checks go unanswered */
 	#watchConsent() {
-		const since = this.#stats.unanswered;
+		const since = this.#peerGone ?? this.#stats.unanswered;
 		if (since === null || !this.#connected || this.#consent > 1) return;
 		const due = since + (this.#consent ? CONSENT_EXPIRED_MS : CONSENT_LOST_MS);
 		if (due === this.#consentDue) return;
@@ -1541,7 +1555,8 @@ export class Connection {
 		clearTimeout(this.#consentTimer);
 		this.#consentTimer = setTimeout(() => {
 			this.#consentDue = 0;
-			if (this.#ended || this.#stats.unanswered !== since) return;
+			if (this.#ended || (this.#peerGone ?? this.#stats.unanswered) !== since)
+				return;
 			if (this.#consent) {
 				this.#consent = 2;
 				this.#setConnection('failed');
@@ -1718,6 +1733,7 @@ export class Connection {
 					this.#setConnection('failed');
 				} else {
 					this.#stats.unanswered ??= performance.now();
+					this.#peerGone ??= this.#stats.unanswered;
 					this.#watchConsent();
 				}
 				break;
