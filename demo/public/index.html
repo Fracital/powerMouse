@@ -95,7 +95,10 @@
 					</div></a
 				>
 				<a draggable="false" href="https://github.com/Fracital/powerMouse"
-					><div class="ns git">Fork us on GitHub</div></a
+					><div class="ns git gitFork">
+						<!-- GitHub's mark, painted in the button's text colour (main.css) -->
+						<span class="gitMark" aria-hidden="true"></span>Fork us on GitHub
+					</div></a
 				>
 			</div>
 			<div class="listing">
@@ -134,24 +137,44 @@
 							draggable="false"
 						/>
 					</button>
-					<!-- the Extensions page, from the other edge of the home card -->
-					<button
-						id="extensionsTab"
-						class="extensionsTab"
-						type="button"
-						title="Extensions"
-						aria-label="Extensions"
-						aria-haspopup="dialog"
-						aria-controls="shieldsPage"
-					>
-						<img
-							src="/pm/icons/extensions.svg"
-							width="32"
-							height="32"
-							alt=""
-							draggable="false"
-						/>
-					</button>
+					<!-- the other edge of the home card: one tab of two buttons, the
+					     Extensions page and, under it, the theme settings -->
+					<div class="extensionsDock">
+						<button
+							id="extensionsTab"
+							class="extensionsTab"
+							type="button"
+							title="Extensions"
+							aria-label="Extensions"
+							aria-haspopup="dialog"
+							aria-controls="shieldsPage"
+						>
+							<img
+								src="/pm/icons/extensions.svg"
+								width="32"
+								height="32"
+								alt=""
+								draggable="false"
+							/>
+						</button>
+						<button
+							id="customizeTab"
+							class="customizeTab"
+							type="button"
+							title="Customize"
+							aria-label="Customize"
+							aria-haspopup="dialog"
+							aria-controls="shieldsPage"
+						>
+							<img
+								src="/pm/icons/customize.svg"
+								width="32"
+								height="32"
+								alt=""
+								draggable="false"
+							/>
+						</button>
+					</div>
 					<section class="commits" aria-labelledby="commitsTitle">
 						<div class="commitsHead">
 							<span id="commitsTitle">Latest commits</span>

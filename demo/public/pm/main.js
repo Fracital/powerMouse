@@ -5364,6 +5364,8 @@ function closeBookmarks(restoreFocus = true, { instant = false } = {}) {
 
 bookmarksTab.addEventListener('click', () => openBookmarks(bookmarksTab));
 $('extensionsTab').addEventListener('click', () => openExtensionsPage());
+// the home page's Customize: the menu's Settings, where the themes are
+$('customizeTab').addEventListener('click', () => openShieldsPage('settings'));
 $('toolSaved').addEventListener('click', () => openBookmarks($('toolSaved')));
 $('bookmarksClose').addEventListener('click', () => closeBookmarks());
 $('bookmarksScrim').addEventListener('click', () => closeBookmarks());

@@ -614,9 +614,13 @@ a span:active,
 .git:hover:active {
 	background: var(--pm-accent-active);
 }
-/* Download (offline.html), the Fork button's twin to its left */
+/* Download (offline.html), the Fork button's twin to its left; both carry
+   a 24px icon left of their label */
 .git.offlineDownload {
 	right: 130px;
+}
+.git.offlineDownload,
+.git.gitFork {
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -626,11 +630,35 @@ a span:active,
 	display: block;
 	pointer-events: none;
 }
+/* GitHub's mark is one flat shape, so it is a mask filled with the label's
+   colour: --pm-on-accent, which a custom theme works out from its accent */
+.gitMark {
+	flex: none;
+	width: 24px;
+	height: 24px;
+	background-color: var(--pm-on-accent);
+	-webkit-mask: url('/pm/icons/github.svg') center / contain no-repeat;
+	mask: url('/pm/icons/github.svg') center / contain no-repeat;
+	pointer-events: none;
+}
 /* a phone's width has no room for it beside the title, and a phone opens no
    HTML file it saved as a page */
 @media only screen and (max-width: 479px) {
 	.git.offlineDownload {
 		display: none;
+	}
+}
+/* a narrow button has room for its label on one line only: the mark goes
+   above it */
+@media only screen and (max-width: 767px) {
+	.git.gitFork {
+		flex-direction: column;
+		gap: 4px;
+		line-height: 1.2;
+	}
+	.gitMark {
+		width: 20px;
+		height: 20px;
 	}
 }
 .inputWrapper {
@@ -2308,7 +2336,7 @@ input:focus-visible {
 	position: absolute;
 	left: 25px;
 	right: 25px;
-	top: 188px; /* below the bookmarks tab */
+	top: 232px; /* below the Extensions and Customize tab */
 	bottom: 137px;
 	display: flex;
 	flex-direction: column;
@@ -2473,7 +2501,7 @@ input:focus-visible {
 		height: calc(100vh - 197px);
 	}
 	.commits {
-		top: 256px;
+		top: 296px;
 		bottom: 232px; /* the tiles wrap to two rows, the footer to three lines */
 	}
 	.commitSha {
@@ -2639,6 +2667,7 @@ input:focus-visible {
 .starbtn:focus-visible,
 .bookmarksTab:focus-visible,
 .extensionsTab:focus-visible,
+.customizeTab:focus-visible,
 .bookmarks button:focus-visible,
 .tokenbtn:focus-visible,
 .shieldsbtn:focus-visible,
@@ -2692,12 +2721,18 @@ input:focus-visible {
 
 /* the home page's two tabs hang off the card's edges, flush against its
    border. They sit opposite one another in the band between the status
-   line and the commits */
+   line and the commits, level at the top: Bookmarks on the left, one
+   button, and on the right a tab twice as long, Extensions over Customize */
 .bookmarksTab,
-.extensionsTab {
+.extensionsDock {
 	position: absolute;
 	z-index: 1; /* under .urlFill (2): the suggestions drop over it */
 	top: 132px;
+}
+
+.bookmarksTab,
+.extensionsTab,
+.customizeTab {
 	width: 60px;
 	height: 44px;
 	display: grid;
@@ -2716,24 +2751,48 @@ input:focus-visible {
 	border-radius: 0 10px 10px 0;
 }
 
-.extensionsTab {
+.extensionsDock {
 	right: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+/* the Extensions button's bottom line parts the two */
+.extensionsTab,
+.customizeTab {
 	border-right: 0;
-	border-radius: 10px 0 0 10px;
+}
+
+.extensionsTab {
+	border-radius: 10px 0 0 0;
+}
+
+.customizeTab {
+	border-top: 0;
+	border-radius: 0 0 0 10px;
+}
+
+/* a ring over its neighbour, not under it */
+.extensionsDock button:focus-visible {
+	position: relative;
+	z-index: 1;
 }
 
 .bookmarksTab:hover,
-.extensionsTab:hover {
+.extensionsTab:hover,
+.customizeTab:hover {
 	background-color: var(--pm-handle-hover);
 }
 
 .bookmarksTab:active,
-.extensionsTab:active {
+.extensionsTab:active,
+.customizeTab:active {
 	background-color: var(--pm-handle-active);
 }
 
 .bookmarksTab img,
-.extensionsTab img {
+.extensionsTab img,
+.customizeTab img {
 	display: block;
 	pointer-events: none;
 	user-select: none;
@@ -3019,13 +3078,18 @@ input:focus-visible {
 
 @media only screen and (max-width: 767px) {
 	.bookmarksTab,
-	.extensionsTab {
+	.extensionsDock {
 		top: 206px;
+	}
+	.bookmarksTab,
+	.extensionsTab,
+	.customizeTab {
 		width: 52px;
 		height: 40px;
 	}
 	.bookmarksTab img,
-	.extensionsTab img {
+	.extensionsTab img,
+	.customizeTab img {
 		width: 28px;
 		height: 28px;
 	}
@@ -3034,15 +3098,49 @@ input:focus-visible {
 /* a landscape phone: the tab is slimmer, to stay clear of the footer */
 @media only screen and (min-width: 768px) and (max-height: 440px) {
 	.bookmarksTab,
-	.extensionsTab {
+	.extensionsDock {
 		top: 126px;
+	}
+	.bookmarksTab,
+	.extensionsTab,
+	.customizeTab {
 		width: 52px;
 		height: 34px;
 	}
 	.bookmarksTab img,
-	.extensionsTab img {
+	.extensionsTab img,
+	.customizeTab img {
 		width: 24px;
 		height: 24px;
+	}
+}
+
+/* a short window has no room for the tab twice as tall above the tiles and
+   the footer: Customize goes beside Extensions, the tab as tall as
+   Bookmarks, and the commits start where they did under one button */
+@media only screen and (min-width: 768px) and (max-height: 560px),
+	only screen and (max-width: 767px) and (max-height: 640px) {
+	.extensionsDock {
+		flex-direction: row;
+	}
+	.extensionsTab {
+		border-right: 1px solid var(--pm-border);
+		border-radius: 10px 0 0 10px;
+	}
+	.customizeTab {
+		border-top: 1px solid var(--pm-border);
+		border-left: 0;
+		border-radius: 0;
+	}
+}
+@media only screen and (min-width: 768px) and (max-height: 560px) {
+	.commits {
+		top: 188px;
+	}
+}
+@media only screen and (max-width: 767px) and (max-height: 640px) {
+	.commits {
+		top: 256px;
 	}
 }
 
@@ -3077,6 +3175,7 @@ input:focus-visible {
 	.bookmarksScrim.open,
 	.bookmarksTab,
 	.extensionsTab,
+	.customizeTab,
 	.starbtn,
 	.bookmarksList.sorting .bookmark {
 		transition: none;

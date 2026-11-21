@@ -346,6 +346,8 @@ const popupState = (page) =>
 // ---- the isolated host, desktop ------------------------------------------------
 // The home card's Extensions tab mirrors the left Bookmarks tab, and
 // opens the same page as Manage extensions with its own keyboard focus.
+// The tab is twice as long, Customize (the theme settings) under
+// Extensions, or beside it where a short window has no room.
 const home = await openDemo(browser, HOST);
 for (const viewport of [
 	{ width: 1280, height: 800 },
@@ -356,7 +358,9 @@ for (const viewport of [
 	await home.setViewportSize(viewport);
 	const edge = await home.evaluate(() => {
 		const rect = (selector) => {
-			const box = document.querySelector(selector).getBoundingClientRect();
+			const element = document.querySelector(selector);
+			if (!element || !element.getClientRects().length) return null;
+			const box = element.getBoundingClientRect();
 			return {
 				left: box.left,
 				right: box.right,
@@ -364,22 +368,65 @@ for (const viewport of [
 				bottom: box.bottom,
 			};
 		};
+		const commits = document.querySelector('.commits');
 		return {
 			card: rect('.listing'),
 			bookmarks: rect('#bookmarksTab'),
+			dock: rect('.extensionsDock'),
 			extensions: rect('#extensionsTab'),
+			customize: rect('#customizeTab'),
+			commitsHead:
+				getComputedStyle(commits).visibility !== 'hidden' &&
+				commits.getBoundingClientRect().height > 0
+					? rect('.commitsHead')
+					: null,
+			tiles: [...document.querySelectorAll('.btn-fancy')]
+				.map((tile) => tile.getBoundingClientRect())
+				.filter((box) => box.width && box.height)
+				.map(({ left, right, top, bottom }) => ({ left, right, top, bottom })),
+			footer: rect('.lbottom'),
 			label: document
 				.querySelector('#extensionsTab')
 				.getAttribute('aria-label'),
+			customizeLabel: document
+				.querySelector('#customizeTab')
+				.getAttribute('aria-label'),
 		};
 	});
+	const at = `home at ${viewport.width}x${viewport.height}`;
+	const overlaps = (a, b) =>
+		!!a &&
+		!!b &&
+		a.left < b.right &&
+		b.left < a.right &&
+		a.top < b.bottom &&
+		b.top < a.bottom;
 	ok(
-		`home at ${viewport.width}x${viewport.height}: Extensions hangs off the right edge opposite Bookmarks`,
+		`${at}: Extensions hangs off the right edge opposite Bookmarks`,
 		edge.label === 'Extensions' &&
-			Math.abs(edge.card.right - edge.extensions.right - 1) <= 1 &&
+			Math.abs(edge.card.right - edge.dock.right - 1) <= 1 &&
 			Math.abs(edge.bookmarks.left - edge.card.left - 1) <= 1 &&
 			Math.abs(edge.bookmarks.top - edge.extensions.top) <= 1 &&
 			Math.abs(edge.bookmarks.bottom - edge.extensions.bottom) <= 1,
+		JSON.stringify(edge),
+	);
+	ok(
+		`${at}: Customize shares the tab, under Extensions or beside it`,
+		edge.customizeLabel === 'Customize' &&
+			!!edge.customize &&
+			((Math.abs(edge.customize.top - edge.extensions.bottom) <= 1 &&
+				Math.abs(edge.customize.right - edge.extensions.right) <= 1) ||
+				(Math.abs(edge.customize.left - edge.extensions.right) <= 1 &&
+					Math.abs(edge.customize.top - edge.extensions.top) <= 1)) &&
+			Math.abs(edge.dock.right - edge.customize.right) <= 1 &&
+			Math.abs(edge.dock.bottom - edge.customize.bottom) <= 1,
+		JSON.stringify(edge),
+	);
+	ok(
+		`${at}: the Extensions and Customize tab sits clear of the commits, the tiles and the footer`,
+		(!edge.commitsHead || edge.dock.bottom <= edge.commitsHead.top) &&
+			!edge.tiles.some((tile) => overlaps(tile, edge.dock)) &&
+			!overlaps(edge.footer, edge.dock),
 		JSON.stringify(edge),
 	);
 }
@@ -405,6 +452,25 @@ ok(
 		() =>
 			document.getElementById('shieldsPage').classList.contains('hidden') &&
 			document.activeElement?.id === 'extensionsTab',
+	),
+);
+await home.click('#customizeTab');
+await painted(home);
+ok(
+	"the home Customize tab opens the theme settings, the menu's Settings",
+	await home.evaluate(
+		() =>
+			!document.getElementById('shieldsPage').classList.contains('hidden') &&
+			document.getElementById('shieldsPage').dataset.view === 'settings',
+	),
+);
+await home.keyboard.press('Escape');
+ok(
+	'Escape closes the settings and returns focus to the Customize tab',
+	await home.evaluate(
+		() =>
+			document.getElementById('shieldsPage').classList.contains('hidden') &&
+			document.activeElement?.id === 'customizeTab',
 	),
 );
 await home.close();
