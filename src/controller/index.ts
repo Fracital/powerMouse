@@ -2033,11 +2033,23 @@ export class StompController extends EventTarget {
 	#ours(worker: ServiceWorker): boolean {
 		return worker.scriptURL.startsWith(this.directory.href);
 	}
-	/** the registration the host gave, else the one for the directory */
+	/**
+	 * the registration the host gave, else the one for the directory when its
+	 * workers are ours: the registration nearest the directory can be the
+	 * host's own at a wider scope (powerMouse's app worker at /), whose
+	 * worker never answers a handshake
+	 */
 	#findRegistration(): Promise<ServiceWorkerRegistration | undefined> {
-		return this.#registration
-			? Promise.resolve(this.#registration)
-			: navigator.serviceWorker.getRegistration(this.directory.href);
+		if (this.#registration) return Promise.resolve(this.#registration);
+		return navigator.serviceWorker
+			.getRegistration(this.directory.href)
+			.then((registration) => {
+				const worker =
+					registration?.active ||
+					registration?.waiting ||
+					registration?.installing;
+				return worker && this.#ours(worker) ? registration : undefined;
+			});
 	}
 	async #watchRegistration() {
 		try {
