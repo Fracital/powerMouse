@@ -47,6 +47,24 @@ is there, and from `node_modules/tor-js` (the npm release) otherwise.
 (`STREAMS`): with it, epoxy runs on Tor streams, and without it, requests go
 through tor-js's fetch and WebSockets are refused.
 
+## Publish and pin
+
+```sh
+deploy/tor-js/publish.sh          # out/ to Fracital/tor-js, branch dist
+PUSH=0 deploy/tor-js/publish.sh   # the commit in a clone under /tmp, not pushed
+```
+
+It refuses an `out/` whose wasm is not `PATCHED_WASM_SHA256`. The branch
+holds an installable package named `tor-js` (tor-js's manifest with version
+`0.4.4-fracital.1`, no scripts, `files` limited to `dist/`, the licences,
+`README.md` and `UPSTREAM`), and beside it `build/` (this directory's
+Dockerfile, build.sh, upstream.env, README and patches), so its README can
+say how to reproduce both hashes without this repository. It prints the
+commit to pin: `"tor-js": "github:Fracital/tor-js#<commit>"` in
+package.json, as EpoxyTransport is pinned. The package's default export
+(`wasm-cdn`) still loads the release's wasm from tor-js's CDN; STomp loads
+`wasm-file`, which takes `dist/tor_js_bg.wasm` from our own server.
+
 ## Changing a patch
 
 Clone tor-js at `TOR_JS_REV`, apply the patches, edit, and write the diff

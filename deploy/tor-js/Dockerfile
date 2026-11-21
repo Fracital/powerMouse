@@ -44,3 +44,6 @@ RUN bash scripts/build.sh --release \
  && sha256sum dist/tor_js_bg.wasm | tee /out/SHA256 \
  && git -C /src diff --stat "$TOR_JS_REV" HEAD > /out/PATCHED \
  && git -C /src rev-parse HEAD > /out/COMMIT
+# what publish.sh puts beside dist/ in the package: tor-js's manifest and
+# licences (a layer of its own, so it reuses the build above)
+RUN cp /src/package.json /src/LICENSE-MIT /src/LICENSE-APACHE /out/
