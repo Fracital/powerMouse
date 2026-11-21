@@ -166,9 +166,11 @@ export async function launch(
 		!backForwardCache
 	)
 		try {
-			return await chromium.connect(process.env.STOMP_BROWSER_WS, {
-				timeout: 30000,
-			});
+			return detachingOnClose(
+				await chromium.connect(process.env.STOMP_BROWSER_WS, {
+					timeout: 30000,
+				}),
+			);
 		} catch (error) {
 			console.error(`shared browser unreachable, launching one: ${error}`);
 		}
@@ -184,6 +186,42 @@ export async function launch(
 		args: [...CHROME_ARGS, ...args],
 		...(ignored.length ? { ignoreDefaultArgs: ignored } : {}),
 	});
+}
+
+/**
+ * A connection to the run's shared browser whose browser CDP sessions are
+ * detached before it closes. A session attached to a target through it
+ * (Target.attachToTarget, as recordRequests attaches to shared workers and
+ * worker-memory to workers) that is still open when the connection goes
+ * makes that Chrome crash (SIGSEGV, measured on Chrome 156 and 158) a
+ * moment later, and every suite on it with it; detached first, none does.
+ */
+function detachingOnClose(browser) {
+	const sessions = new Set();
+	const detach = () =>
+		Promise.all(
+			[...sessions].map((session) => session.detach().catch(() => {})),
+		);
+	const open = browser.newBrowserCDPSession.bind(browser);
+	browser.newBrowserCDPSession = async () => {
+		const session = await open();
+		// a suite that throws ends as it would (the error printed, exit 1),
+		// its sessions detached first
+		if (!sessions.size)
+			process.once('uncaughtException', async (error) => {
+				console.error(error);
+				await detach();
+				process.exit(1);
+			});
+		sessions.add(session);
+		return session;
+	};
+	const close = browser.close.bind(browser);
+	browser.close = async (options) => {
+		await detach();
+		return close(options);
+	};
+	return browser;
 }
 
 const CHROME_ARGS = [
