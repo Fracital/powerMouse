@@ -6,8 +6,10 @@
 // (same-origin controller on 127.0.0.1, isolated host on localhost) and calls
 // a probe a leak when its value shows the host window or document, the demo
 // origin, a /stomp/ URL, an inject global, or a fingerprint the page marked
-// TELL:/LEAK:. It also checks the host page itself was not touched (URL,
-// title, a marker property, messages posted at it), and prints a BYPASS:
+// TELL:/LEAK:. It also checks the host page itself was not touched (the
+// same document, at the same address but for the token of the tab's entry
+// the demo writes there itself, its title, a marker property, messages
+// posted at it), and prints a BYPASS:
 // line (outside the counts) for every request that reached the network
 // without the proxy. Nothing here fixes
 // anything: a leak is a FAIL line that names the probe and the value, so the
@@ -23,6 +25,7 @@ import {
 	done,
 	FIXTURE,
 	HOST,
+	hostPage,
 	launch,
 	ok,
 	openDemo,
@@ -169,6 +172,10 @@ async function measure(browser, base, group, limit = 60000, before = null) {
 	const recorder = await recordRequests(page.context());
 	const host = await page.evaluate(() => {
 		window.__hostMessages = [];
+		// the host's document: a new one (the host page navigated, reloaded)
+		// has no such property
+		const nonce = String(Math.random()).slice(2);
+		Object.defineProperty(window, '__advHostDocument', { value: nonce });
 		// only the pages' own tagged payloads count: the controller's
 		// $stomp$ control messages reach this listener too
 		addEventListener('message', (event) => {
@@ -193,7 +200,11 @@ async function measure(browser, base, group, limit = 60000, before = null) {
 					data: data.slice(0, 200),
 				});
 		});
-		return { title: document.title, url: location.href.split('#')[0] };
+		return {
+			title: document.title,
+			url: location.href.split('#')[0],
+			nonce,
+		};
 	});
 	await submitLanding(page, `${FIXTURE}pages/adv-${group}.html`);
 	let adv = {};
@@ -233,13 +244,35 @@ async function measure(browser, base, group, limit = 60000, before = null) {
 	}
 	// give late messages at the host a moment
 	await sleep(500);
-	const after = await page.evaluate(() => ({
-		title: document.title,
-		url: location.href.split('#')[0],
-		messages: window.__hostMessages,
-		leak: window.__advLeak ?? null,
-		docLeak: document.__advLeak ?? null,
-	}));
+	const after = await page.evaluate(() => {
+		// the tokens the demo gave out (pm/main.js session): the address may
+		// name the entry on show by one of them
+		let tokens = {};
+		try {
+			tokens =
+				JSON.parse(sessionStorage.getItem('stomp-demo:session'))?.tokens ?? {};
+		} catch {
+			// no session kept: no token is the demo's
+		}
+		const token =
+			location.search
+				.slice(1)
+				.split('&')
+				.filter((part) => /^\d+=?$/.test(part))
+				.pop()
+				?.replace('=', '') ?? '';
+		return {
+			title: document.title,
+			url: location.href.split('#')[0],
+			nonce: window.__advHostDocument ?? null,
+			token,
+			tokenKnown: !token || Object.hasOwn(tokens, token),
+			// (none in another document: the listener went with the first)
+			messages: window.__hostMessages ?? null,
+			leak: window.__advLeak ?? null,
+			docLeak: document.__advLeak ?? null,
+		};
+	});
 	const frameUrl = proxiedFrame(page)?.url() ?? null;
 	const errors = page.errors.filter((e) => !/max cycles/.test(e));
 	await page.close();
@@ -367,12 +400,17 @@ export async function runGroup(
 			mode,
 			'host page untouched',
 			false,
-			after.url === host.url &&
+			// the same document at the same address, but for the token of the
+			// entry on show the demo itself wrote (`?1`, pm/main.js
+			// writeAddress), which a tab's navigation changes in place
+			after.nonce === host.nonce &&
+				hostPage(after.url) === hostPage(host.url) &&
+				after.tokenKnown &&
 				after.title === host.title &&
 				after.leak === null &&
 				after.docLeak === null &&
-				after.messages.length === 0,
-			`url ${after.url} title ${JSON.stringify(after.title)} marker ${JSON.stringify(after.leak)}/${JSON.stringify(after.docLeak)} messages ${JSON.stringify(after.messages).slice(0, 300)}`,
+				after.messages?.length === 0,
+			`url ${after.url}${after.nonce === host.nonce ? '' : ' (another document)'}${after.tokenKnown ? '' : ` (token ${after.token} the demo never gave out)`} title ${JSON.stringify(after.title)} marker ${JSON.stringify(after.leak)}/${JSON.stringify(after.docLeak)} messages ${String(JSON.stringify(after.messages)).slice(0, 300)}`,
 		);
 		// a request that reached the network without the proxy: its own line
 		// kind, outside the probe counts
