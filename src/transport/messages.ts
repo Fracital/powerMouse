@@ -720,6 +720,15 @@ export const WORKER_BASE = '$stomp$workerBase';
  */
 export const OFFLINE_WORKER = '$stomp$offlineWorker';
 /**
+ * global set by the same host on the same windows: the srcdoc it gives a
+ * frame sent to a call page (`?<depth>`), else null. A called document's
+ * frames get it before they are in a document (src/inject/dom/
+ * calledFrames.ts): the parser's frame navigates as it is inserted, and
+ * the call page's URL is one nothing serves there. The client takes it
+ * before any page script runs.
+ */
+export const OFFLINE_CALL_PAGE = '$stomp$offlineCallPage';
+/**
  * global set by the same bootstrap: the storage partition of the context
  * that started it (src/partition.ts), which a routed worker reads from its
  * route instead

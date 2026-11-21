@@ -13,10 +13,13 @@
 //  - each game opens from a blob: URL with what its page names: Tetris's
 //    canvas, 2048's stylesheet and font, Breakout's images;
 //  - the emulator boots from Cache Storage with nothing fetched (its first
-//    launch's fetch through the proxy is demo-vibeos's);
+//    launch's fetch through the proxy is demo-vibeos's), and its sound's
+//    worklet starts (from a data: URL: a file: page's blob: URLs are of an
+//    opaque origin, which a worklet refuses);
 //  - back in powerMouse's view the tab is as it was;
-//  - from the switch on, no request leaves the file: none to the network
-//    (the wisp server's socket aside), none to file:.
+//  - in the whole session, from the file's load on, no request leaves the
+//    file: none to the network (the wisp server's socket aside), none to
+//    file: (the tab's nested frame and its hold among them).
 /* global vibeHost -- pm/main.js's, read in the file's page */
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -183,13 +186,25 @@ const settled = await until(
 	frame,
 );
 const nestedFrame = frame.childFrames()[0];
-// (the nested frame's own document does not load in the file yet: its
-// frame stays an empty call page, so only that frame's realm is checked)
+const nestedTicks = nestedFrame
+	? await until(
+			() => ({ title: document.title, ticks: window.ticks }),
+			(v) => v?.title === 'vibeOS state inner' && v.ticks > 3,
+			20000,
+			undefined,
+			nestedFrame,
+		)
+	: null;
 ok(
-	'its timer runs, its nested frame is there',
-	settled?.count > 3 && !!nestedFrame,
+	'its timer runs, its nested frame loads its document (once), whose timer runs',
+	settled?.count > 3 &&
+		nestedTicks?.title === 'vibeOS state inner' &&
+		nestedTicks.ticks > 3 &&
+		(await hits()).join() === '1,1',
 	JSON.stringify({
 		settled,
+		nestedTicks,
+		hits: await hits(),
 		urls: frame.childFrames().map((f) => f.url()),
 	}),
 );
@@ -218,6 +233,15 @@ await page.evaluate(
 		for (const [url, data] of entries)
 			await cache.put(url, new Response(Uint8Array.fromBase64(data)));
 		window.__v86Asked = [];
+		// the sound's worklet nodes v86 makes (once its module is added)
+		window.__dacNodes = 0;
+		const Native = AudioWorkletNode;
+		window.AudioWorkletNode = class extends Native {
+			constructor(context, name, options) {
+				super(context, name, options);
+				if (name === 'dac-processor') window.__dacNodes++;
+			}
+		};
 		vibeHost.fetch = async (url) => {
 			window.__v86Asked.push(url);
 			return new Response(null, { status: 503 });
@@ -235,10 +259,6 @@ await page.evaluate(
 	},
 );
 
-// what the page asks for from here on is vibeOS's
-network.length = 0;
-files.length = 0;
-sockets.length = 0;
 await page.click('#toolMenu');
 await page.click('#menuVibe');
 const shown = await until(
@@ -397,6 +417,17 @@ ok(
 	emulator?.status === 'Running FreeDOS' && emulator.asked.length === 0,
 	JSON.stringify(emulator),
 );
+const sound = await until(
+	() => window.__dacNodes,
+	(v) => v > 0,
+	10000,
+);
+const workletErrors = errors.filter((error) => /worklet/i.test(error));
+ok(
+	"the emulator's sound worklet starts",
+	sound > 0 && workletErrors.length === 0,
+	JSON.stringify({ sound, workletErrors }),
+);
 await page.evaluate(() =>
 	document
 		.querySelector('#vibeos-root .vibe-emulator')
@@ -421,7 +452,7 @@ ok(
 await checkState('back from vibeOS', before, hitsBefore);
 
 ok(
-	'from the switch on no request left the file: none to the network or to file:',
+	'in the whole session no request left the file: none to the network or to file:',
 	network.length === 0 &&
 		files.length === 0 &&
 		sockets.every((url) => url.startsWith(WISP)),

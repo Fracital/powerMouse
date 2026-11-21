@@ -30,7 +30,13 @@ globalThis.STOMP_CONFIG = {
 	http3: true,
 	echDns: 'https://cloudflare-dns.com/dns-query',
 	shieldsDefaults: true,
-	webTransport: true,
+	// a session to the relay's own name and path (a wss: one), never its
+	// discovery document (src/transport/wispWebTransport.ts relayPlan): that
+	// is a fetch of this page's own, past the transport, which a file:
+	// page's opaque origin is refused anyway by a relay that sends no CORS
+	// header. A ws: relay has no name to check a certificate by, so only
+	// its WebSocket
+	webTransport: /^wss:/i.test(wisp) ? { url: `https:${wisp.slice(4)}` } : false,
 	transports: { epoxy: `${ORIGIN}/epoxy/`, libcurl: `${ORIGIN}/libcurl/` },
 	// Tor mode's client (demo/public/tor-client/) in a worker of this page
 	// (./host.mjs torOptions), not in a SharedWorker: no file: page starts one

@@ -62,6 +62,7 @@ import {
 	HARD_LOADED,
 	HOOK_ERROR,
 	LOAD_HEADER,
+	OFFLINE_CALL_PAGE,
 	OPEN_TAB,
 	SHELL_END,
 	type CalledSession,
@@ -610,12 +611,25 @@ export default class DocumentClient extends Client {
 	 * (modules/IFrame.ts)
 	 */
 	callPending?: (element: Element, context: object) => boolean;
+	/**
+	 * offline.html's (OFFLINE_CALL_PAGE): the srcdoc of a frame sent to the
+	 * call page `page`, else null
+	 */
+	offlineCallPage?: (page: string) => string | null;
 	constructor(init: ParsedConfig, global: typeof globalThis) {
 		super(init, global);
 		const called = Reflect.getOwnPropertyDescriptor(global, CALLED_KEY)?.value;
 		if (called) {
 			Reflect.deleteProperty(global, CALLED_KEY);
 			this.called = called;
+		}
+		const callPage = Reflect.getOwnPropertyDescriptor(
+			global,
+			OFFLINE_CALL_PAGE,
+		)?.value;
+		if (callPage) {
+			Reflect.deleteProperty(global, OFFLINE_CALL_PAGE);
+			if (typeof callPage === 'function') this.offlineCallPage = callPage;
 		}
 		// (before any hook: its markers are its own, MutationObserver.ts useMarker)
 		useMarker(this.names.access);

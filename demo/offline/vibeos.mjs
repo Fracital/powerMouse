@@ -17,6 +17,37 @@ export const hasVibeOS = () => !!document.getElementById(ID);
 
 let unpacked = null;
 
+/**
+ * v86 starts its sound's worklet from a blob: URL of its own (libv86.js,
+ * SpeakerWorkletDAC), which a worklet of a file: page refuses: the page's
+ * blob: URLs are of an opaque origin, and a worklet's module is fetched in
+ * cors mode as the page's. Such a module is added as a data: URL of its
+ * text instead (a data: URL is a worklet's own), only on such a page.
+ */
+function workletsFromData() {
+	const Worklet = globalThis.Worklet;
+	if (
+		typeof Worklet !== 'function' ||
+		(location.protocol !== 'file:' && location.origin !== 'null')
+	)
+		return;
+	const add = Worklet.prototype.addModule;
+	Object.defineProperty(Worklet.prototype, 'addModule', {
+		value: async function addModule(url, ...rest) {
+			const given = String(url);
+			if (!given.startsWith('blob:'))
+				return Reflect.apply(add, this, [url, ...rest]);
+			const text = await (await fetch(given)).text();
+			return Reflect.apply(add, this, [
+				`data:text/javascript;charset=utf-8,${encodeURIComponent(text)}`,
+				...rest,
+			]);
+		},
+		configurable: true,
+		writable: true,
+	});
+}
+
 async function unpack() {
 	const element = document.getElementById(ID);
 	if (!element) throw new Error('this file carries no vibeOS');
@@ -47,6 +78,7 @@ async function unpack() {
 	}
 	// the text is not needed again: its files are Blobs now
 	element.remove();
+	workletsFromData();
 	return {
 		module: byPath.get('embed.js'),
 		sheet: byPath.get('embed.css'),

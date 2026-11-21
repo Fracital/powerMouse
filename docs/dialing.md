@@ -120,7 +120,10 @@ is by the host (`calledFrames.ts`). Two things are its own:
   src/server/called.ts): the page's `load` waits until the frame's
   document has loaded or its call ended, as natively. The timing hooks
   leave its entry out (its URL is no page's). A page under a policy of its
-  own is not held: the policy could refuse the image, and report it.
+  own is not held: the policy could refuse the image, and report it. Nor
+  is a page of offline.html (`srcdocCalls`), where no URL of the scope is
+  served to a document: there the hold would be a request to file: or the
+  page's host, and the page's `load` fires with the frame on its call page.
 
 ## What it does not do
 

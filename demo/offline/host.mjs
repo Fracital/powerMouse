@@ -1080,6 +1080,8 @@ export class WrittenFrame extends EventTarget {
 
 /** global the inject takes its port to the worker from (src/transport/messages.ts OFFLINE_WORKER) */
 const OFFLINE_WORKER = '$stomp$offlineWorker';
+/** global the inject takes the srcdoc of its frames' call page from (src/transport/messages.ts OFFLINE_CALL_PAGE) */
+const OFFLINE_CALL_PAGE = '$stomp$offlineCallPage';
 /** the header of a call page's fetch that carries its token (src/transport/messages.ts CALL_TOKEN_HEADER) */
 const CALL_TOKEN_HEADER = 'x-stomp-call-token';
 /** whether the demo dials here */
@@ -1098,6 +1100,8 @@ const callPages = new WeakMap();
 /** the frames sent to the call page before they were in a document */
 const unshown = new WeakSet();
 let calls = 0;
+/** the numbers of the srcdocs handed to a called document for its frames (callSrcdoc) */
+const handed = new Set();
 const setAttribute = Element.prototype.setAttribute;
 
 /** the call page's markup, asked of the worker once */
@@ -1152,6 +1156,16 @@ function callPageOf(value, base) {
 	return toWorker(`${pathname}${search}`);
 }
 
+/** the srcdoc of the call page `page` (as the worker has it): a new one each time */
+function callSrcdoc(page) {
+	// (the page's own URL, which its frame does not read, with its depth)
+	const markup = callMarkup.replace(
+		`const here = ${JSON.stringify(toWorker(callPath))};`,
+		() => `const here = ${JSON.stringify(page)};`,
+	);
+	return `${markup}<!--${++calls}-->`;
+}
+
 /** `element` to the call page `page`: the page as its srcdoc (a new one each time, which navigates it) */
 function showCall(element, page, now = false) {
 	if (!callMarkup) return false;
@@ -1164,15 +1178,7 @@ function showCall(element, page, now = false) {
 		return true;
 	}
 	unshown.delete(element);
-	// (the page's own URL, which its frame does not read, with its depth)
-	const markup = callMarkup.replace(
-		`const here = ${JSON.stringify(toWorker(callPath))};`,
-		() => `const here = ${JSON.stringify(page)};`,
-	);
-	Reflect.apply(setAttribute, element, [
-		'srcdoc',
-		`${markup}<!--${++calls}-->`,
-	]);
+	Reflect.apply(setAttribute, element, ['srcdoc', callSrcdoc(page)]);
 	return true;
 }
 
@@ -1204,7 +1210,16 @@ function dialable(win, own = false) {
 		const value = Reflect.apply(getAttribute, element, ['src']);
 		if (value === null) return;
 		const page = callPageOf(value, baseOf.call(element));
-		if (page) showCall(element, page);
+		if (!page) return;
+		// (a frame its document gave the call page's srcdoc itself, the
+		// parser's among them, is on its way to it already)
+		const srcdoc = Reflect.apply(getAttribute, element, ['srcdoc']);
+		const given = srcdoc && /<!--(\d+)-->$/.exec(srcdoc)?.[1];
+		if (given && handed.has(given)) {
+			callPages.set(element, page);
+			return;
+		}
+		showCall(element, page);
 	};
 	const frames = (node) =>
 		node.localName === 'iframe' || node.localName === 'frame'
@@ -1562,6 +1577,19 @@ function primeCall(win) {
 		emulated.postMessage(event.data, [...event.ports], client);
 	Object.defineProperty(win, OFFLINE_WORKER, {
 		value: channel.port2,
+		configurable: true,
+	});
+	// the srcdoc of a frame its document sends to a call page, which it
+	// gives the frame before the frame is in the document (the parser's
+	// would be sent to the call page's URL, a file: one here)
+	Object.defineProperty(win, OFFLINE_CALL_PAGE, {
+		value: (value) => {
+			const at = callMarkup && callPageOf(value, location.href);
+			if (!at) return null;
+			const srcdoc = callSrcdoc(at);
+			handed.add(/<!--(\d+)-->$/.exec(srcdoc)[1]);
+			return srcdoc;
+		},
 		configurable: true,
 	});
 	win.fetch = frameFetch(win, client, (request, init) =>

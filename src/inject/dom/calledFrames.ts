@@ -110,6 +110,8 @@ interface Kid {
 	holdTimer: ReturnType<typeof setInterval> | undefined;
 	/** the frame element of this document it is shown in (none yet for the parser's copy of one) */
 	frame: Element | null;
+	/** offline.html: the srcdoc this document gave the frame for its call page */
+	srcdoc: string | null;
 }
 
 /** what a called frame's document tells (calledHooks.ts) */
@@ -373,6 +375,10 @@ export function calledFrames(
 			const state = Reflect.apply(readyState, global.document, []);
 			if (
 				state === 'complete' ||
+				// (offline.html: no URL of the scope is served to a document,
+				// and the hold's would be a request of the browser's own, to
+				// file: or the page's host)
+				client.srcdocCalls ||
 				client.browserPolicies().length ||
 				// (a frame the hooks saw out of the document: the parser's copy,
 				// while the parser runs, which it puts in the document next)
@@ -419,6 +425,15 @@ export function calledFrames(
 		const win = frameWindow(element);
 		if (!win || !kid.shown) {
 			kid.shown = true;
+			// offline.html: the call page as the frame's srcdoc, before the src
+			// (a frame with a srcdoc does not load its src): the parser's frame
+			// is sent to its src as it is inserted, before the host could see
+			// it, and nothing serves that URL there
+			const srcdoc = client.offlineCallPage?.(kid.page) ?? null;
+			if (srcdoc !== null) {
+				Reflect.apply(nativeElement.setAttribute, element, ['srcdoc', srcdoc]);
+				kid.srcdoc = srcdoc;
+			}
 			return kid.page;
 		}
 		win.location.replace(kid.page);
@@ -475,6 +490,14 @@ export function calledFrames(
 				kid.calling = null;
 				kid.shown = false;
 				release(kid);
+				// (its call page's srcdoc would keep it from the src it is sent to)
+				if (
+					kid.srcdoc !== null &&
+					Reflect.apply(nativeElement.getAttribute, element, ['srcdoc']) ===
+						kid.srcdoc
+				)
+					Reflect.apply(nativeElement.removeAttribute, element, ['srcdoc']);
+				kid.srcdoc = null;
 			}
 			return false;
 		}
@@ -494,6 +517,7 @@ export function calledFrames(
 				hold: null,
 				holdTimer: undefined,
 				frame: element.isConnected ? element : null,
+				srcdoc: null,
 			};
 			kids.set(element, kid);
 		}
@@ -526,11 +550,11 @@ export function calledFrames(
 		// (a frame of this origin on another page is no call page; one of
 		// another origin cannot be read, and its call page says it is one)
 		const href = hrefOf(win);
-		// (offline.html gives a frame its call page as a srcdoc)
-		const onPage =
-			href === '' ||
-			href === kid.page ||
-			(client.srcdocCalls && href === 'about:srcdoc');
+		// (offline.html gives a frame its call page as a srcdoc: anything
+		// else there, an error page among them, is no call page)
+		const onPage = client.srcdocCalls
+			? href === 'about:srcdoc'
+			: href === '' || href === kid.page;
 		if (!win || !kid.want || !onPage) {
 			release(kid);
 			return;
