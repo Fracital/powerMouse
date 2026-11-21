@@ -90,6 +90,15 @@ To move vibeOS on: `git -C vendor/vibeOS fetch && git -C vendor/vibeOS checkout
   truth; vibeOS's standalone site keeps its own menu. Right-clicking a window's
   tab strip has Open in browser.
 
+## Its font
+
+vibeOS's font is its own: Open Sans (400, 600, 700) and Inconsolata, woff2
+for latin and latin-ext as Fontsource packs them, under the SIL Open Font
+License (each with its `OFL.txt`), in vibeOS's `public/fonts/` and copied to
+`dist/vibeos/fonts/`. The page loads Open Sans with the module, before the
+desktop shows, so it never shows in another font for a moment, and nothing
+is fetched from another site (`demo-vibeos` checks both).
+
 ## Lazy loading
 
 Nothing of vibeOS is fetched before the first switch: the page ships only the

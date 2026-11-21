@@ -22,6 +22,7 @@ const STATIC = [
 	['public/icons', 'icons'],
 	['public/stomp-bookmarks', 'stomp-bookmarks'],
 	['public/licenses', 'licenses'],
+	['public/fonts', 'fonts'],
 	['scripts/v86', 'scripts/v86'],
 	['scripts/net', 'scripts/net'],
 	['LICENSE.md', 'LICENSE.md'],
@@ -33,8 +34,9 @@ const say = (text) => console.log(`vibeOS: ${text}`);
  * vibeOS's stylesheets name its files from its site's root (`url('/tango/…')`):
  * here they are next to embed.css, wherever the server puts it, so each is
  * named from there (`url(./tango/…)`). Its sources name that directory at
- * run time too (__VIBEOS_EMBED__: next to the module). A stylesheet of
- * another site's is left out: the host page loads nothing from another site.
+ * run time too (__VIBEOS_EMBED__: next to the module). Its fonts are its own
+ * (fonts/); a stylesheet of another site's would be left out, as the host
+ * page loads nothing from another site.
  */
 const rebased = {
 	name: 'vibeos-rebase',

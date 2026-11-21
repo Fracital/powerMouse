@@ -7827,6 +7827,13 @@ function loadVibe() {
 		});
 		document.head.append(sheet);
 		const [module] = await Promise.all([import(`${VIBEOS}embed.js`), styled]);
+		// its own font (dist/vibeos/fonts/) before the desktop shows, never
+		// another for a moment
+		await Promise.all(
+			[400, 600, 700].map((weight) =>
+				document.fonts.load(`${weight} 16px "Open Sans"`).catch(() => {}),
+			),
+		);
 		await booted;
 		vibe = module.mountDesktop(vibeHost);
 		return vibe;

@@ -5,6 +5,8 @@
 //    module, stylesheet or file under its directory;
 //  - no address names vibeOS: its directory is a neutral one (config.js),
 //    and so is the address of a game's frame (its window's page);
+//  - its font is its own (Open Sans from its directory), loaded before the
+//    desktop shows, and nothing is asked of another site;
 //  - the tab manager's vibeOS button turns every tab into a window of
 //    vibeOS's browser at once: no card animates back to full screen, each
 //    window holds the tab's own frame element, the card shown in the middle
@@ -183,6 +185,10 @@ async function openTabs(page) {
 // ---- with moveBefore ------------------------------------------------------
 {
 	const vibeRequests = [];
+	// fonts, stylesheets and scripts asked of anywhere but the demo and the
+	// fixture (the landing's commit list shows GitHub's avatars, the demo's
+	// own, whatever vibeOS does)
+	const foreign = [];
 	// the documents the page loads (a frame's, the address the browser has
 	// for it) that name vibeOS or its files
 	const named = [];
@@ -190,6 +196,12 @@ async function openTabs(page) {
 		p.on('request', (request) => {
 			const url = new URL(request.url());
 			if (url.pathname.startsWith(VIBE.base)) vibeRequests.push(url.href);
+			if (
+				['font', 'stylesheet', 'script'].includes(request.resourceType()) &&
+				/^https?:$/.test(url.protocol) &&
+				![new URL(HOST).origin, new URL(FIXTURE).origin].includes(url.origin)
+			)
+				foreign.push(url.href);
 			if (
 				request.resourceType() === 'document' &&
 				/vibe|appfiles|tetris|index\.html/i.test(url.pathname)
@@ -300,6 +312,32 @@ async function openTabs(page) {
 	);
 	console.log(`first switch (module load included): ${firstSwitch} ms`);
 	await checkState(page, 'into vibeOS', before, hitsBefore);
+	const font = await page.evaluate(() => ({
+		title: getComputedStyle(
+			document.querySelector('#vibeos-root .vo-window.vo-active'),
+		).fontFamily,
+		loaded: [...document.fonts]
+			.filter((face) => face.family.replace(/"/g, '') === 'Open Sans')
+			.filter((face) => face.status === 'loaded')
+			.map((face) => face.weight),
+		shown: document.fonts.check('16px "Open Sans"', 'vibeOS'),
+	}));
+	const fontFiles = vibeRequests.filter((url) =>
+		url.startsWith(`${new URL(HOST).origin}${VIBE.base}fonts/open-sans/`),
+	);
+	ok(
+		"vibeOS's own font is loaded from its directory before the desktop shows",
+		/^"?Open Sans"?,/.test(font.title) &&
+			['400', '600', '700'].every((weight) => font.loaded.includes(weight)) &&
+			font.shown &&
+			fontFiles.length >= 3,
+		`${JSON.stringify(font)} ${fontFiles.join(' ')}`,
+	);
+	ok(
+		'no font, stylesheet or script was asked of another site',
+		foreign.length === 0,
+		foreign.join(' '),
+	);
 
 	// vibeOS's browser menu is the demo's menu
 	await page.click(

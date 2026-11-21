@@ -13,6 +13,9 @@
   (`config.js` `vibeos.base`), and each of its games under a neutral one
   inside it (`vibeos.pages`), so no frame's address names vibeOS or the game;
   the bundle finds its directory where it runs.
+- vibeOS shows in its own font, Open Sans, served from its directory with its
+  licence (vibeOS no longer asks Google Fonts for it) and loaded before the
+  desktop shows.
 
 ### Build
 
