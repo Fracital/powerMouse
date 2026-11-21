@@ -1736,6 +1736,7 @@ async function switchTransport(name) {
 function createTab(id = 0, at = tabs.length) {
 	const element = document.createElement('iframe');
 	element.className = 'frame hidden';
+	element.inert = true; // in the background until activateTab shows it
 	element.title = 'Proxied page';
 	element.allow = FRAME_ALLOW;
 	framesContainer.append(element);
@@ -1824,6 +1825,7 @@ function createTab(id = 0, at = tabs.length) {
 	// of its browser's, as its own new tabs are (vibeHost.createTab)
 	if (vibeShown() && !vibeCreating) {
 		element.classList.remove('hidden');
+		element.inert = false;
 		vibe.adopt(hostTabOf(tab));
 	}
 	return tab;
@@ -1943,8 +1945,12 @@ function activateTab(tab) {
 	useTab(tab);
 	// vibeOS's windows show the tabs: none is hidden, the view stays
 	if (vibeShown()) return;
-	for (const other of tabs)
+	for (const other of tabs) {
+		// a tab in the background keeps its layout box, out of sight
+		// (main.css) and out of reach: its focus, selection and scroll stay
 		other.element.classList.toggle('hidden', other !== tab);
+		other.element.inert = other !== tab;
+	}
 	landing.classList.add('hidden');
 	browser.classList.remove('hidden');
 	document.body.classList.add('browsing');
@@ -7741,6 +7747,7 @@ const vibeHost = {
 			vibeCreating = false;
 		}
 		tab.element.classList.remove('hidden');
+		tab.element.inert = false;
 		useTab(tab);
 		navigate(url, { tab });
 		return hostTabOf(tab);
@@ -7811,7 +7818,10 @@ async function enterVibe() {
 	closePopovers();
 	// no card goes back to full screen: the stage goes, the frames stay live
 	if (inRecents) teardownRecents();
-	for (const tab of tabs) tab.element.classList.remove('hidden');
+	for (const tab of tabs) {
+		tab.element.classList.remove('hidden');
+		tab.element.inert = false;
+	}
 	document.body.classList.add('vibeos');
 	document.body.classList.toggle('vibeos-overlay', !ATOMIC_MOVE);
 	landing.inert = true;

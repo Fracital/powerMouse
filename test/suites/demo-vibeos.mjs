@@ -426,6 +426,36 @@ async function openTabs(page) {
 		JSON.stringify(back),
 	);
 	await checkState(page, 'back from vibeOS', before, hitsBefore);
+	// in the background (another tab on screen) the tab keeps its scroll,
+	// out of sight, out of reach and out of the accessibility tree
+	const background = await page.evaluate(() => {
+		const state = tabs.find((t) => t.element.__vibeTest === 'state');
+		activateTab(tabs.find((t) => t !== state));
+		const style = getComputedStyle(state.element);
+		const box = state.element.getBoundingClientRect();
+		return {
+			visibility: style.visibility,
+			display: style.display,
+			inert: state.element.inert,
+			hit:
+				document.elementFromPoint(
+					box.left + box.width / 2,
+					box.top + box.height / 2,
+				) === state.element,
+		};
+	});
+	ok(
+		'a background tab is laid out but unseen, inert and not hit',
+		background.visibility === 'hidden' &&
+			background.display !== 'none' &&
+			background.inert &&
+			!background.hit,
+		JSON.stringify(background),
+	);
+	await checkState(page, 'a background tab', before, hitsBefore);
+	await page.evaluate(() =>
+		activateTab(tabs.find((t) => t.element.__vibeTest === 'state')),
+	);
 	await page.click('#toolMenu');
 	const again = await menuIds(page);
 	await page.keyboard.press('Escape');

@@ -1211,6 +1211,15 @@ html.restoring .omnibox::placeholder {
 	transition: none; /* the universal transition would trail the stage teardown */
 }
 
+/* a tab in the background keeps its layout box, out of sight and (inert,
+   pm/main.js activateTab) out of reach and out of the accessibility tree: a
+   frame with display: none loses its focused element and reads no scroll
+   position while hidden. The tab manager shows them all, as cards */
+body:not(.recents) .frames > .frame.hidden {
+	display: block !important;
+	visibility: hidden;
+}
+
 .chrome {
 	display: flex;
 	align-items: center;
