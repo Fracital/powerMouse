@@ -500,6 +500,7 @@
 	"wisp-idle-drop": 14,
 	"wisp-message-size": 13,
 	"wisp-reconnect": 8,
+	"wisp-refusal": 10,
 	"wisp-split": 1,
 	"woff2-font": 2,
 	"worker-location": 2,

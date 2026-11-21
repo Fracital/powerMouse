@@ -1,0 +1,119 @@
+From b96bfa337a78f260bf96314c6c6f354fa2dc5deb Mon Sep 17 00:00:00 2001
+From: David Reed <reedswork@proton.me>
+Date: Sat, 21 Nov 2026 13:49:12 -0500
+Subject: [PATCH] wisp: a TCP stream the server refused says why, in its TLS
+ handshake's error
+
+A Wisp server answers a CONNECT it will not open with a CLOSE packet and
+a reason: 0x48 for a destination it blocks, 0x44 for a refused
+connection, 0x42 for one it cannot reach, 0x49 for a client it
+throttles. The client's handshake already turns an UnexpectedEof over
+such a stream into WispCloseReason(reason, eof) when the stream has a
+reason, but MuxStreamAsyncRW::get_close_reason asked the write side,
+which answers from whether the multiplexor's own event channel is
+disconnected. That is so only once the whole connection has ended, so a
+stream the server closed while the connection lived on never had a
+reason, and every refusal reached the caller as a plain
+"tls handshake eof": https://raw.githubusercontent.com/ through a relay
+that blocks it failed exactly as a server dropping the ClientHello would.
+
+The read side now notes when it has taken the stream's last packet (the
+end IntoAsyncRead turns into a read of 0 bytes and hides the stream
+behind), keeps the stream's info, and answers get_close_reason from
+both; MuxStreamAsyncRW asks it. The ECH fallback's WispCloseReason arm,
+which this made reachable, behaves as before for a host that drops the
+real-ECH hello.
+---
+ wisp/src/stream/compat.rs | 45 +++++++++++++++++++++++++++++++++------
+ 1 file changed, 38 insertions(+), 7 deletions(-)
+
+diff --git a/wisp/src/stream/compat.rs b/wisp/src/stream/compat.rs
+index d3fab1f..3f1e32c 100644
+--- a/wisp/src/stream/compat.rs
++++ b/wisp/src/stream/compat.rs
+@@ -1,7 +1,10 @@
+ use std::{
+ 	io,
+ 	pin::Pin,
+-	sync::Arc,
++	sync::{
++		atomic::{AtomicBool, Ordering},
++		Arc,
++	},
+ 	task::{ready, Context, Poll},
+ };
+ 
+@@ -24,29 +27,52 @@ use super::{
+ };
+ use crate::mux::inner::FlowControl;
+ 
+-struct MapToIo<W: TransportWrite>(MuxStreamRead<W>);
++/// The stream's packets as io results, noting in `ended` when the last
++/// one has been taken (the read side's end, which IntoAsyncRead turns
++/// into a read of 0 bytes and hides the stream behind)
++struct MapToIo<W: TransportWrite>(MuxStreamRead<W>, Arc<AtomicBool>);
+ 
+ impl<W: TransportWrite> Stream for MapToIo<W> {
+ 	type Item = Result<Payload, std::io::Error>;
+ 
+ 	fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+-		self.0.poll_next_unpin(cx).map_err(std::io::Error::other)
++		let next = ready!(self.0.poll_next_unpin(cx));
++		if next.is_none() {
++			self.1.store(true, Ordering::Relaxed);
++		}
++		Poll::Ready(next.map(|x| x.map_err(std::io::Error::other)))
+ 	}
+ }
+ 
+-// TODO: don't use `futures` for this so get_close_reason etc can be implemented
+ #[pin_project]
+ pub struct MuxStreamAsyncRead<W: TransportWrite> {
+ 	#[pin]
+ 	inner: IntoAsyncRead<MapToIo<W>>,
++	info: Arc<StreamInfo>,
++	ended: Arc<AtomicBool>,
+ }
+ 
+ impl<W: TransportWrite> MuxStreamAsyncRead<W> {
+ 	pub(crate) fn new(inner: MuxStreamRead<W>) -> Self {
++		let info = inner.info.clone();
++		let ended = Arc::new(AtomicBool::new(false));
+ 		Self {
+-			inner: MapToIo(inner).into_async_read(),
++			inner: MapToIo(inner, ended.clone()).into_async_read(),
++			info,
++			ended,
+ 		}
+ 	}
++
++	/// The reason the stream closed with, once its read side has ended
++	/// (every packet received before the CLOSE has been read); None
++	/// before. A stream the server refused (a blocked or unreachable
++	/// destination, a refused connection, a throttled client) ends this
++	/// way at the first read, and its reason is the server's answer.
++	pub fn get_close_reason(&self) -> Option<CloseReason> {
++		self.ended
++			.load(Ordering::Relaxed)
++			.then(|| self.info.get_reason())
++	}
+ }
+ 
+ impl<W: TransportWrite> AsyncRead for MuxStreamAsyncRead<W> {
+@@ -241,9 +267,14 @@ impl<W: TransportWrite> MuxStreamAsyncRW<W> {
+ 		(self.read, self.write)
+ 	}
+ 
+-	/// Get the stream's close reason, if it was closed.
++	/// The stream's close reason, once its read side has ended. (The write
++	/// side's answer, which this gave before, asks whether the
++	/// multiplexor's own channel is disconnected, which it is only when
++	/// the whole connection has ended: a stream the server closed, while
++	/// the connection lives on, had no reason, and a TLS handshake over a
++	/// refused stream failed as a plain "tls handshake eof".)
+ 	pub fn get_close_reason(&self) -> Option<CloseReason> {
+-		self.write.get_close_reason()
++		self.read.get_close_reason()
+ 	}
+ }
+ 

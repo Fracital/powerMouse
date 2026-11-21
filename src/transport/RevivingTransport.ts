@@ -55,6 +55,19 @@ const UNSENT = /Error\(Connect,/;
 /** the connection closed under a request before its response head */
 const LOST =
 	/SendRequest|IncompleteMessage|BrokenPipe|broken pipe|connection closed|ConnectionReset|UnexpectedEof/;
+/**
+ * The wisp server's answer, in a request's error, when it refused the
+ * request's stream for its destination (epoxy-tls 0085: the reason of the
+ * CLOSE that ended the stream under the TLS handshake, which read as a
+ * plain "tls handshake eof" before): a host or address it blocks (0x48), a
+ * name or address it cannot reach (0x42), a connection the destination
+ * refused (0x44) or never answered (0x43), a CONNECT it could not read
+ * (0x41), and wisp-js's answer to a name that does not resolve (0x03).
+ * Chrome fails such a request at once, and asking again meets the same
+ * answer; a throttled stream (0x49) is the client's, and is tried again.
+ */
+const REFUSED_FOR_DESTINATION =
+	/WispCloseReason\((?:ServerStream(?:BlockedAddress|Unreachable|ConnectionRefused|ConnectionTimedOut|InvalidInfo)|Unexpected)\b/;
 /** sent again when the wisp connection is lost under them (no body) */
 const REPLAYABLE = new Set(['GET', 'HEAD', 'OPTIONS']);
 /**
@@ -283,6 +296,7 @@ export default class RevivingTransport implements ProxyTransport {
 				const message = String((error as Error)?.message ?? error);
 				let gone = wispGone(error);
 				if (!gone && !LOST.test(message)) throw error;
+				if (!gone && REFUSED_FOR_DESTINATION.test(message)) throw error;
 				// A GET whose connection closed before its response head over a
 				// wisp connection that looks up: the server's close, which epoxy
 				// already sent again where Chrome would, or the wisp connection
@@ -373,11 +387,12 @@ export default class RevivingTransport implements ProxyTransport {
 
 	/**
 	 * Whether the wisp server says `remote`'s host cannot be reached at
-	 * all. Wisp has no answer to CONNECT but a CLOSE, and epoxy ends a TCP
-	 * stream the server refused without its reason, which only a UDP stream
-	 * reports: the server closes one to such a host as it would the TCP
-	 * stream, one wisp round trip after the CONNECT, and leaves one to a
-	 * host it can reach open. A refusal for the client's rate (0x49) or a
+	 * all. Wisp has no answer to CONNECT but a CLOSE, and an epoxy build
+	 * before epoxy-tls 0085 ended a TCP stream the server refused without
+	 * its reason (a refusal that came with none still does), which only a
+	 * UDP stream reports: the server closes one to such a host as it would
+	 * the TCP stream, one wisp round trip after the CONNECT, and leaves one
+	 * to a host it can reach open. A refusal for the client's rate (0x49) or a
 	 * relay without UDP (0x48) says nothing about the host.
 	 */
 	async #unreachable(remote: URL): Promise<boolean> {

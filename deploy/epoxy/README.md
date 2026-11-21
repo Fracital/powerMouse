@@ -38,6 +38,9 @@ And a stream's CLOSE is read after the data that came before it: epoxy
 dropped what a stream had received but not yet handed on, so a body read
 slower than the wire from an HTTP/1.1 server that closed its idle
 connection ended short (`slow-body-close` suite).
+And a TLS connection whose wisp stream the relay refused fails with the
+relay's close reason (a blocked name, a refused port), where it read as a
+bare "tls handshake eof" (`wisp-refusal` suite).
 And the SIMD128 build is only taken when it loads: a host that leaves
 `epoxy-simd.wasm` out, or answers it with a 404 or an HTML page, gets
 `epoxy.wasm` (`epoxy-simd-fallback` suite).
@@ -129,6 +132,7 @@ fails the build at `git apply --check`.
 | MercuryWorkshop/epoxy-tls                                      | `0083` | `publish.sh` also builds the full client with SIMD128 and bulk memory into `full/epoxy-simd.wasm`; `simd-wasm.mjs` renames its closure-wrapper imports to the base build's and fails the build unless `full/epoxy.js` then serves it unchanged. Same Rust, so the same bytes on the wire.                                                                                         |
 | MercuryWorkshop/EpoxyTransport                                 | `0062` | The ESM bundle loads `epoxy-simd.wasm` where `WebAssembly.validate` takes SIMD128 and bulk memory, `epoxy.wasm` otherwise; the build copies both. One origin's download through the transport worker about a third faster (650 to 870 Mbit/s on loopback).                                                                                                                        |
 | MercuryWorkshop/epoxy-tls                                      | `0084` | wisp: a TCP stream's DATA comes as its reader takes it, by stream credit (0xE2), when the server's INFO offers it (holyWisp's `stream-credit`): the reader grants as it consumes, from a 256 KiB window grown as TCP autotunes, to 16 MiB a stream and 64 MiB of growth a connection. Wisp v2 only, so epoxy with `wisp_v2` (`stream-credit` suite).                              |
+| MercuryWorkshop/epoxy-tls                                      | `0085` | wisp: a TCP stream's `get_close_reason` reads its read side, once ended, so a TLS handshake over a stream the relay refused (0x48 blocked, 0x44 refused, 0x42 unreachable, 0x49 throttled) fails with `WispCloseReason`. The write side has a reason only once the wisp connection ended: every refusal read as a bare `tls handshake eof` (`wisp-refusal` suite).                |
 | MercuryWorkshop/EpoxyTransport                                 | `0063` | The ESM bundle takes `epoxy.wasm` when `epoxy-simd.wasm` does not load (a 404, a page that is no wasm, a refused fetch), with one console warning: hosts that vendor the files under their own names left it out and the transport never opened (`epoxy-simd-fallback` suite).                                                                                                    |
 
 ## stomp-h3 (`h3/`)

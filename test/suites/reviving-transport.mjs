@@ -46,6 +46,11 @@ const CONNECT_REFUSED =
 // response (measured, idle-close-retry suite)
 const INCOMPLETE =
 	'Hyper client: hyper_util::client::legacy::Error(SendRequest, hyper::Error(IncompleteMessage)) (client error (connection closed before message completed))';
+// the same refusal from an epoxy build that reads the server's CLOSE under
+// the handshake (deploy/epoxy patches/epoxy-tls 0085), measured against the
+// real server (wisp-refusal suite): `reason` is wisp-mux's CloseReason
+const refusedWith = (reason) =>
+	`Hyper client: hyper_util::client::legacy::Error(Connect, WispCloseReason(${reason}, Custom { kind: UnexpectedEof, error: "tls handshake eof" })) (client error (Connect))`;
 const MUX_ENDED =
 	'Hyper client: hyper_util::client::legacy::Error(Connect, Wisp(MuxTaskEnded) (Multiplexor task ended))';
 
@@ -454,6 +459,61 @@ for (const [name, reason, answers] of [
 			ok: results.filter((r) => r === 200).length,
 			streams: streams.length,
 		}),
+	);
+}
+
+// 13) a stream the wisp server refused for its destination, with the reason
+// in the error: the request fails at once, once, on the same transport
+// (Chrome fails a connection to a refused or unreachable destination at
+// once, and the server would only refuse it again); one refused for the
+// client's rate (0x49) is still tried again after the backoff
+for (const reason of [
+	'ServerStreamBlockedAddress',
+	'ServerStreamConnectionRefused',
+	'ServerStreamUnreachable',
+	'ServerStreamConnectionTimedOut',
+]) {
+	let calls = 0;
+	const { factory, builds } = makeFactory(() => {
+		calls++;
+		return new Error(refusedWith(reason));
+	});
+	const transport = new RevivingTransport(factory);
+	const t0 = Date.now();
+	const r = await transport
+		.request(new URL('https://example.com/'), 'GET', null, [], undefined)
+		.then(
+			(res) => res.status,
+			(error) => `rejected ${error.message}`,
+		);
+	const elapsed = Date.now() - t0;
+	ok(
+		`a GET whose stream the server refused (${reason}) fails at once, not retried`,
+		String(r).startsWith('rejected ') &&
+			r.includes(reason) &&
+			calls === 1 &&
+			builds() === 1 &&
+			elapsed < 50,
+		JSON.stringify({ r: String(r).slice(0, 80), calls, elapsed }),
+	);
+}
+{
+	const { factory, builds } = makeFactory((call) =>
+		call <= 2 ? new Error(refusedWith('ServerStreamThrottled')) : null,
+	);
+	const transport = new RevivingTransport(factory);
+	const t0 = Date.now();
+	const r = await transport
+		.request(new URL('https://example.com/'), 'GET', null, [], undefined)
+		.then(
+			(res) => res.status,
+			(error) => `rejected ${error.message}`,
+		);
+	const elapsed = Date.now() - t0;
+	ok(
+		'a GET whose stream the server throttled (ServerStreamThrottled) is retried after a backoff and answers',
+		r === 200 && builds() === 1 && elapsed >= 50,
+		JSON.stringify({ status: r, builds: builds(), elapsed }),
 	);
 }
 
