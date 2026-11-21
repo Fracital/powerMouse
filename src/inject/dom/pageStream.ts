@@ -650,8 +650,8 @@ export async function readMarkup(
 		told: unknown,
 	) => void,
 ): Promise<void> {
-	// the streams' methods are taken when the read begins, in the shell's
-	// script, before any script of the page's: a frame that reads no
+	// the streams' methods are taken when the read begins, as the shell's
+	// document is opened, before any script of the page's: a frame that reads no
 	// stream never makes their interfaces (about 4 KB of every frame's
 	// heap, frame-cost)
 	const getReader = globalThis.ReadableStream.prototype.getReader;

@@ -4342,29 +4342,35 @@ export default class DocumentClient extends Client {
 	 * origin sends it, each piece with its prewritten table
 	 */
 	loadHTMLStream(url: string) {
-		const feed = this.#startPage();
 		const primed = this.primeStore?.();
-		void readMarkup(url, primed, (markup, table, sizes, end, told) => {
-			// the sizes the body had, for the document's navigation timing
-			// (ResourceTiming): the shell's are the browser's count
-			if (sizes) this.documentSizes = sizes;
-			// a meta of a head that was still coming when the shell went out:
-			// in force from its piece on, as the parser applies it
-			if (told) {
-				const { facts, upgrade } = told as {
-					facts: ScriptFacts;
-					upgrade?: boolean;
-				};
-				if (upgrade === true) this.upgradeInsecureRequests = true;
-				this.scriptFacts = {
-					...this.scriptFacts,
-					code: facts.code,
-					ttActive: facts.ttActive,
-					rtt: facts.rtt,
-				};
-			}
-			feed(markup, (table ?? undefined) as Prewritten | undefined, end);
-		});
+		// the read begins once the shell's document is opened for the page,
+		// a microtask after this script (#startPage's load): Firefox's
+		// document.open() of a document still loading cancels every request
+		// of the document in flight, and the page's markup stopped at its
+		// first piece there (Wikipedia painted nothing)
+		const feed = this.#startPage(() => void read());
+		const read = () =>
+			readMarkup(url, primed, (markup, table, sizes, end, told) => {
+				// the sizes the body had, for the document's navigation timing
+				// (ResourceTiming): the shell's are the browser's count
+				if (sizes) this.documentSizes = sizes;
+				// a meta of a head that was still coming when the shell went out:
+				// in force from its piece on, as the parser applies it
+				if (told) {
+					const { facts, upgrade } = told as {
+						facts: ScriptFacts;
+						upgrade?: boolean;
+					};
+					if (upgrade === true) this.upgradeInsecureRequests = true;
+					this.scriptFacts = {
+						...this.scriptFacts,
+						code: facts.code,
+						ttActive: facts.ttActive,
+						rtt: facts.rtt,
+					};
+				}
+				feed(markup, (table ?? undefined) as Prewritten | undefined, end);
+			});
 	}
 	/**
 	 * Begin writing the page (../pageStream.ts): its markup is handed to the
@@ -4375,7 +4381,10 @@ export default class DocumentClient extends Client {
 	 * written from there, a task at a time, so the page paints and loads as
 	 * its markup comes.
 	 */
-	#startPage(): (
+	#startPage(
+		/** called once the shell's document is opened for the page */
+		opened?: () => void,
+	): (
 		markup: string,
 		prewritten: string | Prewritten | undefined,
 		end: boolean,
@@ -4694,6 +4703,7 @@ export default class DocumentClient extends Client {
 		const load = () => {
 			this.shellPending = false;
 			Reflect.apply(this.open, this.global.document, []);
+			opened?.();
 			runDocumentOpenListeners(this.global);
 			// the host's post hook, on the document the page's markup lands in
 			// (the shell asked apply() to leave it to us), before the first

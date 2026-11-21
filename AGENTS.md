@@ -173,6 +173,13 @@ on every save (use a `git worktree`).
   cannot be had it refuses (throws, or rejects where the call answers with
   a promise), never calls the browser's own function in its place
   (`deferred-refusals`).
+- **Firefox's `document.open()` cancels the document's requests in
+  flight** while the document is still loading (a `fetch()` too; Chrome
+  keeps them). The shell opens its document for the page in the microtask
+  after its script, so what the shell's script starts before that is lost
+  in Firefox: the markup stream is read from the open on
+  (`Client.loadHTMLStream`), and anything else started there must survive
+  being cancelled.
 - **Classic-script globals use `Reflect.defineProperty`, not `globalName`.**
   The inject bundles delete `createClient` after use; a top-level `var` from
   esbuild's `globalName` can't be deleted. See `src/*/entry.ts`.
