@@ -87,6 +87,13 @@ export interface Config {
 	 */
 	syncFrozen?: boolean;
 	/**
+	 * Set by the service worker where its origin is a file: page's
+	 * (offline.html, demo/offline/): the routes it serves are file:// ones,
+	 * which the documents (about:srcdoc frames) and workers (blob:) it
+	 * serves, whose origin reads "null", make theirs on
+	 */
+	fileRoutes?: boolean;
+	/**
 	 * Where syncFrozen is: the cookies of a document's URL and its stores, as the worker had them when it served the document, for the
 	 * storage key `key` (a document whose own key differs has none)
 	 */

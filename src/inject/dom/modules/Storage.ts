@@ -379,7 +379,7 @@ export default class StorageModule extends Module<DocumentClient> {
 		// is the proxy's
 		const routeOf = (directory: string) =>
 			orderedURL(directory) ??
-			new URL(`${dirOf(directory)}ordered`, location.origin);
+			new URL(`${dirOf(directory)}ordered`, client.originOf(location));
 		// Which operation it is goes in the URL, its arguments in the body:
 		// the worker hears of the write when the request arrives, so the next
 		// document's reads wait for it however long a large body takes to be

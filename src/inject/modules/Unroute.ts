@@ -31,9 +31,9 @@ import ResourceBufferModule from './ResourceBuffer';
  */
 const proxyOrigin = (client: Client) =>
 	client.isDOM
-		? (client as DocumentClient).baseURI.origin
+		? client.originOf((client as DocumentClient).baseURI)
 		: ((client as { bundleOrigin?: string }).bundleOrigin ??
-			client.global.location.origin);
+			client.originOf(client.global.location));
 
 /** the proxy-origin prefix every route of this context starts with */
 export function routedPrefix(client: Client): string {

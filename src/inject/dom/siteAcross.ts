@@ -468,7 +468,7 @@ export function locationAcross(
 	voucher.global.setTimeout(voucher.ownCallback(send), INITIATOR_WAIT_MS);
 	voucher
 		.nativeFetch(
-			`${voucher.global.location.origin}${voucher.directory}${INITIATOR_ROUTE}`,
+			`${voucher.originOf(voucher.global.location)}${voucher.directory}${INITIATOR_ROUTE}`,
 			{
 				method: 'POST',
 				body: JSON.stringify({
@@ -543,7 +543,7 @@ export function acceptAcross(
 			global.setTimeout(client.ownCallback(go), INITIATOR_WAIT_MS);
 			client
 				.nativeFetch(
-					`${global.location.origin}${client.directory}${INITIATOR_ROUTE}`,
+					`${client.originOf(global.location)}${client.directory}${INITIATOR_ROUTE}`,
 					{
 						method: 'POST',
 						body: JSON.stringify({

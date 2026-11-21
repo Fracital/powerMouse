@@ -277,6 +277,8 @@ export default class Client {
 	syncAnswers?: boolean;
 	/** a waiting page stops the worker (config.syncFrozen) */
 	syncFrozen: boolean;
+	/** this realm's routes are file:// ones (config.fileRoutes) */
+	fileRoutes: boolean;
 	/** what this document reads synchronously, where syncFrozen is (config.syncSeed): never handed on */
 	syncSeed?: SyncSeed;
 	applied: boolean;
@@ -649,7 +651,7 @@ export default class Client {
 			return new StompURL(
 				withoutDirective(url),
 				this.codec,
-				`${this.global.location.origin}${this.directory}`,
+				`${this.originOf(this.global.location)}${this.directory}`,
 			);
 		}
 		// this client's own window, not the bundle's: a popup or frame the
@@ -659,20 +661,20 @@ export default class Client {
 			// a link's route (src/visited.ts) is this document's address only
 			// while its history entry is being made (the History module): the
 			// page reads the URL it stands for
-			const link = `${location.origin}${this.scope}${LINK_SEGMENT}/`;
+			const link = `${this.originOf(location)}${this.scope}${LINK_SEGMENT}/`;
 			if (location.href.startsWith(link)) {
 				const url = linkRouteURL(location.href.slice(link.length), this.codec);
 				if (url)
 					return new StompURL(
 						this.isDOM ? withoutDirective(url) : url,
 						this.codec,
-						`${location.origin}${this.directory}`,
+						`${this.originOf(location)}${this.directory}`,
 					);
 			}
 			const parsed = parseRoutedURL(
 				location.toString(),
 				this.codec,
-				`${location.origin}${this.directory}`,
+				`${this.originOf(location)}${this.directory}`,
 			).url;
 			if (this.isDOM) parsed.url = withoutDirective(parsed.url);
 			return parsed;
@@ -691,7 +693,7 @@ export default class Client {
 			return new StompURL(
 				typeof base === 'string' ? base : own,
 				this.codec,
-				`${location.origin}${this.directory}`,
+				`${this.originOf(location)}${this.directory}`,
 			);
 		}
 	}
@@ -850,6 +852,17 @@ export default class Client {
 	 * script, whose location had no query (sop-escapes csp/an object
 	 * document, under load, when the bundle came late).
 	 */
+	/**
+	 * The origin this realm's routes are made on: its location's. In
+	 * offline.html (config.fileRoutes) a document is an about:srcdoc frame
+	 * and a worker a blob: one of a file: page, whose origin reads "null"
+	 * where the routes the worker serves are file:// ones (Firefox also
+	 * reads a file: URL's origin as "null")
+	 */
+	originOf(location: { origin: string }): string {
+		const origin = location.origin;
+		return origin === 'null' && this.fileRoutes ? 'file://' : origin;
+	}
 	/** @internal just call stomp: the document's URL is `href` now (an entry of its session history, src/inject/dom/modules/Called.ts) */
 	rename(href: string) {
 		this.#namedBase = href;
@@ -984,6 +997,7 @@ export default class Client {
 		this.fingerprintSeed = init.fingerprintSeed ?? 0;
 		this.syncAnswers = init.syncAnswers;
 		this.syncFrozen = !!init.syncFrozen;
+		this.fileRoutes = !!init.fileRoutes;
 		this.syncSeed = init.syncSeed;
 		// a stale cached bundle next to a new service worker: say so once,
 		// the page still gets its best effort
@@ -1096,6 +1110,7 @@ export default class Client {
 			...(this.hooks ? { hooks: this.hooks } : {}),
 			...(this.sites ? { sites: this.sites } : {}),
 			...(this.syncFrozen ? { syncFrozen: true } : {}),
+			...(this.fileRoutes ? { fileRoutes: true } : {}),
 		};
 	}
 	/**
@@ -1390,7 +1405,7 @@ export default class Client {
 			})
 		)
 			return null;
-		const origin = client.global.location.origin;
+		const origin = client.originOf(client.global.location);
 		const encoded = new StompURL(
 			referrer,
 			client.codec,

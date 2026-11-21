@@ -6983,6 +6983,10 @@ export function registerRewrites(
 				// a page that waits synchronously stops this worker
 				// (./syncFrozen.ts)
 				...(syncFrozen() ? { syncFrozen: true } : {}),
+				// its origin is a file: page's (offline.html)
+				...(globalThis.location?.protocol === 'file:'
+					? { fileRoutes: true }
+					: {}),
 				...(init.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 				// every document's inject builds the window membrane from this
 				...(init.membrane === false ? { membrane: false } : {}),

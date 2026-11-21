@@ -63,7 +63,7 @@ export default class WorkerPermissionsModule extends Module<WorkerClient> {
 		const ask = async (op: PermissionOp): Promise<unknown> => {
 			try {
 				const response = await client.nativeFetch(
-					`${global.location.origin}${client.directory}${PERMISSION_ROUTE}`,
+					`${client.originOf(global.location)}${client.directory}${PERMISSION_ROUTE}`,
 					{
 						method: 'POST',
 						body: JSON.stringify({ ...op, site }),

@@ -98,7 +98,7 @@ function blankDecided(
 	const asker = nav.voucher() ?? client;
 	blankRule ??= asker
 		.nativeFetch(
-			`${asker.global.location.origin}${asker.directory}${ISOLATION_PROBE}/b`,
+			`${asker.originOf(asker.global.location)}${asker.directory}${ISOLATION_PROBE}/b`,
 			{ cache: 'no-store' },
 		)
 		.then((response) => response.json())
@@ -676,7 +676,7 @@ export function navigateOther(
 	);
 	routed
 		.nativeFetch(
-			`${routed.global.location.origin}${routed.directory}${INITIATOR_ROUTE}`,
+			`${routed.originOf(routed.global.location)}${routed.directory}${INITIATOR_ROUTE}`,
 			{
 				method: 'POST',
 				body: JSON.stringify({

@@ -491,7 +491,7 @@ export function markupMembers(shared: MarkupContext) {
 			return true;
 		}
 		if (external) {
-			const prefix = `${client.global.location.origin}${client.directory}`;
+			const prefix = `${client.originOf(client.global.location)}${client.directory}`;
 			const addresses = html
 				? [call(getAttribute, script, ['src'])]
 				: [

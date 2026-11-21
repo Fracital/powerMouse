@@ -3605,7 +3605,7 @@ export default class DocumentClient extends Client {
 	}
 	#readDocumentURL(named: unknown, location: string): StompURL {
 		const own = this.global.location;
-		const prefix = `${own.origin}${this.directory}`;
+		const prefix = `${this.originOf(own)}${this.directory}`;
 		if (typeof named === 'string')
 			return new StompURL(named, this.codec, prefix);
 		if (ROUTE_PROTOCOLS.includes(own.protocol))

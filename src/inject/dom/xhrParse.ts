@@ -109,7 +109,7 @@ export function responseParser({
 			if (refused) {
 				Reflect.apply(realmOpen, xhr, [
 					'POST',
-					`${client.global.location.origin}${client.directory}${ECHO_ROUTE}/${encodeURIComponent(`${essence}${parameter}`)}`,
+					`${client.originOf(client.global.location)}${client.directory}${ECHO_ROUTE}/${encodeURIComponent(`${essence}${parameter}`)}`,
 					true,
 				]);
 				if (asDocument) Reflect.apply(realmSetType, xhr, ['document']);

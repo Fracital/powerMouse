@@ -110,7 +110,7 @@ export default class VisitedModule extends Module<DocumentClient> {
 				false,
 				client.nestedRoute,
 			);
-		const scope = `${location.origin}${client.scope}`;
+		const scope = `${client.originOf(location)}${client.scope}`;
 		const absolute = (routed: string) => new URL(routed, location.href).href;
 		/** the real URL a link route (absolute) stands for */
 		const linked = (routed: string): URL | null => {
