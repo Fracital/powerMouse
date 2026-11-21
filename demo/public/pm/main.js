@@ -2,7 +2,6 @@
 // an early-Android style navigation bar. Everything uses the public
 // StompController / Frame API from dist/Controller.js.
 
-const DIRECTORY = '/stomp/';
 // the served file names, when a host vendors dist/ under names of its own
 // (init.assets; a host sets globalThis.STOMP_ASSETS before this script). The
 // service worker registered below is named from it too, so no file name of
@@ -53,6 +52,7 @@ const landingStatus = $('logMsg');
 const chromeStatus = $('chromeStatus');
 const transportSelect = $('transport');
 const adblockToggle = $('adblock');
+const torToggle = $('tor');
 const omni = $('omni');
 const mainForm = $('mainForm');
 
@@ -73,9 +73,47 @@ const PROXY_ORIGIN =
 			? location.origin.replace('localhost', '127.0.0.1')
 			: null;
 let ISOLATED = !!PROXY_ORIGIN && PROXY_ORIGIN !== location.origin;
+// The Tor choice is for STomp's proxied traffic, not the host page. A
+// separate Wisp relay must route TCP through Tor; with no relay, a saved Tor
+// choice is an error rather than a silent direct connection.
+const TOR_KEY = 'stomp-demo:tor';
+const TOR_REQUESTED = (() => {
+	let requested = false;
+	try {
+		requested = localStorage.getItem(TOR_KEY) === '1';
+	} catch {}
+	const query = new URLSearchParams(location.search);
+	if (query.has('tor')) return query.get('tor') !== '0';
+	if (query.has('notor')) return false;
+	return requested;
+})();
+const TOR_WISP = (() => {
+	if (typeof CFG.torWisp !== 'string' || !CFG.torWisp) return null;
+	try {
+		const host = ISOLATED ? PROXY_ORIGIN : location.origin;
+		const url = new URL(CFG.torWisp, `${host}/`);
+		if (url.protocol === 'http:') url.protocol = 'ws:';
+		if (url.protocol === 'https:') url.protocol = 'wss:';
+		const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+		if (
+			url.protocol !== 'wss:' &&
+			(url.protocol !== 'ws:' || location.protocol === 'https:' || !local)
+		)
+			return null;
+		return url.href;
+	} catch {
+		return null;
+	}
+})();
+// A separate service worker scope prevents an old controller from taking a
+// new Tor-mode route. The origin's persistent stores are still shared, so
+// the mode does not promise Tor Browser's cookie or storage isolation. A
+// change reloads the host rather than leaving direct requests in flight.
+const DIRECTORY = TOR_REQUESTED ? '/stomp-tor/' : '/stomp/';
 // HTTP cache in the service worker, on by default; ?nocache turns it off for a
 // visit
-const CACHE = !new URLSearchParams(location.search).has('nocache');
+const CACHE =
+	!TOR_REQUESTED && !new URLSearchParams(location.search).has('nocache');
 // emulated service workers for the proxied pages (docs/service-workers.md),
 // on by default; ?nosw turns them off for a visit (?sw=<ms> sets how long a
 // worker may take to answer, for the suites)
@@ -89,9 +127,11 @@ const SERVICE_WORKER_EVENT_DELAY =
 // HTTP/3 over wisp UDP for origins that offer it (docs/http3.md), on by
 // default as in Chrome; STOMP_HTTP3=0 on the server turns it off, and
 // ?http3=0 (off) or ?http3 (on) on this page decides for one visit
-const HTTP3 = new URLSearchParams(location.search).has('http3')
-	? new URLSearchParams(location.search).get('http3') !== '0'
-	: CFG.http3 !== false;
+const HTTP3 =
+	!TOR_REQUESTED &&
+	(new URLSearchParams(location.search).has('http3')
+		? new URLSearchParams(location.search).get('http3') !== '0'
+		: CFG.http3 !== false);
 // The site pool (ControllerInit.sitePool, docs/site-pool.md): the server
 // answers on more ports (STOMP_SITE_POOL, none by default), and the
 // controller shows every proxied site from one of them, so a page and a
@@ -198,9 +238,10 @@ const blockedCounts = new Map();
 // real Encrypted Client Hello where a site's HTTPS DNS record has a config,
 // looked up over DoH by epoxy (STOMP_ECH_DNS on the server; ?noech sends
 // GREASE ECH only, as before)
-const ECH_DNS = new URLSearchParams(location.search).has('noech')
-	? null
-	: CFG.echDns;
+const ECH_DNS =
+	TOR_REQUESTED || new URLSearchParams(location.search).has('noech')
+		? null
+		: CFG.echDns;
 // Wisp over the relay's WebTransport session (STOMP_WISP_WEBTRANSPORT on the
 // server, docs/webtransport.md "Wisp over WebTransport"), its WebSocket when
 // the relay has none; ?wt=0 (off) or ?wt (on) on this page decides for one
@@ -232,10 +273,12 @@ const SHARDS = new URLSearchParams(location.search).has('shards')
 			}
 		: Number(new URLSearchParams(location.search).get('shards'))
 	: null;
-const WEB_TRANSPORT = new URLSearchParams(location.search).has('wt')
-	? new URLSearchParams(location.search).get('wt') !== '0' &&
-		(CFG.webTransport || true)
-	: CFG.webTransport;
+const WEB_TRANSPORT =
+	!TOR_REQUESTED &&
+	(new URLSearchParams(location.search).has('wt')
+		? new URLSearchParams(location.search).get('wt') !== '0' &&
+			(CFG.webTransport || true)
+		: CFG.webTransport);
 // the transports and the built-in wisp live on the proxy origin
 const proxyBase = () => (ISOLATED ? PROXY_ORIGIN : '');
 // each transport's directory: the server names it by the hash of its files
@@ -244,9 +287,17 @@ const proxyBase = () => (ISOLATED ? PROXY_ORIGIN : '');
 const transportPath = (name) => CFG.transports?.[name] || `/${name}/`;
 // STOMP_WISP_URL points the transports at an external wisp server (in
 // production, the edge relay); otherwise the demo server's own /wisp/
-const wispURL = () =>
-	CFG.wisp ||
-	`${(ISOLATED ? PROXY_ORIGIN : location.origin).replace(/^http/, 'ws')}/wisp/`;
+const wispURL = () => {
+	if (TOR_REQUESTED) {
+		if (!TOR_WISP)
+			throw new Error('Tor relay unavailable. Turn Tor off to browse.');
+		return TOR_WISP;
+	}
+	return (
+		CFG.wisp ||
+		`${(ISOLATED ? PROXY_ORIGIN : location.origin).replace(/^http/, 'ws')}/wisp/`
+	);
+};
 
 // transports are described, not constructed: the controller imports and
 // constructs the module in a dedicated worker (in isolation mode inside the
@@ -1272,6 +1323,8 @@ async function startController(name) {
 async function boot() {
 	if (!('serviceWorker' in navigator))
 		throw new Error('This browser does not support service workers.');
+	if (TOR_REQUESTED && !TOR_WISP)
+		throw new Error('Tor relay unavailable. Turn Tor off to browse.');
 
 	const name = preferredTransport();
 	rememberTransport(name);
@@ -1302,7 +1355,9 @@ async function boot() {
 	// older build, and only a reload brings the two together
 	const readyStatus = () =>
 		!controller.stale
-			? 'Ready'
+			? TOR_REQUESTED
+				? 'Ready (Tor route selected)'
+				: 'Ready'
 			: controller.stale.newer === 'worker'
 				? 'Ready (STomp was updated: reload the page)'
 				: 'Ready (service worker updating)';
@@ -2760,6 +2815,29 @@ addEventListener('keydown', (event) => {
 transportSelect.addEventListener('change', () =>
 	switchTransport(transportSelect.value),
 );
+
+// Switching Tor needs a fresh controller and a separate service worker
+// scope: setTransport() lets old in-flight direct requests finish. A saved
+// Tor choice never silently falls back to normal Wisp if its relay is gone.
+torToggle.checked = TOR_REQUESTED;
+torToggle.disabled = !TOR_WISP && !TOR_REQUESTED;
+const torLabel = $('torLabel');
+torLabel.title = !TOR_WISP
+	? 'Tor relay unavailable. The server must configure a Tor-backed Wisp relay.'
+	: TOR_REQUESTED
+		? 'Tor selected for proxied TCP only. Host requests and shared cookies remain outside Tor isolation.'
+		: 'Route proxied TCP traffic through Tor. Applies after the page reloads.';
+torLabel.toggleAttribute('data-unavailable', !TOR_WISP);
+torToggle.addEventListener('change', () => {
+	try {
+		localStorage.setItem(TOR_KEY, torToggle.checked ? '1' : '0');
+	} catch {}
+	const url = new URL(location.href);
+	url.searchParams.delete('tor');
+	url.searchParams.delete('notor');
+	torToggle.disabled = true;
+	location.replace(url.href);
+});
 
 // the blocker is an option of the controller: the choice is remembered and
 // the page starts again with it (without a ?adblock that would overrule it)
@@ -5974,7 +6052,7 @@ menuAbout.innerHTML = `${shieldIcon('info')}<span>About</span>`;
 /** the transport the bar's select chose, for the Transport fact */
 let transportName = '';
 const transportFact = (name) =>
-	`${name} over ${wispURL()}${HTTP3 && name === 'epoxy' ? ', HTTP/3 on' : ''}`;
+	`${name} over ${wispURL()}${TOR_REQUESTED ? ', Tor TCP route' : HTTP3 && name === 'epoxy' ? ', HTTP/3 on' : ''}`;
 
 function showCarrier(info) {
 	const udp = info.carrier === 'webtransport';

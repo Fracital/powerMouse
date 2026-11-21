@@ -44,6 +44,56 @@ Environment variables:
 They can also live in a `.env` file next to `package.json` (not committed);
 the server reads it at startup. The page gets what it needs from `/config.js`.
 
+## Tor routing
+
+The homepage has a **Tor** checkbox beside **Block ads**. It is enabled only
+when a Tor-backed Wisp relay is configured. The choice is kept in
+`localStorage['stomp-demo:tor']` (or set for one visit with `?tor` / `?notor`),
+independently of the content blocker. Changing it reloads the page, since
+`controller.setTransport()` allows requests already using the old transport
+to finish. Tor uses a separate `/stomp-tor/` service worker scope, and the
+STomp HTTP cache is disabled. The persistent cookie, storage and extension
+databases of the proxy origin are **still shared** with normal mode; this
+route is not an isolated browsing profile. HTTP/3, UDP, WebTransport and the external ECH
+DNS lookup are off. A missing Tor relay stops Tor-mode browsing rather than
+trying the normal Wisp endpoint.
+
+Run a Tor SOCKS5 listener on the demo server, then start the demo with:
+
+```sh
+STOMP_TOR_SOCKS5=socks5h://127.0.0.1:9050 npm run demo
+```
+
+The server starts a second holyWisp endpoint at `/wisp-tor/`, upstream of
+which is Tor's SOCKS5 listener. Names are sent to SOCKS5 for Tor to resolve,
+including `.onion` names. The helper resolver gives holyWisp a public
+placeholder address for its initial address-class check, without asking the
+machine's usual resolver; the original hostname is sent in the SOCKS5
+CONNECT. UDP is refused, not sent directly. The Tor listener must be on
+loopback. If no listener is available at startup, the relay is not offered.
+
+Alternatively `STOMP_TOR_WISP_URL=wss://relay.example/wisp/` names a separately
+operated Tor-backed Wisp relay. Configure **one** of these on the server.
+The external relay must resolve names inside Tor, route every outbound TCP
+connection through Tor and reject all UDP. A page cannot prove that an
+untrusted relay obeys these rules. On HTTPS pages the Tor endpoint must use
+`wss://`; an unencrypted `ws://` endpoint is accepted only for local testing.
+
+**Scope:** this provides Tor egress for sites opened through STomp's TCP
+transport (HTTP(S), WebSockets and `.onion`), with no direct fallback in Tor
+mode. It does **not** turn the browser into Tor Browser. The application shell,
+GitHub commits/avatars and other requests the host makes directly do not
+pass through the Tor relay. The relay operator can see the user's network
+address and requested destinations; websites see the Tor exit, but shared
+cookies, logins and browser fingerprints can still link sessions. Tor supports
+TCP; features that require UDP cannot use this route. The relay must be
+secured, rate-limited and monitored before it is offered publicly.
+
+The bundled `tor.app` example is an Anura-specific Tor WASM/Snowflake client,
+not a compatible STomp Wisp transport. `docs/tor-app-audit.md` records the
+issues found during review; none of its compiled scripts or WASM assets were
+copied into this feature.
+
 ## Developing
 
 ```sh

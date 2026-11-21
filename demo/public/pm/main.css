@@ -1035,6 +1035,10 @@ button::-moz-focus-inner {
 	accent-color: var(--pm-link);
 	vertical-align: -2px;
 }
+.rbottom .check[data-unavailable] {
+	opacity: 0.55;
+	cursor: not-allowed;
+}
 
 .chrome .select {
 	height: 28px;

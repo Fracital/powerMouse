@@ -18,6 +18,7 @@
 //   /libcurl/    libcurl transport module
 //   /fonts/      Montserrat from @fontsource
 //   /config.js   deployment config for the page (see the environment below)
+//   /wisp-tor/   opt-in, Tor-only SOCKS5 Wisp gateway (TCP only; no UDP)
 //   /wisp/       wisp server the transports tunnel through (holyWisp, the
 //                server the production edges run, as a child process),
 //                unless STOMP_WISP_URL names an external one
@@ -27,6 +28,12 @@
 //   STOMP_WISP_URL      external wisp endpoint, e.g. wss://host/pipe/<key>/;
 //                       when set, the built-in /wisp/ is not served and
 //                       no holyWisp is started
+//   STOMP_TOR_SOCKS5   opt-in loopback Tor SOCKS5, e.g. socks5h://127.0.0.1:9050.
+//                       Separately starts a TCP-only /wisp-tor/ relay and a
+//                       loopback DNS validation shim: no public DNS lookups.
+//                       An unresponsive SOCKS endpoint hides the Tor option.
+//   STOMP_TOR_WISP_URL optional operator-provided wss:// Tor Wisp URL, instead
+//                       of a local relay; operator must verify its Tor egress
 //   STOMP_PROXY_ORIGIN  origin that serves the proxy for isolation mode; empty
 //                       or unset runs the same-origin controller (README,
 //                       "Origin isolation")
@@ -134,6 +141,7 @@ import { holyWisp } from 'holywisp';
 // proxy. Upgrade Node. Don't replace this with createRequire/readFileSync.
 import pkg from '../package.json' with { type: 'json' };
 import { heldLoads, syncRelay } from './syncRelay.js';
+import { startTorWisp } from './torWisp.js';
 
 const require = createRequire(import.meta.url);
 const { stompPath } = require('../lib/index.cjs');
@@ -203,6 +211,15 @@ Set STOMP_WISP_URL to use an external wisp server instead.`);
 		process.exit(1);
 	}
 }
+// The Tor relay is distinct from /wisp/ and never falls back to it. A local
+// instance uses its OWN DNS resolver, confined to a synthetic loopback DNS
+// responder: holyWisp still resolves before SOCKS but never leaks a hostname.
+const torWisp = await startTorWisp({
+	socks5: process.env.STOMP_TOR_SOCKS5,
+	external: process.env.STOMP_TOR_WISP_URL,
+	logLevel: process.env.HOLYWISP_LOG_LEVEL || 'error',
+});
+
 // the built-in holyWisp has a WebTransport listener the page can reach only
 // when the `holywisp` package and its binary know the option and it serves
 // its discovery document (its self-made certificate's hashes): a binary
@@ -304,6 +321,9 @@ const pageConfig = {
 	...(process.env.STOMP_PROXY_ORIGIN !== undefined && { proxyOrigin }),
 	// on unless turned off; a wisp server without UDP costs it nothing (the
 	// transport stays on HTTP/2, docs/http3.md)
+	// The UI must only offer Tor when the dedicated Tor gateway is ready.
+	// An external gateway's Tor egress is the deployer's responsibility.
+	...(torWisp?.external && { torWisp: torWisp.external }),
 	http3: process.env.STOMP_HTTP3 !== '0',
 	echDns:
 		process.env.STOMP_ECH_DNS === 'off'
@@ -360,10 +380,11 @@ if (wisp && webTransport)
 	});
 app.get('/config.js', (req, res) => {
 	const sitePool = slotPorts(req);
+	const localTor = torWisp?.relay?.isRunning ? { torWisp: '/wisp-tor/' } : {};
 	res.set('Cache-Control', 'no-store');
 	res.type('application/javascript');
 	res.send(
-		`window.STOMP_CONFIG = ${JSON.stringify({ ...pageConfig, transports: transportPaths(), ...(sitePool.length && { sitePool }) })};\n`,
+		`window.STOMP_CONFIG = ${JSON.stringify({ ...pageConfig, ...localTor, transports: transportPaths(), ...(sitePool.length && { sitePool }) })};\n`,
 	);
 });
 
@@ -674,6 +695,9 @@ const stompFiles = {
 		);
 	},
 };
+// The same dist must be served at BOTH service-worker scopes. Tor's separate
+// scope keeps an old ordinary controller from handling a Tor navigation.
+const STOMP_SCOPES = ['/stomp/', '/stomp-tor/'];
 // The sync relay (demo/syncRelay.js): a WebKit page's synchronous request,
 // which nothing in the page's browser can answer while the page waits, done
 // here over the same Wisp relay the transports use
@@ -685,8 +709,29 @@ if (process.env.STOMP_SYNC_RELAY !== '0') {
 	// and the loads of the scripts such a page writes into a frame the
 	// worker does not control, held until their copies come
 	app.all('/stomp/sync-relay/held/:token', ...heldLoads());
+	// Never serve Tor-scoped synchronous requests through the ordinary Wisp
+	// connection, even when Tor went down between a page load and this call.
+	// The two wispClient() closures have independent connections and pools.
+	app.post(
+		'/stomp-tor/sync-relay',
+		(_req, res, next) => {
+			if (torWisp?.external || torWisp?.relay?.isRunning) return next();
+			res.set('Cache-Control', 'no-store');
+			res.status(503).json({ error: 'Tor Wisp is unavailable' });
+		},
+		...syncRelay(
+			() =>
+				torWisp?.external ||
+				(torWisp?.relay?.isRunning
+					? `ws://127.0.0.1:${torWisp.relay.port}/wisp/`
+					: 'ws://127.0.0.1:1/unavailable-tor-relay'),
+		),
+	);
+	// Pure host-side held script bytes have no upstream connection; keep
+	// their tokens separate from the ordinary scope's held script tokens.
+	app.all('/stomp-tor/sync-relay/held/:token', ...heldLoads());
 }
-app.use('/stomp/', express.static(stompPath, stompFiles));
+app.use(STOMP_SCOPES, express.static(stompPath, stompFiles));
 // A routed script request that reaches this host instead of the service
 // worker comes from a document the worker does not control: an about:blank
 // frame or popup the page built (an ad network's cookie-sync frame is the
@@ -698,7 +743,7 @@ app.use('/stomp/', express.static(stompPath, stompFiles));
 // enabled") and log it; an empty JavaScript body lets the load fail quietly,
 // as the blocked load it is. A page the worker controls never reaches here:
 // the worker answers its own routes.
-app.use('/stomp/', (req, res, next) => {
+app.use(STOMP_SCOPES, (req, res, next) => {
 	if (
 		(req.method === 'GET' || req.method === 'HEAD') &&
 		/^\/[^/]+\/js:[^/]+\//.test(req.path)
@@ -723,7 +768,7 @@ navigator.serviceWorker?.getRegistration(location.href).then((registration) => {
 	if (registration?.active) location.reload();
 });
 </script>`;
-app.use('/stomp/', (req, res, next) => {
+app.use(STOMP_SCOPES, (req, res, next) => {
 	if (
 		req.method === 'GET' &&
 		req.headers['sec-fetch-mode'] === 'navigate' &&
@@ -853,10 +898,20 @@ if (dev) {
 	);
 }
 
+// The ordinary HTTP path must never act as a transport or a fallback.
+app.get('/wisp-tor/', (_req, res) => {
+	res.set('Cache-Control', 'no-store');
+	res.sendStatus(torWisp?.relay?.isRunning ? 426 : 503);
+});
+
 const server = createServer(app);
 
 server.on('upgrade', (req, socket, head) => {
-	if (wisp && req.url.startsWith('/wisp/')) wisp.route(req, socket, head);
+	if (req.url?.startsWith('/wisp-tor/')) {
+		if (torWisp?.relay?.isRunning) torWisp.relay.route(req, socket, head);
+		else socket.destroy(); // never use /wisp/ if Tor is offline
+	} else if (wisp && req.url.startsWith('/wisp/'))
+		wisp.route(req, socket, head);
 	else if (devSockets && req.url === '/__dev')
 		devSockets.handleUpgrade(req, socket, head, (ws) =>
 			devSockets.emit('connection', ws, req),
@@ -875,6 +930,10 @@ server.on('listening', () => {
 	if (externalWisp) console.log(`Wisp: ${externalWisp}`);
 	else
 		console.log(`Wisp: holyWisp on 127.0.0.1:${wisp.port} (pid ${wisp.pid})`);
+	if (torWisp?.external)
+		console.log(`Tor Wisp: external ${torWisp.external} (operator-managed)`);
+	else if (torWisp?.relay?.isRunning)
+		console.log('Tor Wisp: /wisp-tor/ (local SOCKS5, TCP only)');
 	if (proxyOrigin) console.log(`Proxy origin: ${proxyOrigin}`);
 	if (dev) console.log('Development mode: live reload on /__dev');
 });

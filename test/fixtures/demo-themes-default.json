@@ -192,6 +192,20 @@
 					"color": "rgb(0, 0, 0)",
 					"outline-color": "rgb(0, 0, 0)"
 				},
+				"label#torLabel": {
+					"opacity": "0.55"
+				},
+				"input#tor": {
+					"::placeholdercolor": "rgb(84, 84, 84)",
+					"accent-color": "rgb(76, 169, 251)",
+					"border-bottom-color": "rgb(84, 84, 84)",
+					"border-left-color": "rgb(84, 84, 84)",
+					"border-right-color": "rgb(84, 84, 84)",
+					"border-top-color": "rgb(84, 84, 84)",
+					"caret-color": "rgb(84, 84, 84)",
+					"color": "rgb(84, 84, 84)",
+					"outline-color": "rgb(84, 84, 84)"
+				},
 				"select#transport": {
 					"::placeholdercolor": "rgb(76, 169, 251)",
 					"background-color": "rgb(0, 0, 0)",
@@ -578,6 +592,20 @@
 					"caret-color": "rgb(0, 0, 0)",
 					"color": "rgb(0, 0, 0)",
 					"outline-color": "rgb(0, 0, 0)"
+				},
+				"label#torLabel": {
+					"opacity": "0.55"
+				},
+				"input#tor": {
+					"::placeholdercolor": "rgb(84, 84, 84)",
+					"accent-color": "rgb(76, 169, 251)",
+					"border-bottom-color": "rgb(84, 84, 84)",
+					"border-left-color": "rgb(84, 84, 84)",
+					"border-right-color": "rgb(84, 84, 84)",
+					"border-top-color": "rgb(84, 84, 84)",
+					"caret-color": "rgb(84, 84, 84)",
+					"color": "rgb(84, 84, 84)",
+					"outline-color": "rgb(84, 84, 84)"
 				},
 				"select#transport": {
 					"::placeholdercolor": "rgb(76, 169, 251)",
@@ -989,6 +1017,24 @@
 					"caret-color": "rgb(0, 0, 0)",
 					"color": "rgb(0, 0, 0)",
 					"outline-color": "rgb(0, 0, 0)"
+				},
+				"label#torLabel": {
+					"border-bottom-color": "rgb(255, 255, 255)",
+					"border-left-color": "rgb(255, 255, 255)",
+					"border-right-color": "rgb(255, 255, 255)",
+					"border-top-color": "rgb(255, 255, 255)",
+					"opacity": "0.55"
+				},
+				"input#tor": {
+					"::placeholdercolor": "rgb(84, 84, 84)",
+					"accent-color": "rgb(76, 169, 251)",
+					"border-bottom-color": "rgb(84, 84, 84)",
+					"border-left-color": "rgb(84, 84, 84)",
+					"border-right-color": "rgb(84, 84, 84)",
+					"border-top-color": "rgb(84, 84, 84)",
+					"caret-color": "rgb(84, 84, 84)",
+					"color": "rgb(84, 84, 84)",
+					"outline-color": "rgb(84, 84, 84)"
 				},
 				"select#transport": {
 					"::placeholdercolor": "rgb(76, 169, 251)",
