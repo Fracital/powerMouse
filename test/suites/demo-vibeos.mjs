@@ -812,7 +812,7 @@ async function openTabs(page) {
 	const vibe = `${root}vendor/vibeOS/`;
 	const source = readFileSync(`${vibe}src/dom/v86files.ts`, 'utf8');
 	const base = (name) =>
-		new RegExp(`const ${name} = '([^']+)'`).exec(source)[1];
+		new RegExp(`const ${name} =\\s*'([^']+)'`).exec(source)[1];
 	const v86 = `${vibe}scripts/v86/`;
 	const PINNED = [
 		[`${base('release')}libv86.js`, `${v86}libv86.js`],
