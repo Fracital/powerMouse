@@ -20,7 +20,12 @@
 //    client; with the real network, check.torproject.org says IsTor
 //    through it (wasm in the transport worker, IndexedDB, Wisp streams);
 //  - offline.html's Download saves the file, which boots from file: and
-//    loads the fixture;
+//    dials: the fixture compared with its native load, offline-html's site
+//    page (suggestions, storage, pushState, its frame, a WebSocket, its
+//    workers), a link, Back, Forward, Reload, forms, a location write and
+//    the Navigation API, and the vibeOS switch (offline-vibeos's checks);
+//  - offline.html's Tor mode, in a build with the suites' stand-in for the
+//    Tor network: the client bootstraps, a page loads, its IndexedDB stays;
 //  - Tor mode (a second demo server whose Tor client is the suites'
 //    stand-in, epoxy over its wisp): the box offered, a page loads, the
 //    normal profile's site data is not in Tor's, and turned off the
@@ -34,6 +39,7 @@
 // missing, and under CI unless FIREFOX names a binary. SHOTS=1 keeps
 // screenshots in test/out/firefox-*.png.
 /* global ISOLATED, PMTheme, openExtensionsPage, DIRECTORY, TOR_REQUESTED, TOR_CLIENT -- the demo page's, in the functions evaluated there */
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { firefoxBinary, launchFirefox } from './bidi.mjs';
@@ -720,16 +726,20 @@ async function offlineHistory(tab) {
 		await omni(tab),
 	);
 	// (Firefox makes it a replace in a document written by document.open)
-	const entries = await inActive(tab, () => [
-		navigation.entries().map((entry) => new URL(entry.url).pathname),
-		navigation.currentEntry.index,
-	]).catch((error) => String(error));
+	// (the tab's last two entries, the current one last)
+	const entries = await inActive(tab, () => {
+		const all = navigation.entries();
+		return [
+			all.slice(-2).map((entry) => new URL(entry.url).pathname),
+			all.length - 1 - navigation.currentEntry.index,
+		];
+	}).catch((error) => String(error));
 	ok(
 		"offline.html: a form's submission makes an entry of its own, as in Chrome",
 		JSON.stringify(entries) ===
 			JSON.stringify([
 				['/pages/offline-html.html', '/pages/offline-html-2.html'],
-				1,
+				0,
 			]),
 		short(entries),
 	);
@@ -799,6 +809,143 @@ async function offlineHistory(tab) {
 		)) && (await omni(tab)) === `${two}?q=script`,
 		await omni(tab),
 	);
+}
+
+// vibeOS in the file (the offline-vibeos suite's in Chrome): the menu's
+// switch makes the tab a window holding its own frame (moveBefore), its
+// document as it was, the desktop's files the file's own, a game opens,
+// and back in powerMouse's view the tab is as it was
+async function offlineVibeOS(tab) {
+	await submitOmni(tab, `${servers.fixture}pages/vibeos-state.html`);
+	const STATE = () =>
+		document.title === 'vibeOS state' && {
+			mark: window.__mark ?? null,
+			loads: window.loads,
+			count: window.count,
+			typed: document.getElementById('typed').value,
+			y: Math.round(scrollY),
+		};
+	await waitActive(
+		tab,
+		() => document.title === 'vibeOS state' && window.count > 3,
+	);
+	await inActive(tab, () => {
+		document.getElementById('typed').value = 'typed before';
+		window.__mark = 'alive';
+		scrollTo(0, 1234);
+	}).catch(() => {});
+	const before = await waitActive(tab, STATE, { timeout: 5000 });
+	await tab.click('#toolMenu');
+	await sleep(300);
+	await tab.click('#menuVibe');
+	const shown = await tab.until(
+		() => {
+			const windows = document.querySelectorAll('#vibeos-root .vo-window');
+			const panel = document.querySelector(
+				'#vibeos-root .vo-window.vo-active .vibe-browser-panel:not([hidden])',
+			);
+			return (
+				document.body.classList.contains('vibeos') &&
+				windows.length > 0 && {
+					windows: windows.length,
+					inWindow: !!panel?.querySelector('iframe.frame'),
+					log: document.getElementById('logMsg')?.textContent,
+				}
+			);
+		},
+		{ timeout: 60000 },
+	);
+	ok(
+		'offline.html: the vibeOS switch makes the tab a window holding its frame',
+		shown?.windows === 1 && shown.inWindow,
+		short(shown ?? (await tab.eval(LANDING))),
+	);
+	/** the tab's document after a move: what it kept, and its timer running */
+	const kept = async (label) => {
+		const first = await waitActive(tab, STATE, { timeout: 10000 });
+		await sleep(300);
+		const second = await waitActive(tab, STATE, { timeout: 10000 });
+		ok(
+			`offline.html: ${label}, the page's script state, typed input and scroll are kept, its timer runs`,
+			first?.mark === 'alive' &&
+				first.loads === 1 &&
+				first.typed === 'typed before' &&
+				first.y === 1234 &&
+				second?.count > first.count &&
+				first.count >= (before?.count ?? Infinity),
+			`${short(first)} -> ${short(second)}`,
+		);
+	};
+	await kept('into vibeOS');
+	const desktop = await tab.until(
+		() => {
+			const images = [...document.querySelectorAll('#vibeos-root img')].filter(
+				(image) => image.src && !image.closest('[hidden]'),
+			);
+			const seen = {
+				sheets: [...document.querySelectorAll('link[rel="stylesheet"]')].filter(
+					(link) => link.href.startsWith('blob:'),
+				).length,
+				wallpaper: /^url\("blob:/.test(
+					getComputedStyle(document.getElementById('vo-wallpaper'))
+						.backgroundImage,
+				),
+				font: document.fonts.check('16px "Open Sans"', 'vibeOS'),
+				images: images.length,
+				own: images.every((image) => /^(blob|data):/.test(image.src)),
+				broken: images.filter(
+					(image) => image.complete && image.naturalWidth === 0,
+				).length,
+				pending: images.filter((image) => !image.complete).length,
+			};
+			return seen.pending === 0 && seen.font && seen;
+		},
+		{ timeout: 10000 },
+	);
+	ok(
+		"offline.html: vibeOS's stylesheet, font, wallpaper and icons are the file's own, and every image loads",
+		desktop?.sheets >= 1 &&
+			desktop.wallpaper &&
+			desktop.images > 3 &&
+			desktop.own &&
+			desktop.broken === 0,
+		short(desktop),
+	);
+	await tab.click('#vibeos-root .vo-applications:not(.vo-leave)');
+	await tab.eval(() =>
+		[...document.querySelectorAll('#vibeos-root .vo-menu-item')]
+			.find((item) => item.textContent.trim() === 'Tetris')
+			.click(),
+	);
+	const game = await tab.find(
+		() => !!document.getElementById('canvas') && location.protocol,
+		{ skipTop: true, timeout: 15000 },
+	);
+	ok(
+		'offline.html: a vibeOS game opens from a blob: URL',
+		game?.value === 'blob:',
+		short(game),
+	);
+	await tab
+		.eval(() =>
+			document
+				.querySelector('#vibeos-root .vo-web-app-frame')
+				.closest('.vo-window')
+				.querySelector('.vo-window-close')
+				.click(),
+		)
+		.catch(() => {});
+	await tab.click('#vibeos-root .vo-leave');
+	const back = await tab.until(
+		() =>
+			!document.body.classList.contains('vibeos') &&
+			[...document.querySelectorAll('iframe.frame')].every(
+				(frame) => frame.parentNode === document.getElementById('frames'),
+			),
+		{ timeout: 10000 },
+	);
+	ok('offline.html: back from vibeOS the frame is its tab again', !!back);
+	await kept('back from vibeOS');
 }
 
 // ---- the landing: Tor, offline.html ----
@@ -973,6 +1120,8 @@ async function offlineHistory(tab) {
 			}
 			await offlineSite(offline);
 			await offlineHistory(offline);
+			if (text.includes('id="pm-vibeos"')) await offlineVibeOS(offline);
+			else console.log('SKIP offline.html vibeOS (the file carries none)');
 		}
 		const fileLoads = await offline
 			.eval(() => window.__pmFileLoads ?? null)
@@ -995,6 +1144,97 @@ async function offlineHistory(tab) {
 		await shot(offline, 'offline');
 		await offline.close();
 	}
+}
+
+// ---- offline.html's Tor mode ----
+// (a build with the suites' stand-in for the Tor network,
+// test/offline-tor-stand-in.mjs, as the offline-html suite's: a Tor stream
+// is the wisp server's TCP stream to 127.0.0.1) the toggle is on and
+// offered, the client in a worker of the file's page bootstraps, a page
+// loads on its streams, and its IndexedDB, the file:// page's, is kept
+// across a reload
+
+{
+	mkdirSync(OUT, { recursive: true });
+	const torFile = `${OUT}firefox-offline-tor.html`;
+	execFileSync(
+		process.execPath,
+		[
+			`${root}scripts/build-offline.mjs`,
+			'--tor-stand-in',
+			'--no-adblock',
+			'--out',
+			torFile,
+		],
+		{ stdio: 'ignore' },
+	);
+	const tab = await firefox.newTab();
+	const from = firefox.logs.length;
+	const READY = () => {
+		const text = document.getElementById('logMsg')?.textContent ?? '';
+		return /^(Ready|Error)/.test(text) ? text : null;
+	};
+	const standIn = () =>
+		new Promise((resolve) => {
+			const open = indexedDB.open('stomp-tor-client-stand-in');
+			open.onerror = () => resolve(null);
+			open.onsuccess = () => {
+				const store = open.result
+					.transaction('kv', 'readonly')
+					.objectStore('kv');
+				const keys = store.getAllKeys();
+				const started = store.get('stand-in:started');
+				keys.onsuccess = () =>
+					(started.onsuccess = () =>
+						resolve({ keys: keys.result, started: started.result }));
+			};
+		});
+	await tab.go(
+		`${pathToFileURL(torFile).href}?wisp=${encodeURIComponent(`ws://127.0.0.1:${servers.port}/wisp/`)}&tor=1`,
+	);
+	const ready = await tab.until(READY, { timeout: 120000 });
+	const box = await tab.eval(() => ({
+		checked: document.getElementById('tor').checked,
+		disabled: document.getElementById('tor').disabled,
+		unavailable: document
+			.getElementById('torLabel')
+			.hasAttribute('data-unavailable'),
+	}));
+	ok(
+		'offline.html Tor mode: the toggle is on and offered, and the client in its worker bootstraps',
+		ready === 'Ready (Tor connected)' &&
+			box.checked &&
+			!box.disabled &&
+			!box.unavailable,
+		short({ ready, box }),
+	);
+	await submitLanding(tab, `${servers.fixture}pages/offline-html.html`);
+	const page = await tab.find(
+		() => document.title === 'Offline page one' && document.URL,
+		{ skipTop: true, timeout: 60000 },
+	);
+	const kept = await tab.eval(standIn).catch(() => null);
+	ok(
+		"offline.html Tor mode: a fixture page loads on the client's streams",
+		!!page &&
+			kept?.keys.includes(`dir:consensus:stand-in-${servers.fixturePort}`),
+		short({ page: page?.value, kept }),
+	);
+	await tab.reload();
+	await tab.until(READY, { timeout: 120000 });
+	const again = await tab.eval(standIn).catch(() => null);
+	ok(
+		"offline.html Tor mode: the client's IndexedDB is kept across a reload",
+		kept?.started === '1' && again?.started === '2',
+		short({ kept: kept?.started, again: again?.started }),
+	);
+	const torErrors = errorsSince(from);
+	ok(
+		'offline.html Tor mode: no console errors',
+		!torErrors.length,
+		short(torErrors, 2000),
+	);
+	await tab.close();
 }
 
 // ---- Tor mode through the client, on the real network ----

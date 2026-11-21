@@ -11,6 +11,18 @@
 
 const ID = 'pm-vibeos';
 const PLACEHOLDER = /@@pm-vibeos:(\d+)@@/g;
+// vibeOS resolves its root-relative paths against `location.origin`, which
+// Firefox reads as "null" on file: (`new URL('/icons/x.svg', 'null')`
+// throws, and the desktop never loaded): its module reads `file://` there,
+// as Chrome reads a file: page's origin
+const NULL_ORIGIN =
+	location.protocol === 'file:' && location.origin === 'null'
+		? (text) =>
+				text.replaceAll(
+					'location.origin',
+					'(location.origin==="null"?"file://":location.origin)',
+				)
+		: null;
 
 /** whether this file carries vibeOS */
 export const hasVibeOS = () => !!document.getElementById(ID);
@@ -67,11 +79,13 @@ async function unpack() {
 	for (const [path, type, size, text] of index) {
 		const bytes = plain.subarray(at, at + size);
 		at += size;
-		const body = text
+		let body = text
 			? new TextDecoder()
 					.decode(bytes)
 					.replace(PLACEHOLDER, (_, n) => urls[Number(n)] ?? 'data:,')
 			: bytes;
+		if (NULL_ORIGIN && path === 'embed.js')
+			body = NULL_ORIGIN(text ? body : new TextDecoder().decode(bytes));
 		const url = URL.createObjectURL(new Blob([body], { type }));
 		urls.push(url);
 		byPath.set(path, url);

@@ -665,8 +665,9 @@ fixture page firefox-smoke.html proxied in both modes against its native
 load, Wikipedia, MDN, the Web Store and Hacker News (`SKIP_NETWORK=1`
 leaves them out), Back, Forward and a reload with the `?N` tokens, Ctrl+R,
 Stop, themes and Page appearance, the Extensions page, the Tor box and Tor
-mode, offline.html's Download and the saved file, and dialing on content
-slots. It is not in CI and says
+mode, offline.html's Download and the saved file (its dialed tabs, a
+site's history, frames, workers and forms, the vibeOS switch, and Tor mode
+on the suites' stand-in), and dialing on content slots. It is not in CI and says
 SKIP where there is no Firefox (FIREFOX names a binary); a difference
 Firefox still has goes in its `KNOWN` list with the reason.
 
