@@ -8,7 +8,10 @@
 // them used to be a revalidation, and the transport worker's, the module's
 // and its wasm's came one after another before the transport could start.
 // The page and the service worker's script still revalidate: they are what
-// says which build is current. In isolation mode the host's controller frame
+// says which build is current. (The page's reload goes out as the app
+// worker's navigation preload, demo/public/app-worker.js, which Playwright
+// gives to the worker without the headers the network stack added: the
+// page's own DevTools session sees the request as it went out.) In isolation mode the host's controller frame
 // and its script are asked for by their hashes too
 // (`controllerFrame.html?<hash>&script=controllerFrame.js%3F<hash>`), kept
 // for good, and a reload revalidates neither. The plain names keep working, no-cache, and
@@ -36,6 +39,28 @@ await page.evaluate(() => window.controller.wait());
 await sleep(2000);
 const cold = asked.map(({ url }) => url);
 asked.length = 0;
+// the page's own requests as they went out (the headers the HTTP cache
+// added, If-None-Match) and the status the server answered
+const wire = new Map();
+const cdp = await page.context().newCDPSession(page);
+const sent = (id) => wire.get(id) ?? wire.set(id, {}).get(id);
+cdp.on('Network.requestWillBeSent', (event) => {
+	sent(event.requestId).url = event.request.url;
+});
+cdp.on('Network.requestWillBeSentExtraInfo', (event) => {
+	const headers = Object.fromEntries(
+		Object.entries(event.headers).map(([name, value]) => [
+			name.toLowerCase(),
+			value,
+		]),
+	);
+	sent(event.requestId).conditional =
+		'if-none-match' in headers || 'if-modified-since' in headers;
+});
+cdp.on('Network.responseReceivedExtraInfo', (event) => {
+	sent(event.requestId).status = event.statusCode;
+});
+await cdp.send('Network.enable');
 await page.reload();
 await page.waitForFunction(
 	() => /^(Ready|Error)/.test(document.getElementById('logMsg').textContent),
@@ -75,11 +100,15 @@ ok(
 	revalidated.length === 0 && asked.length > 0,
 	JSON.stringify(revalidated.map(({ url }) => path(url))),
 );
+const pageAsked = [...wire.values()].filter(
+	({ url }) => url && path(url) === '/',
+);
 ok(
 	'the page itself is asked again',
-	asked.some(({ url, conditional }) => path(url) === '/' && conditional),
-	JSON.stringify(asked.slice(0, 3)),
+	pageAsked.some(({ conditional }) => conditional),
+	JSON.stringify(pageAsked),
 );
+await cdp.detach();
 
 const cacheControl = async (url) =>
 	(await fetch(url)).headers.get('cache-control');
