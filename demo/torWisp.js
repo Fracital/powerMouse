@@ -4,8 +4,18 @@
 // Tor sees it. This loopback DNS server returns a public, never-dialled A
 // placeholder for that validation; the only outbound TCP path is SOCKS5.
 // It NEVER asks or forwards a question to another DNS server.
+//
+// A SOCKS greeting only proves that something listens on the port. Whether
+// Tor has bootstrapped and builds circuits is watched by createTorMonitor:
+// Tor's control port (`GETINFO status/bootstrap-phase`) when one is
+// configured, else a bounded CONNECT through SOCKS to a probe host. The relay
+// takes new Wisp connections only while that says ready (demo/server.js).
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createSocket } from 'node:dgram';
-import { connect } from 'node:net';
+import { EventEmitter } from 'node:events';
+import { readFile } from 'node:fs/promises';
+import { connect, isIP } from 'node:net';
+import { isAbsolute } from 'node:path';
 import { holyWisp } from 'holywisp';
 
 // A syntactically public address: holyWisp's outbound-address policy rejects
@@ -13,8 +23,36 @@ import { holyWisp } from 'holywisp';
 // This address is never a TCP dial target: proxy is mandatory and all TCP
 // streams are proxied by hostname. IP-literal CONNECTs are forbidden.
 const VALIDATION_A = Buffer.from([1, 1, 1, 1]);
+// Local and special-use names never go to Tor: the host's own names, Tor's
+// `.exit`/`.noconnect` notations, and the reverse-lookup zones.
 const BLOCKED_NAMES =
-	/(?:^|\.)(?:localhost|local|lan|internal|home\.arpa|in-addr\.arpa|ip6\.arpa)$/i;
+	/(?:^|\.)(?:localhost|local|lan|internal|intranet|home\.arpa|in-addr\.arpa|ip6\.arpa|exit|noconnect|test|invalid|example)$/i;
+// A last label that is a number (`127.0.0.1` spelled in a form the IP
+// literal check does not read, `0x7f.1`) is an address, not a name: no
+// public top-level domain is numeric.
+const NUMERIC_LAST_LABEL = /(?:^|\.)(?:\d+|0x[0-9a-f]*)$/i;
+
+// The ports no browser request goes to (fetch.spec.whatwg.org/#port-blocking,
+// src/server/badPorts.ts): a page could not reach them natively, so the Tor
+// relay refuses them too (mail, IRC, SSH, ...). Port 0 is no Wisp port.
+export const TOR_BLOCKED_PORTS = [
+	1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79,
+	87, 95, 101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137,
+	139, 143, 161, 179, 389, 427, 465, 512, 513, 514, 515, 526, 530, 531, 532,
+	540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993, 995, 1719, 1720, 1723,
+	2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669,
+	6679, 6697, 10080,
+];
+
+/** Whether a hostname is one the Tor relay refuses before any lookup. */
+export function blockedTorName(name) {
+	return (
+		name.length > 253 ||
+		!name.includes('.') ||
+		BLOCKED_NAMES.test(name) ||
+		NUMERIC_LAST_LABEL.test(name)
+	);
+}
 
 /** Answer only ordinary uncompressed DNS questions, without upstream I/O. */
 export function validationDnsAnswer(query) {
@@ -37,7 +75,7 @@ export function validationDnsAnswer(query) {
 	const type = query.readUInt16BE(offset);
 	const klass = query.readUInt16BE(offset + 2);
 	const name = labels.join('.');
-	const denied = name.length > 253 || BLOCKED_NAMES.test(name);
+	const denied = blockedTorName(name);
 	const answerA = !denied && klass === 1 && type === 1;
 	const response = Buffer.alloc(12);
 	query.copy(response, 0, 0, 2);
@@ -110,25 +148,70 @@ export function parseTorSocks5(value) {
 	};
 }
 
-/** SOCKS5 method negotiation only: proves a SOCKS endpoint exists, not that Tor bootstrapped. */
-export async function probeTorSocks5({ host, port }, timeoutMs = 1200) {
-	await new Promise((resolve, reject) => {
-		const socket = connect({ host, port });
+/**
+ * Tor's control port, which must be the machine's own: `127.0.0.1:PORT`,
+ * `[::1]:PORT` or `unix:/absolute/path` (Tor's ControlSocket).
+ */
+export function parseTorControl(value) {
+	const text = String(value).trim();
+	if (text.startsWith('unix:')) {
+		const path = text.slice(5);
+		if (!isAbsolute(path) || path.includes('\0'))
+			throw new TypeError('STOMP_TOR_CONTROL unix: needs an absolute path');
+		return { path };
+	}
+	const match = /^(127\.0\.0\.1|\[::1\]):(\d{1,5})$/.exec(text);
+	const port = Number(match?.[2]);
+	if (!match || port < 1 || port > 65535)
+		throw new TypeError(
+			'STOMP_TOR_CONTROL must be 127.0.0.1:PORT, [::1]:PORT or unix:/path',
+		);
+	return { host: match[1] === '[::1]' ? '::1' : match[1], port };
+}
+
+/** The circuit probe's destination: a public hostname and a port. */
+export function parseTorProbe(value) {
+	const match = /^([a-z0-9.-]+):(\d{1,5})$/i.exec(String(value).trim());
+	const port = Number(match?.[2]);
+	if (
+		!match ||
+		port < 1 ||
+		port > 65535 ||
+		isIP(match[1]) ||
+		blockedTorName(match[1].toLowerCase())
+	)
+		throw new TypeError(
+			'STOMP_TOR_PROBE must be host:port with a public hostname, or off',
+		);
+	return { host: match[1].toLowerCase(), port };
+}
+
+/** One socket with a deadline: `finish` settles once and destroys it. */
+function bounded(options, timeoutMs, onSocket) {
+	return new Promise((resolve, reject) => {
+		const socket = connect(options);
 		let done = false;
-		const finish = (err) => {
+		const finish = (error, value) => {
 			if (done) return;
 			done = true;
+			clearTimeout(timer);
 			socket.destroy();
-			if (err) reject(err);
-			else resolve();
+			if (error) reject(error);
+			else resolve(value);
 		};
-		socket.setTimeout(timeoutMs, () =>
-			finish(new Error('Tor SOCKS5 probe timed out')),
-		);
-		socket.once('error', finish);
-		socket.once('close', () =>
-			finish(new Error('Tor SOCKS5 closed during probe')),
-		);
+		// a wall-clock bound, not an idle one: a peer that trickles bytes
+		// must not hold a check open
+		const timer = setTimeout(() => finish(new Error('timed out')), timeoutMs);
+		timer.unref?.();
+		socket.once('error', (error) => finish(error));
+		socket.once('close', () => finish(new Error('closed')));
+		onSocket(socket, finish);
+	});
+}
+
+/** SOCKS5 method negotiation only: proves a SOCKS endpoint exists, not that Tor bootstrapped. */
+export async function probeTorSocks5({ host, port }, timeoutMs = 1200) {
+	await bounded({ host, port }, timeoutMs, (socket, finish) => {
 		socket.once('connect', () => socket.write(Buffer.from([5, 1, 0])));
 		socket.once('data', (bytes) =>
 			finish(
@@ -137,7 +220,375 @@ export async function probeTorSocks5({ host, port }, timeoutMs = 1200) {
 					: new Error('Tor SOCKS5 refused no-auth negotiation'),
 			),
 		);
+	}).catch((error) => {
+		throw new Error(`Tor SOCKS5 probe: ${error.message}`);
 	});
+}
+
+/**
+ * A SOCKS5 CONNECT through Tor to `target` (a public host:port), closed as
+ * soon as Tor answers: Tor replies success only once a circuit carried the
+ * connection to the destination, so this is the readiness signal when no
+ * control port is configured. Nothing is sent to the destination.
+ */
+export async function probeTorCircuit(
+	{ host, port },
+	target,
+	timeoutMs = 30000,
+) {
+	const name = Buffer.from(target.host, 'ascii');
+	const request = Buffer.concat([
+		Buffer.from([5, 1, 0, 3, name.length]),
+		name,
+		Buffer.from([target.port >> 8, target.port & 255]),
+	]);
+	await bounded({ host, port }, timeoutMs, (socket, finish) => {
+		let step = 0;
+		let pending = Buffer.alloc(0);
+		socket.once('connect', () => socket.write(Buffer.from([5, 1, 0])));
+		socket.on('data', (chunk) => {
+			pending = Buffer.concat([pending, chunk]);
+			if (step === 0 && pending.length >= 2) {
+				if (pending[0] !== 5 || pending[1] !== 0)
+					return finish(new Error('SOCKS5 refused no-auth negotiation'));
+				pending = pending.subarray(2);
+				step = 1;
+				socket.write(request);
+			}
+			if (step === 1 && pending.length >= 2)
+				finish(
+					pending[0] === 5 && pending[1] === 0
+						? null
+						: new Error(`SOCKS5 CONNECT failed (reply ${pending[1]})`),
+				);
+		});
+	});
+}
+
+const CONTROL_SERVER_KEY =
+	'Tor safe cookie authentication server-to-controller hash';
+const CONTROL_CLIENT_KEY =
+	'Tor safe cookie authentication controller-to-server hash';
+
+/** A Tor control-protocol reply's lines, as `{ code, lines }`. */
+function controlReader(socket, finish) {
+	let buffer = '';
+	let lines = [];
+	const waiting = [];
+	socket.setEncoding('latin1');
+	socket.on('data', (text) => {
+		buffer += text;
+		// a control port that sends without end is no Tor
+		if (buffer.length > 65536) return finish(new Error('reply too long'));
+		let newline;
+		while ((newline = buffer.indexOf('\r\n')) !== -1) {
+			const line = buffer.slice(0, newline);
+			buffer = buffer.slice(newline + 2);
+			lines.push(line);
+			// `250 OK` ends a reply, `250-...` and `250+...` continue it
+			if (/^\d{3} /.test(line) || /^\d{3}$/.test(line)) {
+				const reply = { code: Number(line.slice(0, 3)), lines };
+				lines = [];
+				waiting.shift()?.(reply);
+			}
+		}
+	});
+	return (command) =>
+		new Promise((resolve) => {
+			waiting.push(resolve);
+			socket.write(`${command}\r\n`);
+		});
+}
+
+const quoted = (text) => `"${text.replace(/[\\"]/g, (c) => `\\${c}`)}"`;
+
+/** Parse `status/bootstrap-phase`'s value (`NOTICE BOOTSTRAP PROGRESS=50 TAG=... SUMMARY="..."`). */
+export function parseBootstrapPhase(value) {
+	const progress = Number(/\bPROGRESS=(\d{1,3})\b/.exec(value)?.[1]);
+	if (!Number.isInteger(progress) || progress > 100) return null;
+	const tag = /\bTAG=([a-z0-9_]+)/i.exec(value)?.[1] ?? '';
+	const summary = /\bSUMMARY="((?:[^"\\]|\\.)*)"/.exec(value)?.[1] ?? '';
+	return {
+		progress,
+		tag,
+		// what Tor says of the phase, printable ASCII only and short: it is
+		// shown to visitors as is
+		summary: summary
+			.replace(/\\(.)/g, '$1')
+			.replace(/[^\x20-\x7e]/g, '')
+			.slice(0, 80),
+		warning: /^WARN\b/.test(value),
+	};
+}
+
+/**
+ * Ask Tor's control port how far it bootstrapped. Authenticates with what
+ * PROTOCOLINFO offers: NULL, SAFECOOKIE (the cookie file is read, never
+ * sent: only an HMAC of it is, after the port proved it knows the cookie
+ * too) or HASHEDPASSWORD with `password`. The plain COOKIE method is not
+ * used, since it would send the file's bytes to whoever listens there.
+ */
+export async function queryTorControl(
+	control,
+	{ password = '', cookieFile = '', timeoutMs = 3000 } = {},
+) {
+	return bounded(control, timeoutMs, (socket, finish) => {
+		const ask = controlReader(socket, finish);
+		socket.once('connect', async () => {
+			try {
+				const info = await ask('PROTOCOLINFO 1');
+				if (info.code !== 250) throw new Error('PROTOCOLINFO refused');
+				const auth = info.lines.find((line) => /^250-AUTH /.test(line)) ?? '';
+				const methods = (/METHODS=([A-Z,]+)/.exec(auth)?.[1] ?? '').split(',');
+				const offeredFile = /COOKIEFILE="((?:[^"\\]|\\.)*)"/.exec(auth)?.[1];
+				let command;
+				if (methods.includes('NULL')) command = 'AUTHENTICATE';
+				else if (methods.includes('HASHEDPASSWORD') && password)
+					command = `AUTHENTICATE ${quoted(password)}`;
+				else if (methods.includes('SAFECOOKIE')) {
+					const path = cookieFile || offeredFile?.replace(/\\(.)/g, '$1');
+					if (!path || !isAbsolute(path))
+						throw new Error('no control cookie file');
+					const cookie = await readFile(path);
+					if (cookie.length !== 32) throw new Error('not a Tor cookie file');
+					const clientNonce = randomBytes(32);
+					const challenge = await ask(
+						`AUTHCHALLENGE SAFECOOKIE ${clientNonce.toString('hex')}`,
+					);
+					const hash = /SERVERHASH=([0-9A-F]{64})/i.exec(
+						challenge.lines[0],
+					)?.[1];
+					const nonce = /SERVERNONCE=([0-9A-F]{64})/i.exec(
+						challenge.lines[0],
+					)?.[1];
+					if (challenge.code !== 250 || !hash || !nonce)
+						throw new Error('AUTHCHALLENGE refused');
+					const message = Buffer.concat([
+						cookie,
+						clientNonce,
+						Buffer.from(nonce, 'hex'),
+					]);
+					const expected = createHmac('sha256', CONTROL_SERVER_KEY)
+						.update(message)
+						.digest();
+					if (!timingSafeEqual(expected, Buffer.from(hash, 'hex')))
+						throw new Error('control port does not know the cookie');
+					command = `AUTHENTICATE ${createHmac('sha256', CONTROL_CLIENT_KEY)
+						.update(message)
+						.digest('hex')}`;
+				} else throw new Error('no usable control authentication');
+				if ((await ask(command)).code !== 250)
+					throw new Error('control authentication failed');
+				const phase = await ask('GETINFO status/bootstrap-phase');
+				const value = phase.lines
+					.find((line) => line.startsWith('250-status/bootstrap-phase='))
+					?.slice('250-status/bootstrap-phase='.length);
+				const bootstrap =
+					phase.code === 250 && value && parseBootstrapPhase(value);
+				if (!bootstrap) throw new Error('no bootstrap phase');
+				// older Tor may not know it: then the phase alone says
+				const circuit = await ask('GETINFO status/circuit-established');
+				const established = circuit.lines
+					.find((line) => line.startsWith('250-status/circuit-established='))
+					?.slice(-1);
+				socket.write('QUIT\r\n');
+				finish(null, {
+					...bootstrap,
+					circuit:
+						circuit.code === 250 && established ? established === '1' : null,
+				});
+			} catch (error) {
+				finish(error);
+			}
+		});
+	}).catch((error) => {
+		throw new Error(`Tor control port: ${error.message}`);
+	});
+}
+
+/**
+ * Watches whether the Tor behind `socks` can carry connections. Its state is
+ * `down` (no SOCKS listener, or the relay is not running), `bootstrapping`
+ * (Tor answers but has no working circuit yet; `progress` is Tor's when the
+ * control port says), `ready`, or `unknown` (Tor answers and nothing more
+ * can be learnt: no control port and the probe turned off). Checks are
+ * bounded: one at a time, every `fastMs` until ready and `slowMs` after
+ * (a SOCKS greeting and, if set, the control port: both on this machine),
+ * the circuit probe through Tor at most every `probeFastMs` until ready and
+ * `probeSlowMs` after. `refresh()` asks for a check now, at most once per
+ * `minMs`, so a page that polls cannot make it probe more. It emits
+ * `change` with the new snapshot.
+ */
+export function createTorMonitor({
+	socks,
+	control = null,
+	password = '',
+	cookieFile = '',
+	probe = null,
+	relayRunning = () => true,
+	fastMs = 2000,
+	slowMs = 5000,
+	probeFastMs = 10000,
+	probeSlowMs = 300000,
+	probeTimeoutMs = 30000,
+	minMs = 1000,
+	log = (line) => console.log(line),
+} = {}) {
+	const monitor = new EventEmitter();
+	let state = {
+		state: 'bootstrapping',
+		progress: null,
+		summary: 'Checking Tor',
+		via: control ? 'control' : probe ? 'probe' : 'socks',
+	};
+	let checkedAt = 0;
+	let running = null;
+	let timer = null;
+	let stopped = false;
+	let probing = null;
+	let lastProbe = { at: 0, ok: false };
+	let probeFailures = 0;
+	let controlWarned = false;
+
+	const set = (next) => {
+		const changed =
+			next.state !== state.state ||
+			next.progress !== state.progress ||
+			next.summary !== state.summary ||
+			next.via !== state.via;
+		const was = state.state;
+		state = next;
+		if (!changed) return;
+		if (next.state !== was)
+			log(
+				`Tor: ${next.state}${next.progress !== null && next.state !== 'ready' ? ` ${next.progress}%` : ''} (${next.via})`,
+			);
+		monitor.emit('change', monitor.snapshot());
+	};
+
+	// the probe runs beside the checks: it can take as long as a circuit
+	// does, and a check must not wait for it
+	const circuitProbe = () => {
+		const due =
+			Date.now() - lastProbe.at >=
+			(lastProbe.ok && state.state === 'ready' ? probeSlowMs : probeFastMs);
+		if (probing || !due) return;
+		probing = probeTorCircuit(socks, probe, probeTimeoutMs).then(
+			() => true,
+			() => false,
+		);
+		probing.then((ok) => {
+			probing = null;
+			lastProbe = { at: Date.now(), ok };
+			probeFailures = ok ? 0 : probeFailures + 1;
+			if (!stopped) check();
+		});
+	};
+
+	async function once() {
+		if (!relayRunning())
+			return set({
+				state: 'down',
+				progress: null,
+				summary: 'Tor relay is not running',
+				via: 'relay',
+			});
+		try {
+			await probeTorSocks5(socks);
+		} catch {
+			// a Tor that comes back proves its circuits again
+			lastProbe = { at: 0, ok: false };
+			probeFailures = 0;
+			return set({
+				state: 'down',
+				progress: null,
+				summary: 'Tor is not running',
+				via: 'socks',
+			});
+		}
+		if (control) {
+			try {
+				const phase = await queryTorControl(control, { password, cookieFile });
+				controlWarned = false;
+				const ready = phase.progress === 100 && phase.circuit !== false;
+				return set({
+					state: ready ? 'ready' : 'bootstrapping',
+					progress: phase.progress,
+					summary:
+						phase.progress === 100 && phase.circuit === false
+							? 'No Tor circuit established'
+							: phase.summary,
+					via: 'control',
+				});
+			} catch (error) {
+				// a broken control port setting is the operator's to fix: say
+				// so once (the message names no secret), and fall back to the
+				// probe, or to not knowing
+				if (!controlWarned) console.warn(error.message);
+				controlWarned = true;
+			}
+		}
+		if (probe) {
+			circuitProbe();
+			// one failed probe of a working Tor is not yet an outage
+			const ok = lastProbe.ok || (state.state === 'ready' && probeFailures < 2);
+			return set({
+				state: lastProbe.at && ok ? 'ready' : 'bootstrapping',
+				progress: null,
+				summary:
+					lastProbe.at && ok
+						? 'Tor circuit works'
+						: lastProbe.at
+							? 'Waiting for a Tor circuit'
+							: 'Checking for a Tor circuit',
+				via: 'probe',
+			});
+		}
+		set({
+			state: 'unknown',
+			progress: null,
+			summary: 'Tor answers; readiness is not checked',
+			via: 'socks',
+		});
+	}
+
+	function check() {
+		if (running) return running;
+		clearTimeout(timer);
+		running = once()
+			.catch(() => {})
+			.finally(() => {
+				running = null;
+				checkedAt = Date.now();
+				if (stopped) return;
+				timer = setTimeout(
+					check,
+					state.state === 'ready' || state.state === 'unknown'
+						? slowMs
+						: fastMs,
+				);
+				timer.unref?.();
+			});
+		return running;
+	}
+
+	monitor.snapshot = () => ({
+		...state,
+		checked: checkedAt ? Date.now() - checkedAt : null,
+	});
+	monitor.refresh = () => {
+		if (!running && Date.now() - checkedAt >= minMs) check();
+		return monitor.snapshot();
+	};
+	monitor.check = check;
+	/** New Wisp connections are taken only in these states. */
+	monitor.accepting = () =>
+		state.state === 'ready' || state.state === 'unknown';
+	monitor.stop = () => {
+		stopped = true;
+		clearTimeout(timer);
+	};
+	return monitor;
 }
 
 function externalTorWisp(value) {
@@ -156,29 +607,52 @@ function externalTorWisp(value) {
 	return url.href;
 }
 
-/** Start a distinct relay, or advertise an operator-provided external one. */
+const list = (value) =>
+	String(value ?? '')
+		.split(',')
+		.map((item) => item.trim())
+		.filter(Boolean);
+
+/**
+ * Start a distinct relay, or advertise an operator-provided external one.
+ * A local relay starts whether or not Tor is up yet (its monitor says), so
+ * Tor coming up later, or coming back, needs no restart of this server.
+ */
 export async function startTorWisp({
 	socks5 = '',
 	external = '',
+	control = '',
+	controlPassword = '',
+	controlCookie = '',
+	probe = 'check.torproject.org:443',
+	origins = '',
+	trustedProxies = '',
 	logLevel = 'error',
+	monitor: monitorOptions = {},
 } = {}) {
 	if (external)
-		return { external: externalTorWisp(external), relay: null, dns: null };
+		return {
+			external: externalTorWisp(external),
+			relay: null,
+			dns: null,
+			monitor: null,
+		};
 	if (!socks5) return null;
 	const socks = parseTorSocks5(socks5);
-	try {
-		await probeTorSocks5(socks);
-	} catch (error) {
-		console.warn(`Tor Wisp disabled: ${error.message}`);
-		return null;
-	}
+	const controlPort = control ? parseTorControl(control) : null;
+	const probeTarget =
+		!probe || /^(?:0|off)$/i.test(probe) ? null : parseTorProbe(probe);
+	const allowedOrigins = list(origins);
+	const proxies = list(trustedProxies);
 	let dns;
 	let relay;
 	try {
 		dns = await openValidationDns();
 		relay = new holyWisp({
 			port: 0,
-			autoRestart: false, // a dead relay must not silently come back in a different mode
+			// a crashed relay comes back with this same configuration (still
+			// Tor-only); route() answers 503 meanwhile, never another relay
+			autoRestart: true,
 			proxy: socks.url,
 			proxyUDP: 'refuse',
 			allowTCP: true,
@@ -187,11 +661,34 @@ export async function startTorWisp({
 			allowPrivateIPs: false,
 			allowLoopbackIPs: false,
 			allowLinkLocalIPs: false,
+			enableTwisp: false,
+			serveWebclient: false,
+			blacklist: { ports: TOR_BLOCKED_PORTS },
 			dnsServers: [dns.address], // never use the system resolver for destinations
 			dnsResultOrder: 'ipv4first',
 			dnsTtlSeconds: 1,
 			dnsTimeoutMs: 1000,
-			floodProtection: { enabled: false },
+			// Every name resolves to the one placeholder, so a per-destination
+			// limit would be one limit for every site and every visitor: those
+			// are out of reach. The per-client ones stay (holyWisp's defaults,
+			// counted by the address route() is handed, see trustedProxies),
+			// and the SYN-flood heuristic is off: Tor's slow or failed
+			// circuits look like failed handshakes to it.
+			floodProtection: {
+				enabled: true,
+				maxConnectsPerDestPerSecond: 1000000,
+				maxConnectsPerDestPerMinute: 1000000,
+				maxConcurrentStreamsPerConnection: 512,
+				synFloodSignature: { enabled: false },
+			},
+			// an onion service's first connection can take tens of seconds
+			// (descriptor, introduction, rendezvous); past a minute it fails
+			// with a Wisp CLOSE rather than hanging the page
+			connectTimeoutMs: 60000,
+			// a connection with no stream left and nothing sent goes away
+			idleTimeoutSeconds: 300,
+			...(allowedOrigins.length && { allowedOrigins }),
+			...(proxies.length && { trustedProxies: proxies }),
 			maxMessageSize: 262149,
 			streamQueueMax: 64 * 1024 * 1024,
 			logLevel,
@@ -207,5 +704,15 @@ export async function startTorWisp({
 	// back to the host resolver or to the ordinary Wisp relay.
 	dns.socket.on('error', () => relay.kill());
 	dns.socket.on('close', () => relay.kill());
-	return { relay, dns, external: null };
+	const monitor = createTorMonitor({
+		socks,
+		control: controlPort,
+		password: controlPassword,
+		cookieFile: controlCookie,
+		probe: probeTarget,
+		relayRunning: () => relay.isRunning,
+		...monitorOptions,
+	});
+	await monitor.check();
+	return { relay, dns, monitor, external: null };
 }

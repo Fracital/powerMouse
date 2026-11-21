@@ -89,6 +89,52 @@
 			document
 				.getElementById('retry')
 				.addEventListener('click', () => location.reload());
+			// Tor mode (the /stomp-tor/ scope): a load that failed while the
+			// server's Tor was down or still connecting says so, and loads
+			// again by itself once Tor is ready (demo/server.js /api/tor).
+			// The question goes to the demo's server, not through Tor: this
+			// page runs no inject, its requests are the host's own.
+			if (
+				location.pathname.startsWith('/stomp-tor/') &&
+				(info.kind === 'transport' || info.kind === 'timeout')
+			) {
+				const tell = (status) => {
+					const progress =
+						status.progress != null ? ` (${status.progress}%)` : '';
+					const why =
+						status.state === 'down'
+							? 'Tor is not running on the server.'
+							: `Tor is still connecting${progress}${status.summary ? `: ${status.summary}` : ''}.`;
+					document.title = document.getElementById('title').textContent =
+						status.state === 'down' ? 'Tor is down' : 'Tor is connecting';
+					document.getElementById('detail').textContent =
+						`${why} This page loads again by itself once Tor is ready.`;
+				};
+				let waited = false;
+				const ask = async () => {
+					let status;
+					try {
+						const answer = await fetch('/api/tor', { cache: 'no-store' });
+						status = await answer.json();
+					} catch {
+						status = null;
+					}
+					const ready =
+						status?.state === 'ready' || status?.state === 'unknown';
+					// ready at once: the site itself failed, the page says so
+					if (ready && !waited) return;
+					if (ready) return location.reload();
+					// no Tor relay here at all: nothing to wait for
+					if (status?.state === 'off') return;
+					if (status) {
+						waited = true;
+						tell(status);
+					}
+					// at most every 2 s, and only while the page is shown
+					setTimeout(ask, 2000);
+				};
+				ask();
+			}
 		</script>
 	</body>
 </html>

@@ -69,14 +69,36 @@ which is Tor's SOCKS5 listener. Names are sent to SOCKS5 for Tor to resolve,
 including `.onion` names. The helper resolver gives holyWisp a public
 placeholder address for its initial address-class check, without asking the
 machine's usual resolver; the original hostname is sent in the SOCKS5
-CONNECT. UDP is refused, not sent directly. The Tor listener must be on
-loopback. If no listener is available at startup, the relay is not offered.
+CONNECT. UDP, IP literals, local names and the ports browsers block are
+refused, never sent directly. The Tor listener must be on loopback.
+
+A SOCKS listener is not a bootstrapped Tor, so the server watches Tor and
+says what it sees at `GET /api/tor` (`down`, `bootstrapping` with Tor's
+percentage, `ready`); `/wisp-tor/` takes connections only while Tor is
+ready and closes them when it stops being ready, so a load fails at once
+instead of hanging. In Tor mode the page shows the state beside the toggle
+and in the status line, and a page that failed because Tor was not ready
+says so ("Tor is down", "Tor is connecting") and loads again by itself once
+Tor is ready, without a reload of the host page. Tor that is down when the
+server starts, or that goes away and comes back, needs no restart.
+
+| Variable                     | Default                    | Meaning                                                                                                                                        |
+| ---------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `STOMP_TOR_SOCKS5`           | unset                      | Tor's SOCKS5 listener, `socks5h://127.0.0.1:PORT` or `socks5h://[::1]:PORT`, no credentials: turns on the `/wisp-tor/` relay                   |
+| `STOMP_TOR_CONTROL`          | unset                      | Tor's control port for readiness (`GETINFO status/bootstrap-phase`): `127.0.0.1:PORT`, `[::1]:PORT` or `unix:/path` of a `ControlSocket`       |
+| `STOMP_TOR_CONTROL_PASSWORD` | unset                      | the control port's password (`HashedControlPassword`); never logged                                                                            |
+| `STOMP_TOR_CONTROL_COOKIE`   | the file Tor names         | the control port's cookie file, for SAFECOOKIE authentication (the plain COOKIE method is not used)                                            |
+| `STOMP_TOR_PROBE`            | `check.torproject.org:443` | without a control port, the host a SOCKS CONNECT through Tor probes (closed at once, no byte sent; every 5 minutes once ready); `off` for none |
+| `STOMP_TOR_ORIGINS`          | unset                      | page origins the Tor relay takes WebSockets from, comma separated (unset: any)                                                                 |
+| `STOMP_TOR_TRUSTED_PROXIES`  | unset                      | reverse proxies (addresses or CIDRs) whose `X-Forwarded-For` the Tor relay's per-client limits believe                                         |
+| `STOMP_TOR_WISP_URL`         | unset                      | instead of all of the above, a separately operated Tor-backed Wisp relay                                                                       |
 
 Alternatively `STOMP_TOR_WISP_URL=wss://relay.example/wisp/` names a separately
 operated Tor-backed Wisp relay. Configure **one** of these on the server.
 The external relay must resolve names inside Tor, route every outbound TCP
 connection through Tor and reject all UDP. A page cannot prove that an
-untrusted relay obeys these rules. On HTTPS pages the Tor endpoint must use
+untrusted relay obeys these rules, and its readiness is not visible here
+(the page shows it as unknown). On HTTPS pages the Tor endpoint must use
 `wss://`; an unencrypted `ws://` endpoint is accepted only for local testing.
 
 **Scope:** this provides Tor egress for sites opened through STomp's TCP
@@ -86,8 +108,10 @@ GitHub commits/avatars and other requests the host makes directly do not
 pass through the Tor relay. The relay operator can see the user's network
 address and requested destinations; websites see the Tor exit, but shared
 cookies, logins and browser fingerprints can still link sessions. Tor supports
-TCP; features that require UDP cannot use this route. The relay must be
-secured, rate-limited and monitored before it is offered publicly.
+TCP; features that require UDP cannot use this route. `docs/tor.md` has the
+privacy scope in full, the readiness checks, the relay's limits, the
+operator checklist to work through before offering it publicly, and the
+options (and costs) of isolating Tor mode's profile from normal mode's.
 
 The bundled `tor.app` example is an Anura-specific Tor WASM/Snowflake client,
 not a compatible STomp Wisp transport. `docs/tor-app-audit.md` records the

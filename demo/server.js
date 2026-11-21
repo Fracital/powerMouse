@@ -31,7 +31,17 @@
 //   STOMP_TOR_SOCKS5   opt-in loopback Tor SOCKS5, e.g. socks5h://127.0.0.1:9050.
 //                       Separately starts a TCP-only /wisp-tor/ relay and a
 //                       loopback DNS validation shim: no public DNS lookups.
-//                       An unresponsive SOCKS endpoint hides the Tor option.
+//                       The relay takes connections only while Tor is ready
+//                       (/api/tor says; README "Tor routing").
+//   STOMP_TOR_CONTROL  optional Tor control port for readiness, 127.0.0.1:PORT
+//                       or unix:/path; STOMP_TOR_CONTROL_PASSWORD or
+//                       STOMP_TOR_CONTROL_COOKIE (a SAFECOOKIE file) if needed
+//   STOMP_TOR_PROBE    without a control port, the host:port a SOCKS CONNECT
+//                       through Tor probes (check.torproject.org:443); `off`
+//   STOMP_TOR_ORIGINS  optional comma-separated page origins the Tor relay
+//                       accepts WebSockets from
+//   STOMP_TOR_TRUSTED_PROXIES reverse proxies (CIDRs) whose X-Forwarded-For
+//                       the Tor relay's per-client limits believe
 //   STOMP_TOR_WISP_URL optional operator-provided wss:// Tor Wisp URL, instead
 //                       of a local relay; operator must verify its Tor egress
 //   STOMP_PROXY_ORIGIN  origin that serves the proxy for isolation mode; empty
@@ -217,7 +227,26 @@ Set STOMP_WISP_URL to use an external wisp server instead.`);
 const torWisp = await startTorWisp({
 	socks5: process.env.STOMP_TOR_SOCKS5,
 	external: process.env.STOMP_TOR_WISP_URL,
+	control: process.env.STOMP_TOR_CONTROL,
+	controlPassword: process.env.STOMP_TOR_CONTROL_PASSWORD,
+	controlCookie: process.env.STOMP_TOR_CONTROL_COOKIE,
+	probe: process.env.STOMP_TOR_PROBE,
+	origins: process.env.STOMP_TOR_ORIGINS,
+	trustedProxies: process.env.STOMP_TOR_TRUSTED_PROXIES,
 	logLevel: process.env.HOLYWISP_LOG_LEVEL || 'error',
+});
+// whether /wisp-tor/ takes a new connection: the relay runs and Tor is ready
+const torAccepting = () =>
+	!!torWisp?.relay?.isRunning && torWisp.monitor.accepting();
+// the WebSockets the local Tor relay was handed: when Tor stops being ready
+// they are closed, so what is in flight on them fails at once instead of
+// waiting out a connect timeout, and the transport's next connection waits
+// for Tor (refused until then, never sent to /wisp/)
+const torSockets = new Set();
+torWisp?.monitor?.on('change', ({ state }) => {
+	if (state === 'ready' || state === 'unknown') return;
+	for (const socket of torSockets) socket.destroy();
+	torSockets.clear();
 });
 
 // the built-in holyWisp has a WebTransport listener the page can reach only
@@ -380,7 +409,9 @@ if (wisp && webTransport)
 	});
 app.get('/config.js', (req, res) => {
 	const sitePool = slotPorts(req);
-	const localTor = torWisp?.relay?.isRunning ? { torWisp: '/wisp-tor/' } : {};
+	// a configured relay is advertised whatever Tor's state: the page asks
+	// /api/tor and says what it is, and its loads fail until Tor is ready
+	const localTor = torWisp?.relay ? { torWisp: '/wisp-tor/' } : {};
 	res.set('Cache-Control', 'no-store');
 	res.type('application/javascript');
 	res.send(
@@ -398,6 +429,24 @@ function servedBuild() {
 		return null;
 	}
 }
+// Tor's state for the page (README "Tor routing"): `off` without a Tor relay,
+// `unknown` for an operator's external one (its Tor is not visible here),
+// else the monitor's (down, bootstrapping, ready, unknown) with Tor's own
+// bootstrap progress and summary when its control port is configured. No
+// address, port or setting of the relay is in it. Asking may start a check,
+// at most one a second however many ask.
+app.get('/api/tor', (req, res) => {
+	res.set('Cache-Control', 'no-store');
+	if (!torWisp) return res.json({ state: 'off' });
+	if (torWisp.external)
+		return res.json({ state: 'unknown', via: 'external', checked: null });
+	const status = torWisp.monitor.refresh();
+	res.json(
+		torWisp.relay.isRunning
+			? status
+			: { ...status, state: 'down', summary: 'Tor relay is not running' },
+	);
+});
 app.get('/api/status', (req, res) => {
 	res.json({
 		uptime: (Date.now() - started) / 1000,
@@ -715,14 +764,14 @@ if (process.env.STOMP_SYNC_RELAY !== '0') {
 	app.post(
 		'/stomp-tor/sync-relay',
 		(_req, res, next) => {
-			if (torWisp?.external || torWisp?.relay?.isRunning) return next();
+			if (torWisp?.external || torAccepting()) return next();
 			res.set('Cache-Control', 'no-store');
 			res.status(503).json({ error: 'Tor Wisp is unavailable' });
 		},
 		...syncRelay(
 			() =>
 				torWisp?.external ||
-				(torWisp?.relay?.isRunning
+				(torAccepting()
 					? `ws://127.0.0.1:${torWisp.relay.port}/wisp/`
 					: 'ws://127.0.0.1:1/unavailable-tor-relay'),
 		),
@@ -901,15 +950,24 @@ if (dev) {
 // The ordinary HTTP path must never act as a transport or a fallback.
 app.get('/wisp-tor/', (_req, res) => {
 	res.set('Cache-Control', 'no-store');
-	res.sendStatus(torWisp?.relay?.isRunning ? 426 : 503);
+	res.sendStatus(torAccepting() ? 426 : 503);
 });
 
 const server = createServer(app);
 
 server.on('upgrade', (req, socket, head) => {
 	if (req.url?.startsWith('/wisp-tor/')) {
-		if (torWisp?.relay?.isRunning) torWisp.relay.route(req, socket, head);
-		else socket.destroy(); // never use /wisp/ if Tor is offline
+		if (torAccepting()) {
+			torSockets.add(socket);
+			socket.once('close', () => torSockets.delete(socket));
+			torWisp.relay.route(req, socket, head);
+		} else {
+			// never use /wisp/ while Tor is not ready: a plain refusal the
+			// transport reports as a failed connection, at once
+			socket.end(
+				'HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nCache-Control: no-store\r\nContent-Length: 0\r\n\r\n',
+			);
+		}
 	} else if (wisp && req.url.startsWith('/wisp/'))
 		wisp.route(req, socket, head);
 	else if (devSockets && req.url === '/__dev')
@@ -932,8 +990,10 @@ server.on('listening', () => {
 		console.log(`Wisp: holyWisp on 127.0.0.1:${wisp.port} (pid ${wisp.pid})`);
 	if (torWisp?.external)
 		console.log(`Tor Wisp: external ${torWisp.external} (operator-managed)`);
-	else if (torWisp?.relay?.isRunning)
-		console.log('Tor Wisp: /wisp-tor/ (local SOCKS5, TCP only)');
+	else if (torWisp?.relay)
+		console.log(
+			`Tor Wisp: /wisp-tor/ (local SOCKS5, TCP only), Tor ${torWisp.monitor.snapshot().state}`,
+		);
 	if (proxyOrigin) console.log(`Proxy origin: ${proxyOrigin}`);
 	if (dev) console.log('Development mode: live reload on /__dev');
 });

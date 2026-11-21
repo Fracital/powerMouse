@@ -1362,14 +1362,19 @@ async function boot() {
 	const readyStatus = () =>
 		!controller.stale
 			? TOR_REQUESTED
-				? 'Ready (Tor route selected)'
+				? torReadyStatus()
 				: 'Ready'
 			: controller.stale.newer === 'worker'
 				? 'Ready (STomp was updated: reload the page)'
 				: 'Ready (service worker updating)';
-	controller.addEventListener('stale', () => setStatus(readyStatus()));
-	controller.addEventListener('rebind', () => setStatus(readyStatus()));
-	setStatus(readyStatus());
+	const showReady = () => {
+		const text = readyStatus();
+		setStatus(text, TOR_REQUESTED && !/^Ready/.test(text));
+	};
+	controller.addEventListener('stale', showReady);
+	controller.addEventListener('rebind', showReady);
+	torStatusShown = showReady;
+	showReady();
 	badge('Controller', `ready, codec ${controller.config.codec}`, 'green');
 }
 
@@ -3188,18 +3193,121 @@ transportSelect.addEventListener('change', () =>
 	switchTransport(transportSelect.value),
 );
 
+// Tor's state on the server (GET /api/tor, demo/server.js): a SOCKS
+// listener is not a bootstrapped Tor, so the server watches Tor's control
+// port or a circuit probe and its relay takes connections only while Tor is
+// ready. The page asks while Tor mode is on (every 2 s until ready, every
+// 15 s after, not while hidden) and says what it heard: on the Tor toggle,
+// in the status line, and on the error page of a load that failed
+// (error.html, which loads the page again once Tor is ready). A state that
+// changes needs no reload here: the transport's next connection is taken
+// as soon as the server takes it.
+let torStatus = TOR_REQUESTED
+	? TOR_WISP
+		? { state: 'checking' }
+		: { state: 'off' }
+	: null;
+let torStatusShown = null; // boot()'s status line, once the controller is up
+function torStatusText(status = torStatus) {
+	switch (status?.state) {
+		case 'off':
+			return 'Tor relay unavailable. Turn Tor off to browse.';
+		case 'down':
+			return 'Tor is not running on the server. Proxied pages load once it is.';
+		case 'bootstrapping':
+			return `Tor is connecting${status.progress != null ? ` (${status.progress}%)` : ''}${status.summary ? `: ${status.summary}` : ''}`;
+		case 'ready':
+			return 'Tor connected';
+		case 'error':
+			return 'Tor status unavailable';
+		case 'checking':
+			return 'Checking Tor';
+		default:
+			return 'Tor route selected';
+	}
+}
+const torReadyStatus = () =>
+	torStatus?.state === 'ready'
+		? 'Ready (Tor connected)'
+		: torStatus?.state === 'unknown' || torStatus?.state === 'checking'
+			? 'Ready (Tor route selected)'
+			: torStatusText();
+function showTorStatus() {
+	const state = torStatus?.state ?? '';
+	torLabel.dataset.torState = state;
+	$('torState').textContent =
+		{
+			down: 'down',
+			bootstrapping:
+				torStatus.progress != null ? `${torStatus.progress}%` : 'connecting',
+			ready: 'on',
+			error: '?',
+			off: 'unavailable',
+		}[state] ?? '';
+	if (TOR_REQUESTED) torLabel.title = `${torStatusText()}. ${TOR_SCOPE_NOTE}`;
+	torStatusShown?.();
+}
+async function watchTor() {
+	let last = '';
+	for (;;) {
+		if (!document.hidden) {
+			let next;
+			try {
+				const answer = await fetch('/api/tor', { cache: 'no-store' });
+				next = answer.ok ? await answer.json() : { state: 'error' };
+			} catch {
+				next = { state: 'error' };
+			}
+			// an external relay's Tor is not visible from here
+			if (next.state === 'off' && TOR_WISP) next = { state: 'unknown' };
+			const key = `${next.state} ${next.progress} ${next.summary}`;
+			torStatus = next;
+			if (key !== last) {
+				last = key;
+				badge(
+					'Tor',
+					torStatusText(),
+					next.state === 'ready'
+						? 'green'
+						: next.state === 'unknown'
+							? 'blue'
+							: 'orange',
+				);
+				showTorStatus();
+			}
+		}
+		const ready = torStatus.state === 'ready' || torStatus.state === 'unknown';
+		await new Promise((resolve) => {
+			const wake = () => {
+				if (document.hidden) return;
+				document.removeEventListener('visibilitychange', wake);
+				clearTimeout(timer);
+				resolve();
+			};
+			const timer = setTimeout(wake, ready ? 15000 : 2000);
+			document.addEventListener('visibilitychange', wake);
+		});
+	}
+}
+
 // Switching Tor needs a fresh controller and a separate service worker
 // scope: setTransport() lets old in-flight direct requests finish. A saved
 // Tor choice never silently falls back to normal Wisp if its relay is gone.
+const TOR_SCOPE_NOTE =
+	'Proxied TCP only: the host page, shared cookies, storage and extensions stay outside Tor.';
 torToggle.checked = TOR_REQUESTED;
 torToggle.disabled = !TOR_WISP && !TOR_REQUESTED;
 const torLabel = $('torLabel');
 torLabel.title = !TOR_WISP
 	? 'Tor relay unavailable. The server must configure a Tor-backed Wisp relay.'
 	: TOR_REQUESTED
-		? 'Tor selected for proxied TCP only. Host requests and shared cookies remain outside Tor isolation.'
+		? `Tor selected. ${TOR_SCOPE_NOTE}`
 		: 'Route proxied TCP traffic through Tor. Applies after the page reloads.';
 torLabel.toggleAttribute('data-unavailable', !TOR_WISP);
+if (TOR_REQUESTED) {
+	showTorStatus();
+	if (TOR_WISP) watchTor();
+}
 torToggle.addEventListener('change', () => {
 	try {
 		localStorage.setItem(TOR_KEY, torToggle.checked ? '1' : '0');
