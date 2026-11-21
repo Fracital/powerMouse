@@ -3,12 +3,15 @@
 ! servers: a test run names this list instead, so the engine runs in every
 ! suite and nothing is asked of a server that is not the run's. The rules
 ! name nothing a suite serves, but for the WebTransport session the
-! webtransport-live suite has refused (a session is asked as `other`). Its
+! webtransport-live suite has refused (a session is asked as `other`) and
+! the speedtest suite's livestats.js (EasyPrivacy's rule, as it is there,
+! which a site's shields in standard mode leave to a first-party load). Its
 ! resources are adblock-run-resources.json (none): the fixture's hit
 ! counters are one table for every suite of a run, and the adblock suite
 ! counts the fetches of its own files.
 ||ads.stomp-suites.invalid^
 /stomp-suites-ad/*$script,image
 /stomp-suites-ad/*$other
+/livestats.js
 ##.stomp-suites-ad
 ###stomp-suites-ad

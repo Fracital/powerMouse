@@ -83,6 +83,7 @@ async function answer(engine: Blocker, { op, args }: BlockerCall) {
 				text(0),
 				text(1),
 				args[2] === 'webtransport' ? 'webtransport' : undefined,
+				args[3] === true,
 			);
 		case 'cosmetic':
 			return engine.ready ? engine.cosmeticResources(text(0)) : null;
@@ -183,8 +184,11 @@ export class RemoteBlocker implements BlockerLike {
 		url: string,
 		source: string,
 		type?: 'webtransport',
+		firstParty = false,
 	): Promise<boolean> {
-		return (await this.#ask('socket', [url, source, type])) === true;
+		return (
+			(await this.#ask('socket', [url, source, type, firstParty])) === true
+		);
 	}
 	async cosmetic(
 		url: string,

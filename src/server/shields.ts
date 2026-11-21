@@ -98,12 +98,24 @@ export class ShieldsStore {
 	/**
 	 * Whether the ad/tracker blocker runs for the host: off when shields are
 	 * down or the blocker is in "allow all" mode. 'aggressive' and 'standard'
-	 * both block; the crate is not asked to tell them apart yet (see FINDINGS).
+	 * both run it; standard leaves a first-party request to the host's own
+	 * filters (`standard`).
 	 */
 	blocks(host: string): boolean {
 		const entry = this.get(host);
 		if (!entry) return true; // neutral: the blocker runs as configured
 		return entry.enabled && entry.mode !== 'allow';
+	}
+
+	/**
+	 * Whether the host's blocker is in standard mode, where the lists leave
+	 * a first-party request alone and only the host's own filters judge it
+	 * (Blocker.decide). A host with no entry is neutral: every request is
+	 * judged by every list, as before shields existed.
+	 */
+	standard(host: string): boolean {
+		const entry = this.get(host);
+		return !!entry && entry.enabled && entry.mode === 'standard';
 	}
 
 	/** whether the host's requests are upgraded to HTTPS (shields-up, not 'off') */

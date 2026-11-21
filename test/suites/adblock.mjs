@@ -1136,7 +1136,10 @@ const shieldsRun = await page.evaluate(
 		await wait(700);
 		const downCount = downBlocks();
 		const upBlocks = mark();
-		controller.shields.set(host, { enabled: true });
+		// aggressive: the page's own blocked script is a first-party
+		// request, which standard mode (a new entry's) leaves to the user's
+		// own filters, as Brave's does (the speedtest suite)
+		controller.shields.set(host, { enabled: true, mode: 'aggressive' });
 		await wait(500);
 		const again = await load(site);
 		await wait(700);
@@ -1171,7 +1174,7 @@ ok(
 	String(shieldsRun.downCount),
 );
 ok(
-	'shields up again: the blocker blocks once more',
+	'shields up again (aggressive): the blocker blocks once more',
 	!shieldsRun.again.ran.includes('blocked') &&
 		shieldsRun.again.gone === true &&
 		shieldsRun.again.spy !== null &&

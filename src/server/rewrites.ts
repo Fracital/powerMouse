@@ -79,6 +79,7 @@ import {
 	nestedMark,
 	parseNestedMark,
 	partitionSite,
+	registrableDomain,
 	siteOf,
 	workerKindPartition,
 	workerKindUnisolated,
@@ -2786,6 +2787,19 @@ function genericForward(
 		// related video it went on to)
 		if (blocker && blocks && navigation && !blocker.ready)
 			await blocker.settled(!!rewriter.blockerAsked);
+		// standard mode leaves a request of its top-level page's site (a
+		// top-level navigation is its own) to the host's own filters, as
+		// Brave's does: the lists block third-party trackers only. The site
+		// is the registrable domain whatever the scheme (Brave's
+		// SameDomainOrHost)
+		const pageSite = navigation && topLevel ? null : topSite;
+		const firstParty =
+			blocks &&
+			!!rewriter.shields?.standard(shieldsHost) &&
+			(pageSite === null
+				? navigation && topLevel
+				: pageSite.slice(pageSite.indexOf('//') + 2) ===
+					registrableDomain(url.url.hostname, publicSuffix));
 		const decision = blocks
 			? await blocker?.decide({
 					url: reportURL(url),
@@ -2793,6 +2807,7 @@ function genericForward(
 					destination,
 					navigation,
 					topLevel,
+					firstParty,
 					method: serverRequest.method,
 					ping:
 						serverRequest.headers.has('ping-to') ||

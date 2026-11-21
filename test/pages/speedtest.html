@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<title>speed test</title>
+		<!-- the speedtest suite's page: a speed test as wisp.baby is one. Its
+		app is a module that imports its own livestats.js, a name a generic
+		rule of EasyPrivacy blocks (`/livestats.js`, in adblock-run.txt
+		too), and measures a WebSocket the way wisp.baby measures one -->
+		<script>
+			window.__speed = { ran: false, moduleError: false };
+		</script>
+		<script
+			type="module"
+			src="speedtest-app.js"
+			onerror="window.__speed.moduleError = true"
+		></script>
+	</head>
+	<body>
+		<p>Your Internet speed is <span id="speed">0</span> Mbps</p>
+	</body>
+</html>

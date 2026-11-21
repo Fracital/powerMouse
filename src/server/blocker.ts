@@ -144,6 +144,12 @@ export interface BlockerRequest {
 	method: string;
 	/** a beacon or an `<a ping>` */
 	ping?: boolean;
+	/**
+	 * the request is of its top-level page's site (a top-level navigation
+	 * is its own) and that site's shields are in standard mode: only the
+	 * host's own filters judge it (Blocker.decide)
+	 */
+	firstParty?: boolean;
 }
 
 /** what the lists say of a request: at most one of the three */
@@ -225,6 +231,7 @@ export interface BlockerLike {
 		url: string,
 		source: string,
 		type?: 'webtransport',
+		firstParty?: boolean,
 	): boolean | Promise<boolean>;
 	cosmetic(
 		url: string,
@@ -295,6 +302,16 @@ export class Blocker implements BlockerLike {
 	 */
 	#generation = 0;
 	readonly #scripts = new Map<string, string>();
+	/**
+	 * the host's own filters (its inline lists, the custom-filters editor's)
+	 * compiled apart, for the requests standard mode leaves to them, with
+	 * the lists and resources they were built from
+	 */
+	#own: {
+		lists: AdblockList[];
+		resources: Uint8Array<ArrayBuffer> | string;
+		instance: BlockerInstance | null;
+	} | null = null;
 	/** a host-visible note of what went wrong, for the request log */
 	lastError: string | null = null;
 
@@ -796,11 +813,11 @@ export class Blocker implements BlockerLike {
 		source: string,
 		type: string,
 		method: string,
+		/** only the host's own filters judge it (standard mode's first-party request) */
+		own = false,
 	): Verdict | null {
-		const answer = this.#call(
-			`${url}\t${source}\t${type}\t${method.toLowerCase()}`,
-			OP.check,
-		);
+		const input = `${url}\t${source}\t${type}\t${method.toLowerCase()}`;
+		const answer = own ? this.#askOwn(input) : this.#call(input, OP.check);
 		if (answer === null) return null;
 		try {
 			const parsed = JSON.parse(answer) as {
@@ -810,6 +827,57 @@ export class Blocker implements BlockerLike {
 			};
 			return { block: !!parsed.block, ...parsed };
 		} catch (error) {
+			return null;
+		}
+	}
+	/**
+	 * What the host's own filters answer for a check, or null when it gave
+	 * none. Brave's standard mode asks its default lists nothing of a request
+	 * to the site of the tab's page (it blocks third-party trackers only) and
+	 * still asks the filters the user added (custom filters, the lists they
+	 * subscribed to); aggressive mode asks both of every request. The lists
+	 * here are one engine, so the inline lists the host gave as text are
+	 * compiled again on their own (a few milliseconds: they are short) the
+	 * first time a first-party request is asked about, and again when the
+	 * lists or the resources change.
+	 */
+	#askOwn(input: string): string | null {
+		if (!this.#ready || !this.#module) return null;
+		const lists = this.#init.lists;
+		const resources = this.#resources;
+		if (this.#own?.lists !== lists || this.#own.resources !== resources) {
+			const inline = lists.filter((list) => list.filters?.trim());
+			let instance: BlockerInstance | null = null;
+			const built = inline.length
+				? this.#buildHere(
+						inline.map((list) => ({
+							text: list.filters!,
+							// the user's own rules never get the trusted scriptlets
+							flags: list.format === 'hosts' ? FLAG_HOSTS : 0,
+						})),
+					)
+				: null;
+			if (built)
+				try {
+					instance = new BlockerInstance(this.#module);
+					if (
+						instance.call(resources || '[]', OP.resources) !== 0 ||
+						instance.call(built, OP.load) !== 0
+					)
+						instance = null;
+				} catch (error) {
+					instance = null;
+				}
+			this.#own = { lists, resources, instance };
+		}
+		const instance = this.#own.instance;
+		if (!instance) return null;
+		try {
+			if (instance.call(input, OP.check) !== 0) return null;
+			return instance.text();
+		} catch (error) {
+			// a trap: built again at the next ask
+			this.#own = null;
 			return null;
 		}
 	}
@@ -904,6 +972,7 @@ export class Blocker implements BlockerLike {
 			request.navigation && request.topLevel ? request.url : request.source,
 			type,
 			request.method,
+			!!request.firstParty,
 		);
 		if (!verdict) return null;
 		if (verdict.redirect) {
@@ -921,7 +990,13 @@ export class Blocker implements BlockerLike {
 	 * uBlock Origin, and the other is not applied. False while no engine
 	 * answers, as for any request that is not a navigation.
 	 */
-	socket(url: string, source: string, type?: 'webtransport'): boolean {
+	socket(
+		url: string,
+		source: string,
+		type?: 'webtransport',
+		/** standard mode, and the socket is of its page's site: only the host's own filters judge it */
+		firstParty = false,
+	): boolean {
 		// a WebTransport session: adblock-rust has no type of its own for it
 		// (Chrome's blocker has `webtransport`), so only the rules that name
 		// no type apply to it, as they do in Chrome's
@@ -930,6 +1005,7 @@ export class Blocker implements BlockerLike {
 			source,
 			type ? 'other' : 'websocket',
 			type ? 'CONNECT' : 'GET',
+			firstParty,
 		)?.block;
 	}
 	/**

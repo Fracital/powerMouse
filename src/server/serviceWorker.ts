@@ -9,6 +9,7 @@ import { isolationResponseHeaders, SERVED_EMBEDDER_POLICY } from '../isolation';
 import {
 	kindPartition,
 	partitionSite,
+	registrableDomain,
 	siteOf as schemefulSite,
 } from '../partition';
 import {
@@ -533,10 +534,22 @@ function registerController(
 					type,
 					typeof client === 'string' ? client : undefined,
 				);
+				// standard mode leaves a socket of its page's site to the host's
+				// own filters (Blocker.decide says why)
+				let firstParty = false;
+				try {
+					const suffix = (host: string) => getPublicSuffix(host, true);
+					firstParty =
+						srv.shields.standard(socketHost) &&
+						registrableDomain(new URL(url).hostname, suffix) ===
+							registrableDomain(socketHost, suffix);
+				} catch (error) {
+					// no URL: every list judges it
+				}
 				const blocked =
 					!!ruled ||
 					(srv.shields.blocks(socketHost) &&
-						!!(await srv.blocker?.socket(url, source, type)));
+						!!(await srv.blocker?.socket(url, source, type, firstParty)));
 				if (blocked && config.requestLog)
 					report({
 						url,

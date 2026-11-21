@@ -395,8 +395,23 @@ was, so the sites come back as they were left when Block ads is on again.
 What the worker enforces today:
 
 - `mode` (`aggressive` | `standard` | `allow`): the ad/tracker blocker.
-  `allow` turns it off for the host; `aggressive` and `standard` both block
-  (the crate is not asked to tell them apart yet).
+  `allow` turns it off for the host. `aggressive` asks every list of every
+  request. `standard` (the demo's default, as Brave's) asks the lists
+  nothing of a first-party request, one to the registrable domain of its
+  top-level page whatever the scheme (a top-level navigation is its own),
+  and asks only the host's inline lists (the custom-filters editor's) of
+  it: Brave's standard mode asks its default lists nothing of a request to
+  the tab's site (they block third-party trackers only) and still asks the
+  user's own filters. The inline lists are compiled again on their own for
+  this the first time a first-party request is asked about (a few
+  milliseconds). A WebSocket or WebTransport session to its page's site is
+  judged the same way. Lists the host names by URL count as default lists
+  here, where Brave asks the lists a user subscribed to of first-party
+  requests too. A host with no entry for the site (no shields) is judged
+  by every list, as before shields existed. This is what kept wisp.baby at
+  0 Mbps: its app imports its own `livestats.js`, which EasyPrivacy's
+  generic `/livestats.js` rule blocks, so the app never ran (the speedtest
+  suite).
 - `httpsUpgrade` (`strict` | `upgrade` | `off`): `upgrade` and `strict` upgrade
   the host's HTTP requests through the mixed-content machinery; `strict`'s
   "block when HTTPS is unavailable" is not yet told apart from `upgrade`.
