@@ -47,8 +47,14 @@ import { startWebTransportServer } from '../wtserver.mjs';
 
 const ORIGINS = 4;
 const BYTES = 4 * 1024 * 1024;
-/** ShardedTransport.ts IDLE_MS, and a little */
-const IDLE_WAIT_MS = 32 * 1000;
+/** ShardedTransport.ts IDLE_MS */
+const IDLE_MS = 30 * 1000;
+/**
+ * how long past IDLE_MS a worker's close may come: its timer starts at its
+ * last stream's release, which a busy runner (two suites beside each other
+ * on a loaded machine) runs seconds after the page read the body
+ */
+const IDLE_LATE_MS = 20 * 1000;
 
 // a leaf for 127.0.0.1 signed by the test CA, which epoxy is given
 const wt = await startWebTransportServer();
@@ -603,14 +609,21 @@ const EAGER = { max: 4, start: 4 };
 		JSON.stringify({ saturated, started, moved, lines: lines.slice(0, 12) }),
 	);
 	if (started) {
-		await page.waitForTimeout(IDLE_WAIT_MS);
-		const closed = workerLines(page).filter((line) =>
-			/closes/.test(line),
-		).length;
+		const idleFrom = Date.now();
+		const closes = () =>
+			workerLines(page).filter((line) => /closes/.test(line)).length;
+		await page.waitForTimeout(IDLE_MS);
+		while (closes() < started && Date.now() - idleFrom < IDLE_MS + IDLE_LATE_MS)
+			await page.waitForTimeout(250);
+		const closed = closes();
 		ok(
 			'lazy: the workers close once they carried nothing for 30 s',
 			closed === started,
-			JSON.stringify({ started, closed }),
+			JSON.stringify({
+				started,
+				closed,
+				seconds: Math.round((Date.now() - idleFrom) / 1000),
+			}),
 		);
 		const [after, afterBad] = intact(
 			await downloads(page, 'after', small),
