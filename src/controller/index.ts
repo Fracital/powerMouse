@@ -71,6 +71,7 @@ import {
 	ACTIVATED,
 	BLOCKER_SERVE,
 	BlockerServeMessage,
+	CALL_TOKEN_DIGITS,
 	CLIENT_HINTS,
 	CLIENT_ID,
 	ClientHintsReport,
@@ -319,6 +320,14 @@ export interface ControllerInit {
 	id?: string;
 	/** origins allowed to frame proxied documents (CSP frame-ancestors) */
 	frameAncestors?: string[];
+	/**
+	 * Just call stomp (`justCallStomp()`, experimental): the host may dial
+	 * frames, writing each document into a constant call page
+	 * (`assets.callPage`) instead of navigating the frame. Only then does
+	 * the service worker serve the call page and answer its calls for this
+	 * controller; `justCallStomp()` throws without it.
+	 */
+	dialing?: boolean;
 	/**
 	 * Called when a proxied page wants a new tab (`window.open`, a link with
 	 * `target="_blank"` or a name, a modifier click). The page's `window.open`
@@ -1558,6 +1567,7 @@ export class StompController extends EventTarget {
 			directory: this.id ? `${this.directory.pathname}${this.id}/` : '',
 			scope: this.directory.pathname,
 			...(init.frameAncestors ? { frameAncestors: init.frameAncestors } : {}),
+			...(init.dialing === true ? { dialing: true } : {}),
 			...(init.onOpen || init.openTab ? { openTab: true } : {}),
 			// the host's page sent COOP same-origin and an embedder policy (in
 			// origin-isolation mode this is the controller's frame, which the
@@ -3810,6 +3820,21 @@ export class StompController extends EventTarget {
 	/** @internal a frame is sent to the route `routed` again: the worker drops it no longer (stopNavigation `early`) */
 	async navigationSent(routed: string): Promise<void> {
 		await this.#call('navigationSent', routed);
+	}
+	/**
+	 * @internal just call stomp (./justCallStomp.ts): a token for one call
+	 * of the routed URL `routed`, which this controller's worker now holds
+	 * for it (src/server/called.ts allowCallToken). The worker refuses one
+	 * for a controller that did not opt in (`init.dialing`).
+	 */
+	async callToken(routed: string): Promise<string> {
+		const bytes = crypto.getRandomValues(new Uint8Array(CALL_TOKEN_DIGITS / 2));
+		const token = Array.from(bytes, (byte) =>
+			byte.toString(16).padStart(2, '0'),
+		).join('');
+		await this.#ready;
+		await this.#call('callToken', { token, routed });
+		return token;
 	}
 	/**
 	 * The real URL a routed one stands for (the inverse of `route()`, with

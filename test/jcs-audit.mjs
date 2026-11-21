@@ -36,6 +36,22 @@ export const A1 = `http://127.0.0.1:${F}/pages/jcs-a1.html`;
 export const MARK = 'visit7Q';
 export const OUT = process.env.JCS_AUDIT_OUT || '';
 
+// the demo's dialing mode serves its scope under a neutral name the server
+// minted (demo/server.js STOMP_DIAL_DIRECTORY): its routes are routes too
+const DIAL_SCOPES = await (async () => {
+	try {
+		await waitForServer(PROXY);
+		const text = await (await fetch(`${PROXY}config.js`)).text();
+		const { dial } = JSON.parse(
+			/window\.STOMP_CONFIG = (.*);\s*$/s.exec(text)[1],
+		);
+		return [dial.directory, dial.torDirectory].filter(Boolean);
+	} catch (error) {
+		return [];
+	}
+})();
+const SCOPES = ['/stomp/', ...DIAL_SCOPES];
+
 export function jcsQuery() {
 	if (process.env.JCS_QUERY !== undefined)
 		return process.env.JCS_QUERY.replace(/^\?/, '') || null;
@@ -52,14 +68,18 @@ export function kind(url) {
 	if (text.includes(MARK) || text.includes(`:${F}/`)) return 'plain';
 	// a document's route (/stomp/<id>/<kind>/<sealed>), a link route
 	// (/stomp/~/<sealed>), or the demo's fragment that names one (#html/...)
+	// (or the dialing mode's scope's)
 	if (
-		/\/stomp\/[\w-]+\/[\w:~-]+\/[\w-]{6,}/.test(text) ||
-		/\/stomp\/~\/[\w-]{6,}/.test(text) ||
+		SCOPES.some(
+			(scope) =>
+				new RegExp(`${scope}[\\w-]+/[\\w:~-]+/[\\w-]{6,}`).test(text) ||
+				new RegExp(`${scope}~/[\\w-]{6,}`).test(text),
+		) ||
 		/#html\/[\w-]{6,}/.test(text)
 	)
 		return 'route';
 	// the proxy's own scripts and assets
-	if (text.includes('/stomp/')) return 'asset';
+	if (SCOPES.some((scope) => text.includes(scope))) return 'asset';
 	try {
 		const { host } = new URL(text);
 		if (host === new URL(PROXY).host || host === new URL(HOST).host)

@@ -158,6 +158,7 @@ server on the same port:
 | --------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `/`             | `demo/public` (the page, stylesheet, script, images)                                                                                    |
 | `/stomp/`       | `dist/` via `stompPath` from `@sysce/stomp/path`                                                                                        |
+| `/<minted>/`    | `dist/` again, the dialing mode's neutral scope (`STOMP_DIAL_DIRECTORY`, "Dialing" below)                                               |
 | `/epoxy/`       | `@mercuryworkshop/epoxy-transport`'s `dist/`                                                                                            |
 | `/libcurl/`     | `@mercuryworkshop/libcurl-transport`'s `dist/`                                                                                          |
 | `/wisp/`        | WebSocket upgrade handed to holyWisp (the `holywisp` package), see below                                                                |
@@ -263,9 +264,9 @@ holyWisp is started.
    the tabs back, the token's tab on show at its entry; a token the browser
    tab never wrote (a copied link, another window) opens home. A frame's
    navigation already adds a browser history entry, so the demo only
-   replaces its address then; a dialed tab (`?mode=just-call-stomp`) is never
-   navigated, so each new entry of it is a `pushState`, and Back and Forward
-   step the tab. A demo framed by its embedder (SystemYA's `/ui/`), or one
+   replaces its address then; a dialed tab (`?mode=just-call-stomp`,
+   "Dialing" below) is never navigated, so each new entry of it is a
+   `pushState`, and Back and Forward step the tab. A demo framed by its embedder (SystemYA's `/ui/`), or one
    whose `STOMP_CONFIG.addressFragment` is `'sealed'`, also writes the
    page's route as its fragment (`#html/<sealed>`, from `controller.route()`)
    for the embedder to read; a fragment, or one holding the URL itself (an
@@ -788,6 +789,34 @@ frames no window for the popups they open, and the suites open real popups
 `STOMP_ISOLATION=on npm test -- <suite>` runs a suite under the isolated
 host. docs/same-origin-policy.md, "Cross-origin isolation", has the
 measurements.
+
+## Dialing
+
+`?mode=just-call-stomp` dials the tabs (`justCallStomp`, docs/dialing.md):
+each document is written into one constant call page instead of the frame
+navigating to the site. The page's controller is made with `dialing: true`;
+in every other mode it is not, and the service worker then has no call page
+and answers no call.
+
+What the browser has for a dialed frame (its `src` and its real location) is
+the call page's URL alone, `<scope><callPage>`, with `?1`, `?2` for the frames
+of its documents. So that this names nothing, the mode does not use
+`/stomp/`: the server mints a scope and a page name when it starts
+(`/3dee0ce3/c2866a19.html`, and another scope for Tor mode), tells the page in
+`/config.js` (`dial: { directory, torDirectory, page }`) and serves `dist/`
+there too. `STOMP_DIAL_DIRECTORY` (`/<name>/`) and `STOMP_DIAL_PAGE` (`<name>`)
+fix them instead. A host that sets `STOMP_ASSETS.callPage` keeps its own name
+for the page. `test/suites/dial-urls.mjs` walks the mode and checks every
+frame's URL at every step, and that the default mode has no call page.
+
+For a host that vendors the bundle under neutral names (SystemYA's
+`scripts/prepare-stomp.mjs`): `callPage` is a new key of
+`StompController.DEFAULT_ASSETS`, so a check that compares the keys with its
+own list sees it. It names no file in `dist/`: give it a stamped neutral name
+like the others (`pg.<stamp>.html`) in the `assets` the controller gets, and
+copy nothing for it. The scope it lives under is the host's `directory`, which
+should be neutral too (`/vendor/rt/` is). It matters only to a host that opts
+in to dialing.
 
 ## Deploying somewhere real
 

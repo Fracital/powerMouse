@@ -8,14 +8,23 @@
 // by the host's page, by anything that observes it and by the proxied page.
 // Here each document of the tab gets a frame of its own, made fresh, whose
 // one navigation is its first (no history entry) to the call page
-// (CALL_PAGE): one page under the scope, the same for every site, which the
-// worker serves and so controls. Once it is loaded this page sends it the
-// route by a message, with a port; the page asks the worker for its document
-// with a fetch of the route that carries CALL_HEADER, which the worker
-// answers as that frame's navigation to the route (the same request
-// upstream, rewrite and shell: src/server/called.ts), and writes the answer
-// into itself. Its src and its location never show anything but the call
-// page.
+// (the asset `callPage`, `<scope><callPage>`): one page under the scope,
+// the same for every site, which the worker serves and so controls, only to
+// a controller that opted in (ControllerInit.dialing). Before the frame
+// loads, this page has the worker hold a token for the route
+// (StompController.callToken); once it is loaded it sends the call page the
+// token by a message, with a port, and the call over the port. The page
+// asks the worker for its document with a fetch of the route that carries
+// the token, which the worker answers as that frame's navigation to the
+// route (the same request upstream, rewrite and shell:
+// src/server/called.ts), and writes the answer into itself. Its src and its
+// location never show anything but the call page.
+//
+// Everything between this page and a call page, or the document written
+// into it, goes over the port: the page never reaches into the frame's
+// window (its scroll, its document), so the call page may be of another
+// origin than this page. Every message on the port is checked for its
+// shape, and one of another shape is dropped.
 //
 // The inject of a document written so (src/inject/dom/calledHooks.ts)
 // cancels every navigation its page starts and hands it to the frame's
@@ -28,21 +37,16 @@
 // (an entry added, replaced or stepped to, a title) fires `entries` on the
 // Frame, for the host's own record of the tab.
 
+import { assetName } from '../config';
 import { navigationAnswer } from '../navigationAnswer';
 import {
-	CALL_HEADER,
 	CALL_MESSAGE,
-	CALL_PAGE,
-	CALL_POLICY_HEADER,
+	CALL_WAIT_MS,
 	type CalledSession,
 } from '../transport/messages';
 import { frameColorScheme } from './colorScheme';
-import { stopWindow } from './history';
 import type { Frame, StompController } from './index';
 
-/** what Chrome's navigation asks for (its Accept header) */
-const NAVIGATION_ACCEPT =
-	'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7';
 /** the sessionStorage name a tab's history is kept under */
 const KEPT_PREFIX = 'just-call:';
 /** how long a frame may take to show the call page */
@@ -116,19 +120,128 @@ type How = {
 
 /** what a called document tells its host (calledHooks.ts) */
 type Told = {
-	op: 'navigate' | 'push' | 'replace' | 'step';
+	op: 'navigate' | 'push' | 'replace' | 'step' | 'scroll' | 'token';
 	url?: string;
+	/** a token's: the route of the call a frame of the document is to make */
+	routed?: string;
+	/** a token's: the number the answer names */
+	id?: number;
 	state?: unknown;
 	delta?: number;
-	/** the scroll of the entry a push leaves */
+	/** where the document is scrolled now (a push's: the entry it leaves) */
 	scroll?: [number, number];
 	replace?: boolean;
 	reload?: boolean;
 	/** a submission's entries, and how its form encodes them */
 	entries?: [string, string | File][] | null;
-	enctype?: string;
+	enctype?: string | null;
 	policy?: string;
 };
+
+/** the longest URL a message on a call's port names */
+const MAX_URL = 32_768;
+const OPS = ['navigate', 'push', 'replace', 'step', 'scroll', 'token'];
+const isText = (value: unknown, limit = MAX_URL): value is string =>
+	typeof value === 'string' && value.length <= limit;
+const isScroll = (value: unknown): value is [number, number] =>
+	Array.isArray(value) &&
+	value.length === 2 &&
+	value.every((part) => Number.isFinite(part));
+
+/**
+ * `data` as what a called document may tell (calledHooks.ts), else null:
+ * every field of its type, and a submission's entries as pairs of a name
+ * and a string or File
+ */
+export function toldOf(data: unknown): Told | null {
+	if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+	const told = data as Record<string, unknown>;
+	if (!OPS.includes(told.op as string)) return null;
+	const optional = (key: string, check: (value: unknown) => boolean) =>
+		told[key] === undefined || check(told[key]);
+	const fine =
+		optional('url', (value) => isText(value)) &&
+		optional('routed', (value) => isText(value)) &&
+		optional('id', Number.isSafeInteger) &&
+		optional('delta', Number.isSafeInteger) &&
+		optional('scroll', isScroll) &&
+		optional('replace', (value) => typeof value === 'boolean') &&
+		optional('reload', (value) => typeof value === 'boolean') &&
+		optional('enctype', (value) => value === null || isText(value, 256)) &&
+		optional('policy', (value) => isText(value, 256)) &&
+		optional(
+			'entries',
+			(value) =>
+				value === null ||
+				(Array.isArray(value) &&
+					value.length <= 65_536 &&
+					value.every(
+						(pair) =>
+							Array.isArray(pair) &&
+							pair.length === 2 &&
+							typeof pair[0] === 'string' &&
+							(typeof pair[1] === 'string' || pair[1] instanceof File),
+					)),
+		);
+	if (!fine) return null;
+	if (
+		(told.op === 'navigate' && !told.reload && told.url === undefined) ||
+		((told.op === 'push' || told.op === 'replace') && told.url === undefined) ||
+		(told.op === 'step' && told.delta === undefined) ||
+		(told.op === 'scroll' && told.scroll === undefined) ||
+		(told.op === 'token' &&
+			(told.routed === undefined || told.id === undefined))
+	)
+		return null;
+	return told as Told;
+}
+
+/** what a call page answers a call, else null (src/server/called.ts) */
+export type CallAnswer =
+	| {
+			answered: {
+				url: string;
+				routed: string;
+				status: number;
+				/** its Content-Type and Content-Disposition (navigationAnswer) */
+				type: string | null;
+				disposition: string | null;
+			};
+	  }
+	| { failed: string };
+export function callAnswerOf(data: unknown): CallAnswer | null {
+	if (!data || typeof data !== 'object') return null;
+	const { answered, failed } = data as Record<string, any>;
+	if (isText(failed, 1024)) return { failed };
+	if (
+		answered &&
+		typeof answered === 'object' &&
+		isText(answered.url) &&
+		isText(answered.routed) &&
+		Number.isInteger(answered.status) &&
+		(answered.type === null ||
+			answered.type === undefined ||
+			isText(answered.type, 1024)) &&
+		(answered.disposition === null ||
+			answered.disposition === undefined ||
+			isText(answered.disposition, 4096))
+	)
+		try {
+			new URL(answered.url);
+			return {
+				answered: {
+					url: answered.url,
+					routed: answered.routed,
+					status: answered.status,
+					type: answered.type ?? null,
+					disposition: answered.disposition ?? null,
+				},
+			};
+		} catch (error) {
+			return null;
+		}
+	return null;
+}
 
 const randomId = () => crypto.randomUUID();
 
@@ -175,10 +288,54 @@ function pageLoad(element: HTMLIFrameElement): Promise<void> {
 	});
 }
 
-/** the next message on `port` */
-function next(port: MessagePort): Promise<Record<string, any>> {
+/**
+ * A call over `port`, once the call page has its token and port: the page
+ * says it is ready (else it is no call page, or it took another caller's
+ * message: PAGE_WAIT_MS), then `call` goes and its answer comes back (within
+ * CALL_WAIT_MS). Anything else the port hears is dropped.
+ */
+function dial(port: MessagePort, call: object): Promise<CallAnswer> {
+	return new Promise((resolve, reject) => {
+		let ready = false;
+		const fail = (why: string) => {
+			clearTimeout(timer);
+			port.onmessage = null;
+			reject(new Error(why));
+		};
+		let timer = setTimeout(
+			() => fail('The call page did not take the call'),
+			PAGE_WAIT_MS,
+		);
+		port.onmessage = ({ data }) => {
+			if (!ready) {
+				if (data?.ready !== true || Object.keys(data).length !== 1) return;
+				ready = true;
+				clearTimeout(timer);
+				timer = setTimeout(
+					() => fail('The call page did not answer'),
+					CALL_WAIT_MS,
+				);
+				port.postMessage({ call });
+				return;
+			}
+			const answer = callAnswerOf(data);
+			if (!answer) return;
+			clearTimeout(timer);
+			port.onmessage = null;
+			resolve(answer);
+		};
+	});
+}
+
+/** settles once the call page on `port` says it saved the download (or never) */
+function saved(port: MessagePort): Promise<void> {
 	return new Promise((resolve) => {
-		port.onmessage = ({ data }) => resolve(data ?? {});
+		port.onmessage = ({ data }) => {
+			if (data?.saved === true && Object.keys(data).length === 1) {
+				port.onmessage = null;
+				resolve();
+			}
+		};
 	});
 }
 
@@ -199,6 +356,8 @@ export class CalledFrame {
 	#routed = '';
 	/** the port to the document shown */
 	#port: MessagePort | null = null;
+	/** where the document shown is scrolled, as it last told */
+	#scroll: [number, number] = [0, 0];
 	/** the load under way (#load): what stop() gives up, and the route it called, once it did */
 	#pending: { cancel: () => void; routed: string | null } | null = null;
 	/** the routes stop() told the worker to drop, until when (EARLY_STOP_MS) */
@@ -301,29 +460,24 @@ export class CalledFrame {
 	 * yet is never called, and one whose answer has not come is given up
 	 * (its frame goes, and the worker drops its request, so the origin's
 	 * connection closes); the frame keeps the document it shows, which
-	 * stops loading as on its own window.stop()
+	 * stops loading as on its own window.stop() (told over its port: the
+	 * host never reaches into its window)
 	 */
 	async stop(): Promise<void> {
 		this.#loads++;
 		const pending = this.#pending;
 		this.#pending = null;
 		pending?.cancel();
-		stopWindow(this.frame.element.contentWindow);
+		this.#port?.postMessage({ stop: true });
 		if (!pending?.routed) return;
 		// (its request may reach the worker after this)
 		this.#stopped.set(pending.routed.split('#')[0], Date.now() + EARLY_STOP_MS);
 		await this.controller.stopNavigation(pending.routed, true).catch(() => {});
 	}
-	/** the scroll of the entry being left */
+	/** the scroll of the entry being left: the document's, as it last told */
 	#leave() {
 		const entry = this.entries[this.index];
-		const win = this.frame.element.contentWindow;
-		if (entry && win)
-			try {
-				entry.scroll = [win.scrollX, win.scrollY];
-			} catch (error) {
-				// a document out of reach
-			}
+		if (entry) entry.scroll = [...this.#scroll];
 	}
 	#entry(url: string, state: unknown, document: number): CalledEntry {
 		return {
@@ -343,6 +497,24 @@ export class CalledFrame {
 		if (port !== this.#port) return;
 		const entry = this.entries[this.index];
 		switch (told.op) {
+			case 'scroll':
+				this.#scroll = [Number(told.scroll![0]), Number(told.scroll![1])];
+				break;
+			case 'token': {
+				// a frame of the document is to be called: a token for it, which
+				// only this page can have its worker hold (a route of its own)
+				let token: string | null = null;
+				try {
+					const routed = new URL(String(told.routed));
+					if (routed.href.startsWith(this.controller.directory.href))
+						token = await this.controller.callToken(routed.href);
+				} catch (error) {
+					// none: the frame's call is refused
+				}
+				if (port === this.#port)
+					port.postMessage({ token: { id: told.id, value: token } });
+				break;
+			}
 			case 'push':
 			case 'replace': {
 				const next = this.#entry(String(told.url), told.state, this.#document);
@@ -351,7 +523,7 @@ export class CalledFrame {
 					next.referrer = entry.referrer;
 				}
 				if (told.op === 'push') {
-					if (entry && Array.isArray(told.scroll))
+					if (entry && told.scroll)
 						entry.scroll = [Number(told.scroll[0]), Number(told.scroll[1])];
 					else this.#leave();
 					this.entries.splice(++this.index, Infinity, next);
@@ -366,12 +538,13 @@ export class CalledFrame {
 				void this.step(Number(told.delta) || 0);
 				break;
 			case 'navigate': {
+				if (told.scroll) this.#scroll = told.scroll;
 				if (told.reload) {
 					void this.reload();
 					break;
 				}
 				const body = told.entries
-					? await encoded(told.entries, told.enctype)
+					? await encoded(told.entries, told.enctype ?? undefined)
 					: null;
 				void this.#load(String(told.url), {
 					type: 'navigate',
@@ -386,7 +559,11 @@ export class CalledFrame {
 	}
 	/** what the document about to be written is told of the tab */
 	#session(how: How): CalledSession {
+		const scroll = this.entries[this.index]?.scroll;
 		return {
+			// a step's: the entry's scroll, which the document restores
+			...(how.type === 'back_forward' &&
+				scroll?.some(Boolean) && { scroll: [scroll[0], scroll[1]] }),
 			entries: this.entries.map(({ url, key, id, document }) => ({
 				url,
 				key,
@@ -420,6 +597,10 @@ export class CalledFrame {
 		this.#pending = pending;
 		const until = <T>(promise: Promise<T>) =>
 			Promise.race([promise, cancelled]);
+		/** the load is over: stopped, or a newer one took its place */
+		const over = () => {
+			if (this.#pending === pending) this.#pending = null;
+		};
 		// (the preference the document reads: its element's color-scheme,
 		// which the fresh element has too, from the same rules)
 		controller.reportViewport(
@@ -428,7 +609,36 @@ export class CalledFrame {
 			frameColorScheme(old),
 		);
 		controller.expectNavigation(frame, url);
-		const page = new URL(CALL_PAGE, controller.directory).href;
+		// a reload and a step ask with the entry's own referrer, as natively
+		const referrer =
+			how.type === 'navigate'
+				? (how.referrer ?? '')
+				: (this.entries[this.index]?.referrer ?? '');
+		// the route and its token before the frame loads: the worker that
+		// answers the call page knows this controller then (a worker the
+		// browser stopped is woken and told it by these calls)
+		let routed: string;
+		let token: string;
+		try {
+			routed = await until(controller.route(url));
+			// a stop of the same route a moment ago is over for this call
+			const key = routed.split('#')[0];
+			const stopped = this.#stopped.get(key);
+			if (stopped !== undefined) {
+				this.#stopped.delete(key);
+				if (Date.now() < stopped)
+					await until(controller.navigationSent(routed).catch(() => {}));
+			}
+			token = await until(controller.callToken(routed));
+		} catch (error) {
+			over();
+			if (error === STOPPED) return;
+			throw error;
+		}
+		const page = new URL(
+			assetName(controller.config.assets, 'callPage'),
+			controller.directory,
+		).href;
 		const fresh = old.ownerDocument.createElement('iframe');
 		for (const { name, value } of [...old.attributes])
 			if (name !== 'src' && name !== 'srcdoc') fresh.setAttribute(name, value);
@@ -439,63 +649,37 @@ export class CalledFrame {
 		fresh.src = page;
 		old.after(fresh);
 		const { port1: port, port2 } = new MessageChannel();
-		// a reload and a step ask with the entry's own referrer, as natively
-		const referrer =
-			how.type === 'navigate'
-				? (how.referrer ?? '')
-				: (this.entries[this.index]?.referrer ?? '');
-		let answered: Record<string, any>;
-		let routed: string;
+		let answer: CallAnswer;
 		try {
 			await until(pageLoad(fresh));
-			routed = await until(controller.route(url));
 			await until(controller.measureGeometry());
-			// a stop of the same route a moment ago is over for this call
-			const key = routed.split('#')[0];
-			const stopped = this.#stopped.get(key);
-			if (stopped !== undefined) {
-				this.#stopped.delete(key);
-				if (Date.now() < stopped)
-					await until(controller.navigationSent(routed).catch(() => {}));
-			}
 			pending.routed = routed;
 			fresh.contentWindow!.postMessage(
-				{ [CALL_MESSAGE]: 1 },
+				{ [CALL_MESSAGE]: token },
 				new URL(page).origin,
 				[port2],
 			);
-			const answer = next(port);
-			port.postMessage({
-				call: {
+			answer = await until(
+				dial(port, {
 					routed,
-					init: {
-						method: how.method ?? 'GET',
-						body: how.body ?? null,
-						headers: {
-							[CALL_HEADER]: how.type,
-							accept: NAVIGATION_ACCEPT,
-							'upgrade-insecure-requests': '1',
-							...(how.contentType && { 'content-type': how.contentType }),
-							...(how.policy && { [CALL_POLICY_HEADER]: how.policy }),
-						},
-						credentials: 'include',
-						redirect: 'follow',
-						referrer,
-						cache: how.type === 'reload' ? 'no-cache' : 'default',
-					},
-				},
-			});
-			answered = await until(answer);
-			if (answered.failed) throw new Error(answered.failed);
+					type: how.type,
+					method: how.method ?? 'GET',
+					body: how.body ?? null,
+					referrer,
+					...(how.contentType && { contentType: how.contentType }),
+					...(how.policy && { policy: how.policy }),
+				}),
+			);
+			if ('failed' in answer) throw new Error(answer.failed);
 		} catch (error) {
 			fresh.remove();
 			port.close();
-			if (this.#pending === pending) this.#pending = null;
+			over();
 			// stopped: the frame keeps its document
 			if (error === STOPPED) return;
 			throw error;
 		}
-		if (this.#pending === pending) this.#pending = null;
+		over();
 		if (load !== this.#loads) {
 			fresh.remove();
 			port.close();
@@ -503,23 +687,17 @@ export class CalledFrame {
 		}
 		// an answer Chrome commits no document for (a 204, a download): the
 		// frame keeps its document and its entry, and the load is over
-		const kind = navigationAnswer(
-			Number(answered.answered?.status) || 200,
-			answered.answered?.type ?? null,
-			answered.answered?.disposition ?? null,
-		);
-		if (kind) {
+		const got = 'answered' in answer ? answer.answered : null;
+		const kind = got && navigationAnswer(got.status, got.type, got.disposition);
+		if (got && kind) {
 			if (kind === 'download') {
 				// (its frame, hidden, saves it, and stays until the browser has it)
-				const saved = next(port);
+				const done = saved(port);
 				port.postMessage({
-					save: downloadName(
-						answered.answered?.disposition ?? null,
-						answered.answered?.url || url,
-					),
+					save: downloadName(got.disposition, got.url || url),
 				});
 				void Promise.race([
-					saved,
+					done,
 					new Promise((resolve) => setTimeout(resolve, SAVE_WAIT_MS)),
 				]).then(() =>
 					setTimeout(() => {
@@ -537,8 +715,8 @@ export class CalledFrame {
 		// where the answer is from: the page's URL after its redirects, with
 		// the fragment asked for when the last one named none
 		let shown = url;
-		const real = answered.answered?.url;
-		if (typeof real === 'string' && real) {
+		const real = 'answered' in answer ? answer.answered.url : '';
+		if (real) {
 			const after = new URL(real);
 			if (!after.hash) after.hash = new URL(url).hash;
 			shown = after.href;
@@ -550,8 +728,9 @@ export class CalledFrame {
 			port.close();
 			return;
 		}
-		// the answer is in: the tab's entries change, and its document
-		this.#leave();
+		// the answer is in: the tab's entries change, and its document (a
+		// step left its entry before it moved)
+		if (how.type !== 'back_forward') this.#leave();
 		if (how.type === 'navigate') {
 			const next = this.#entry(shown, null, ++this.#documents);
 			next.referrer = referrer;
@@ -565,6 +744,7 @@ export class CalledFrame {
 		this.#routed = routed;
 		this.#port?.close();
 		this.#port = port;
+		this.#scroll = [0, 0];
 		this.#keep();
 		const focused = old.ownerDocument.activeElement === old;
 		old.remove();
@@ -573,18 +753,13 @@ export class CalledFrame {
 		if (!fresh.getAttribute('style')) fresh.removeAttribute('style');
 		frame.adopt(fresh);
 		frame.dispatchEvent(new CustomEvent('element', { detail: fresh }));
-		port.onmessage = ({ data }) => void this.#told(data as Told, port);
+		port.onmessage = ({ data }) => {
+			const told = toldOf(data);
+			if (told) void this.#told(told, port);
+		};
 		port.postMessage({ write: { url: shown, session: this.#session(how) } });
 		// the frame the user was in keeps the focus, as a navigation's does
 		if (focused) fresh.focus();
-		if (how.type === 'back_forward' && entry.scroll.some(Boolean)) {
-			const [x, y] = entry.scroll;
-			fresh.addEventListener(
-				'load',
-				() => fresh.contentWindow?.scrollTo(x, y),
-				{ once: true },
-			);
-		}
 	}
 }
 
@@ -599,13 +774,18 @@ const called = new WeakMap<Frame, CalledFrame>();
  * through the history kept here, and the frame fires `entries` (detail
  * `{ index, entries }`) each time that history changes. Without a URL, a tab kept from before the
  * host's page was reloaded is shown again where it was. The frames'
- * documents are of the controller's own origin (no site pool).
+ * documents are of the controller's own origin (no site pool). The
+ * controller must have opted in (`init.dialing`).
  */
 export async function justCallStomp(
 	frame: Frame,
 	url?: string | URL,
 	options: JustCallStompOptions = {},
 ): Promise<CalledFrame> {
+	if (frame.controller.config.dialing !== true)
+		throw new Error(
+			'Stomp: justCallStomp() needs a controller made with `dialing: true`',
+		);
 	let tab = called.get(frame);
 	if (!tab) {
 		const key = options.key ?? String(frame.controller.frames.indexOf(frame));

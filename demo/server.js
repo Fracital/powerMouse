@@ -135,12 +135,21 @@
 //                       the page sends it here (over the same Wisp relay as
 //                       everything else, the built-in holyWisp or
 //                       STOMP_WISP_URL)
+//   STOMP_DIAL_DIRECTORY the service worker scope of the dialing mode
+//                       (?mode=just-call-stomp), where every dialed frame's
+//                       URL is the call page: a neutral path such as
+//                       `/a1b2c3d4/` (default: one minted when the server
+//                       starts, and the Tor mode's another). Its call page's
+//                       name is STOMP_DIAL_PAGE (default: minted too,
+//                       `<8 hex>.html`). Neither names the proxy, the page or
+//                       the route, so the URL the browser has for a frame
+//                       says nothing
 //   STOMP_DEV           development mode (`npm run dev` sets it): /__dev is a
 //                       WebSocket that announces rebuilt bundles and edited
 //                       files to the page, which reloads what changed; see
 //                       demo/public/pm/dev.js
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { readdirSync, readFileSync, statSync, watch } from 'node:fs';
 import { readFile, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
@@ -174,6 +183,18 @@ const wispWebTransport = process.env.STOMP_WISP_WEBTRANSPORT || '1';
 const webTransportOn = wispWebTransport !== '0';
 const proxyOrigin = process.env.STOMP_PROXY_ORIGIN || '';
 const dev = !!process.env.STOMP_DEV;
+// the dialing mode's scopes and call page (STOMP_DIAL_DIRECTORY,
+// STOMP_DIAL_PAGE): neutral names, minted per start as a host mints its
+// asset names per build
+const mint = () => randomBytes(4).toString('hex');
+const DIAL = (() => {
+	const given = process.env.STOMP_DIAL_DIRECTORY;
+	const directory = given && /^\/[\w-]+\/$/.test(given) ? given : `/${mint()}/`;
+	const page = /^[\w.-]+$/.test(process.env.STOMP_DIAL_PAGE ?? '')
+		? process.env.STOMP_DIAL_PAGE
+		: `${mint()}.html`;
+	return { directory, torDirectory: `/${mint()}/`, page };
+})();
 
 // the transports only export their dist entry; serve its directory
 const transportDir = (name) =>
@@ -360,6 +381,8 @@ const pageConfig = {
 	// An external gateway's Tor egress is the deployer's responsibility.
 	...(torWisp?.external && { torWisp: torWisp.external }),
 	http3: process.env.STOMP_HTTP3 !== '0',
+	// the dialing mode's scopes and call page (STOMP_DIAL_DIRECTORY)
+	dial: DIAL,
 	echDns:
 		process.env.STOMP_ECH_DNS === 'off'
 			? null
@@ -863,23 +886,34 @@ const stompFiles = {
 };
 // The same dist must be served at BOTH service-worker scopes. Tor's separate
 // scope keeps an old ordinary controller from handling a Tor navigation.
-const STOMP_SCOPES = ['/stomp/', '/stomp-tor/'];
+const STOMP_SCOPES = [
+	'/stomp/',
+	'/stomp-tor/',
+	DIAL.directory,
+	DIAL.torDirectory,
+];
 // The sync relay (demo/syncRelay.js): a WebKit page's synchronous request,
 // which nothing in the page's browser can answer while the page waits, done
 // here over the same Wisp relay the transports use
 if (process.env.STOMP_SYNC_RELAY !== '0') {
 	app.post(
-		'/stomp/sync-relay',
+		['/stomp/sync-relay', `${DIAL.directory}sync-relay`],
 		...syncRelay(() => externalWisp || `ws://127.0.0.1:${wisp.port}/wisp/`),
 	);
 	// and the loads of the scripts such a page writes into a frame the
 	// worker does not control, held until their copies come
-	app.all('/stomp/sync-relay/held/:token', ...heldLoads());
+	app.all(
+		[
+			'/stomp/sync-relay/held/:token',
+			`${DIAL.directory}sync-relay/held/:token`,
+		],
+		...heldLoads(),
+	);
 	// Never serve Tor-scoped synchronous requests through the ordinary Wisp
 	// connection, even when Tor went down between a page load and this call.
 	// The two wispClient() closures have independent connections and pools.
 	app.post(
-		'/stomp-tor/sync-relay',
+		['/stomp-tor/sync-relay', `${DIAL.torDirectory}sync-relay`],
 		(_req, res, next) => {
 			if (torWisp?.external || torAccepting()) return next();
 			res.set('Cache-Control', 'no-store');
@@ -895,7 +929,13 @@ if (process.env.STOMP_SYNC_RELAY !== '0') {
 	);
 	// Pure host-side held script bytes have no upstream connection; keep
 	// their tokens separate from the ordinary scope's held script tokens.
-	app.all('/stomp-tor/sync-relay/held/:token', ...heldLoads());
+	app.all(
+		[
+			'/stomp-tor/sync-relay/held/:token',
+			`${DIAL.torDirectory}sync-relay/held/:token`,
+		],
+		...heldLoads(),
+	);
 }
 app.use(STOMP_SCOPES, express.static(stompPath, stompFiles));
 // A routed script request that reaches this host instead of the service

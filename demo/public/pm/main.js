@@ -6,7 +6,7 @@
 // (init.assets; a host sets globalThis.STOMP_ASSETS before this script). The
 // service worker registered below is named from it too, so no file name of
 // the bundle is written here
-const ASSETS = globalThis.STOMP_ASSETS ?? {};
+const ASSETS = { ...(globalThis.STOMP_ASSETS ?? {}) };
 const assetName = (key) => ASSETS[key] || StompController.DEFAULT_ASSETS[key];
 const SEARCH = new SearchBuilder('https://search.brave.com/search?q=%s');
 const QUICK_LINKS = [
@@ -142,6 +142,11 @@ const PROXY_ORIGIN =
 // in the same-origin mode and without the site pool
 const JUST_CALL =
 	new URLSearchParams(location.search).get('mode') === 'just-call-stomp';
+// what the browser has for a dialed frame is its call page's URL alone:
+// the server's neutral scope for the mode and its call page's name
+// (STOMP_DIAL_DIRECTORY), unless the host named a call page itself
+const DIAL = JUST_CALL && CFG.dial ? CFG.dial : null;
+if (DIAL && !ASSETS.callPage) ASSETS.callPage = DIAL.page;
 let ISOLATED = !JUST_CALL && !!PROXY_ORIGIN && PROXY_ORIGIN !== location.origin;
 // The Tor choice is for STomp's proxied traffic, not the host page. A
 // separate Wisp relay must route TCP through Tor; with no relay, a saved Tor
@@ -179,7 +184,13 @@ const TOR_WISP = (() => {
 // new Tor-mode route. The origin's persistent stores are still shared, so
 // the mode does not promise Tor Browser's cookie or storage isolation. A
 // change reloads the host rather than leaving direct requests in flight.
-const DIRECTORY = TOR_REQUESTED ? '/stomp-tor/' : '/stomp/';
+const DIRECTORY = DIAL
+	? TOR_REQUESTED
+		? DIAL.torDirectory
+		: DIAL.directory
+	: TOR_REQUESTED
+		? '/stomp-tor/'
+		: '/stomp/';
 // HTTP cache in the service worker, on by default; ?nocache turns it off for a
 // visit
 const CACHE =
@@ -1552,6 +1563,9 @@ async function startController(name) {
 			directory: DIRECTORY,
 			assets: ASSETS,
 			codec: 'xor',
+			// the dialing mode's call page and calls exist for this
+			// controller only (justCallStomp)
+			...(JUST_CALL && { dialing: true }),
 			// ?carrierhost=0: this visit's transport opens its own carrier
 			...(new URLSearchParams(location.search).get('carrierhost') === '0' && {
 				carrierHost: false,

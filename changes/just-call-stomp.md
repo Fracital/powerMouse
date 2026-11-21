@@ -4,7 +4,7 @@
   `justCallStomp(frame, url)` (also `StompController.justCallStomp`; the
   demo's `?mode=just-call-stomp`). The frame never navigates to a site. Each
   document goes into a fresh frame of one constant call page under the
-  scope (`blank.html`), which the service worker serves and controls; the
+  scope (`assets.callPage`), which the service worker serves and controls; the
   host sends it the route by a message, and the page asks the worker for
   the document with a fetch the worker answers as that frame's navigation
   (the same request upstream, rewrite and shell), then writes the answer

@@ -100,7 +100,15 @@ import { allowApartAgent, apartClient } from './apartAgent';
 import { knownOriginOf, knownTopSiteOf, recordBlobOrigin } from './blobOrigins';
 import { Blocker, heardBlockerBytes } from './blocker';
 import { memoryCache } from './cache';
-import { answerOf, calledEvent, callPage, isCall } from './called';
+import {
+	allowCallToken,
+	answerOf,
+	callable,
+	calledEvent,
+	callPage,
+	isCall,
+	useDialers,
+} from './called';
 import { legacyFileSystemCleared } from './clearSiteData';
 import {
 	hintsDocument,
@@ -483,6 +491,24 @@ function registerController(
 			},
 			navigationSent: async (routed) => {
 				navigationSent(routed);
+			},
+			callToken: async ({ token, routed }) => {
+				const ready = await server;
+				let target: URL | null = null;
+				try {
+					target = new URL(routed, location.origin);
+				} catch (error) {
+					// no URL: refused below
+				}
+				if (
+					config.dialing !== true ||
+					!target ||
+					target.origin !== location.origin ||
+					!target.pathname.startsWith(directory) ||
+					ready.realURL(target.href) === target.href ||
+					!allowCallToken(token, target.href, directory)
+				)
+					throw new Error('Stomp: no call of this route');
 			},
 			unroute: async (url) => {
 				const ready = await server;
@@ -2902,9 +2928,14 @@ function srcdocClaim(event: FetchEvent, pathname: string): boolean {
 	return true;
 }
 
+// just call stomp (./called.ts): the controllers that opted in
+useDialers(() => [...controllers.values()]);
+
 self.addEventListener('fetch', (event: FetchEvent) => {
-	// just call stomp: answered as the navigation it stands for (./called.ts)
-	if (isCall(event.request)) {
+	// just call stomp: a call of a controller that opted in is answered as
+	// the navigation it stands for (./called.ts); for any other it is a
+	// request like any other
+	if (isCall(event.request) && callable(event.request.url, controllerFor)) {
 		event.respondWith(answerCall(event));
 		return;
 	}
@@ -2915,15 +2946,20 @@ async function answerCall(event: FetchEvent): Promise<Response> {
 	const realURL = (url: string) => {
 		const ready = controllerFor(new URL(url).pathname)?.ready;
 		try {
-			return ready ? ready.realURL(url) : null;
+			const real = ready?.realURL(url);
+			return real && real !== url ? real : null;
 		} catch (error) {
 			return null;
 		}
 	};
-	const called = await calledEvent(event, (url) => {
-		const real = realURL(url);
-		return real ? new URL(real).origin : null;
-	});
+	const called = await calledEvent(
+		event,
+		(url) => {
+			const real = realURL(url);
+			return real ? new URL(real).origin : null;
+		},
+		(url) => controllerFor(new URL(url).pathname)?.directory,
+	);
 	if (!called)
 		return new Response(null, { status: 403, statusText: 'Forbidden' });
 	dispatch(called);

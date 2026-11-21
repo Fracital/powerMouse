@@ -1071,13 +1071,11 @@ export interface SrcdocMessage {
 	directory: string;
 	token: string;
 }
-/**
- * Just call stomp (src/controller/justCallStomp.ts): the one page every
- * called frame loads, under the scope (the worker serves it and controls
- * it): the same for every site, it names none. The host hands it a URL by
- * a message (CALL_MESSAGE) and the page calls stomp in itself.
- */
-export const CALL_PAGE = 'blank.html';
+// Just call stomp (src/controller/justCallStomp.ts): the one page every
+// called frame loads is the asset `callPage` (src/config.ts Assets), under
+// the scope. The worker serves it, and only to a controller that opted in
+// (ControllerInit.dialing). The host hands it a token and a port by a
+// message (CALL_MESSAGE) and the page calls stomp in itself.
 /**
  * Just call stomp: the header of the fetch the call page makes for the
  * document it is to show, which the worker answers as it answers that
@@ -1090,8 +1088,22 @@ export const CALL_HEADER = 'x-stomp-call';
 export const CALLED_URL_HEADER = 'x-stomp-called-url';
 /** just call stomp: the referrer policy of the call's navigation (its document's, or its link's), which the worker reads in place of the fetch's */
 export const CALL_POLICY_HEADER = 'x-stomp-call-policy';
-/** Just call stomp: the key of the host's one message to a call page, which carries the port the rest goes over */
+/**
+ * Just call stomp: the key of the host's message to a call page, whose value
+ * is the dial's token (CALL_TOKEN_DIGITS lowercase hex digits) and which
+ * carries the one port the rest goes over
+ */
 export const CALL_MESSAGE = '$stomp$call';
+/**
+ * Just call stomp: the header of a call that carries its token. A token is
+ * minted by the controller that opted in (StompController.callToken), given
+ * to its worker for one route over the controller's own channel, and good
+ * for one call of one call page (src/server/called.ts)
+ */
+export const CALL_TOKEN_HEADER = 'x-stomp-call-token';
+export const CALL_TOKEN_DIGITS = 32;
+/** Just call stomp: how long a token, a call page's wait for its port's call and a host's wait for the answer last */
+export const CALL_WAIT_MS = 45_000;
 /** Just call stomp: what the call page leaves on its window for the document it writes, taken before any page script */
 export const CALLED_KEY = '$stomp$called';
 
@@ -1108,6 +1120,8 @@ export interface CalledSession {
 	replaced?: boolean;
 	/** the document's route, the referrer of the requests of its frames' calls */
 	routed?: string;
+	/** a step's: where the entry was scrolled when it was left, restored once the document loads */
+	scroll?: [number, number];
 }
 
 export interface InlineDocumentMessage {
@@ -1439,6 +1453,12 @@ export type SWbound = {
 	stopNavigation: [{ routed: string; early?: boolean }];
 	/** the host sends a frame to this routed URL again: a stop `early` of it is over */
 	navigationSent: [string];
+	/**
+	 * Just call stomp: let `token` make one call of the routed URL `routed`
+	 * (src/server/called.ts allowCallToken); refused unless the controller
+	 * opted in (Config.dialing)
+	 */
+	callToken: [{ token: string; routed: string }];
 	/** the real URL a routed one stands for (the controller's codec); null for anything that is not a route */
 	unroute: [string, string | null];
 	/** drop every entry of the HTTP cache */

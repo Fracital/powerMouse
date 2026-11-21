@@ -19,12 +19,18 @@
 // location.replace, which makes no history entry, then called. Its history
 // is kept here, and its steps are its own: a frame's history is not joined
 // to the tab's.
+//
+// Each call takes a token, which only the controller can have the worker
+// hold: this document asks its host for one over its own port (askToken,
+// calledHooks.ts), and a frame's document asks this one, which asks its
+// host in turn. Between this document and a frame's call page or document
+// there are messages alone: nothing here reads the frame's window, so a
+// frame on another origin is called the same way. (Where the frame is of
+// this origin, its URL is checked as well before the call goes.)
 
 import {
-	CALL_HEADER,
 	CALL_MESSAGE,
-	CALL_PAGE,
-	CALL_POLICY_HEADER,
+	CALL_WAIT_MS,
 	type CalledSession,
 } from '../../transport/messages';
 import { scopePrefix } from '../modules/Unroute';
@@ -34,9 +40,10 @@ import { frameWindow } from './freshContext';
 
 type Globals = typeof globalThis & Record<string, any>;
 
-/** what Chrome's navigation asks for (its Accept header) */
-const NAVIGATION_ACCEPT =
-	'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7';
+/** how long a frame's call page may take to say it has the call's port */
+const READY_WAIT_MS = 10_000;
+/** the longest URL a message on a call's port names */
+const MAX_URL = 32_768;
 
 type How = {
 	type: CalledSession['type'];
@@ -58,8 +65,15 @@ interface Kid {
 	entries: KidEntry[];
 	index: number;
 	documents: number;
-	/** the document the frame is to be called with next */
-	want: { url: string; routed: string; how: How } | null;
+	/** the document the frame is to be called with next, and its call's token on the way */
+	want: {
+		url: string;
+		routed: string;
+		how: How;
+		token: Promise<string | null>;
+	} | null;
+	/** the frame was sent to its call page before: the next is a replace of it */
+	shown: boolean;
 	/** the port of the call in flight (a newer one drops it) */
 	calling: MessagePort | null;
 	/** the port to the document shown */
@@ -72,22 +86,92 @@ interface Kid {
 
 /** what a called frame's document tells (calledHooks.ts) */
 type Told = {
-	op: 'navigate' | 'push' | 'replace' | 'step';
+	op: 'navigate' | 'push' | 'replace' | 'step' | 'scroll' | 'token';
 	url?: string;
 	routed?: string;
+	id?: number;
 	state?: unknown;
 	delta?: number;
 	replace?: boolean;
 	reload?: boolean;
 	entries?: [string, string | File][] | null;
-	enctype?: string;
+	enctype?: string | null;
 	policy?: string;
 };
+
+const isText = (value: unknown, limit = MAX_URL): value is string =>
+	typeof value === 'string' && value.length <= limit;
+
+/** `data` as what a frame's document may tell, else null (the host's check, src/controller/justCallStomp.ts toldOf) */
+function toldOf(data: unknown, File: typeof globalThis.File): Told | null {
+	if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+	const told = data as Record<string, unknown>;
+	const optional = (key: string, check: (value: unknown) => boolean) =>
+		told[key] === undefined || check(told[key]);
+	const text = (limit?: number) => (value: unknown) => isText(value, limit);
+	const ops: Record<string, string[]> = {
+		navigate: [],
+		push: ['url'],
+		replace: ['url'],
+		step: ['delta'],
+		scroll: [],
+		token: ['routed', 'id'],
+	};
+	const needs = ops[told.op as string];
+	if (
+		!needs ||
+		needs.some((key) => told[key] === undefined) ||
+		(told.op === 'navigate' && !told.reload && told.url === undefined) ||
+		!optional('url', text()) ||
+		!optional('routed', text()) ||
+		!optional('id', Number.isSafeInteger) ||
+		!optional('delta', Number.isSafeInteger) ||
+		!optional('replace', (value) => typeof value === 'boolean') ||
+		!optional('reload', (value) => typeof value === 'boolean') ||
+		!optional('enctype', (value) => value === null || isText(value, 256)) ||
+		!optional('policy', text(256)) ||
+		!optional(
+			'entries',
+			(value) =>
+				value === null ||
+				(Array.isArray(value) &&
+					value.length <= 65_536 &&
+					value.every(
+						(pair) =>
+							Array.isArray(pair) &&
+							pair.length === 2 &&
+							typeof pair[0] === 'string' &&
+							(typeof pair[1] === 'string' || pair[1] instanceof File),
+					)),
+		)
+	)
+		return null;
+	return told as Told;
+}
+
+/** what a frame's call page answers its call, else null (src/server/called.ts) */
+function answerOf(
+	data: unknown,
+): { url: string; routed: string } | { failed: string } | null {
+	if (!data || typeof data !== 'object') return null;
+	const { answered, failed } = data as Record<string, any>;
+	if (isText(failed, 1024)) return { failed };
+	if (
+		answered &&
+		typeof answered === 'object' &&
+		isText(answered.url) &&
+		isText(answered.routed) &&
+		Number.isInteger(answered.status)
+	)
+		return { url: answered.url, routed: answered.routed };
+	return null;
+}
 
 export function calledFrames(
 	client: DocumentClient,
 	page: string,
 	routed: string,
+	askToken: (routed: string) => Promise<string | null>,
 ) {
 	const global = client.global as Globals;
 	const {
@@ -98,6 +182,9 @@ export function calledFrames(
 		URL,
 		Reflect,
 		crypto,
+		File,
+		setTimeout,
+		clearTimeout,
 	} = global;
 	const portPost = global.MessagePort.prototype.postMessage;
 	const send = (port: MessagePort, message: object) =>
@@ -149,19 +236,30 @@ export function calledFrames(
 			return '';
 		}
 	};
-	/** the frame to the call page again: a replace, no entry */
+	/**
+	 * the frame to the call page: its src the first time, then a replace,
+	 * no entry (Location.replace is the one member of another origin's
+	 * location a parent may call)
+	 */
 	const reach = (element: Element, kid: Kid): string | true => {
 		kid.calling = null;
 		const win = frameWindow(element);
-		if (hrefOf(win) !== kidPage) return kidPage;
-		win!.location.replace(kidPage);
+		if (!win || !kid.shown) {
+			kid.shown = true;
+			return kidPage;
+		}
+		win.location.replace(kidPage);
 		return true;
 	};
 
 	// a frame of this document on its call page takes no message of the
 	// page's: its call is this document's hooks' alone (the page's poster,
 	// modules/Context.ts)
-	const pages = new URL(CALL_PAGE, kidPage).href;
+	const pages = (() => {
+		const url = new URL(kidPage);
+		url.search = '';
+		return url.href;
+	})();
 	client.callPageWindow = (receiver) =>
 		hrefOf(receiver as Window).startsWith(pages);
 
@@ -174,7 +272,17 @@ export function calledFrames(
 		} catch (error) {
 			return false;
 		}
-		if (!absolute.startsWith(scope)) return false;
+		if (!absolute.startsWith(scope)) {
+			// (sent elsewhere: no call of it is to come, and its next call page
+			// is its src again)
+			const kid = kids.get(element);
+			if (kid) {
+				kid.want = null;
+				kid.calling = null;
+				kid.shown = false;
+			}
+			return false;
+		}
 		let kid = kids.get(element);
 		if (!kid) {
 			kid = {
@@ -182,6 +290,7 @@ export function calledFrames(
 				index: -1,
 				documents: 0,
 				want: null,
+				shown: false,
 				calling: null,
 				port: null,
 				writing: false,
@@ -193,6 +302,7 @@ export function calledFrames(
 			url,
 			routed: absolute,
 			how: { type: 'navigate', referrer: routed },
+			token: askToken(absolute),
 		};
 		if (!element.isConnected) unplaced.set(url, kid);
 		return reach(element, kid);
@@ -211,9 +321,12 @@ export function calledFrames(
 			return;
 		}
 		const win = frameWindow(element);
-		if (hrefOf(win) !== kidPage || !kid.want) return;
+		// (a frame of this origin on another page is no call page; one of
+		// another origin cannot be read, and its call page says it is one)
+		const href = hrefOf(win);
+		if (!win || !kid.want || (href !== '' && href !== kidPage)) return;
 		Reflect.apply(stop, event, []);
-		void call(element, kid, win!);
+		void call(element, kid, win);
 	};
 	const listen = () =>
 		Reflect.apply(
@@ -229,48 +342,63 @@ export function calledFrames(
 		kid.want = null;
 		const { port1: port, port2 } = new MessageChannel();
 		kid.calling = port;
-		const answered = new Promise<Record<string, any>>((resolve) => {
-			port.onmessage = ({ data }) => resolve(data ?? {});
-		});
-		Reflect.apply(windowPost, win, [{ [CALL_MESSAGE]: 1 }, origin, [port2]]);
+		const token = await want.token;
+		if (kid.calling !== port || !token) {
+			port.close();
+			return;
+		}
 		const { how } = want;
-		send(port, {
-			call: {
-				routed: want.routed,
-				init: {
-					method: how.method ?? 'GET',
-					body: how.body ?? null,
-					headers: {
-						[CALL_HEADER]: how.type,
-						accept: NAVIGATION_ACCEPT,
-						'upgrade-insecure-requests': '1',
-						...(how.contentType && { 'content-type': how.contentType }),
-						...(how.policy && { [CALL_POLICY_HEADER]: how.policy }),
-					},
-					credentials: 'include',
-					redirect: 'follow',
-					referrer: how.referrer,
-					cache: how.type === 'reload' ? 'no-cache' : 'default',
-				},
-			},
+		// the call page says it has the port, then the call goes, then its
+		// answer comes; anything else it says is dropped
+		const answered = new Promise<ReturnType<typeof answerOf>>((resolve) => {
+			let ready = false;
+			let timer = setTimeout(() => resolve(null), READY_WAIT_MS);
+			port.onmessage = ({ data }) => {
+				if (!ready) {
+					if (data?.ready !== true) return;
+					ready = true;
+					clearTimeout(timer);
+					timer = setTimeout(() => resolve(null), CALL_WAIT_MS);
+					send(port, {
+						call: {
+							routed: want.routed,
+							type: how.type,
+							method: how.method ?? 'GET',
+							body: how.body ?? null,
+							referrer: how.referrer,
+							...(how.contentType && { contentType: how.contentType }),
+							...(how.policy && { policy: how.policy }),
+						},
+					});
+					return;
+				}
+				const answer = answerOf(data);
+				if (!answer) return;
+				clearTimeout(timer);
+				resolve(answer);
+			};
 		});
+		Reflect.apply(windowPost, win, [
+			{ [CALL_MESSAGE]: token },
+			origin,
+			[port2],
+		]);
 		const answer = await answered;
-		if (kid.calling !== port || answer.failed) {
+		port.onmessage = null;
+		if (kid.calling !== port || !answer || 'failed' in answer) {
 			port.close();
 			return;
 		}
 		kid.calling = null;
 		let shown = want.url;
-		const real = answer.answered?.url;
-		if (typeof real === 'string' && real) {
-			const after = new URL(real);
+		try {
+			const after = new URL(answer.url);
 			if (!after.hash) after.hash = new URL(want.url).hash;
 			shown = after.href;
+		} catch (error) {
+			// no URL: the one asked for
 		}
-		const route =
-			typeof answer.answered?.routed === 'string' && answer.answered.routed
-				? answer.answered.routed
-				: want.routed;
+		const route = answer.routed || want.routed;
 		if (how.type === 'navigate') {
 			const made: KidEntry = {
 				url: shown,
@@ -293,7 +421,10 @@ export function calledFrames(
 		kid.routed = route;
 		kid.port?.close();
 		kid.port = port;
-		port.onmessage = ({ data }) => void told(element, kid, port, data as Told);
+		port.onmessage = ({ data }) => {
+			const what = toldOf(data, File);
+			if (what) void told(element, kid, port, what);
+		};
 		kid.writing = true;
 		send(port, {
 			write: {
@@ -322,7 +453,7 @@ export function calledFrames(
 		to: string,
 		how: How,
 	) => {
-		kid.want = { url, routed: to, how };
+		kid.want = { url, routed: to, how, token: askToken(to) };
 		reach(element, kid);
 	};
 
@@ -335,6 +466,22 @@ export function calledFrames(
 		if (port !== kid.port) return;
 		const entry = kid.entries[kid.index];
 		switch (what.op) {
+			// (a frame's scroll is its own: its steps are within its document)
+			case 'scroll':
+				break;
+			// a token for a frame of the frame's document: asked of this
+			// document's host, for a route of the scope only
+			case 'token': {
+				let to = '';
+				try {
+					to = new URL(String(what.routed)).href;
+				} catch (error) {
+					// none
+				}
+				const value = to.startsWith(scope) ? await askToken(to) : null;
+				if (port === kid.port) send(port, { token: { id: what.id, value } });
+				break;
+			}
 			case 'push':
 			case 'replace': {
 				const made: KidEntry = {
@@ -381,7 +528,7 @@ export function calledFrames(
 				}
 				if (!to.startsWith(scope)) break;
 				const body = what.entries
-					? await encoded(what.entries, what.enctype)
+					? await encoded(what.entries, what.enctype ?? undefined)
 					: null;
 				load(element, kid, String(what.url), to, {
 					type: 'navigate',

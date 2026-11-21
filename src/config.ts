@@ -213,6 +213,12 @@ export interface Config {
 	/** the served file names, when the host renamed them (see Assets) */
 	assets?: Assets;
 	/**
+	 * Just call stomp (ControllerInit.dialing): the host opted in, so the
+	 * service worker serves the call page (Assets.callPage) and answers its
+	 * calls for this controller. Without it neither exists.
+	 */
+	dialing?: boolean;
+	/**
 	 * The global names the rewriter and the inject bundles use (see
 	 * HelperNames): a deployment's own, when the host set them, and the
 	 * client's the controller minted otherwise. Defaults: `$s$j`, `$s$L`,
@@ -443,6 +449,16 @@ export interface Assets {
 	 */
 	rewriterLib?: string;
 	/**
+	 * Just call stomp's call page (ControllerInit.dialing): the one page
+	 * every dialed frame loads, `<scope><callPage>` (`?<depth>` below the
+	 * tab's frame). No file of dist/ is behind it: the service worker
+	 * serves it, and only to a controller that opted in, so a host names
+	 * it and serves nothing. It is the URL the browser shows for every
+	 * dialed frame, so a host that wants that URL to say nothing names it
+	 * as it names its other files (a neutral name of its own, per build)
+	 */
+	callPage?: string;
+	/**
 	 * the host's omnibox (src/omnibox/), a classic script whose global is
 	 * `Omnibox`: no proxied page and no bundle of the controller's loads it,
 	 * a host page that wants it loads it by this name
@@ -473,6 +489,8 @@ const BUNDLE_ASSETS: Required<Pick<Assets, BundleAsset>> = {
 	adblockResources: 'adblock-resources.json',
 	adblockSnapshot: 'adblock-snapshot.dat.gz',
 	rewriterLib: 'rewriterLib.js',
+	// (no file: the worker's page; a neutral name, as a host renames it)
+	callPage: 'k3v9.html',
 };
 
 /**

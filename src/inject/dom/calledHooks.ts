@@ -17,13 +17,20 @@
 // entries, current entry and activation, and the performance navigation
 // entry's name and type read the tab's history as the host told it and as
 // this document changed it since.
+//
+// The host never reaches into this window: where the document is scrolled
+// goes to it over the port as the document scrolls, and a step's entry's
+// scroll comes with the step (a pop, or the session of the document written
+// for it), restored here. A frame of this document gets its call's token
+// from the host over the port too (calledFrames.ts).
 
-import type { CalledSession } from '../../transport/messages';
+import { CALL_WAIT_MS, type CalledSession } from '../../transport/messages';
 import ProxyModule from '../modules/Proxy';
 import { unrouteURL } from '../modules/Unroute';
 import { withStack } from '../nativeErrors';
 import { calledFrames } from './calledFrames';
 import type DocumentClient from './Client';
+import { addDocumentOpenListener } from './Client';
 import { destinationURL } from './freshContext';
 import { sourcePolicy } from './sourcePolicy';
 
@@ -49,13 +56,31 @@ export function calledHooks(client: DocumentClient) {
 	const proxyModule = client.getModule(ProxyModule)!;
 	// (the frame's one URL, the call page's)
 	const page = global.location.href;
-	// this document's own frames are called too
-	calledFrames(client, page, session.routed ?? '');
 	const { DOMException, structuredClone, setTimeout, Promise } = global;
-	const getter = (from: object, name: string) =>
-		Reflect.getOwnPropertyDescriptor(from, name)!.get!;
 	const post = global.MessagePort.prototype.postMessage;
 	const tell = (message: object) => Reflect.apply(post, port, [message]);
+	// a token for a frame of this document's call, which the host has its
+	// worker hold (null: refused, or no answer within the call's wait)
+	const asked = new Map<number, (token: string | null) => void>();
+	let asks = 0;
+	const askToken = (routed: string) =>
+		new Promise<string | null>((resolve) => {
+			const id = ++asks;
+			const timer = setTimeout(() => {
+				asked.delete(id);
+				resolve(null);
+			}, CALL_WAIT_MS);
+			asked.set(id, (token) => {
+				clearTimeout(timer);
+				asked.delete(id);
+				resolve(token);
+			});
+			tell({ op: 'token', id, routed });
+		});
+	// this document's own frames are called too
+	calledFrames(client, page, session.routed ?? '', askToken);
+	const getter = (from: object, name: string) =>
+		Reflect.getOwnPropertyDescriptor(from, name)!.get!;
 	const dispatch = global.EventTarget.prototype.dispatchEvent;
 	const fire = (event: Event) => Reflect.apply(dispatch, global, [event]);
 	const eventProto = global.Event.prototype;
@@ -89,20 +114,86 @@ export function calledHooks(client: DocumentClient) {
 				),
 			);
 	};
-	// a step of the host's to an entry of this document
+	const isScroll = (value: unknown): value is [number, number] =>
+		Array.isArray(value) &&
+		value.length === 2 &&
+		value.every((part) => Number.isFinite(part));
+	// the entry's own scroll, unless the page restores it itself
+	const restore = (scroll: [number, number]) => {
+		if (global.history.scrollRestoration !== 'manual')
+			global.scrollTo(scroll[0], scroll[1]);
+	};
+	// what the host sends: a step of its to an entry of this document, the
+	// token a frame's call asked for and its Stop; anything else is dropped
+	// (the window's own stop, taken before any script of the page runs: a
+	// [Global] interface's operations are the window's own properties, which
+	// the page could replace)
+	const ownStop = global.stop;
 	port.onmessage = ({ data }) => {
-		const pop = data?.pop;
-		if (!pop || !entries[pop.index]) return;
+		if (!data || typeof data !== 'object') return;
+		// the host's Stop (CalledFrame.stop): this document stops loading, as
+		// on its own window.stop(); a host of another origin cannot call it
+		if (data.stop === true && Object.keys(data).length === 1) {
+			Reflect.apply(ownStop, global, []);
+			return;
+		}
+		const token = data.token;
+		if (token && typeof token === 'object') {
+			const value = token.value;
+			if (value === null || (typeof value === 'string' && value.length <= 64))
+				asked.get(token.id)?.(value);
+			return;
+		}
+		const pop = data.pop;
+		if (
+			!pop ||
+			typeof pop !== 'object' ||
+			!Number.isInteger(pop.index) ||
+			!entries[pop.index]
+		)
+			return;
 		const from = client.locationHref;
 		index = pop.index;
 		state = pop.state;
 		client.rename(entries[index].url);
-		// the entry's own scroll, unless the page restores it itself
-		const scroll = pop.scroll;
-		if (Array.isArray(scroll) && global.history.scrollRestoration !== 'manual')
-			global.scrollTo(Number(scroll[0]) || 0, Number(scroll[1]) || 0);
+		if (isScroll(pop.scroll)) restore(pop.scroll);
 		popped(from, entries[index].url, state);
 	};
+	// where the document is scrolled, for the entry it is when the host
+	// leaves it (the window's first listener, capturing: a page's own does
+	// not stop it), and a step to an entry of another document: its scroll
+	// once it has loaded, as a browser restores a traversal's. Again after
+	// each open (loadHTML's, which writes the real page, among them), which
+	// erases the window's listeners
+	const addListener = global.EventTarget.prototype.addEventListener;
+	const reported = () =>
+		tell({ op: 'scroll', scroll: [global.scrollX, global.scrollY] });
+	// (at each load: the shell's, before loadHTML writes the real page,
+	// restores nothing yet)
+	const restoring =
+		session.type === 'back_forward' && isScroll(session.scroll)
+			? session.scroll
+			: null;
+	const restored = () => {
+		if (restoring) setTimeout(() => restore(restoring));
+	};
+	const listen = () => {
+		Reflect.apply(addListener, global, [
+			'scroll',
+			reported,
+			{ capture: true, passive: true },
+		]);
+		// (this part may arrive once the document has loaded)
+		if (restoring && global.document.readyState === 'complete') restored();
+		else if (restoring)
+			Reflect.apply(addListener, global, [
+				'load',
+				restored,
+				{ capture: true, once: true },
+			]);
+	};
+	listen();
+	addDocumentOpenListener(global, listen);
 	const change = (push: boolean, url: string, value: unknown) => {
 		const made = entry(url);
 		if (push) entries.splice(++index, Infinity, made);
@@ -442,6 +533,7 @@ export function calledHooks(client: DocumentClient) {
 				op: 'navigate',
 				url,
 				routed,
+				scroll: [global.scrollX, global.scrollY],
 				replace: type === 'replace',
 				entries: data ? [...Reflect.apply(formEntries, data, [])] : null,
 				enctype:
