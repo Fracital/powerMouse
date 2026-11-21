@@ -41,6 +41,12 @@ export function webNatives(global: Global) {
 			uuid?.() ??
 			`${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`,
 		fetch: global.fetch.bind(global),
+		/** (setIcon's path decoded as Chrome's bindings decode it) */
+		createImageBitmap: (
+			global.createImageBitmap as typeof createImageBitmap
+		).bind(global),
+		atob: (global.atob as typeof atob).bind(global),
+		Blob: global.Blob as typeof Blob,
 		setTimeout: global.setTimeout.bind(global),
 		clearTimeout: global.clearTimeout.bind(global),
 		setInterval: global.setInterval.bind(global),

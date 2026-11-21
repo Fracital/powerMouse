@@ -554,6 +554,66 @@ function pickSizes<T>(value: T | Record<string, T>): Record<string, T> {
 	return out;
 }
 
+/**
+ * setIcon's path as Chrome's bindings take it (extensions/renderer/
+ * resources/set_icon.js): fetched (a relative path from the extension's
+ * root, where Chrome's is the context's: the same for a worker at the
+ * root), decoded, and kept as the picture, so the toolbar never loads the
+ * path itself (the host page cannot: an extension's files answer only its
+ * own contexts). A file the package does not have, or one that is no
+ * image, fails the whole call in Chrome's words and leaves the icon as it
+ * was (Tampermonkey sets images/icon_grey.png, which it does not ship, at
+ * every start). Another site's URL is kept as given (the host shows the
+ * placeholder for it).
+ */
+async function loadIcon(ctx: Context, given: string): Promise<string> {
+	const failed = (why: string) =>
+		new ApiError(`Failed to set icon '${given}': ${why}`);
+	const resolved = resolveExtensionURL(given);
+	let data: string | null;
+	if (/^data:/i.test(resolved)) data = resolved;
+	else {
+		let url: URL;
+		try {
+			url = new natives.URL(resolved, extensionURL(ctx.ext.id));
+		} catch (error) {
+			throw failed('Failed to fetch');
+		}
+		if (extensionOfURL(url.href) !== ctx.ext.id) return url.href;
+		let path: string;
+		try {
+			path = decodeURIComponent(url.pathname);
+		} catch (error) {
+			throw failed('Failed to fetch');
+		}
+		data = (await ctx.worker('icon', 'read', path)) as string | null;
+	}
+	const comma = data ? data.indexOf(',') : -1;
+	if (!data || comma < 0) throw failed('Failed to fetch');
+	const head = data.slice(5, comma);
+	let blob: Blob;
+	try {
+		const body = /;base64$/i.test(head)
+			? natives.atob(data.slice(comma + 1))
+			: decodeURIComponent(data.slice(comma + 1));
+		const bytes = new Uint8Array(body.length);
+		for (let i = 0; i < body.length; i++) bytes[i] = body.charCodeAt(i);
+		blob = new natives.Blob([bytes], {
+			type: head.replace(/;base64$/i, ''),
+		});
+	} catch (error) {
+		throw failed('Failed to fetch');
+	}
+	try {
+		(await natives.createImageBitmap(blob)).close();
+	} catch (error) {
+		throw failed(
+			(error as Error)?.message || 'The source image could not be decoded.',
+		);
+	}
+	return data;
+}
+
 /** declarativeContent's rules as they travel to the hub: SetIcon's imageData as pictures */
 function contentRulesOut(rules: unknown): Record<string, unknown>[] {
 	const list = (Array.isArray(rules) ? rules : []) as Record<string, unknown>[];
@@ -636,7 +696,7 @@ export function actionApi(ctx: Context, kind: string) {
 			async (details: Details) => (await get(details, 'title')) ?? ctx.ext.name,
 		),
 		setIcon: m(
-			(
+			async (
 				details: Details & {
 					path?: string | Record<string, string>;
 					imageData?: unknown;
@@ -653,14 +713,22 @@ export function actionApi(ctx: Context, kind: string) {
 					for (const [size, data] of Object.entries(sizes))
 						if (data) icons[size] = imageDataUrl(data);
 				} else if (details.path) {
-					// (getURL's chrome-extension:// URL is the emulated origin's)
-					for (const [size, path] of Object.entries(pickSizes(details.path))) {
-						const url = path && resolveExtensionURL(path);
-						if (url)
-							icons[size] = /^(data|blob|https?):/.test(url)
-								? url
-								: extensionURL(ctx.ext.id, cleanPath(url));
-					}
+					// every path given is loaded (one that fails fails the call),
+					// the toolbar's two sizes picked from what loaded
+					const given =
+						typeof details.path === 'object'
+							? details.path
+							: { 0: details.path };
+					const loaded: Record<string, string> = {};
+					await natives.Promise.all(
+						Object.entries(given).map(async ([size, path]) => {
+							if (typeof path === 'string' && path)
+								loaded[size] = await loadIcon(ctx, path);
+						}),
+					);
+					if (typeof details.path === 'object')
+						Object.assign(icons, pickSizes(loaded));
+					else if (loaded[0]) Object.assign(icons, pickSizes(loaded[0]));
 				}
 				if (!Object.keys(icons).length)
 					throw new ApiError('Either path or imageData must be specified.');

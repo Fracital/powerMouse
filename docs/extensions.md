@@ -261,6 +261,20 @@ controller.extensions  --RPC-->  ExtensionHub (with the controller)    Extension
   `HubTabs`), offscreen documents, context menus and notifications, and
   answers the contexts' calls over the same channel. A RemoteController's
   hub is its controller frame's; the host page's frames are the tabs.
+- **The toolbar's icons.** Every `iconUrl` the host gets is a picture (a
+  `data:` URL), never an extension's file: those answer only the
+  extension's own contexts, so a route of one is a 404 (or ORB's refusal)
+  in the host's `<img>`. The manifest's icons are read into pictures at
+  load. `action.setIcon`'s `path` is taken as Chrome's bindings take it
+  (`set_icon.js`): the runtime asks the worker for each file given
+  (relative to the extension's root), decodes it, and the hub keeps the
+  picture, per tab or for the extension, until the tab navigates or the
+  background sets another. A file the package lacks fails the call with
+  "Failed to set icon '<path>': Failed to fetch", one that does not decode
+  with the decoder's words, and the icon stays as it was: Tampermonkey
+  sets `images/icon_grey.png`, which it does not ship, at every start, and
+  keeps its manifest's grey icon there as in Chrome. An icon the demo still
+  cannot decode is Chrome's placeholder, the name's first letter.
 - **Tabs' and webNavigation's events.** The host page watches its frames
   (`framesAsTabs`): a frame that appears, is shown or goes away, each top
   document's first report (its commit), its URL moving within the

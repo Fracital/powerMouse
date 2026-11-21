@@ -170,6 +170,16 @@ chrome.runtime.onInstalled.addListener(() => {
 });`,
 };
 
+// setIcon's paths are decoded as Chrome's bindings decode them: pictures
+const I16 = Buffer.from(
+	'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGElEQVR4nGNgYPj/nzI8asCoAaMGDBMDADKm/hDlteSrAAAAAElFTkSuQmCC',
+	'base64',
+);
+const I32 = Buffer.from(
+	'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAK0lEQVR4nO3OoQEAAAwCIE/f5/MMC4FOcvkpAQEBAQEBAQEBAQEBAQGBdaCps/xMy+wbFwAAAABJRU5ErkJggg==',
+	'base64',
+);
+
 const BADGE = {
 	'manifest.json': manifest({
 		name: 'Badge Probe',
@@ -185,8 +195,8 @@ self.__settings = [];
 chrome.action.onUserSettingsChanged.addListener((settings) => self.__settings.push(settings));`,
 	'd16.png': 'D16',
 	'd32.png': 'D32',
-	'i16.png': 'I16',
-	'i32.png': 'I32',
+	'i16.png': I16,
+	'i32.png': I32,
 };
 
 const PAGE_ACTION = {
@@ -880,20 +890,15 @@ for (const [mode, base] of [
 		chrome.action.setIcon({ path: { 16: 'i16.png', 32: 'i32.png' } }),
 	);
 	const iconSet = await state('badge');
-	// (the icon's URL is routed: compared with the routes of both sizes)
-	const iconRoutes = await page.evaluate(
-		(id) =>
-			Promise.all(
-				['i16.png', 'i32.png'].map((file) =>
-					window.__controller.route(`https://${id}.invalid/${file}`),
-				),
-			),
-		ids.badge,
+	// (the toolbar keeps the picture, never the path: the host cannot load
+	// an extension's file)
+	const iconPictures = [I16, I32].map(
+		(bytes) => `data:image/png;base64,${bytes.toString('base64')}`,
 	);
 	ok(
 		`${mode}: setIcon's 16 pixel path at a device pixel ratio of 1`,
-		iconSet?.iconUrl === iconRoutes[0] && iconRoutes[0] !== iconRoutes[1],
-		`${iconSet?.iconUrl} | ${iconRoutes.join(' ')}`,
+		iconSet?.iconUrl === iconPictures[0],
+		iconSet?.iconUrl?.slice(0, 80),
 	);
 	await inBackground(
 		page,

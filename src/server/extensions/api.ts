@@ -351,6 +351,12 @@ export async function extensionApi(
 						shortcut,
 					}));
 				break;
+			case 'icon':
+				// setIcon's path: the file, which the runtime decodes (an
+				// extension page reads its own files; the host cannot route one)
+				await registry.ready();
+				value = await registry.fileData(id, String(args[0] ?? ''));
+				break;
 			case 'runtime':
 				if (call.call === 'ranVersion') value = await registry.ranVersion(id);
 				else throw new ExtensionError('unsupported', `runtime.${call.call}`);

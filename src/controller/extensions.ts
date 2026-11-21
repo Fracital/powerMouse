@@ -1717,10 +1717,9 @@ export class ExtensionHub {
 		const badge = badgeColors(raw.badgeColor, raw.badgeTextColor);
 		return {
 			title,
-			iconUrl:
-				icon && !/^(data|blob):/.test(icon)
-					? await this.#host.route(icon)
-					: icon,
+			// (a picture only: the host page cannot load an extension's file,
+			// which answers its own contexts alone, through any route)
+			iconUrl: icon && /^(data|blob):/.test(icon) ? icon : null,
 			badgeText: raw.badgeText,
 			badgeColor: badge.background,
 			badgeTextColor: badge.text,

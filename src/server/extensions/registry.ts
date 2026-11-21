@@ -953,6 +953,21 @@ export class ExtensionRegistry {
 		return `data:${mimeOf(path)};base64,${bytesToBase64(bytes)}`;
 	}
 
+	/**
+	 * A file of the extension's as a data: URL of its bytes, whatever its
+	 * size, or null when the package has no such file: what setIcon's path
+	 * loads (Chrome's bindings fetch it from the extension and decode it,
+	 * and the toolbar keeps the picture, never the path)
+	 */
+	async fileData(id: string, path: string): Promise<string | null> {
+		const clean = cleanPath(path);
+		if (!clean) return null;
+		const response = await files.read(id, clean);
+		if (!response) return null;
+		const bytes = new Uint8Array(await response.arrayBuffer());
+		return `data:${mimeOf(clean)};base64,${bytesToBase64(bytes)}`;
+	}
+
 	async #load(stored: StoredExtension): Promise<Loaded> {
 		// a theme is what themes.ts leaves of it, whatever an older record kept
 		const theme = isTheme(stored.manifest);
@@ -1094,12 +1109,12 @@ export class ExtensionRegistry {
 		for (const error of loaded.errors)
 			this.#nextErrorId = Math.max(this.#nextErrorId, error.id + 1);
 		// the toolbar's sizes: 16 pixels at 1x, 32 at 2x (Chrome's 16 dip
-		// action icon), the action's own icons first
+		// action icon), the action's own icons first; pictures whatever their
+		// size, as the host cannot load an extension's file
 		for (const size of [16, 32]) {
-			const icon = await this.#icon(
-				record.id,
-				pickIcon(action?.default_icon, size) ?? pickIcon(raw.icons, size),
-			);
+			const path =
+				pickIcon(action?.default_icon, size) ?? pickIcon(raw.icons, size);
+			const icon = path ? await this.fileData(record.id, path) : null;
 			if (icon) loaded.toolbarIcons[size] = icon;
 		}
 		for (const entry of loaded.entries)

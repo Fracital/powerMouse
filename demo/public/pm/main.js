@@ -7250,19 +7250,22 @@ function scheduleExtSync() {
 
 /** an extension's icon (its action's for the tab), or its initial without one */
 function extIcon(name, iconUrl, className = 'extIcon') {
+	// Chrome's placeholder: the name's first character, its case kept
+	const letter = () =>
+		element('span', `${className} extLetter`, [...(name || '?').trim()][0]);
 	if (iconUrl) {
 		const image = element('img', className);
+		// (a picture that does not decode is the placeholder, as in Chrome,
+		// never a broken image)
+		image.addEventListener('error', () => image.replaceWith(letter()), {
+			once: true,
+		});
 		image.src = iconUrl;
 		image.alt = '';
 		image.draggable = false;
 		return image;
 	}
-	// Chrome's placeholder: the name's first character, its case kept
-	return element(
-		'span',
-		`${className} extLetter`,
-		[...(name || '?').trim()][0],
-	);
+	return letter();
 }
 
 const badgeMeasure = document.createElement('canvas').getContext('2d');
