@@ -94,7 +94,7 @@
 		"playwright-core": "1.65.1",
 		"prettier": "^3.10.1",
 		"rimraf": "^6.0.1",
-		"tor-js": "github:Fracital/tor-js#aca4f6df96b617464af61f9a243c6de48722c7f9",
+		"tor-js": "github:Fracital/tor-js#789147dba8ff95d6fc4f0f3d2af068a2607603a4",
 		"typescript": "^5.9.0",
 		"typescript-eslint": "^8.73.0",
 		"werift": "^0.27.0",
