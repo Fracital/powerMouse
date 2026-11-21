@@ -392,6 +392,27 @@ export async function demoBehind(headers) {
  * A raw request to a target a proxied page named is a bypass. Requests are
  * recorded from the call on; `raw()` lists the raw ones.
  */
+/**
+ * The CDP browserContextId of a Playwright context (Target.getTargetInfo of
+ * one of its pages), or null while it has no page: what tells its targets
+ * from the others of a browser's Target domain
+ */
+export async function contextIdOf(context) {
+	for (const page of context.pages()) {
+		let session;
+		try {
+			session = await context.newCDPSession(page);
+			const { targetInfo } = await session.send('Target.getTargetInfo');
+			return targetInfo.browserContextId;
+		} catch (error) {
+			// the page closed
+		} finally {
+			await session?.detach().catch(() => {});
+		}
+	}
+	return null;
+}
+
 export async function recordRequests(context, { scope = '/stomp/' } = {}) {
 	const proxy = new URL(PROXY);
 	const host = new URL(HOST);
@@ -455,8 +476,14 @@ export async function recordRequests(context, { scope = '/stomp/' } = {}) {
 	if (browser) {
 		const cdp = await browser.newBrowserCDPSession();
 		let id = 0;
+		// the browser's targets are every context's, another suite's too in the
+		// run's shared browser (test/run.mjs SHARED_BROWSER): only the shared
+		// workers of this context are watched, never another's
+		const own = await contextIdOf(context);
 		cdp.on('Target.targetCreated', async ({ targetInfo }) => {
 			if (targetInfo.type !== 'shared_worker') return;
+			if (targetInfo.browserContextId !== (own ?? (await contextIdOf(context))))
+				return;
 			try {
 				const { sessionId } = await cdp.send('Target.attachToTarget', {
 					targetId: targetInfo.targetId,

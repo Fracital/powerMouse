@@ -86,7 +86,11 @@ export async function workerMemory(browser) {
 				target.type === 'service_worker' &&
 				target.url.startsWith(new URL(PROXY).origin)
 					? 'sw'
-					: target.type === 'worker' && /transportWorker/.test(target.url)
+					: target.type === 'worker' &&
+						  /transportWorker/.test(target.url) &&
+						  // this suite's demo's, not another suite's in the run's
+						  // shared browser (test/run.mjs SHARED_BROWSER)
+						  new URL(target.url).port === new URL(PROXY).port
 						? 'transport'
 						: null;
 			if (kind !== label) continue;
