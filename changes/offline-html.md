@@ -23,9 +23,14 @@
   run time. The file ends with the licences and notices of every part it
   carries, read from each bundled package's licence file or from
   demo/offline/notices/, and the build fails when a bundled package has
-  neither; the Rust crates of core.wasm, codec.wasm, blocker.wasm and
-  stomp-h3 are named with their versions from the Cargo.lock files, their
-  licence texts not yet included. check-reproducible builds it twice and
+  neither. The Rust crates of every wasm module it carries (core.wasm,
+  codec.wasm, blocker.wasm, epoxy-simd.wasm, stomp_h3_bg.wasm) are named
+  by module with their versions and licences, followed by each crate's own
+  licence and notice files and the standard library's licences, from
+  demo/offline/notices/crates.json, which `node scripts/crate-notices.mjs`
+  writes from cargo in the containers that build the modules; the build
+  fails when a module's lockfile, or the installed epoxy build, resolves
+  other crates than it lists. check-reproducible builds it twice and
   compares.
 
 ### Demo and API

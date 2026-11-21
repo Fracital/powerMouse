@@ -663,14 +663,20 @@ in a bundled file (read from the bundles' source maps) or carried whole
 with its licence file or a notice held in `demo/offline/notices/` (the
 epoxy fork, which ships no LICENSE, the adblock engine and lists, the
 Tango icons, the Powermouse style), the Public Suffix List's header, and
-the Rust crates of `core.wasm`, `codec.wasm`, `blocker.wasm` and
-`stomp_h3_bg.wasm` by name and version from `rust/Cargo.lock` and
-`deploy/epoxy/h3/Cargo.lock`. The build fails when a bundled package has
-neither a licence file nor a held notice. The crates' own licence texts
-are not in the file yet, nor the crates of `epoxy-simd.wasm` by version
-(the epoxy fork's lockfile is not in this repository): that needs
-cargo-about in `deploy/rust`'s and `deploy/epoxy`'s containers, and
-`dist/` ships those wasm modules without them today too.
+the Rust crates of every wasm module it carries (`core.wasm`,
+`codec.wasm`, `blocker.wasm`, `epoxy-simd.wasm`, `stomp_h3_bg.wasm`) by
+module, name, version and licence, then each crate's own licence and
+notice files, and the standard library's licences. The build fails when a
+bundled package has neither a licence file nor a held notice. The crates'
+part comes from `demo/offline/notices/crates.json`, which
+`node scripts/crate-notices.mjs` writes by asking cargo in the containers
+that build the modules (`deploy/rust`'s toolchain image, and
+`deploy/epoxy`'s image of the pinned epoxy build, whose lockfile is in no
+checkout of this repository), so the build itself needs no cargo. The
+build fails when `rust/Cargo.lock` or `deploy/epoxy/h3/Cargo.lock`
+resolves other crates for a module, or the installed epoxy transport is
+another build, than the file was written for: run the script again.
+`dist/` still ships those wasm modules without the crates' notices.
 
 ## Files
 

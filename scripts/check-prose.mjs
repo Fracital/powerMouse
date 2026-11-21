@@ -23,6 +23,10 @@ const TEXT = /\.(md|ts|js|mjs|cjs|json|yml|yaml|html|css|txt)$/i;
 const VENDORED =
 	/^test\/wpt\/(?!README\.md$|BACKLOG\.md$|refresh\.mjs$|lists\/|resources\/(testharnessreport|testdriver-vendor)\.js$)/;
 
+// the licence texts of the Rust crates offline.html carries are the crates'
+// own words, byte for byte (scripts/crate-notices.mjs)
+const UPSTREAM_TEXT = new Set(['demo/offline/notices/crates.json']);
+
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' });
 const problems = [];
 
@@ -59,6 +63,7 @@ if (mode === '--commits') {
 			if (
 				file !== 'scripts/check-prose.mjs' &&
 				!VENDORED.test(file) &&
+				!UPSTREAM_TEXT.has(file) &&
 				line.includes(EM_DASH)
 			)
 				problems.push(`${file}:${i + 1}: em dash`);

@@ -12,4 +12,5 @@ It is licensed under the GNU Affero General Public License, version 3 only
 Its wasm modules are compiled from Rust crates under their own licences,
 among them hyper, h2 and hyper-util (MIT), rustls (Apache-2.0, ISC or MIT),
 ring (ISC and Apache-2.0), quinn and h3 (MIT or Apache-2.0) and brotli
-(MIT); deploy/epoxy names their versions.
+(MIT): "The Rust crates in the wasm modules", below, names each with its
+version, and each crate's own licence and notice files follow it.

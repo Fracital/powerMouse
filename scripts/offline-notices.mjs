@@ -31,13 +31,12 @@ function packagesOfMap(file) {
 
 /**
  * The crates a Cargo.lock resolves for the packages named `roots`, each
- * once, as `name version` with where it comes from: a registry's crate, a
- * git one, or (no source) one of the workspace's own or a patched copy.
- * It is an upper bound of what a wasm module is compiled from: the
- * lockfile also resolves build scripts' and proc macros' crates, the
- * workspace's dev-dependencies and other targets' dependencies.
+ * once (the roots left out), as { name, version, source }. It is an upper
+ * bound of what a wasm module is compiled from: the lockfile also resolves
+ * build scripts' and proc macros' crates, the workspace's dev-dependencies
+ * and other targets' dependencies.
  */
-function lockedCrates(file, roots) {
+export function lockedPackages(file, roots) {
 	const packages = readFileSync(file, 'utf8')
 		.split(/^\[\[package\]\]$/m)
 		.slice(1)
@@ -71,17 +70,134 @@ function lockedCrates(file, roots) {
 	for (const root of roots) walk(root);
 	return [...seen]
 		.filter((p) => !roots.includes(p.name))
-		.map(
-			(p) =>
-				`  ${p.name} ${p.version}${
-					!p.source
-						? ' (a path crate: this source, or a patched copy of the crate)'
-						: p.source.startsWith('registry+')
-							? ''
-							: ` (${p.source.replace(/#.*/, '')})`
-				}`,
-		)
-		.sort();
+		.map(({ name, version, source }) => ({ name, version, source }));
+}
+
+/**
+ * The Rust crates of the wasm modules the file carries, from
+ * demo/offline/notices/crates.json (scripts/crate-notices.mjs): which
+ * crates each module is compiled from, then each crate's licence and notice
+ * files as its package ships them. A module built from a lockfile here must
+ * resolve the same crates from it as when crates.json was written, and the
+ * epoxy build's must be the installed epoxy transport's; the build fails
+ * otherwise, until scripts/crate-notices.mjs is run again.
+ */
+function crateSections({ root, held, adblock, shared, section, problems }) {
+	const data = JSON.parse(readFileSync(join(held, 'crates.json'), 'utf8'));
+	const text = (hash) => data.texts[hash];
+	const modules = data.modules.filter(
+		(module) => adblock || !module.files.includes('/stomp/blocker.wasm'),
+	);
+	const again = 'run node scripts/crate-notices.mjs';
+	for (const module of modules) {
+		if (module.lock) {
+			const now = lockedPackages(join(root, module.lock), [module.crate])
+				.map((p) => `${p.name} ${p.version}`)
+				.sort();
+			const then = [
+				...module.crates,
+				...module.workspace,
+				...module.notInModule,
+			].sort();
+			if (now.join('\n') !== then.join('\n'))
+				problems.push(
+					`${module.lock} resolves other crates for ${module.crate} than demo/offline/notices/crates.json lists: ${again}`,
+				);
+		} else {
+			const installed = readFileSync(
+				join(root, 'node_modules/@mercuryworkshop/epoxy-transport/UPSTREAM'),
+				'utf8',
+			);
+			if (installed !== module.upstream)
+				problems.push(
+					`the installed epoxy transport is not the build demo/offline/notices/crates.json lists ${module.crate}'s crates of: ${again}`,
+				);
+		}
+	}
+
+	// the licence files of the source repositories of crates whose packages
+	// ship none (demo/offline/notices/crates/: a `crates:` line naming them,
+	// a `source:` line, then each file after `-- <name>`)
+	const heldCrates = new Map();
+	const heldDir = join(held, 'crates');
+	for (const entry of readdirSync(heldDir).sort()) {
+		const raw = readFileSync(join(heldDir, entry), 'utf8');
+		const head = raw.slice(0, raw.indexOf('\n\n'));
+		const names = /^crates: (.+)$/m.exec(head)?.[1].split(' ');
+		const source = /^source: (.+)$/m.exec(head)?.[1];
+		const files = raw
+			.slice(head.length)
+			.split(/^-- (.+)$/m)
+			.slice(1);
+		if (!names || !source || !files.length) {
+			problems.push(
+				`demo/offline/notices/crates/${entry}: no crates:, source: or file`,
+			);
+			continue;
+		}
+		const pairs = [];
+		for (let i = 0; i < files.length; i += 2)
+			pairs.push([files[i], files[i + 1].trim()]);
+		for (const name of names) heldCrates.set(name, { source, files: pairs });
+	}
+
+	const used = [...new Set(modules.flatMap((module) => module.crates))].sort();
+	const licence = (key) => data.crates[key].license ?? 'no licence named';
+	const sections = [
+		section(
+			'The Rust crates in the wasm modules',
+			`Each wasm module of this file is compiled from the Rust crates listed
+under it, as cargo resolves them for wasm32-unknown-unknown (the crates its
+code depends on, proc macros included; not those only a build script or a
+test uses), with the licence each one's Cargo.toml names. The licence and
+notice files each crate's package ships follow, one section a crate. The
+modules also hold Rust's standard library, whose licences are at the end.`,
+			...modules.map((module) =>
+				[
+					`${module.files.join(', ')} (the crate ${module.crate}${module.workspace.length ? `, with ${module.workspace.join(', ')} of the same workspace` : ''}):`,
+					...module.crates.map((key) => `  ${key} (${licence(key)})`),
+				].join('\n'),
+			),
+		),
+	];
+	for (const key of used) {
+		const crate = data.crates[key];
+		const files = Object.entries(crate.files);
+		const body = [
+			`${key} (${licence(key)}), from ${crate.source}${crate.repository ? `, ${crate.repository}` : ''}.${crate.authors ? `\nAuthors: ${crate.authors.join(', ')}.` : ''}`,
+		];
+		for (const [file, hash] of files)
+			body.push(`-- ${file}\n\n${shared(text(hash), key)}`);
+		if (!files.length) {
+			const upstream = heldCrates.get(key.split(' ')[0]);
+			if (!upstream)
+				problems.push(
+					`${key}: its package ships no licence file and none is held in demo/offline/notices/crates/`,
+				);
+			else {
+				body.push(
+					`Its package ships no licence file. These are its source's, ${upstream.source}:`,
+				);
+				for (const [file, held] of upstream.files)
+					body.push(`-- ${file}\n\n${shared(held, key)}`);
+			}
+		}
+		sections.push(section(key, ...body));
+	}
+	sections.push(
+		section(
+			"Rust's standard library",
+			`Each wasm module holds parts of Rust's standard library, built by
+${data.std.rustc}, which is licensed under the Apache License,
+Version 2.0, or the MIT license, at your option, both below. Its
+copyright notices, and those of the crates it is built from, are the
+toolchain's share/doc/rust/COPYRIGHT-library.html (https://www.rust-lang.org/policies/licenses).`,
+			...Object.entries(data.std.files).map(
+				([file, hash]) => `-- ${file}\n\n${shared(text(hash), "Rust's")}`,
+			),
+		),
+	);
+	return sections;
 }
 
 /**
@@ -210,34 +326,8 @@ scripts/build-offline.mjs of that source.`,
 		),
 	);
 
-	// the Rust crates in the wasm modules, by name and version: their own
-	// licence texts are not in this file yet (no copy of the crates is at
-	// hand where it is built; cargo-about in deploy/rust's and deploy/epoxy's
-	// containers would give them), so each is named, for its notice to be
-	// found with it
-	const crateList = (title, lock, roots, what) =>
-		section(
-			title,
-			`${what} are compiled from these crates as ${lock} of
-powerMouse's source resolves them (an upper bound: the crates of build
-scripts, proc macros and other targets are listed too). Each is under the
-licence its own Cargo.toml names, which this file does not yet carry the
-text of; crates.io names it for each, at https://crates.io/crates/<name>.`,
-			lockedCrates(join(root, lock), roots).join('\n'),
-		);
 	sections.push(
-		crateList(
-			"STomp's Rust crates",
-			'rust/Cargo.lock',
-			['core-module', 'codec', ...(adblock ? ['block'] : [])],
-			`/stomp/core.wasm, /stomp/codec.wasm${adblock ? ' and /stomp/blocker.wasm' : ''} (this repository's rust/core-module, rust/codec${adblock ? ' and rust/block' : ''}, under STomp's licence above)`,
-		),
-		crateList(
-			"stomp-h3's Rust crates",
-			'deploy/epoxy/h3/Cargo.lock',
-			['stomp-h3'],
-			'/epoxy/h3/stomp_h3_bg.wasm (deploy/epoxy/h3, part of the epoxy transport named above)',
-		),
+		...crateSections({ root, held, adblock, shared, section, problems }),
 	);
 
 	if (adblock) {
