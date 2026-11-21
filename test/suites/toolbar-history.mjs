@@ -19,6 +19,7 @@ import {
 	done,
 	FIXTURE,
 	HOST,
+	inPool,
 	launch,
 	ok,
 	PROXY,
@@ -621,8 +622,10 @@ async function demo(name, steps, expected, mode, base) {
 
 // SEQUENCES=<words> runs the sequences whose names contain one of them
 const only = process.env.SEQUENCES?.split(',');
-for (const [name, steps] of Object.entries(SEQUENCES)) {
-	if (only && !only.some((word) => name.includes(word))) continue;
+// two sequences at once, each in contexts of its own (the pages keep no
+// state on the fixture)
+await inPool(Object.entries(SEQUENCES), 2, async ([name, steps]) => {
+	if (only && !only.some((word) => name.includes(word))) return;
 	const expected = await native(steps);
 	console.log(
 		`natively, ${name}: ${expected.map((s) => (s ? `${s.url}${s.back ? ' <' : ''}${s.fwd ? ' >' : ''}` : '-')).join(' | ')}`,
@@ -632,6 +635,6 @@ for (const [name, steps] of Object.entries(SEQUENCES)) {
 		demo(name, steps, expected, 'same-origin', PROXY),
 		demo(name, steps, expected, 'isolated', HOST),
 	]);
-}
+});
 
 await done(browser);
