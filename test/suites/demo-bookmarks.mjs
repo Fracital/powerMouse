@@ -17,6 +17,7 @@
 // of pages, backing off on a refusal, and pushes a new commit to every open
 // page with no reload). Both controller modes at once, each in a context of
 // its own.
+/* global tabs */
 import { execFileSync, spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -663,7 +664,11 @@ async function run(mode, base) {
 	await sleep(400);
 
 	// opening a bookmark: a click in the current tab, the middle button in a new one
-	const frames = () =>
+	// the page's tabs, not its frame elements: a dialed tab (the default,
+	// docs/dialing.md) has one for each document it shows, two while the
+	// next one loads (and kept until it has)
+	const frames = () => page.evaluate(() => tabs.length);
+	const elements = () =>
 		page.evaluate(() => document.querySelectorAll('.frames .frame').length);
 	const before = await frames();
 	await page.click('#bookmarksTab');
@@ -679,7 +684,11 @@ async function run(mode, base) {
 		(await omniIs(page, A)) === A &&
 			(await frames()) === before + 1 &&
 			!(await sidebarOpen(page)),
-		JSON.stringify({ before, after: await frames() }),
+		JSON.stringify({
+			before,
+			after: await frames(),
+			elements: await elements(),
+		}),
 	);
 	await page.click('#home');
 	await sleep(400);
@@ -694,7 +703,11 @@ async function run(mode, base) {
 	ok(
 		`${mode}: a click opens A in the current tab`,
 		(await omniIs(page, A)) === A && (await frames()) === before + 1,
-		JSON.stringify({ before, after: await frames() }),
+		JSON.stringify({
+			before,
+			after: await frames(),
+			elements: await elements(),
+		}),
 	);
 	await loaded(page);
 
@@ -789,7 +802,11 @@ async function run(mode, base) {
 		(await omniIs(page, A)) === A &&
 			(await frames()) === before + 1 &&
 			(await saved(false)) === false,
-		JSON.stringify({ before, after: await frames() }),
+		JSON.stringify({
+			before,
+			after: await frames(),
+			elements: await elements(),
+		}),
 	);
 	await loaded(page);
 	await page.click('#toolSaved');
@@ -798,7 +815,11 @@ async function run(mode, base) {
 	ok(
 		`${mode}: and the middle button opens it in a new tab`,
 		(await omniIs(page, A)) === A && (await frames()) === before + 2,
-		JSON.stringify({ before, after: await frames() }),
+		JSON.stringify({
+			before,
+			after: await frames(),
+			elements: await elements(),
+		}),
 	);
 	await loaded(page);
 
