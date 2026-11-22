@@ -340,12 +340,6 @@
 	--pm-chip-text: #202124;
 }
 
-:root[data-pm-theme='systemya-light'] .toolbtn img,
-:root[data-pm-theme='systemya-light'] .cardChrome .toolbtn img,
-:root[data-pm-theme='systemya-light'] .cardChrome .menubtn img {
-	filter: brightness(0.55);
-}
-
 /* the window behind another (Chrome's inactive frame); pm/theme.js sets it.
    Not in built-in Dark, whose .head is Default's (below) */
 :root:is(
