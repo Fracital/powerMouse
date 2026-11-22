@@ -1,0 +1,30 @@
+<svg
+	xmlns="http://www.w3.org/2000/svg"
+	width="24"
+	height="24"
+	viewBox="0 0 24 24"
+>
+	<!-- Settings, in the same Tango Aluminium finish as the adjacent icons. -->
+	<defs>
+		<linearGradient id="gear" x1="0" y1="0" x2="0" y2="1">
+			<stop offset="0" stop-color="#fff" />
+			<stop offset="1" stop-color="#babdb6" />
+		</linearGradient>
+	</defs>
+	<path
+		fill="url(#gear)"
+		stroke="#555753"
+		stroke-width="0.9"
+		stroke-linejoin="round"
+		d="M9.6 2.5h4.8l.6 2.7 2 1.1 2.6-.9 2.4 4.2-2 1.8v2.3l2 1.8-2.4 4.2-2.6-.9-2 1.1-.6 2.6H9.6L9 19.9l-2-1.1-2.6.9L2 15.5l2-1.8v-2.3l-2-1.8 2.4-4.2 2.6.9 2-1.1z"
+	/>
+	<circle
+		cx="12"
+		cy="12"
+		r="3.3"
+		fill="#888a85"
+		stroke="#555753"
+		stroke-width="0.8"
+	/>
+	<circle cx="12" cy="12" r="2" fill="#eeeeec" />
+</svg>

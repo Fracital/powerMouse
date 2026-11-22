@@ -59,6 +59,13 @@ const read = () => ({
 	stored: localStorage.getItem('stomp-demo:tor'),
 });
 
+/** Tor now lives in the shared Proxy submenu of the home Settings menu. */
+async function toggleTor(page) {
+	await page.click('#settingsTab');
+	await page.click('#menuProxy');
+	await page.click('#tor');
+}
+
 for (const [name, origin] of [
 	['same-origin', PROXY],
 	['isolated', HOST],
@@ -79,7 +86,7 @@ for (const [name, origin] of [
 	);
 	await Promise.all([
 		page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
-		page.click('#tor'),
+		toggleTor(page),
 	]);
 	state = await until(page, read, (value) => /^Ready/.test(value?.status));
 	ok(
@@ -123,7 +130,7 @@ for (const [name, origin] of [
 	await page.click('#home');
 	await Promise.all([
 		page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
-		page.click('#tor'),
+		toggleTor(page),
 	]);
 	state = await until(page, read, (value) => /^Ready/.test(value?.status));
 	ok(
@@ -429,7 +436,7 @@ for (const [name, origin] of [
 	);
 	await Promise.all([
 		page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
-		page.click('#tor'),
+		toggleTor(page),
 	]);
 	state = await until(page, read, (value) => /^Ready/.test(value?.status));
 	ok(

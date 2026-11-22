@@ -386,8 +386,9 @@ handshake, as the request rules do. A `SiteShields` entry
 blockScripts, blockFingerprinting, cookies, forget }`.
 
 `enabled` is the master toggle: down, every layer below is off for the host
-without touching STomp's rewriting. In the demo, the Block ads switch beside
-the transport select takes the shields down on every site while it is off:
+without touching STomp's rewriting. In the demo, the Block ads switch in
+**Settings > Proxy** (also under the browser hamburger's **Proxy** submenu)
+takes the shields down on every site while it is off:
 each entry, and a `*` entry for the hosts with none, goes to the controller
 with `enabled: false`, the button and panel read down, and the panel's
 master switch is disabled. What each site has stored is persisted as it

@@ -554,15 +554,6 @@ a span:active,
 	}
 }
 
-.rbottom {
-	position: absolute;
-	width: calc(100% - 10px);
-	padding: 10px;
-	bottom: 0;
-	right: 5px;
-	text-align: right;
-}
-
 .romlink:hover {
 	color: var(--pm-link-bright);
 	cursor: pointer;
@@ -1061,10 +1052,6 @@ button::-moz-focus-inner {
 	color: var(--pm-error);
 }
 
-.rbottom label {
-	cursor: pointer;
-}
-
 .select {
 	font-family: 'Montserrat', sans-serif;
 	font-size: 14px;
@@ -1075,22 +1062,6 @@ button::-moz-focus-inner {
 	padding: 3px 6px;
 }
 
-.rbottom .select {
-	margin-left: 4px;
-}
-
-.rbottom .check {
-	margin-right: 14px;
-}
-
-.rbottom .check input {
-	accent-color: var(--pm-link);
-	vertical-align: -2px;
-}
-.rbottom .check[data-unavailable] {
-	opacity: 0.55;
-	cursor: not-allowed;
-}
 .chrome .select {
 	height: 28px;
 	box-sizing: border-box;
@@ -1142,8 +1113,7 @@ body {
 	#button-container {
 		bottom: 44px;
 	}
-	.lbottom,
-	.rbottom {
+	.lbottom {
 		padding: 6px 10px;
 		font-size: 13px;
 	}
@@ -1890,17 +1860,11 @@ body.vibeos-overlay .frames .frame.vibe-browser-frame {
 		line-height: 56px;
 		font-size: 16px;
 	}
-	.lbottom,
-	.rbottom {
+	.lbottom {
 		position: absolute;
 		width: calc(100% - 20px);
 		text-align: center;
 		font-size: 13px;
-	}
-	.lbottom {
-		bottom: 30px;
-	}
-	.rbottom {
 		bottom: 0;
 	}
 }
@@ -2744,11 +2708,8 @@ input:focus-visible {
 	inset: calc(-8px / var(--k, 1));
 }
 
-/* the home page's two tabs hang off the card's edges, flush against its
-   border. They sit opposite one another in the band between the status
-   line and the commits, level and as tall: Bookmarks on the left, and on
-   the right one tab of two buttons side by side, Extensions and Customize,
-   one border and one background with no line between them */
+/* The home tabs share the card's edge: Bookmarks on the left, Extensions,
+   Customize and Settings on the right, in a single border and background. */
 .bookmarksTab,
 .extensionsDock {
 	position: absolute;
@@ -2763,7 +2724,8 @@ input:focus-visible {
 
 .bookmarksTab,
 .extensionsTab,
-.customizeTab {
+.customizeTab,
+.settingsTab {
 	display: grid;
 	place-items: center;
 	padding: 0;
@@ -2784,9 +2746,10 @@ input:focus-visible {
 	border-radius: 10px 0 0 10px;
 }
 
-/* each half is only the dock's fill: hover and press tint it, no edge */
+/* Each button is only the dock's fill: hover and press tint it, no edge. */
 .extensionsTab,
-.customizeTab {
+.customizeTab,
+.settingsTab {
 	width: 54px;
 	height: 100%;
 	border: 0;
@@ -2806,19 +2769,22 @@ input:focus-visible {
 
 .bookmarksTab:hover,
 .extensionsTab:hover,
-.customizeTab:hover {
+.customizeTab:hover,
+.settingsTab:hover {
 	background-color: var(--pm-handle-hover);
 }
 
 .bookmarksTab:active,
 .extensionsTab:active,
-.customizeTab:active {
+.customizeTab:active,
+.settingsTab:active {
 	background-color: var(--pm-handle-active);
 }
 
 .bookmarksTab img,
 .extensionsTab img,
-.customizeTab img {
+.customizeTab img,
+.settingsTab img {
 	display: block;
 	pointer-events: none;
 	user-select: none;
@@ -3112,12 +3078,14 @@ input:focus-visible {
 		width: 52px;
 	}
 	.extensionsTab,
-	.customizeTab {
+	.customizeTab,
+	.settingsTab {
 		width: 46px;
 	}
 	.bookmarksTab img,
 	.extensionsTab img,
-	.customizeTab img {
+	.customizeTab img,
+	.settingsTab img {
 		width: 28px;
 		height: 28px;
 	}
@@ -3134,12 +3102,14 @@ input:focus-visible {
 		width: 52px;
 	}
 	.extensionsTab,
-	.customizeTab {
+	.customizeTab,
+	.settingsTab {
 		width: 46px;
 	}
 	.bookmarksTab img,
 	.extensionsTab img,
-	.customizeTab img {
+	.customizeTab img,
+	.settingsTab img {
 		width: 24px;
 		height: 24px;
 	}
@@ -3177,6 +3147,7 @@ input:focus-visible {
 	.bookmarksTab,
 	.extensionsTab,
 	.customizeTab,
+	.settingsTab,
 	.starbtn,
 	.bookmarksList.sorting .bookmark {
 		transition: none;
@@ -3376,6 +3347,49 @@ input:focus-visible {
 .pmMenuItem:disabled {
 	opacity: 0.45;
 	cursor: default;
+}
+
+/* A real set of form controls in the shared Settings / hamburger Proxy
+   submenu. The same nodes are stored outside the popup while it is closed. */
+.proxyMenuControls {
+	min-width: 208px;
+	padding: 3px 2px;
+}
+.proxyMenuRow {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	min-height: 41px;
+	padding: 7px 10px;
+	border-radius: 8px;
+	color: var(--pm-panel-text);
+	cursor: pointer;
+}
+.proxyMenuRow:hover,
+.proxyMenuRow:focus-within {
+	background: rgba(var(--pm-panel-fg-rgb), 0.06);
+}
+.proxyMenuRow .proxyMenuControl[type='checkbox'] {
+	flex: none;
+	width: 17px;
+	height: 17px;
+	margin: 0;
+	accent-color: var(--pm-link);
+	cursor: pointer;
+}
+.proxyMenuRow .select {
+	max-width: 108px;
+	font-size: 13px;
+	margin: 0;
+}
+.proxyMenuRow[data-unavailable] {
+	opacity: 0.55;
+	cursor: not-allowed;
+}
+.proxyMenuControl:focus-visible {
+	outline: 2px solid var(--pm-link);
+	outline-offset: 2px;
 }
 
 /* ---- extensions: the bar's buttons, the puzzle piece's list, a popup ------ */

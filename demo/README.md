@@ -54,7 +54,10 @@ the server reads it at startup. The page gets what it needs from `/config.js`.
 
 ## Tor routing
 
-The homepage has a **Tor** checkbox beside **Block ads**. It is enabled
+The homepage's **Settings** button, beside Customize (Themes), opens the
+same dropdown as the browser's hamburger. Its **Proxy** submenu contains
+**Block ads**, **Tor** and **Transport**, and the menu also offers vibeOS
+where available, Themes, Extensions, Settings and About. Tor is enabled
 unless the server turns Tor mode off (`STOMP_TOR_CLIENT=0`). The choice is
 kept in `localStorage['stomp-demo:tor']` (or set for one visit with `?tor` /
 `?notor`), independently of the content blocker. Changing it reloads the

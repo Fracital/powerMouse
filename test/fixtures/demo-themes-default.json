@@ -1,7 +1,7 @@
 {
 	"views": {
 		"landing": {
-			"digest": "1d3a7d323ca3318a87036f43115a8feec2e70495c4ca110fde69440b1aa1397c",
+			"digest": "bb3bdbbf8f2409a0eb2771252eeba3f3b939feed20bcbae9717578708ae5fcd8",
 			"common": {
 				"::placeholderbackground-color": "rgba(0, 0, 0, 0)",
 				"::placeholderbackground-image": "none",
@@ -198,17 +198,6 @@
 					"color": "rgb(76, 169, 251)",
 					"outline-color": "rgb(76, 169, 251)"
 				},
-				"input#adblock": {
-					"::placeholdercolor": "rgb(0, 0, 0)",
-					"accent-color": "rgb(76, 169, 251)",
-					"border-bottom-color": "rgb(0, 0, 0)",
-					"border-left-color": "rgb(0, 0, 0)",
-					"border-right-color": "rgb(0, 0, 0)",
-					"border-top-color": "rgb(0, 0, 0)",
-					"caret-color": "rgb(0, 0, 0)",
-					"color": "rgb(0, 0, 0)",
-					"outline-color": "rgb(0, 0, 0)"
-				},
 				"div#browser>div.chrome:0": {
 					"background-color": "rgb(0, 0, 0)",
 					"background-image": "url(\"/pm/header-background.png\")",
@@ -338,6 +327,17 @@
 					"outline-color": "rgb(201, 201, 202)",
 					"stroke": "rgb(201, 201, 202)"
 				},
+				"input#adblock": {
+					"::placeholdercolor": "rgb(0, 0, 0)",
+					"accent-color": "rgb(76, 169, 251)",
+					"border-bottom-color": "rgb(0, 0, 0)",
+					"border-left-color": "rgb(0, 0, 0)",
+					"border-right-color": "rgb(0, 0, 0)",
+					"border-top-color": "rgb(0, 0, 0)",
+					"caret-color": "rgb(0, 0, 0)",
+					"color": "rgb(0, 0, 0)",
+					"outline-color": "rgb(0, 0, 0)"
+				},
 				"div#bookmarksScrim": {
 					"background-color": "rgba(0, 0, 0, 0.55)",
 					"opacity": "0"
@@ -394,7 +394,7 @@
 			}
 		},
 		"browser": {
-			"digest": "091b71c0acd5da958e1cc94e5a994198e54d841f9841401c90087455cfe818c4",
+			"digest": "f25921c2101f2b53b6edce29d100bd369fe9e7ca1168e57750809eb29d694c83",
 			"common": {
 				"::placeholderbackground-color": "rgba(0, 0, 0, 0)",
 				"::placeholderbackground-image": "none",
@@ -591,17 +591,6 @@
 					"color": "rgb(76, 169, 251)",
 					"outline-color": "rgb(76, 169, 251)"
 				},
-				"input#adblock": {
-					"::placeholdercolor": "rgb(0, 0, 0)",
-					"accent-color": "rgb(76, 169, 251)",
-					"border-bottom-color": "rgb(0, 0, 0)",
-					"border-left-color": "rgb(0, 0, 0)",
-					"border-right-color": "rgb(0, 0, 0)",
-					"border-top-color": "rgb(0, 0, 0)",
-					"caret-color": "rgb(0, 0, 0)",
-					"color": "rgb(0, 0, 0)",
-					"outline-color": "rgb(0, 0, 0)"
-				},
 				"div#browser>div.chrome:0": {
 					"background-color": "rgb(0, 0, 0)",
 					"background-image": "url(\"/pm/header-background.png\")",
@@ -744,6 +733,17 @@
 					"outline-color": "rgb(201, 201, 202)",
 					"stroke": "rgb(201, 201, 202)"
 				},
+				"input#adblock": {
+					"::placeholdercolor": "rgb(0, 0, 0)",
+					"accent-color": "rgb(76, 169, 251)",
+					"border-bottom-color": "rgb(0, 0, 0)",
+					"border-left-color": "rgb(0, 0, 0)",
+					"border-right-color": "rgb(0, 0, 0)",
+					"border-top-color": "rgb(0, 0, 0)",
+					"caret-color": "rgb(0, 0, 0)",
+					"color": "rgb(0, 0, 0)",
+					"outline-color": "rgb(0, 0, 0)"
+				},
 				"div#bookmarksScrim": {
 					"background-color": "rgba(0, 0, 0, 0.55)",
 					"opacity": "0"
@@ -800,32 +800,32 @@
 			}
 		},
 		"shields": {
-			"digest": "b2d86f1ab835c413231c0f42236fefaf5dceb8a260082dba7d31c19eb612a856",
+			"digest": "e63ebe3a6685eef3b8bb2678f44dffa0f8c04282a0420d82049bcec16e1a3604",
 			"common": {
 				"::afterbackground-color": null,
 				"::afterbackground-image": null,
 				"::aftercolor": null,
 				"::placeholderbackground-color": "rgba(0, 0, 0, 0)",
 				"::placeholderbackground-image": "none",
-				"::placeholdercolor": "rgb(255, 255, 255)",
+				"::placeholdercolor": "rgb(228, 228, 229)",
 				"accent-color": "auto",
 				"background-color": "rgba(0, 0, 0, 0)",
 				"background-image": "none",
 				"background-position": "0% 0%",
 				"background-repeat": "repeat",
 				"background-size": "auto",
-				"border-bottom-color": "rgb(201, 201, 202)",
-				"border-left-color": "rgb(201, 201, 202)",
-				"border-right-color": "rgb(201, 201, 202)",
-				"border-top-color": "rgb(201, 201, 202)",
+				"border-bottom-color": "rgb(228, 228, 229)",
+				"border-left-color": "rgb(228, 228, 229)",
+				"border-right-color": "rgb(228, 228, 229)",
+				"border-top-color": "rgb(228, 228, 229)",
 				"box-shadow": "none",
-				"caret-color": "rgb(255, 255, 255)",
-				"color": "rgb(255, 255, 255)",
+				"caret-color": "rgb(228, 228, 229)",
+				"color": "rgb(228, 228, 229)",
 				"color-scheme": "normal",
 				"fill": "rgb(0, 0, 0)",
 				"filter": "none",
 				"opacity": "1",
-				"outline-color": "rgb(255, 255, 255)",
+				"outline-color": "rgb(228, 228, 229)",
 				"stroke": "none",
 				"text-shadow": "none"
 			},
@@ -841,26 +841,38 @@
 					"outline-color": "rgb(0, 0, 0)"
 				},
 				"html>body.browsing": {
+					"::placeholdercolor": "rgb(255, 255, 255)",
 					"background-color": "rgb(0, 0, 0)",
 					"background-image": "url(\"/pm/noise.png\")",
 					"border-bottom-color": "rgb(255, 255, 255)",
 					"border-left-color": "rgb(255, 255, 255)",
 					"border-right-color": "rgb(255, 255, 255)",
-					"border-top-color": "rgb(255, 255, 255)"
+					"border-top-color": "rgb(255, 255, 255)",
+					"caret-color": "rgb(255, 255, 255)",
+					"color": "rgb(255, 255, 255)",
+					"outline-color": "rgb(255, 255, 255)"
 				},
 				"div#landing>div.head:0": {
+					"::placeholdercolor": "rgb(255, 255, 255)",
 					"background-color": "rgb(0, 0, 0)",
 					"background-image": "url(\"/pm/header-background.png\")",
 					"border-bottom-color": "rgb(182, 182, 182)",
 					"border-left-color": "rgb(182, 182, 182)",
 					"border-right-color": "rgb(182, 182, 182)",
-					"border-top-color": "rgb(182, 182, 182)"
+					"border-top-color": "rgb(182, 182, 182)",
+					"caret-color": "rgb(255, 255, 255)",
+					"color": "rgb(255, 255, 255)",
+					"outline-color": "rgb(255, 255, 255)"
 				},
 				"div#landing>div.head:0>h1": {
+					"::placeholdercolor": "rgb(255, 255, 255)",
 					"border-bottom-color": "rgb(255, 255, 255)",
 					"border-left-color": "rgb(255, 255, 255)",
 					"border-right-color": "rgb(255, 255, 255)",
-					"border-top-color": "rgb(255, 255, 255)"
+					"border-top-color": "rgb(255, 255, 255)",
+					"caret-color": "rgb(255, 255, 255)",
+					"color": "rgb(255, 255, 255)",
+					"outline-color": "rgb(255, 255, 255)"
 				},
 				"a#offlineDownload": {
 					"::placeholdercolor": "rgb(0, 0, 238)",
@@ -895,11 +907,15 @@
 					"outline-color": "rgb(76, 169, 251)"
 				},
 				"div#landing>div.listing:1": {
+					"::placeholdercolor": "rgb(255, 255, 255)",
 					"background-color": "rgb(0, 0, 0)",
 					"border-bottom-color": "rgb(182, 182, 182)",
 					"border-left-color": "rgb(182, 182, 182)",
 					"border-right-color": "rgb(182, 182, 182)",
-					"border-top-color": "rgb(182, 182, 182)"
+					"border-top-color": "rgb(182, 182, 182)",
+					"caret-color": "rgb(255, 255, 255)",
+					"color": "rgb(255, 255, 255)",
+					"outline-color": "rgb(255, 255, 255)"
 				},
 				"form#mainForm>div.urlFill>input.form-text.url": {
 					"::placeholdercolor": "rgb(108, 117, 125)",
@@ -923,6 +939,7 @@
 					"outline-color": "rgb(42, 159, 214)"
 				},
 				"div#button-container>div.bnt-orange.btn-fancy.ns:0": {
+					"::placeholdercolor": "rgb(255, 255, 255)",
 					"background-image": "linear-gradient(0deg, rgb(210, 97, 42) 0%, rgb(222, 152, 91) 100%)",
 					"background-repeat": "repeat-x",
 					"border-bottom-color": "rgb(201, 85, 40)",
@@ -930,9 +947,13 @@
 					"border-right-color": "rgb(201, 85, 40)",
 					"border-top-color": "rgb(201, 85, 40)",
 					"box-shadow": "sha256:209b58d2bd9a3547",
+					"caret-color": "rgb(255, 255, 255)",
+					"color": "rgb(255, 255, 255)",
+					"outline-color": "rgb(255, 255, 255)",
 					"text-shadow": "rgba(0, 0, 0, 0.2) 0px -1px 0px"
 				},
 				"div#button-container>div.bnt-green.btn-fancy.ns:1": {
+					"::placeholdercolor": "rgb(255, 255, 255)",
 					"background-image": "linear-gradient(0deg, rgb(42, 210, 76) 0%, rgb(91, 222, 118) 100%)",
 					"background-repeat": "repeat-x",
 					"border-bottom-color": "rgb(40, 201, 73)",
@@ -940,9 +961,13 @@
 					"border-right-color": "rgb(40, 201, 73)",
 					"border-top-color": "rgb(40, 201, 73)",
 					"box-shadow": "sha256:209b58d2bd9a3547",
+					"caret-color": "rgb(255, 255, 255)",
+					"color": "rgb(255, 255, 255)",
+					"outline-color": "rgb(255, 255, 255)",
 					"text-shadow": "rgba(0, 0, 0, 0.2) 0px -1px 0px"
 				},
 				"div#button-container>div.bnt-red.btn-fancy.ns:2": {
+					"::placeholdercolor": "rgb(255, 255, 255)",
 					"background-image": "linear-gradient(0deg, rgb(210, 42, 42) 0%, rgb(222, 91, 91) 100%)",
 					"background-repeat": "repeat-x",
 					"border-bottom-color": "rgb(201, 40, 40)",
@@ -950,9 +975,13 @@
 					"border-right-color": "rgb(201, 40, 40)",
 					"border-top-color": "rgb(201, 40, 40)",
 					"box-shadow": "sha256:209b58d2bd9a3547",
+					"caret-color": "rgb(255, 255, 255)",
+					"color": "rgb(255, 255, 255)",
+					"outline-color": "rgb(255, 255, 255)",
 					"text-shadow": "rgba(0, 0, 0, 0.2) 0px -1px 0px"
 				},
 				"div#button-container>div.bnt-blue.btn-fancy.ns:3": {
+					"::placeholdercolor": "rgb(255, 255, 255)",
 					"background-image": "linear-gradient(0deg, rgb(42, 76, 210) 0%, rgb(91, 154, 222) 100%)",
 					"background-repeat": "repeat-x",
 					"border-bottom-color": "rgb(40, 80, 201)",
@@ -960,6 +989,9 @@
 					"border-right-color": "rgb(40, 80, 201)",
 					"border-top-color": "rgb(40, 80, 201)",
 					"box-shadow": "sha256:209b58d2bd9a3547",
+					"caret-color": "rgb(255, 255, 255)",
+					"color": "rgb(255, 255, 255)",
+					"outline-color": "rgb(255, 255, 255)",
 					"text-shadow": "rgba(0, 0, 0, 0.2) 0px -1px 0px"
 				},
 				"p#logMsg": {
@@ -984,11 +1016,15 @@
 					"outline-color": "rgb(0, 0, 0)"
 				},
 				"div#landing>div.listing:1>div.inputWrapper:0>div.extensionsDock:1": {
+					"::placeholdercolor": "rgb(255, 255, 255)",
 					"background-color": "rgb(143, 89, 2)",
 					"border-bottom-color": "rgb(182, 182, 182)",
 					"border-left-color": "rgb(182, 182, 182)",
 					"border-right-color": "rgb(255, 255, 255)",
-					"border-top-color": "rgb(182, 182, 182)"
+					"border-top-color": "rgb(182, 182, 182)",
+					"caret-color": "rgb(255, 255, 255)",
+					"color": "rgb(255, 255, 255)",
+					"outline-color": "rgb(255, 255, 255)"
 				},
 				"div#landing>div.listing:1>div.inputWrapper:0>section.commits>div.commitsHead": {
 					"::placeholdercolor": "rgb(154, 154, 154)",
@@ -1010,24 +1046,17 @@
 					"color": "rgb(76, 169, 251)",
 					"outline-color": "rgb(76, 169, 251)"
 				},
-				"input#adblock": {
-					"::placeholdercolor": "rgb(0, 0, 0)",
-					"accent-color": "rgb(76, 169, 251)",
-					"border-bottom-color": "rgb(0, 0, 0)",
-					"border-left-color": "rgb(0, 0, 0)",
-					"border-right-color": "rgb(0, 0, 0)",
-					"border-top-color": "rgb(0, 0, 0)",
-					"caret-color": "rgb(0, 0, 0)",
-					"color": "rgb(0, 0, 0)",
-					"outline-color": "rgb(0, 0, 0)"
-				},
 				"div#browser>div.chrome:0": {
+					"::placeholdercolor": "rgb(255, 255, 255)",
 					"background-color": "rgb(0, 0, 0)",
 					"background-image": "url(\"/pm/header-background.png\")",
 					"border-bottom-color": "rgb(182, 182, 182)",
 					"border-left-color": "rgb(255, 255, 255)",
 					"border-right-color": "rgb(255, 255, 255)",
-					"border-top-color": "rgb(255, 255, 255)"
+					"border-top-color": "rgb(255, 255, 255)",
+					"caret-color": "rgb(255, 255, 255)",
+					"color": "rgb(255, 255, 255)",
+					"outline-color": "rgb(255, 255, 255)"
 				},
 				"button#toolBack": {
 					"::placeholdercolor": "rgba(16, 16, 16, 0.3)",
@@ -1062,11 +1091,15 @@
 					"outline-color": "rgb(0, 0, 0)"
 				},
 				"span#chromeStatus": {
+					"::placeholdercolor": "rgb(255, 255, 255)",
 					"background-color": "rgb(138, 138, 138)",
 					"border-bottom-color": "rgb(255, 255, 255)",
 					"border-left-color": "rgb(255, 255, 255)",
 					"border-right-color": "rgb(255, 255, 255)",
-					"border-top-color": "rgb(255, 255, 255)"
+					"border-top-color": "rgb(255, 255, 255)",
+					"caret-color": "rgb(255, 255, 255)",
+					"color": "rgb(255, 255, 255)",
+					"outline-color": "rgb(255, 255, 255)"
 				},
 				"button#toolShields": {
 					"::placeholdercolor": "rgb(0, 0, 0)",
@@ -1094,75 +1127,111 @@
 					"outline-color": "rgb(0, 0, 0)"
 				},
 				"div#frames>iframe.frame": {
+					"::placeholdercolor": "rgb(255, 255, 255)",
 					"background-color": "rgb(18, 18, 18)",
 					"border-bottom-color": "rgb(255, 255, 255)",
 					"border-left-color": "rgb(255, 255, 255)",
 					"border-right-color": "rgb(255, 255, 255)",
 					"border-top-color": "rgb(255, 255, 255)",
-					"color-scheme": "dark"
+					"caret-color": "rgb(255, 255, 255)",
+					"color": "rgb(255, 255, 255)",
+					"color-scheme": "dark",
+					"outline-color": "rgb(255, 255, 255)"
 				},
 				"span#recentsCount": {
+					"::placeholdercolor": "rgb(255, 255, 255)",
 					"background-color": "rgba(0, 0, 0, 0.25)",
 					"border-bottom-color": "rgba(255, 255, 255, 0.35)",
 					"border-left-color": "rgba(255, 255, 255, 0.35)",
 					"border-right-color": "rgba(255, 255, 255, 0.35)",
-					"border-top-color": "rgba(255, 255, 255, 0.35)"
+					"border-top-color": "rgba(255, 255, 255, 0.35)",
+					"caret-color": "rgb(255, 255, 255)",
+					"color": "rgb(255, 255, 255)",
+					"outline-color": "rgb(255, 255, 255)"
 				},
 				"div#dock": {
+					"::placeholdercolor": "rgb(255, 255, 255)",
 					"border-bottom-color": "rgb(255, 255, 255)",
 					"border-left-color": "rgb(255, 255, 255)",
 					"border-right-color": "rgb(255, 255, 255)",
-					"border-top-color": "rgba(255, 255, 255, 0.15)"
+					"border-top-color": "rgba(255, 255, 255, 0.15)",
+					"caret-color": "rgb(255, 255, 255)",
+					"color": "rgb(255, 255, 255)",
+					"outline-color": "rgb(255, 255, 255)"
 				},
 				"div#dock>button.bnt-orange.dockButton:0": {
+					"::placeholdercolor": "rgb(255, 255, 255)",
 					"background-color": "rgb(239, 239, 239)",
 					"background-image": "linear-gradient(0deg, rgb(210, 97, 42) 0%, rgb(222, 152, 91) 100%)",
 					"border-bottom-color": "rgb(255, 255, 255)",
 					"border-left-color": "rgb(255, 255, 255)",
 					"border-right-color": "rgba(0, 0, 0, 0.35)",
 					"border-top-color": "rgb(255, 255, 255)",
+					"caret-color": "rgb(255, 255, 255)",
+					"color": "rgb(255, 255, 255)",
+					"outline-color": "rgb(255, 255, 255)",
 					"text-shadow": "rgba(0, 0, 0, 0.2) 0px -1px 0px"
 				},
 				"div#dock>button.bnt-green.dockButton:1": {
+					"::placeholdercolor": "rgb(255, 255, 255)",
 					"background-color": "rgb(239, 239, 239)",
 					"background-image": "linear-gradient(0deg, rgb(42, 210, 76) 0%, rgb(91, 222, 118) 100%)",
 					"border-bottom-color": "rgb(255, 255, 255)",
 					"border-left-color": "rgb(255, 255, 255)",
 					"border-right-color": "rgba(0, 0, 0, 0.35)",
 					"border-top-color": "rgb(255, 255, 255)",
+					"caret-color": "rgb(255, 255, 255)",
+					"color": "rgb(255, 255, 255)",
+					"outline-color": "rgb(255, 255, 255)",
 					"text-shadow": "rgba(0, 0, 0, 0.2) 0px -1px 0px"
 				},
 				"div#dock>button.bnt-red.dockButton:2": {
+					"::placeholdercolor": "rgb(255, 255, 255)",
 					"background-color": "rgb(239, 239, 239)",
 					"background-image": "linear-gradient(0deg, rgb(210, 42, 42) 0%, rgb(222, 91, 91) 100%)",
 					"border-bottom-color": "rgb(255, 255, 255)",
 					"border-left-color": "rgb(255, 255, 255)",
 					"border-right-color": "rgba(0, 0, 0, 0.35)",
 					"border-top-color": "rgb(255, 255, 255)",
+					"caret-color": "rgb(255, 255, 255)",
+					"color": "rgb(255, 255, 255)",
+					"outline-color": "rgb(255, 255, 255)",
 					"text-shadow": "rgba(0, 0, 0, 0.2) 0px -1px 0px"
 				},
 				"div#dock>button.bnt-blue.dockButton:3": {
+					"::placeholdercolor": "rgb(255, 255, 255)",
 					"background-color": "rgb(239, 239, 239)",
 					"background-image": "linear-gradient(0deg, rgb(42, 76, 210) 0%, rgb(91, 154, 222) 100%)",
 					"border-bottom-color": "rgb(255, 255, 255)",
 					"border-left-color": "rgb(255, 255, 255)",
 					"border-right-color": "rgb(255, 255, 255)",
 					"border-top-color": "rgb(255, 255, 255)",
+					"caret-color": "rgb(255, 255, 255)",
+					"color": "rgb(255, 255, 255)",
+					"outline-color": "rgb(255, 255, 255)",
 					"text-shadow": "rgba(0, 0, 0, 0.2) 0px -1px 0px"
 				},
 				"section#requests": {
+					"::placeholdercolor": "rgb(255, 255, 255)",
 					"background-color": "rgba(18, 13, 26, 0.92)",
 					"border-bottom-color": "rgb(255, 255, 255)",
 					"border-left-color": "rgb(255, 255, 255)",
 					"border-right-color": "rgb(255, 255, 255)",
 					"border-top-color": "rgba(255, 255, 255, 0.15)",
-					"box-shadow": "rgba(0, 0, 0, 0.6) 0px -10px 40px 0px"
+					"box-shadow": "rgba(0, 0, 0, 0.6) 0px -10px 40px 0px",
+					"caret-color": "rgb(255, 255, 255)",
+					"color": "rgb(255, 255, 255)",
+					"outline-color": "rgb(255, 255, 255)"
 				},
 				"section#requests>div.requestsTop:0": {
+					"::placeholdercolor": "rgb(255, 255, 255)",
 					"border-bottom-color": "rgba(255, 255, 255, 0.1)",
 					"border-left-color": "rgb(255, 255, 255)",
 					"border-right-color": "rgb(255, 255, 255)",
-					"border-top-color": "rgb(255, 255, 255)"
+					"border-top-color": "rgb(255, 255, 255)",
+					"caret-color": "rgb(255, 255, 255)",
+					"color": "rgb(255, 255, 255)",
+					"outline-color": "rgb(255, 255, 255)"
 				},
 				"span#requestsCount": {
 					"::placeholdercolor": "rgba(255, 255, 255, 0.6)",
@@ -1175,53 +1244,21 @@
 					"outline-color": "rgba(255, 255, 255, 0.6)"
 				},
 				"div#shieldsPanel": {
-					"::placeholdercolor": "rgb(228, 228, 229)",
 					"background-color": "rgb(28, 28, 29)",
-					"border-bottom-color": "rgb(228, 228, 229)",
-					"border-left-color": "rgb(228, 228, 229)",
-					"border-right-color": "rgb(228, 228, 229)",
-					"border-top-color": "rgb(228, 228, 229)",
-					"box-shadow": "rgba(0, 0, 0, 0.55) 0px 12px 40px 0px, rgba(255, 255, 255, 0.06) 0px 0px 0px 1px",
-					"caret-color": "rgb(228, 228, 229)",
-					"color": "rgb(228, 228, 229)",
-					"outline-color": "rgb(228, 228, 229)"
+					"box-shadow": "rgba(0, 0, 0, 0.55) 0px 12px 40px 0px, rgba(255, 255, 255, 0.06) 0px 0px 0px 1px"
 				},
 				"div#shieldsPanel>div.shieldsCard:0": {
-					"::placeholdercolor": "rgb(228, 228, 229)",
 					"background-color": "rgb(37, 37, 39)",
-					"border-bottom-color": "rgb(48, 48, 50)",
-					"border-left-color": "rgb(228, 228, 229)",
-					"border-right-color": "rgb(228, 228, 229)",
-					"border-top-color": "rgb(228, 228, 229)",
-					"caret-color": "rgb(228, 228, 229)",
-					"color": "rgb(228, 228, 229)",
-					"outline-color": "rgb(228, 228, 229)"
+					"border-bottom-color": "rgb(48, 48, 50)"
 				},
-				"div#shieldsPanel>div.shieldsCard:0>div.shieldsHead:0": {
-					"::placeholdercolor": "rgb(228, 228, 229)",
-					"border-bottom-color": "rgb(228, 228, 229)",
-					"border-left-color": "rgb(228, 228, 229)",
-					"border-right-color": "rgb(228, 228, 229)",
-					"border-top-color": "rgb(228, 228, 229)",
-					"caret-color": "rgb(228, 228, 229)",
-					"color": "rgb(228, 228, 229)",
-					"outline-color": "rgb(228, 228, 229)"
-				},
+				"div#shieldsPanel>div.shieldsCard:0>div.shieldsHead:0": {},
 				"div#shieldsPanel>div.shieldsCard:0>div.shieldsHead:0>span.shieldsFavicon:0": {
-					"::placeholdercolor": "rgb(228, 228, 229)",
 					"background-color": "rgb(28, 28, 29)",
 					"background-image": "sha256:a7b9c2d0af916a01",
 					"background-position": "50% 50%",
 					"background-repeat": "no-repeat",
 					"background-size": "20px 20px",
-					"border-bottom-color": "rgb(228, 228, 229)",
-					"border-left-color": "rgb(228, 228, 229)",
-					"border-right-color": "rgb(228, 228, 229)",
-					"border-top-color": "rgb(228, 228, 229)",
-					"box-shadow": "rgba(0, 0, 0, 0.4) 0px 1px 4px 0px",
-					"caret-color": "rgb(228, 228, 229)",
-					"color": "rgb(228, 228, 229)",
-					"outline-color": "rgb(228, 228, 229)"
+					"box-shadow": "rgba(0, 0, 0, 0.4) 0px 1px 4px 0px"
 				},
 				"input#shMaster": {
 					"::afterbackground-color": "rgb(33, 40, 72)",
@@ -1240,6 +1277,10 @@
 				"div#shieldsPanel>div.shieldsCard:0>div.shieldsCount:1": {
 					"::placeholdercolor": "rgb(201, 201, 202)",
 					"background-color": "rgb(28, 28, 29)",
+					"border-bottom-color": "rgb(201, 201, 202)",
+					"border-left-color": "rgb(201, 201, 202)",
+					"border-right-color": "rgb(201, 201, 202)",
+					"border-top-color": "rgb(201, 201, 202)",
 					"box-shadow": "rgba(0, 0, 0, 0.4) 0px 1px 4px 0px",
 					"caret-color": "rgb(201, 201, 202)",
 					"color": "rgb(201, 201, 202)",
@@ -1268,24 +1309,28 @@
 				},
 				"div#shAdvanced>div.shieldsRows>div.shieldsRow:0>svg.shieldsIcon": {
 					"::placeholdercolor": "rgb(201, 201, 202)",
+					"border-bottom-color": "rgb(201, 201, 202)",
+					"border-left-color": "rgb(201, 201, 202)",
+					"border-right-color": "rgb(201, 201, 202)",
+					"border-top-color": "rgb(201, 201, 202)",
 					"caret-color": "rgb(201, 201, 202)",
 					"color": "rgb(201, 201, 202)",
 					"fill": "rgb(201, 201, 202)",
 					"outline-color": "rgb(201, 201, 202)"
 				},
 				"div#shAds>button.shieldsDropBtn": {
-					"::placeholdercolor": "rgb(228, 228, 229)",
 					"background-color": "rgb(31, 31, 35)",
 					"border-bottom-color": "rgb(48, 48, 50)",
 					"border-left-color": "rgb(48, 48, 50)",
 					"border-right-color": "rgb(48, 48, 50)",
-					"border-top-color": "rgb(48, 48, 50)",
-					"caret-color": "rgb(228, 228, 229)",
-					"color": "rgb(228, 228, 229)",
-					"outline-color": "rgb(228, 228, 229)"
+					"border-top-color": "rgb(48, 48, 50)"
 				},
 				"div#shAds>ul.shieldsDropList>li:0": {
 					"::placeholdercolor": "rgb(201, 201, 202)",
+					"border-bottom-color": "rgb(201, 201, 202)",
+					"border-left-color": "rgb(201, 201, 202)",
+					"border-right-color": "rgb(201, 201, 202)",
+					"border-top-color": "rgb(201, 201, 202)",
 					"caret-color": "rgb(201, 201, 202)",
 					"color": "rgb(201, 201, 202)",
 					"outline-color": "rgb(201, 201, 202)"
@@ -1316,14 +1361,7 @@
 					"outline-color": "rgb(0, 0, 0)"
 				},
 				"div#shieldsPanel>div.shieldsFooter:2": {
-					"::placeholdercolor": "rgb(228, 228, 229)",
-					"border-bottom-color": "rgb(228, 228, 229)",
-					"border-left-color": "rgb(228, 228, 229)",
-					"border-right-color": "rgb(228, 228, 229)",
-					"border-top-color": "rgb(48, 48, 50)",
-					"caret-color": "rgb(228, 228, 229)",
-					"color": "rgb(228, 228, 229)",
-					"outline-color": "rgb(228, 228, 229)"
+					"border-top-color": "rgb(48, 48, 50)"
 				},
 				"button#shFilterLists": {
 					"::placeholdercolor": "rgb(188, 198, 243)",
@@ -1348,33 +1386,60 @@
 				},
 				"button#menuFullscreen>svg.shieldsIcon>path": {
 					"::placeholdercolor": "rgb(201, 201, 202)",
+					"border-bottom-color": "rgb(201, 201, 202)",
+					"border-left-color": "rgb(201, 201, 202)",
+					"border-right-color": "rgb(201, 201, 202)",
+					"border-top-color": "rgb(201, 201, 202)",
 					"caret-color": "rgb(201, 201, 202)",
 					"color": "rgb(201, 201, 202)",
 					"fill": "none",
 					"outline-color": "rgb(201, 201, 202)",
 					"stroke": "rgb(201, 201, 202)"
 				},
+				"input#adblock": {
+					"::placeholdercolor": "rgb(0, 0, 0)",
+					"accent-color": "rgb(76, 169, 251)",
+					"border-bottom-color": "rgb(0, 0, 0)",
+					"border-left-color": "rgb(0, 0, 0)",
+					"border-right-color": "rgb(0, 0, 0)",
+					"border-top-color": "rgb(0, 0, 0)",
+					"caret-color": "rgb(0, 0, 0)",
+					"color": "rgb(0, 0, 0)",
+					"outline-color": "rgb(0, 0, 0)"
+				},
 				"div#bookmarksScrim": {
+					"::placeholdercolor": "rgb(255, 255, 255)",
 					"background-color": "rgba(0, 0, 0, 0.55)",
 					"border-bottom-color": "rgb(255, 255, 255)",
 					"border-left-color": "rgb(255, 255, 255)",
 					"border-right-color": "rgb(255, 255, 255)",
 					"border-top-color": "rgb(255, 255, 255)",
-					"opacity": "0"
+					"caret-color": "rgb(255, 255, 255)",
+					"color": "rgb(255, 255, 255)",
+					"opacity": "0",
+					"outline-color": "rgb(255, 255, 255)"
 				},
 				"aside#bookmarks": {
+					"::placeholdercolor": "rgb(255, 255, 255)",
 					"background-color": "rgb(0, 0, 0)",
 					"border-bottom-color": "rgb(182, 182, 182)",
 					"border-left-color": "rgb(255, 255, 255)",
 					"border-right-color": "rgb(182, 182, 182)",
 					"border-top-color": "rgb(182, 182, 182)",
-					"box-shadow": "rgba(0, 0, 0, 0.6) 10px 0px 40px 0px"
+					"box-shadow": "rgba(0, 0, 0, 0.6) 10px 0px 40px 0px",
+					"caret-color": "rgb(255, 255, 255)",
+					"color": "rgb(255, 255, 255)",
+					"outline-color": "rgb(255, 255, 255)"
 				},
 				"span#bookmarksCount": {
+					"::placeholdercolor": "rgb(255, 255, 255)",
 					"border-bottom-color": "rgb(182, 182, 182)",
 					"border-left-color": "rgb(182, 182, 182)",
 					"border-right-color": "rgb(182, 182, 182)",
-					"border-top-color": "rgb(182, 182, 182)"
+					"border-top-color": "rgb(182, 182, 182)",
+					"caret-color": "rgb(255, 255, 255)",
+					"color": "rgb(255, 255, 255)",
+					"outline-color": "rgb(255, 255, 255)"
 				},
 				"div#bookmarksEmpty>img": {
 					"::placeholdercolor": "rgb(154, 154, 154)",
@@ -1388,11 +1453,15 @@
 					"outline-color": "rgb(154, 154, 154)"
 				},
 				"html>body.browsing>nav.navbar": {
+					"::placeholdercolor": "rgb(255, 255, 255)",
 					"background-color": "rgb(0, 0, 0)",
 					"border-bottom-color": "rgb(255, 255, 255)",
 					"border-left-color": "rgb(255, 255, 255)",
 					"border-right-color": "rgb(255, 255, 255)",
-					"border-top-color": "rgb(255, 255, 255)"
+					"border-top-color": "rgb(255, 255, 255)",
+					"caret-color": "rgb(255, 255, 255)",
+					"color": "rgb(255, 255, 255)",
+					"outline-color": "rgb(255, 255, 255)"
 				},
 				"button#back": {
 					"::placeholdercolor": "rgb(221, 221, 221)",

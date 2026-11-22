@@ -2,9 +2,16 @@
 // controls, outside the page and its service worker: through the proxy the
 // page's artwork URLs must reach the worker, none the site directly, and
 // read back as the page wrote them, compared with the page loaded natively
-// in both modes.
+// in both modes. The page is asked for its answer without a user
+// activation: Playwright's evaluate is a user's gesture to Chrome, and one
+// that reached the tab's frame before the page's own document began is an
+// activation that document starts with from another, which the proxy
+// answers as natively a page the user did not touch: play() is refused,
+// nothing plays and the browser fetches no artwork (in a mode of about one
+// run in five of CI's, and in every run that polled every 10 ms).
 import {
 	done,
+	evaluateQuietly,
 	FIXTURE,
 	HOST,
 	launch,
@@ -34,7 +41,7 @@ await nativePage.goto(target);
 let native = null;
 for (let i = 0; i < 60 && !native?.done; i++) {
 	await sleep(250);
-	native = await nativePage.evaluate(() => window.__ms).catch(() => null);
+	native = await evaluateQuietly(nativePage.mainFrame(), 'window.__ms');
 }
 await nativeContext.close();
 ok(
@@ -67,7 +74,7 @@ for (const [mode, base] of [
 		await sleep(250);
 		for (const frame of page.frames())
 			if (/\/stomp\/[\w-]+\/html\//.test(frame.url())) {
-				const value = await frame.evaluate(() => window.__ms).catch(() => null);
+				const value = await evaluateQuietly(frame, 'window.__ms');
 				if (value?.done) proxied = value;
 			}
 	}
@@ -84,7 +91,7 @@ for (const [mode, base] of [
 		`${mode}: the browser's artwork fetch is served by the service worker`,
 		artwork.length > 0 &&
 			artwork.every(([status, worker]) => status === 200 && worker),
-		JSON.stringify(artwork),
+		JSON.stringify({ artwork, play: proxied?.play ?? 'played' }),
 	);
 	ok(
 		`${mode}: the artwork reads back as the page wrote it`,

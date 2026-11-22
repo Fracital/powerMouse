@@ -137,8 +137,7 @@
 							draggable="false"
 						/>
 					</button>
-					<!-- the other edge of the home card: one tab of two buttons side
-					     by side, the Extensions page and the theme settings -->
+					<!-- the other edge of the home card: Extensions, Themes and Settings -->
 					<div class="extensionsDock">
 						<button
 							id="extensionsTab"
@@ -174,6 +173,24 @@
 								draggable="false"
 							/>
 						</button>
+						<button
+							id="settingsTab"
+							class="settingsTab"
+							type="button"
+							title="Settings"
+							aria-label="Settings"
+							aria-haspopup="menu"
+							aria-expanded="false"
+							aria-controls="pmMenu"
+						>
+							<img
+								src="/pm/icons/settings.svg"
+								width="32"
+								height="32"
+								alt=""
+								draggable="false"
+							/>
+						</button>
 					</div>
 					<section class="commits" aria-labelledby="commitsTitle">
 						<div class="commitsHead">
@@ -190,31 +207,6 @@
 				</div>
 				<div class="lbottom">
 					Uptime: <span id="uptime">…</span><span id="version"></span>
-				</div>
-				<div class="rbottom">
-					<label
-						class="check"
-						title="The built-in content blocker; the page reloads"
-						><input type="checkbox" id="adblock" /> Block ads</label
-					>
-					<label
-						class="check"
-						id="torLabel"
-						title="Route proxied sites through Tor"
-						><input
-							type="checkbox"
-							id="tor"
-							aria-label="Tor for proxied sites"
-						/>
-						Tor</label
-					>
-					<label
-						>Transport
-						<select id="transport" class="select">
-							<option value="epoxy">epoxy</option>
-							<option value="libcurl">libcurl</option>
-						</select></label
-					>
 				</div>
 			</div>
 		</div>
@@ -529,6 +521,13 @@
 				hidden
 			></button>
 			<button
+				id="menuProxy"
+				class="pmMenuItem"
+				type="button"
+				role="menuitem"
+				tabindex="-1"
+			></button>
+			<button
 				id="menuSettings"
 				class="pmMenuItem"
 				type="button"
@@ -542,6 +541,49 @@
 				role="menuitem"
 				tabindex="-1"
 			></button>
+		</div>
+		<!-- The real controls live here while the Proxy submenu is closed.
+		     Its popup moves this same node, preserving the control state and
+		     listeners through every menu opening and page reload. -->
+		<div id="proxySettingsStore" hidden>
+			<div
+				id="proxySettings"
+				class="proxyMenuControls"
+				role="group"
+				aria-label="Proxy settings"
+			>
+				<label
+					class="proxyMenuRow"
+					title="The built-in content blocker; the page reloads"
+				>
+					<span>Block ads</span>
+					<input type="checkbox" id="adblock" class="proxyMenuControl" />
+				</label>
+				<label
+					class="proxyMenuRow"
+					id="torLabel"
+					title="Route proxied sites through Tor"
+				>
+					<span>Tor</span>
+					<input
+						type="checkbox"
+						id="tor"
+						class="proxyMenuControl"
+						aria-label="Tor for proxied sites"
+					/>
+				</label>
+				<label class="proxyMenuRow">
+					<span>Transport</span>
+					<select
+						id="transport"
+						class="select proxyMenuControl"
+						aria-label="Transport"
+					>
+						<option value="epoxy">epoxy</option>
+						<option value="libcurl">libcurl</option>
+					</select>
+				</label>
+			</div>
 		</div>
 
 		<!-- the extensions: the puzzle piece's list (each one's button, its

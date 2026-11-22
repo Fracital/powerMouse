@@ -40,7 +40,13 @@
 // screenshots in test/out/firefox-*.png.
 /* global ISOLATED, PMTheme, openExtensionsPage, DIRECTORY, TOR_REQUESTED, TOR_CLIENT -- the demo page's, in the functions evaluated there */
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import {
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	statSync,
+} from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { firefoxBinary, launchFirefox } from './bidi.mjs';
 import { startServers } from './servers.mjs';
@@ -445,10 +451,16 @@ else {
 	const browserBack = await waitActive(tab, () =>
 		document.title === 'WALK 1' ? location.href : null,
 	);
-	await sleep(500);
+	// On a busy Firefox the iframe's old document may be visible before the
+	// parent page has finished replacing the address token. Require both to
+	// settle, rather than sampling the token 500 ms after the frame appears.
+	const browserBackToken = await tab.until(
+		(expected) => (location.search === expected ? location.search : null),
+		{ timeout: 10000, args: [token1] },
+	);
 	ok(
 		"navigation: the browser's Back shows walk-1 at its token",
-		!!browserBack && (await topSearch(tab)) === token1,
+		!!browserBack && browserBackToken === token1,
 		`${browserBack} ${await topSearch(tab)}`,
 	);
 	await firefox.send('browsingContext.traverseHistory', {
@@ -458,10 +470,13 @@ else {
 	const browserForward = await waitActive(tab, () =>
 		document.title === 'WALK 2' ? location.href : null,
 	);
-	await sleep(500);
+	const browserForwardToken = await tab.until(
+		(expected) => (location.search === expected ? location.search : null),
+		{ timeout: 10000, args: [token2] },
+	);
 	ok(
 		"navigation: the browser's Forward shows walk-2 at its token",
-		!!browserForward && (await topSearch(tab)) === token2,
+		!!browserForward && browserForwardToken === token2,
 		`${browserForward} ${await topSearch(tab)}`,
 	);
 	const reloadFrom = firefox.logs.length;
@@ -968,22 +983,42 @@ async function offlineVibeOS(tab) {
 	const before = new Set(readdirSync(firefox.downloads));
 	await tab.click('#offlineDownload > div');
 	let saved = null;
+	let lastSize = 0;
+	let text = '';
+	let wisp = null;
 	for (let i = 0; i < 120 && !saved; i++) {
 		await sleep(500);
-		saved =
+		const candidate =
 			readdirSync(firefox.downloads).find(
 				(name) => !before.has(name) && !/\.part$/.test(name),
 			) ?? null;
-		if (saved && existsSync(`${firefox.downloads}/${saved}.part`)) saved = null;
+		if (!candidate || existsSync(`${firefox.downloads}/${candidate}.part`))
+			continue;
+		const file = `${firefox.downloads}/${candidate}`;
+		let size;
+		try {
+			size = statSync(file).size;
+		} catch {
+			continue; // the temporary file was renamed between the two reads
+		}
+		// Firefox can make the final filename before it starts writing the
+		// 18 MiB file, and can pause between writes on a loaded runner. Wait
+		// for its size to settle before opening it, not just for the name.
+		if (size <= 1e6 || size !== lastSize) {
+			lastSize = size;
+			continue;
+		}
+		const content = readFileSync(file, 'utf8');
+		const embedded =
+			/<script type="application\/json" id="pm-wisp">([^<]*)<\/script>/.exec(
+				content,
+			)?.[1] ?? null;
+		if (!content.includes('</html>') || !embedded) continue;
+		saved = candidate;
+		text = content;
+		wisp = embedded;
 	}
-	const text = saved
-		? readFileSync(`${firefox.downloads}/${saved}`, 'utf8')
-		: '';
 	// (the element the file names its wisp server in, demo/public/pm/main.js OFFLINE_WISP)
-	const wisp =
-		/<script type="application\/json" id="pm-wisp">([^<]*)<\/script>/.exec(
-			text,
-		)?.[1];
 	ok(
 		"offline.html: Download saves the file, with this page's wisp server",
 		saved === 'offline.html' &&
@@ -1316,6 +1351,8 @@ else {
 		disabled: document.getElementById('tor').disabled,
 	}));
 	ok('Tor: the box is offered', !box.disabled, short(box));
+	await tab.click('#settingsTab');
+	await tab.click('#menuProxy');
 	await tab.click('#tor');
 	await sleep(1500);
 	const torStatus = await tab.until(
@@ -1347,6 +1384,8 @@ else {
 	);
 	await tab.eval(() => document.getElementById('home').click());
 	await sleep(500);
+	await tab.click('#settingsTab');
+	await tab.click('#menuProxy');
 	await tab.click('#tor');
 	await sleep(1500);
 	const off = await tab.until(

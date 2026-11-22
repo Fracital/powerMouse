@@ -1,5 +1,7 @@
 /node_modules
 /dist
+# Local, untracked Git worktrees have their own changes and formatting state.
+/.worktrees
 # the vibeOS submodule keeps its own formatting (docs/vibeos.md)
 /vendor
 /package-lock.json

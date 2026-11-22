@@ -273,7 +273,7 @@ const SITE_POOL = (() => {
 })();
 // the built-in content blocker (docs/adblock.md), on unless something says
 // off. In order: ?noadblock and ?adblock on this page (one load), the toggle
-// beside the transport select (remembered), STOMP_ADBLOCK=0 on the server.
+// in Settings > Proxy (remembered), STOMP_ADBLOCK=0 on the server.
 // On, the controller is given nothing (the blocker is the library's default)
 // or the lists STOMP_ADBLOCK named; off, `adblock: false`
 const ADBLOCK = (() => {
@@ -1797,7 +1797,7 @@ function createTab(id = 0, at = tabs.length) {
 		url: '',
 		history: [],
 		index: -1,
-		traversal: null, // 'back' / 'forward' while a step we issued is in flight
+		traversal: null, // { from, target } while a Back/Forward step is in flight
 		pending: Promise.resolve(false), // queue of back/forward presses
 		goingTo: null, // { url, from }: a navigation not yet committed (navigate)
 		stayedOn: null, // the URL a stopped navigation left the tab on, until it reports
@@ -1907,13 +1907,17 @@ function recordUrl(tab) {
 	// the address bars' history (attachOmniboxes)
 	visitHistory?.record(tab, { url, title: visitTitle(tab, url) });
 	if (tab.traversal) {
-		// the frame still reports the page it is leaving until the step commits
-		const from = tab.history[tab.index + (tab.traversal === 'back' ? 1 : -1)];
-		if (url === from) return;
+		// A frame can report its destination *inside* frame.back()/forward(),
+		// before the returned promise resolves and step() updates tab.index.
+		// Compare with the entry we actually left, not an index that changes
+		// depending on whether the awaited frame method has resolved yet.
+		if (url === tab.traversal.from) return;
+		tab.index = tab.traversal.target;
 		tab.traversal = null;
 		// landed somewhere else (the entry redirected or replaced its URL): that
 		// is what this entry really is, not a new one
 		tab.history[tab.index] = url;
+		keepTabs();
 		return;
 	}
 	if (url === tab.history[tab.index]) return;
@@ -1954,14 +1958,32 @@ function step(tab, direction) {
 			const can = back ? tab.index > 0 : tab.index < tab.history.length - 1;
 			if (!can) return false;
 		}
-		tab.traversal = direction;
+		const from = normalizeUrl(tab.frame.url || tab.history[tab.index] || '');
+		const target = Math.min(
+			Math.max(tab.index + (back ? -1 : 1), 0),
+			tab.history.length - 1,
+		);
+		const traversal = { from, target };
+		tab.traversal = traversal;
 		const went = await (back ? tab.frame.back() : tab.frame.forward());
 		if (!went) {
-			tab.traversal = null;
+			if (tab.traversal === traversal) tab.traversal = null;
 			return false;
 		}
-		const next = tab.index + (back ? -1 : 1);
-		tab.index = Math.min(Math.max(next, 0), tab.history.length - 1);
+		// recordUrl() may already have run as part of the frame's method.
+		// Never move a second entry if it committed before this await resumed.
+		tab.index = target;
+		// Different history entries may name the same URL (a reload, a
+		// pushState of the same address). No URL report can distinguish such
+		// an entry from the one we left; once the frame says it stepped,
+		// clear the traversal so the next unrelated navigation is recorded
+		// as a new entry rather than replacing the one we stepped back to.
+		if (
+			tab.traversal === traversal &&
+			normalizeUrl(tab.history[target]) === from &&
+			normalizeUrl(tab.frame.url) === from
+		)
+			tab.traversal = null;
 		return true;
 	};
 	tab.pending = tab.pending.then(run, run);
@@ -7242,7 +7264,7 @@ const submenuBuilders = new WeakMap();
 let subMenuOwner = null;
 const subMenuOpen = () => !subMenu.classList.contains('hidden');
 const submenuRows = () =>
-	[...subMenu.querySelectorAll('.pmMenuItem')].filter(
+	[...subMenu.querySelectorAll('.pmMenuItem, .proxyMenuControl')].filter(
 		(item) => !item.disabled && !item.hidden,
 	);
 // its menu closing (a choice, Tab, a click outside) closes it too
@@ -7316,6 +7338,10 @@ function closeSubmenu() {
 	if (!subMenuOpen()) return;
 	subMenuParent.disconnect();
 	const inside = subMenu.contains(document.activeElement);
+	// The native Proxy controls retain their IDs, state and event listeners
+	// between openings. Keep them in the document for boot and other settings.
+	if (subMenuOwner?.id === 'menuProxy')
+		$('proxySettingsStore').append($('proxySettings'));
 	subMenu.classList.add('hidden');
 	subMenu.setAttribute('aria-hidden', 'true');
 	subMenuOwner?.setAttribute('aria-expanded', 'false');
@@ -7347,6 +7373,22 @@ addEventListener(
 		if (!inside) return;
 		const rows = submenuRows();
 		const at = rows.indexOf(focused);
+		if (event.key === 'Tab') {
+			const next = at + (event.shiftKey ? -1 : 1);
+			if (next >= 0 && next < rows.length) {
+				event.preventDefault();
+				rows[next].focus();
+			} else {
+				closeSubmenu();
+				popoverStack.at(-1)?.close();
+			}
+			event.stopImmediatePropagation();
+			return;
+		}
+		// Select's arrows change the actual transport option, rather than
+		// moving the focus to another menu row.
+		if (focused.tagName === 'SELECT' && /^(ArrowUp|ArrowDown)$/.test(event.key))
+			return;
 		const next = {
 			ArrowDown: (at + 1) % rows.length,
 			ArrowUp: (at <= 0 ? rows.length : at) - 1,
@@ -7476,15 +7518,37 @@ async function offlineWithWisp() {
 	link.addEventListener('auxclick', save);
 })();
 
-// ---- the menu: Fullscreen, Extensions, Settings and About -------------------
+// ---- the menu: Fullscreen, Extensions, Themes, Proxy and Settings ----------
 // The button beside the address box (and its twin in the tab manager, which
 // hides the bar) opens the Shields panel's popover as a menu: Fullscreen puts
 // this page, STomp's window, in fullscreen and takes it out again, Extensions
 // lists the extensions as the puzzle piece does (which a narrow bar has no
-// room for), Settings has the theme, and About shows the proxy's build.
+// room for); Proxy has the transport, blocker and Tor switches; Settings
+// has the theme picker, and About shows the proxy's build. The home Settings
+// tab opens the same menu beside the home Customize tab.
 const menuPanel = $('pmMenu');
-const menuPopover = popover(menuPanel, $('menuScrim'));
+const menuPopover = popover(menuPanel, $('menuScrim'), {
+	onClose: () => closeSubmenu(),
+	// The homepage Settings button is near the bottom on short phones. Open
+	// above it if the menu cannot fit below, without changing the browser's
+	// hamburger, which opens downward from its top bar.
+	place(rect) {
+		const height = menuPanel.offsetHeight;
+		const below = rect.bottom + 4;
+		const top =
+			below + height <= innerHeight - 8
+				? below
+				: Math.max(
+						8,
+						Math.min(rect.top - height - 4, innerHeight - height - 8),
+					);
+		menuPanel.style.top = `${Math.round(top)}px`;
+		menuPanel.style.left = 'auto';
+		menuPanel.style.right = `${Math.max(8, Math.round(innerWidth - rect.right))}px`;
+	},
+});
 const menuFullscreen = $('menuFullscreen');
+const menuProxy = $('menuProxy');
 const menuSettings = $('menuSettings');
 const menuAbout = $('menuAbout');
 
@@ -7520,6 +7584,12 @@ function syncFullscreenItem() {
 }
 menuSettings.innerHTML = `${shieldIcon('gear')}<span>Settings</span>`;
 menuAbout.innerHTML = `${shieldIcon('info')}<span>About</span>`;
+Object.assign(SHIELD_ICONS, {
+	proxy:
+		'<path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M4 8h15m-4-4 4 4-4 4M20 16H5m4-4-4 4 4 4"/>',
+});
+menuProxy.innerHTML = `${shieldIcon('proxy')}<span>Proxy</span>`;
+submenuItem(menuProxy, () => [$('proxySettings')]);
 
 // ---- the in-browser Tor client (docs/tor-over-wisp.md) ------------------------
 // Its transport tells this page how its bootstrap goes, in Tor Browser's
@@ -7687,6 +7757,7 @@ function openMenu(anchor) {
 	menuItems()[0]?.focus();
 }
 menuButton.addEventListener('click', () => openMenu(menuButton));
+$('settingsTab').addEventListener('click', () => openMenu($('settingsTab')));
 
 // a menu's keys: the arrows, Home and End move between the items, Tab
 // leaves the menu, and while it is open no key reaches the tab manager
@@ -7695,6 +7766,7 @@ addEventListener(
 	'keydown',
 	(event) => {
 		if (!menuPopover.isOpen()) return;
+		if (subMenuOpen() && subMenu.contains(document.activeElement)) return;
 		const items = menuItems();
 		const at = items.indexOf(document.activeElement);
 		const next = {
@@ -7840,7 +7912,7 @@ const vibeHost = {
 	openMenu: (anchor) => openMenu(anchor),
 	// the network as the proxy reaches it: what vibeOS fetches that it does
 	// not carry (its emulator, from pinned sources, which it checks by hash)
-	// goes through the proxy's transport, never from this page to another
+	// uses the selected transport, never directly from this page to another
 	// site
 	fetch: async (url, { method = 'GET', headers = {}, signal } = {}) => {
 		await booted;

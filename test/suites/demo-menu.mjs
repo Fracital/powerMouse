@@ -45,6 +45,7 @@ const MENU = withVibe([
 	'Fullscreen',
 	'Extensions',
 	'Themes',
+	'Proxy',
 	'Settings',
 	'About',
 ]);

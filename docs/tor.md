@@ -55,7 +55,8 @@ protects and what it does not, and how its profile is kept apart.
   candidates do not work in Tor mode, and the external ECH DNS lookup is
   off. Epoxy runs on Tor streams, so HTTP/2 and WebSockets work
   (docs/tor-over-wisp.md, "Epoxy on Tor streams").
-- **Progress.** The Tor toggle's tooltip and the status line show the
+- **Progress.** The Tor toggle's tooltip under **Settings > Proxy** (also
+  in the browser hamburger's Proxy submenu) and the status line show the
   client's bootstrap in Tor Browser's phases (the toggle has no badge, like
   the others), and a load that failed while it connected loads
   again by itself once it is ready. `GET /api/tor` says only whether the

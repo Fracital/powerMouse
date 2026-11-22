@@ -57,6 +57,8 @@ export interface Session {
 	hashes: ArrayBuffer[];
 	/** the anticipated counts of the server's bidirectional and unidirectional streams (Chrome 158 on), null for none */
 	anticipated: (number | null)[];
+	/** Chrome 159: datagrams are a default ReadableStream unless `datagramsReadableType: 'bytes'` is requested */
+	datagramBytes: boolean;
 	/** `responseHeaders` once read on an up session */
 	responseHeaders?: object;
 	/** the server's answer, once up */

@@ -48,7 +48,7 @@
 //    first click after a reload, and a tab older than its worker (a deploy),
 //    whose buttons, list and menus work from the first click.
 // (the demo page's own globals, read in the page)
-/* global activateTab, extAnchor, extButton, openExtensionsPage, openExtMenu, tabs, JUST_CALL, DIRECTORY, assetName */
+/* global activeTab, activateTab, extAnchor, extButton, openExtensionsPage, openExtMenu, tabs, JUST_CALL, DIRECTORY, assetName */
 import { readFileSync } from 'node:fs';
 import { crc32, deflateRawSync } from 'node:zlib';
 import {
@@ -380,6 +380,7 @@ for (const viewport of [
 			status: { top: text.top, bottom: text.bottom },
 			extensions: rect('#extensionsTab'),
 			customize: rect('#customizeTab'),
+			settings: rect('#settingsTab'),
 			commitsHead:
 				getComputedStyle(commits).visibility !== 'hidden' &&
 				commits.getBoundingClientRect().height > 0
@@ -393,6 +394,7 @@ for (const viewport of [
 			seam: [
 				getComputedStyle(document.querySelector('#extensionsTab')),
 				getComputedStyle(document.querySelector('#customizeTab')),
+				getComputedStyle(document.querySelector('#settingsTab')),
 			].map((style) => [
 				style.borderLeftWidth,
 				style.borderRightWidth,
@@ -403,6 +405,9 @@ for (const viewport of [
 				.getAttribute('aria-label'),
 			customizeLabel: document
 				.querySelector('#customizeTab')
+				.getAttribute('aria-label'),
+			settingsLabel: document
+				.querySelector('#settingsTab')
 				.getAttribute('aria-label'),
 		};
 	});
@@ -424,14 +429,19 @@ for (const viewport of [
 		JSON.stringify(edge),
 	);
 	ok(
-		`${at}: Customize sits beside Extensions in the same tab, with no line or fill of their own between them`,
+		`${at}: Customize and Settings sit beside Extensions in the same tab, with no seams`,
 		edge.customizeLabel === 'Customize' &&
+			edge.settingsLabel === 'Settings' &&
 			!!edge.customize &&
+			!!edge.settings &&
 			Math.abs(edge.customize.left - edge.extensions.right) <= 0.5 &&
+			Math.abs(edge.settings.left - edge.customize.right) <= 0.5 &&
 			Math.abs(edge.customize.top - edge.extensions.top) <= 0.5 &&
 			Math.abs(edge.customize.bottom - edge.extensions.bottom) <= 0.5 &&
+			Math.abs(edge.settings.top - edge.extensions.top) <= 0.5 &&
+			Math.abs(edge.settings.bottom - edge.extensions.bottom) <= 0.5 &&
 			Math.abs(edge.extensions.left - edge.dock.left - 1) <= 1 &&
-			Math.abs(edge.dock.right - edge.customize.right) <= 1 &&
+			Math.abs(edge.dock.right - edge.settings.right) <= 1 &&
 			edge.seam.every(
 				([left, right, fill]) =>
 					left === '0px' && right === '0px' && fill === 'rgba(0, 0, 0, 0)',
@@ -439,7 +449,7 @@ for (const viewport of [
 		JSON.stringify(edge),
 	);
 	ok(
-		`${at}: the Extensions and Customize tab sits clear of the status line, the commits, the tiles and the footer`,
+		`${at}: the three-button home tab sits clear of status, commits, tiles and footer`,
 		edge.dock.top >= edge.status.bottom &&
 			(!edge.commitsHead || edge.dock.bottom <= edge.commitsHead.top) &&
 			!edge.tiles.some((tile) => overlaps(tile, edge.dock)) &&
@@ -1605,6 +1615,14 @@ await page.close();
 	await home.evaluate(() => {
 		window.__barFrames = (done) => {
 			const frames = [];
+			let zoomStarts = 0;
+			const started = (event) => {
+				if (event.animationName === 'landingZoom') zoomStarts++;
+			};
+			// The start event survives a loaded renderer skipping the whole
+			// 220 ms animation between animation frames, unlike getAnimations().
+			document.addEventListener('animationstart', started, true);
+			window.__barArmed = true;
 			const form = document.getElementById('mainForm');
 			const input = form.querySelector('input[name="url"]');
 			const go = form.querySelector('.visit');
@@ -1626,12 +1644,29 @@ await page.close();
 				};
 			};
 			const start = performance.now();
+			let firstShown = null;
+			let shown = 0;
 			const tick = () => {
-				frames.push(read());
-				if (performance.now() - start < 500) requestAnimationFrame(tick);
+				const current = read();
+				frames.push(current);
+				if (current.shown) {
+					firstShown ??= performance.now();
+					shown++;
+				}
+				const now = performance.now();
+				// The home page may not appear until Back finishes its frame's
+				// async navigation. Take the 500 ms after it actually appears,
+				// including at least five rendered frames even if CI's main
+				// thread was blocked; still compare every frame we collected.
+				const complete =
+					firstShown !== null && now - firstShown >= 500 && shown >= 5;
+				const timedOut = now - start >= 15000;
+				if (!complete && !timedOut) requestAnimationFrame(tick);
 				else
 					setTimeout(() => {
-						done({ frames, settled: read() });
+						document.removeEventListener('animationstart', started, true);
+						window.__barArmed = false;
+						done({ frames, settled: read(), timedOut, zoomStarts });
 					}, 300);
 			};
 			requestAnimationFrame(tick);
@@ -1639,9 +1674,13 @@ await page.close();
 	});
 	/** the frames of the bar while `act` brings the home page back */
 	const barFrames = async (act) => {
+		await home.evaluate(() => {
+			window.__barArmed = false;
+		});
 		const recording = home.evaluate(
 			() => new Promise((resolve) => window.__barFrames(resolve)),
 		);
+		await home.waitForFunction(() => window.__barArmed === true);
 		await act();
 		return recording;
 	};
@@ -1710,26 +1749,47 @@ await page.close();
 			name,
 			{
 				view: run.view,
+				timedOut: run.timedOut,
 				settled: run.settled,
 				shown: run.frames.filter((f) => f.shown).length,
 				zoomed: run.frames.filter((f) => f.shown && f.zoom).length,
+				zoomStarts: run.zoomStarts,
 				off: off(run).slice(0, 4),
 			},
 		]),
 	);
+	let delayedBack = null;
+	if (!summary['puzzle, Escape, #back'].settled.shown)
+		delayedBack = await until(
+			home,
+			() => ({
+				home: !document.getElementById('landing').classList.contains('hidden'),
+				browser: !document
+					.getElementById('browser')
+					.classList.contains('hidden'),
+				token: location.search,
+				index: activeTab?.index ?? null,
+				history: activeTab?.history?.slice(-3) ?? [],
+			}),
+			(state) => state?.home,
+			5000,
+		);
 	ok(
 		"after the Extensions page, every frame of the home page shows its search box's width, right edge and gap to Go at their settled values, the zoom in included",
 		Object.values(summary).every(
 			(run) =>
 				run.view === 'extensions' &&
+				!run.timedOut &&
 				run.shown >= 5 &&
 				!run.off.length &&
 				run.settled.gap > 0 &&
 				run.settled.gap < 20,
 		) &&
-			summary['menu, close, #home'].zoomed > 0 &&
-			summary['puzzle, Escape, #back'].zoomed > 0,
-		JSON.stringify(summary),
+			(summary['menu, close, #home'].zoomed > 0 ||
+				summary['menu, close, #home'].zoomStarts > 0) &&
+			(summary['puzzle, Escape, #back'].zoomed > 0 ||
+				summary['puzzle, Escape, #back'].zoomStarts > 0),
+		JSON.stringify({ summary, delayedBack }),
 	);
 	errors.push(...home.errors);
 	await home.close();
@@ -1967,6 +2027,7 @@ const pageBuild = JSON.parse(
 	readFileSync(new URL('../../dist/build.json', import.meta.url), 'utf8'),
 ).build;
 const olderBuild = `${pageBuild.slice(0, -1)}${pageBuild.endsWith('0') ? '1' : '0'}`;
+const staleRoutes = { html: 0, rewritten: 0, controller: 0 };
 // (the page's own copy of the controller, from a path the worker does not
 // answer: a route never sees what the worker answers)
 // (the page's address may name its tab by a token, `?3`: the route takes
@@ -1974,18 +2035,23 @@ const olderBuild = `${pageBuild.slice(0, -1)}${pageBuild.endsWith('0') ? '1' : '
 await same.route(
 	(url) => `${url.origin}${url.pathname}` === PROXY,
 	async (route) => {
+		staleRoutes.html++;
 		const response = await route.fetch();
+		const original = await response.text();
+		const body = original.replace(
+			/\/stomp\/Controller\.js(\?[^"']*)?/,
+			'/stale-build/Controller.js',
+		);
+		if (body !== original) staleRoutes.rewritten++;
 		route.fulfill({
 			response,
-			body: (await response.text()).replace(
-				/\/stomp\/Controller\.js(\?[^"']*)?/,
-				'/stale-build/Controller.js',
-			),
+			body,
 		});
 	},
 );
-await same.route('**/stale-build/Controller.js', (route) =>
-	route.fulfill({
+await same.route('**/stale-build/Controller.js', (route) => {
+	staleRoutes.controller++;
+	return route.fulfill({
 		contentType: 'text/javascript',
 		body: readFileSync(
 			new URL('../../dist/Controller.js', import.meta.url),
@@ -1993,8 +2059,8 @@ await same.route('**/stale-build/Controller.js', (route) =>
 		)
 			.split(pageBuild)
 			.join(olderBuild),
-	}),
-);
+	});
+});
 // (the demo's app worker answers the page's load, which the route then
 // never sees: it goes first)
 await same.evaluate(async () => {
@@ -2002,13 +2068,22 @@ await same.evaluate(async () => {
 	if (registration && new URL(registration.scope).pathname === '/')
 		await registration.unregister();
 });
+// unregister() removes the registration, but its active app worker may
+// continue controlling the current page until that client goes away. It can
+// answer a reload before Playwright's route does, leaving the controller
+// unchanged and this test's supposed old page actually up to date. Drop the
+// controlled document, then navigate through the intercepted network route.
+// Keep its token in the address so the active browsing tab (and its pinned
+// extension button) comes back, rather than opening an empty home page.
+const staleAddress = same.url();
+await same.goto('about:blank');
 // (a failed extensions call is a console warning: extFailed)
 const staleWarnings = [];
 same.on('console', (message) => {
 	if (/No enabled extension/.test(message.text()))
 		staleWarnings.push(message.text());
 });
-await same.reload();
+await same.goto(staleAddress);
 await same.waitForFunction(
 	() => /^(Ready|Error)/.test(document.getElementById('logMsg').textContent),
 	null,
@@ -2029,6 +2104,12 @@ const staleTab = await until(
 	15000,
 	id,
 );
+const staleEnvironment = await same.evaluate(async () => ({
+	controllerScript: document.querySelector('script[src*="Controller.js"]')?.src,
+	appWorker: (await navigator.serviceWorker.getRegistration('/'))?.active
+		?.scriptURL,
+	status: document.getElementById('logMsg').textContent,
+}));
 await same.click('#toolExtensions');
 await painted(same);
 await same.click(`#extPanel .extRowMain[data-ext="${id}"]`);
@@ -2036,11 +2117,13 @@ const staleFrame = await popupFrame(same);
 ok(
 	"a tab older than its worker: the button, its menu and the list's row work at once",
 	staleTab?.stale === 'worker' &&
+		staleRoutes.rewritten === 1 &&
+		staleRoutes.controller === 1 &&
 		staleTab.bar === 1 &&
 		typeof staleTab.menu === 'number' &&
 		!!staleFrame &&
 		!staleWarnings.length,
-	JSON.stringify({ staleTab, staleWarnings }),
+	JSON.stringify({ staleTab, staleWarnings, staleRoutes, staleEnvironment }),
 );
 errors.push(...same.errors);
 await same.close();

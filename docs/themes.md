@@ -5,7 +5,10 @@ with the noise and the striped header), Light (Tango's colours), Dark (Default
 with a solid black browser bar and no striped picture on it), SystemYA Light (the
 original black homepage with a solid white browser bar), Follow system (Light
 or Dark as the system's `prefers-color-scheme` is), and Chrome Web Store themes.
-The menu's Settings has the picker. The theme system
+The homepage's Customize palette opens the picker directly; the new Settings
+button beside it opens the same dropdown as the browser's hamburger, whose
+Themes submenu selects a theme and whose Settings opens the full picker.
+The theme system
 is the demo's, not the library's: `pm/theme.js` and the tokens in
 `pm/main.css`, with `globalThis.PMTheme` as the interface the picker and the
 Web Store install use.

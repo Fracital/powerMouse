@@ -82,6 +82,19 @@ WebTransport server (quic-go's) on the machine.
   a static `supportsReliableOnly` (false). There is still no `getStats` or
   `congestionControl`, and `allowPooling`, `requireUnreliable` and
   `congestionControl` are still not read.
+- Chrome 159 (Chrome for Testing 159.0.8154.6) reads `congestionControl` and then
+  `datagramsReadableType` after the two anticipated stream counts and before
+  `headers`. `congestionControl` accepts `default`, `throughput`, and
+  `low-latency`; `datagramsReadableType` accepts `bytes`. An invalid enum
+  value is refused during construction with a TypeError naming the option
+  and its WebIDL enum; an unset option is not an error. A session's datagram
+  readable is now a _default_ (non-byte) `ReadableStream` unless its
+  constructor requests `datagramsReadableType: 'bytes'`. Its
+  `createBidirectionalStream` and `createUnidirectionalStream` methods read
+  the `sendGroup` and `sendOrder` options, in that order. Stream sides now
+  inherit `WebTransportReceiveStream` and `WebTransportSendStream` (subclasses
+  of `ReadableStream` and `WritableStream`, with their own names and tags).
+  Earlier Chromium versions continue to receive their original behavior.
 - A server that cannot be reached (a closed port, a name that does not
   resolve, with a pinned certificate or without): `closed` rejects and then
   `ready`, in one task, with one `WebTransportError` whose message is
@@ -427,7 +440,7 @@ is told on the host's console instead. In the verbose mode
 `?transportdebug`) every session a proxied page makes ends in one `[wt]`
 line (src/transport/webTransportTrace.ts), once it is up or has failed:
 
-```
+```text
 [wt] #3 page session to https://example.net failed at udp (the Wisp UDP stream closed during the handshake: the relay closed it with 0x48 (destination blocked by the relay (or the relay relays no UDP))) after 41 ms: carrier +0 ms: the Wisp connection on WebTransport (QUIC datagrams) | udp +2 ms: Wisp UDP stream to example.net:443 open | quic +2 ms: handshake: 1 pinned certificate hashes, 0 protocols offered, 0 page headers | ... | page +41 ms: WebTransportError "Opening handshake failed." (source session, streamErrorCode null), ...
 ```
 

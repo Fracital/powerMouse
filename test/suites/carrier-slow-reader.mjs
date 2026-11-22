@@ -32,11 +32,26 @@ const { certPem, keyPem, caPem } = await startWebTransportServer();
 // HTTP/1.1 origins (no flow control but the client's reading): `/flow?n=`
 // streams `n` bytes of one random MiB as fast as the client takes them
 const chunk = Buffer.alloc(MB, 7);
-async function flowOrigin() {
+const flowReports = [];
+async function flowOrigin(label) {
 	const server = createHttpsServer(
 		{ cert: certPem, key: keyPem },
 		(req, res) => {
 			const n = Number(new URL(req.url, 'https://x').searchParams.get('n'));
+			const report = {
+				label,
+				expected: n,
+				queued: 0,
+				finished: false,
+				closedEarly: false,
+			};
+			flowReports.push(report);
+			res.once('finish', () => {
+				report.finished = true;
+			});
+			res.once('close', () => {
+				report.closedEarly = !res.writableFinished;
+			});
 			res.writeHead(200, {
 				'content-type': 'application/octet-stream',
 				'content-length': String(n),
@@ -47,6 +62,7 @@ async function flowOrigin() {
 				while (left > 0) {
 					const part = chunk.subarray(0, Math.min(left, chunk.length));
 					left -= part.length;
+					report.queued += part.length;
 					if (!res.write(part)) return void res.once('drain', more);
 				}
 				res.end();
@@ -59,8 +75,8 @@ async function flowOrigin() {
 	await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 	return `https://127.0.0.1:${server.address().port}`;
 }
-const slowOrigin = await flowOrigin();
-const fastOrigin = await flowOrigin();
+const slowOrigin = await flowOrigin('slow');
+const fastOrigin = await flowOrigin('fast');
 
 const echo = new WebSocketServer({ port: 0, host: '127.0.0.1' });
 echo.on('connection', (ws) =>
@@ -134,11 +150,15 @@ const slow = slowTab.evaluate(
 // let the slow tab fall behind first
 await new Promise((resolve) => setTimeout(resolve, 2000));
 
-const fast = await fastTab.evaluate(
+const fastEvaluation = fastTab.evaluate(
 	async ({ origin, bytes, chunk, ws }) => {
 		// an echo every 100 ms over a WebSocket of its own while it downloads
 		const echoes = [];
 		let echoError = null;
+		let pings = 0;
+		// the longest the page went between two pings (its timers run late
+		// on a busy machine)
+		let sendGap = 0;
 		let pinging = true;
 		const echoed = new Promise((resolve) => {
 			const sent = new Map();
@@ -148,14 +168,19 @@ const fast = await fastTab.evaluate(
 				[],
 				[],
 				async () => {
+					let last = performance.now();
 					while (pinging) {
 						const id = String(n++);
-						sent.set(id, performance.now());
+						const now = performance.now();
+						sendGap = Math.max(sendGap, now - last);
+						last = now;
+						sent.set(id, now);
 						send(id);
 						await new Promise((r) => setTimeout(r, 100));
 					}
 					// the last answers
 					await new Promise((r) => setTimeout(r, 1000));
+					pings = n;
 					close(1000, '');
 					resolve();
 				},
@@ -202,13 +227,26 @@ const fast = await fastTab.evaluate(
 			got,
 			ms: Math.round(ms),
 			gap: Math.round(gap),
+			pings,
 			echoes: echoes.length,
+			sendGap: Math.round(sendGap),
 			slowestEcho: Math.round(Math.max(0, ...echoes)),
 			echoError,
 		};
 	},
 	{ origin: fastOrigin, bytes: FAST_BYTES, chunk: FAST_CHUNK, ws: wsEcho },
 );
+const fast = await fastEvaluation.catch((error) => {
+	// A transport-side incomplete body is indistinguishable from the origin
+	// closing early without the origin's own finish/close state. Keep the
+	// request-by-request evidence when the browser evaluation throws.
+	console.error(
+		'Flow origins at transport failure:',
+		JSON.stringify(flowReports),
+	);
+	throw error;
+});
+
 const slowRead = await slow;
 
 ok(
@@ -216,10 +254,17 @@ ok(
 	fast.got === FAST_BYTES && fast.gap < GAP_MS,
 	JSON.stringify({ fast, slowRead }),
 );
+// every ping is answered, each within a second, and the pings went on all
+// along: never a second without one. Counted against the pings the page
+// sent, not against the download's time over 100 ms: a timer on a busy
+// machine fires late, and six of CI's failing runs had every echo back
+// within 0.6 s but 1 to 4 fewer echoes than that count asked for.
 ok(
 	"its WebSocket's echoes come back within a second all along",
 	!fast.echoError &&
-		fast.echoes >= Math.floor(fast.ms / 100) - 2 &&
+		fast.pings > 0 &&
+		fast.echoes === fast.pings &&
+		fast.sendGap < GAP_MS &&
 		fast.slowestEcho < GAP_MS,
 	JSON.stringify(fast),
 );

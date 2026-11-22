@@ -144,8 +144,13 @@ const ANTICIPATED = [
 	'anticipatedConcurrentIncomingBidirectionalStreams',
 	'anticipatedConcurrentIncomingUnidirectionalStreams',
 ];
-/** the members of the options older browsers do not read, in the order a browser reads them */
-const LATER_OPTIONS = [...ANTICIPATED, 'headers'];
+/** the optional dictionary members, in Chrome's order (159 adds two enums) */
+const LATER_OPTIONS = [
+	...ANTICIPATED,
+	'congestionControl',
+	'datagramsReadableType',
+	'headers',
+];
 
 const INCOMING_AGE = 1;
 const OUTGOING_AGE = 2;
@@ -404,11 +409,17 @@ export function standIn(
 	 */
 	const options = (
 		value: unknown,
-	): [string[], ArrayBuffer[], string[][], (number | null)[]] => {
+	): [string[], ArrayBuffer[], string[][], (number | null)[], boolean] => {
 		const context = "construct 'WebTransport'";
 		const values: ArrayBuffer[] = [];
 		if (value === undefined || value === null)
-			return [[], values, [], [null, null]];
+			return [
+				[],
+				values,
+				[],
+				[null, null],
+				!readsOption('datagramsReadableType'),
+			];
 		if (!isObject(value))
 			throw failed(context, notOfType('WebTransportOptions'));
 		const given = value as Record<string, unknown>;
@@ -416,6 +427,29 @@ export function standIn(
 			reading(context, name, 'WebTransportOptions');
 		const counts = ANTICIPATED.map((name) =>
 			readsOption(name) ? unsignedShort(given[name], from(name)) : null,
+		);
+		/** WebIDL enum strings, read before headers on Chrome 159. */
+		const enumOption = (name: string, type: string, allowed: string[]) => {
+			if (!readsOption(name)) return undefined;
+			const value = given[name];
+			if (value === undefined) return undefined;
+			const text = primitive(value, from(name)) as string;
+			if (!allowed.includes(text))
+				throw failed(
+					from(name),
+					`The provided value '${text}' is not a valid enum value of type ${type}.`,
+				);
+			return text;
+		};
+		enumOption('congestionControl', 'WebTransportCongestionControl', [
+			'default',
+			'throughput',
+			'low-latency',
+		]);
+		const readableType = enumOption(
+			'datagramsReadableType',
+			'ReadableStreamType',
+			['bytes'],
 		);
 		const headers = readsOption('headers')
 			? headerList(given.headers, from('headers'))
@@ -453,7 +487,13 @@ export function standIn(
 				if (name === 'sha-256' && bytes !== undefined)
 					values.push(copy(bytes as ArrayBuffer).buffer);
 			});
-		return [names, values, headers, counts];
+		return [
+			names,
+			values,
+			headers,
+			counts,
+			!readsOption('datagramsReadableType') || readableType === 'bytes',
+		];
 	};
 
 	/** the page's headers as Chrome sends them, or Chrome's refusal of them */
@@ -538,7 +578,7 @@ export function standIn(
 					)
 				: part === 0
 					? new realm.ReadableStream({
-							type: 'bytes',
+							...(session.datagramBytes ? { type: 'bytes' } : {}),
 							start,
 							pull: () =>
 								session.live?.pull() ??
@@ -551,7 +591,9 @@ export function standIn(
 		const input = (
 			primitive(args[0], "construct 'WebTransport'") as string
 		).toWellFormed();
-		const [protocols, hashes, given, anticipated] = options(args[1]);
+		const [protocols, hashes, given, anticipated, datagramBytes] = options(
+			args[1],
+		);
 		// (no base: a relative URL is none)
 		let url: URL;
 		try {
@@ -612,6 +654,7 @@ export function standIn(
 			headers,
 			hashes,
 			anticipated,
+			datagramBytes,
 		};
 		const made = Reflect.construct(Object, [], newTarget) as object;
 		sessions.set(made, session);
@@ -652,6 +695,18 @@ export function standIn(
 		return new Promise((resolve, refuse) => {
 			if (given !== undefined && given !== null && !isObject(given))
 				throw failed(context, notOfType('WebTransportSendStreamOptions'));
+			// Chrome 159 reads the send-group and send-order options, in that
+			// order, even when a connection is still opening. Earlier versions
+			// do not touch them. Preserve observable getters and their errors.
+			if (
+				readsOption('datagramsReadableType') &&
+				given !== undefined &&
+				given !== null
+			) {
+				const options = given as Record<string, unknown>;
+				void options.sendGroup;
+				void options.sendOrder;
+			}
 			const uni = name === 'createUnidirectionalStream';
 			if (session.live && !session.over) return resolve(session.live.open(uni));
 			if (!modern)

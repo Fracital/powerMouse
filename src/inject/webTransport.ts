@@ -137,7 +137,7 @@ export async function carry(ctx: Context, session: Session): Promise<boolean> {
 
 	const readable = (id: number) => {
 		const state = streams.get(id)!;
-		return new realm.ReadableStream({
+		const stream = new realm.ReadableStream({
 			type: 'bytes',
 			start: (controller: Controller) => {
 				state.readable = controller;
@@ -150,6 +150,12 @@ export async function carry(ctx: Context, session: Session): Promise<boolean> {
 				send({ t: 's', id, code: codeOf(reason) });
 			},
 		}) as ReadableStream;
+		// Chrome 159 introduces WebTransportReceiveStream as a subclass of
+		// ReadableStream. Keep this stream's native byte-readable internals,
+		// but expose the interface's actual prototype and toStringTag.
+		const Receive = realm.WebTransportReceiveStream;
+		if (Receive?.prototype) Reflect.setPrototypeOf(stream, Receive.prototype);
+		return stream;
 	};
 	const writable = (id: number) => {
 		const state = streams.get(id)!;
@@ -159,7 +165,7 @@ export async function carry(ctx: Context, session: Session): Promise<boolean> {
 				state.taken = [resolve, reject];
 				send(message, buffer);
 			});
-		return new realm.WritableStream(
+		const stream = new realm.WritableStream(
 			{
 				start: (controller: { error(reason: unknown): void }) => {
 					state.writable = controller;
@@ -185,6 +191,11 @@ export async function carry(ctx: Context, session: Session): Promise<boolean> {
 			},
 			{ highWaterMark: 1 },
 		) as WritableStream;
+		// Same for Chrome 159's WebTransportSendStream subclass. Reads and
+		// writes remain the stream's real WritableStream operations.
+		const Send = realm.WebTransportSendStream;
+		if (Send?.prototype) Reflect.setPrototypeOf(stream, Send.prototype);
+		return stream;
 	};
 	/** the page's object for a stream: a WebTransportBidirectionalStream, or the one side a unidirectional one has */
 	const pageStream = (id: number, uni: boolean, incoming: boolean) => {
