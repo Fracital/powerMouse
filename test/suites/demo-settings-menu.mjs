@@ -110,6 +110,21 @@ for (const [mode, base, width, height] of [
 			menu.menuRect.bottom <= height,
 		JSON.stringify(menu),
 	);
+	// the entry's > is drawn, not an empty icon (submenuArrow was defined
+	// after the Proxy entry was built, which left its <svg> empty)
+	const arrow = await page.evaluate(() => {
+		const icon = document.querySelector('#menuProxy .pmSubmenuArrow');
+		const box = icon?.getBoundingClientRect();
+		return {
+			paths: icon?.querySelectorAll('path').length ?? 0,
+			width: box?.width ?? 0,
+		};
+	});
+	ok(
+		`${mode}: the Proxy entry shows its submenu arrow`,
+		arrow.paths > 0 && arrow.width > 0,
+		JSON.stringify(arrow),
+	);
 
 	await page.click('#menuProxy');
 	menu = await readMenu(page);

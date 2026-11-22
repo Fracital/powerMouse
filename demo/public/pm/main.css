@@ -1098,8 +1098,11 @@ body {
 .listing {
 	/* Powermouse's calc(100vh - 155px) minus the navigation bar. No minimum:
 	   the home screen must never need a scrollbar; short viewports shrink
-	   the tiles instead (below). */
+	   the tiles instead (below). dvh, where there is one: a phone's 100vh is
+	   its height with the address bar hidden, which put the footer's
+	   version line under the screen's bottom edge while the bar shows. */
 	height: calc(100vh - 203px);
+	height: calc(100dvh - 203px);
 }
 
 #landing.wrapper {
@@ -1220,6 +1223,7 @@ body:not(.recents) .frames > .frame.hidden {
 	}
 	.listing {
 		height: calc(100vh - 203px - env(titlebar-area-height, 0px));
+		height: calc(100dvh - 203px - env(titlebar-area-height, 0px));
 	}
 }
 
@@ -2490,6 +2494,7 @@ input:focus-visible {
 	.listing {
 		/* the title bar is shorter with the title on a line of its own */
 		height: calc(100vh - 197px);
+		height: calc(100dvh - 197px);
 	}
 	.commits {
 		top: 256px;

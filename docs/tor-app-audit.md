@@ -41,5 +41,8 @@ status acceptance. Live Tor bootstrap, Snowflake broker behavior and complete
 connection recovery were not validated. These findings concern the supplied
 archive; no changes were made to it.
 
-STomp's demo Tor mode uses its existing Wisp transports and a separate
-Tor-backed relay, so these defects do not enter the proxy or its inject bundle.
+STomp's demo Tor mode does not use this client. It runs its own in-browser
+Tor client (arti compiled to wasm, tor-js) in the transport worker, carried to
+Tor relays over the demo's ordinary Wisp endpoint, with no server-side Tor
+relay (docs/tor.md and docs/tor-over-wisp.md). None of the code above enters
+the proxy, its transport worker or its inject bundle.

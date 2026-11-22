@@ -7584,9 +7584,13 @@ function syncFullscreenItem() {
 }
 menuSettings.innerHTML = `${shieldIcon('gear')}<span>Settings</span>`;
 menuAbout.innerHTML = `${shieldIcon('info')}<span>About</span>`;
+// submenuArrow is drawn by submenuItem() at once, so it is defined before the
+// first submenu entry (Proxy, just below) rather than with the extension icons
 Object.assign(SHIELD_ICONS, {
 	proxy:
 		'<path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M4 8h15m-4-4 4 4-4 4M20 16H5m4-4-4 4 4 4"/>',
+	submenuArrow:
+		'<path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="m10 7 5 5-5 5"/>',
 });
 menuProxy.innerHTML = `${shieldIcon('proxy')}<span>Proxy</span>`;
 submenuItem(menuProxy, () => [$('proxySettings')]);
@@ -8227,8 +8231,6 @@ Object.assign(SHIELD_ICONS, {
 	pin: '<path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" d="M9 4h6l-1 6 3 3v1H7v-1l3-3zM12 14v6"/>',
 	pinned:
 		'<path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" d="M9 4h6l-1 6 3 3v1H7v-1l3-3zM12 14v6"/><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" d="M5 4l14 16"/>',
-	submenuArrow:
-		'<path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="m10 7 5 5-5 5"/>',
 	close:
 		'<path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" d="m7 7 10 10M17 7 7 17"/>',
 	palette:
