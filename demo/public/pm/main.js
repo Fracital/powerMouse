@@ -55,6 +55,14 @@ const adblockToggle = $('adblock');
 const torToggle = $('tor');
 const omni = $('omni');
 const mainForm = $('mainForm');
+// The home screen puts the caret in its address box, as Chrome's new tab
+// page does on a desktop. A touch screen's browser does not: focusing a text
+// box there opens the on-screen keyboard over the page, so on one (no hover,
+// a coarse pointer) Home, the tab manager closing and a new tab leave it be.
+const TOUCH_ONLY = matchMedia('(hover: none) and (pointer: coarse)');
+function focusHomeAddress() {
+	if (!TOUCH_ONLY.matches) mainForm.url.focus();
+}
 
 // Escape is Chrome's Stop (IDC_STOP) where nothing of the browser's takes
 // it: the focus in the page (whose key it is first: one the page prevented
@@ -2183,7 +2191,7 @@ function showLanding() {
 	// home names no page: the address keeps only the page's own flags
 	addressWrites++;
 	history.replaceState(hostState(), '', addressFor(''));
-	mainForm.url.focus();
+	focusHomeAddress();
 }
 
 // The recents screen never moves the iframes (that would reload them). It
@@ -2580,7 +2588,7 @@ function teardownRecents() {
 		tab.element.classList.remove('shade', 'dragging', 'gone');
 	}
 	if (recentsReturn === 'landing' && browser.classList.contains('hidden'))
-		mainForm.url.focus();
+		focusHomeAddress();
 }
 
 /**
@@ -8161,7 +8169,7 @@ function launchApp(href) {
 		return landing.classList.contains('hidden') ||
 			document.body.classList.contains('recents')
 			? showLanding()
-			: mainForm.url.focus();
+			: focusHomeAddress();
 	if (asked === 'settings') return openShieldsPage('settings');
 	if (asked === 'extensions')
 		return booted.then(
@@ -9698,7 +9706,7 @@ booted
 			!browser.classList.contains('hidden')
 		)
 			showLanding(); // the fragment named no page it can open
-		else if (browser.classList.contains('hidden')) mainForm.url.focus();
+		else if (browser.classList.contains('hidden')) focusHomeAddress();
 		if (opening && !restore) {
 			// the address index.html put in the bar was of a page it cannot open
 			forgetBarText({ key: openedAt });

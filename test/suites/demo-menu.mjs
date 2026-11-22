@@ -686,6 +686,53 @@ for (const [width, height] of [
 	await phone.close();
 }
 
+// ---- a touch screen: Home and the tab manager leave the keyboard down ----------
+// The home screen focuses its address box on a desktop (Chrome's new tab page
+// does); on a touch screen that opened the on-screen keyboard every time Home
+// was pressed or the tab manager closed onto the home screen
+{
+	const touch = await browsing({ width: 390, height: 844 }, async (page) => {
+		const cdp = await page.context().newCDPSession(page);
+		await cdp.send('Emulation.setTouchEmulationEnabled', {
+			enabled: true,
+			maxTouchPoints: 5,
+		});
+	});
+	const focusOf = () =>
+		touch.evaluate(() => ({
+			coarse: matchMedia('(hover: none) and (pointer: coarse)').matches,
+			home: !document.getElementById('landing').classList.contains('hidden'),
+			recents: document.body.classList.contains('recents'),
+			address:
+				document.activeElement === document.getElementById('mainForm').url,
+		}));
+	await touch.click('#home');
+	await sleep(800);
+	const afterHome = await focusOf();
+	ok(
+		'touch screen: Home shows the home screen without focusing its address box',
+		afterHome.coarse && afterHome.home && !afterHome.address,
+		JSON.stringify(afterHome),
+	);
+	await touch.click('#recents');
+	await sleep(800);
+	const opened = await focusOf();
+	await touch.click('#recents');
+	await sleep(800);
+	const closed = await focusOf();
+	ok(
+		'touch screen: the tab manager opens and closes onto the home screen without focusing its address box',
+		opened.recents &&
+			!opened.address &&
+			!closed.recents &&
+			closed.home &&
+			!closed.address,
+		JSON.stringify({ opened, closed }),
+	);
+	errors.push(...touch.errors);
+	await touch.close();
+}
+
 // ---- Block ads off: shields down everywhere --------------------------------------
 // the demo's Block ads switch off takes the shields down on every site: the
 // button reads down, the panel says why and its master switch is off and
