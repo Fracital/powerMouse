@@ -132,6 +132,7 @@
 	"demo-themes": 30,
 	"demo-token": 7,
 	"demo-tor": 16,
+	"demo-tor-fail-closed": 80,
 	"demo-vibeos": 1,
 	"deploy-handover": 12,
 	"device-reads": 7,

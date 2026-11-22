@@ -3888,7 +3888,9 @@ function torStatusText(status = torStatus) {
 		case 'off':
 			return TOR_UNAVAILABLE;
 		case 'bootstrapping':
-			return `Tor is connecting${status.progress != null ? ` (${status.progress}%)` : ''}${status.summary ? `: ${status.summary}` : ''}`;
+			// what holds it up, where the client knows (docs/tor-over-wisp.md
+			// "Bootstrap progress and failures")
+			return `Tor is connecting${status.progress != null ? ` (${status.progress}%)` : ''}${status.summary ? `: ${status.summary}` : ''}${status.blocked?.message ? `. Blocked: ${status.blocked.message}` : ''}`;
 		case 'ready':
 			return 'Tor connected';
 		case 'failed':
@@ -4032,6 +4034,8 @@ if (TOR_REQUESTED) showTorStatus();
 torToggle.addEventListener('change', () => {
 	try {
 		localStorage.setItem(TOR_KEY, torToggle.checked ? '1' : '0');
+		// (this tab's own Tor mode goes only by its own toggle: pm/profile.js)
+		if (!torToggle.checked) sessionStorage.removeItem(PMProfile.TAB_KEY);
 	} catch {}
 	const url = new URL(location.href);
 	url.searchParams.delete('tor');
@@ -7624,9 +7628,14 @@ if (torClientChannel) {
 		torStatus =
 			data.state === 'ready'
 				? { state: 'ready' }
-				: { state: data.state, progress: data.progress, summary: data.summary };
+				: {
+						state: data.state,
+						progress: data.progress,
+						summary: data.summary,
+						blocked: data.blocked,
+					};
 		window.__pmTorClient = data;
-		const key = `${torStatus.state} ${torStatus.progress}`;
+		const key = `${torStatus.state} ${torStatus.progress} ${torStatus.summary} ${torStatus.blocked?.message}`;
 		if (key === last) return;
 		last = key;
 		badge(

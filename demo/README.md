@@ -86,7 +86,11 @@ network. The client is tor-js built from source with a stream API
 `github:Fracital/tor-js`, so Tor mode runs epoxy on Tor streams:
 connections kept per site, HTTP/2 and WebSockets. The suites run with `STOMP_TOR_CLIENT=stand-in`, which answers Tor
 mode with epoxy over `/wisp/` (`demo/public/test/tor-stand-in.mjs`), since
-they reach no Tor network.
+they reach no Tor network; `STOMP_TOR_CLIENT=stand-in-arti` runs Tor mode's
+own client with `test/offline-tor-stand-in.mjs` in tor-js's place, which
+the demo-tor-fail-closed suite breaks on purpose. The tooltip and the
+status line say what blocks bootstrap or why it failed, and a tab in Tor
+mode stays in it across its reloads even when another tab turned Tor off.
 
 There is no server-side Tor relay any more: `STOMP_TOR_SOCKS5`,
 `STOMP_TOR_WISP_URL`, `STOMP_TOR_CONTROL` and the other `STOMP_TOR_*`

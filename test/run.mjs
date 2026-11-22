@@ -102,6 +102,9 @@ const SUITE_ENV = {
 	'offline-html': { WISP_LOG: '1', STOMP_TOR_CLIENT: 'stand-in' },
 	// Tor mode's transport, answered with epoxy (demo/public/test/tor-stand-in.mjs)
 	'demo-tor': { STOMP_TOR_CLIENT: 'stand-in' },
+	// Tor mode's own client with tor-js replaced by a stand-in the suite
+	// breaks on purpose (test/offline-tor-stand-in.mjs)
+	'demo-tor-fail-closed': { STOMP_TOR_CLIENT: 'stand-in-arti' },
 	'demo-settings-menu': { STOMP_TOR_CLIENT: 'stand-in' },
 	// epoxy plus the fixture hosts of test/mixed-servers.mjs
 	'mixed-content': { STOMP_TEST_TRANSPORT: '1' },

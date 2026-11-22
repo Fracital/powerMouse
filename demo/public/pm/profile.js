@@ -11,16 +11,31 @@
 // interface (pm/theme.js, pm/main.js, pm/extensions-page.js).
 (() => {
 	const TOR_KEY = 'stomp-demo:tor';
+	// A browser tab in Tor mode stays in it across its reloads, whatever
+	// another tab chose since: only its own toggle (or ?notor) takes it out,
+	// as a Brave Tor window stays one. The saved choice is shared by every
+	// tab of the origin, and turning Tor off in one tab must not bring
+	// another back up outside Tor when it is reloaded. Turning it on in one
+	// still reaches the others at their next load.
+	const TAB_KEY = 'stomp-demo:tab-tor';
 	const query = new URLSearchParams(location.search);
 	let saved = false;
 	try {
 		saved = localStorage.getItem(TOR_KEY) === '1';
 	} catch {}
+	let tabWasTor = false;
+	try {
+		tabWasTor = sessionStorage.getItem(TAB_KEY) === '1';
+	} catch {}
 	const tor = query.has('tor')
 		? query.get('tor') !== '0'
 		: query.has('notor')
 			? false
-			: saved;
+			: saved || tabWasTor;
+	try {
+		if (tor) sessionStorage.setItem(TAB_KEY, '1');
+		else sessionStorage.removeItem(TAB_KEY);
+	} catch {}
 	const id = tor ? 'tor' : '';
 	// the mark every store name of a profile ends with (src/profile.ts)
 	const named = (key) => (id ? `${key}|${id}` : key);
@@ -108,5 +123,7 @@
 		/** a name of the demo's own store (an IndexedDB database) in the profile */
 		storeName: named,
 		TOR_KEY,
+		/** this browser tab's own Tor mode, which outlives another tab's choice */
+		TAB_KEY,
 	});
 })();

@@ -38,10 +38,14 @@ function packet(type, id, payload) {
 /**
  * One Wisp connection; `open("ip:port")` is a TCP stream over it. Only
  * addresses arti hands it are ever opened, never a hostname, so the Wisp
- * server resolves nothing for Tor mode.
+ * server resolves nothing for Tor mode. `links` hears how each link to a
+ * relay went: `reached()` at its first bytes, `failed(code)` when it closed
+ * before any (`code` the Wisp close reason, undefined when the WebSocket to
+ * the Wisp server did not open).
  */
 class WispConnection {
 	#url;
+	#links;
 	#socket = null;
 	#opening = null;
 	#streams = new Map();
@@ -49,8 +53,9 @@ class WispConnection {
 	#initialCredit = 0;
 	#creditReady = null;
 
-	constructor(url) {
+	constructor(url, links = {}) {
 		this.#url = url;
+		this.#links = links;
 	}
 
 	#connect() {
@@ -93,7 +98,10 @@ class WispConnection {
 				else if (type === CONTINUE) stream.credit(view.getUint32(5, true));
 				else if (type === CLOSE) {
 					this.#streams.delete(id);
-					stream.closed(`Wisp close reason 0x${payload[0]?.toString(16)}`);
+					stream.closed(
+						`Wisp close reason 0x${payload[0]?.toString(16)}`,
+						payload[0],
+					);
 				}
 			};
 		});
@@ -104,16 +112,24 @@ class WispConnection {
 		const match = /^\[?([^\]]+)\]?:(\d+)$/.exec(target);
 		if (!match) throw new Error(`not an address: ${target}`);
 		const [, host, port] = match;
-		const socket = await this.#connect();
+		let socket;
+		try {
+			socket = await this.#connect();
+		} catch (error) {
+			this.#links.failed?.(undefined);
+			throw error;
+		}
 		await this.#creditReady;
 		const id = this.#nextId++;
 		let controller;
 		let credit = this.#initialCredit;
 		let waiting = null;
 		let finished = false;
+		// bytes the relay sent: a link closed before any is a relay not reached
+		let received = 0;
 		let settle;
 		const closed = new Promise((resolve) => (settle = resolve));
-		const finish = (ok, reason) => {
+		const finish = (ok, reason, code) => {
 			if (finished) return;
 			finished = true;
 			try {
@@ -123,10 +139,13 @@ class WispConnection {
 				// its reader cancelled it already
 			}
 			waiting?.();
-			settle(ok ? { ok } : { ok, reason });
+			settle(ok ? { ok, received } : { ok, reason, code, received });
+			if (!ok && !received) this.#links.failed?.(code);
 		};
 		const stream = {
 			data: (bytes) => {
+				if (!received) this.#links.reached?.();
+				received += bytes.byteLength;
 				if (!finished) controller.enqueue(new Uint8Array(bytes));
 			},
 			credit: (value) => {
@@ -134,7 +153,7 @@ class WispConnection {
 				waiting?.();
 				waiting = null;
 			},
-			closed: (reason) => finish(false, reason),
+			closed: (reason, code) => finish(false, reason, code),
 		};
 		this.#streams.set(id, stream);
 		const name = new TextEncoder().encode(host);
@@ -240,6 +259,35 @@ const PHASES = [
 	[/Bootstrap complete/, 90, 'Establishing a Tor circuit'],
 ];
 
+/** the phase a bootstrap event's progress is in (bootstrapEvents) */
+function phaseAt(progress) {
+	let summary = 'Connecting to a relay';
+	for (const [, at, name] of PHASES) if (progress >= at) summary = name;
+	return summary;
+}
+
+// What a link to a relay ended with, as the Wisp server said it (its close
+// reasons, wisp-protocol): the blocker the page shows
+const WISP_REASONS = new Map([
+	[0x03, 'a network error'],
+	[0x41, 'an invalid address'],
+	[0x42, 'an unreachable host'],
+	[0x43, 'a connection timeout'],
+	[0x44, 'a refused connection'],
+	[0x47, 'a stalled connection'],
+	[0x49, 'throttling'],
+]);
+// links that failed, with none reached, before bootstrap is said to be blocked
+const BLOCKED_AFTER = 2;
+// arti's BlockageKind (arti-client status.rs), as bootstrapEvents names them
+const BLOCKAGE_KINDS = new Set([
+	'offline',
+	'filtering',
+	'cant-reach-tor',
+	'clock-skewed',
+	'cant-bootstrap',
+]);
+
 let wasmChosen = false;
 /**
  * Where arti's wasm comes from, when not from beside tor-js's module
@@ -270,13 +318,22 @@ export class TorService {
 	// where the Wisp streams may go: the fallback directories arti has
 	// compiled in, and the relays of the newest consensus it kept
 	#relays = new Set(FALLBACK_ADDRESSES);
-	/** what bootstrap took and what it is doing, for the page and the smoke */
+	/**
+	 * What bootstrap took and what it is doing, for the page and the smoke:
+	 * `blocked` ({ kind, message }) says why it cannot go on, arti's own
+	 * reason where tor-js tells it (bootstrapEvents), else what this client
+	 * saw of its links to relays
+	 */
 	status = {
 		state: 'starting',
 		progress: 0,
 		summary: 'Starting',
 		instance: instanceId(),
 	};
+	/** links to relays in this bootstrap: reached, failed, and the last failure's reason */
+	#links = { reached: 0, failed: 0, code: undefined };
+	#linkBlocked = null;
+	#artiBlocked = null;
 
 	/**
 	 * `say(level, text)`: the client's own console lines (its bootstrap, a
@@ -296,7 +353,10 @@ export class TorService {
 				'this tor-js has no stream API (TorClient.connect): Tor mode needs the Fracital build (deploy/tor-js)',
 			);
 		useWasm(wasm);
-		this.#wisp = new WispConnection(wisp);
+		this.#wisp = new WispConnection(wisp, {
+			reached: () => this.#linkReached(),
+			failed: (code) => this.#linkFailed(code),
+		});
 		this.#storageName = storageName;
 		this.#say = say;
 	}
@@ -310,9 +370,100 @@ export class TorService {
 	#phase(state, progress, summary, extra = {}) {
 		if (state === 'bootstrapping' && progress <= (this.status.progress ?? 0))
 			return;
+		this.#tell({ state, progress, summary, ...extra });
+	}
+
+	#tell({ state, progress, summary, ...extra }) {
 		const { instance, refused } = this.status;
-		this.status = { state, progress, summary, instance, refused, ...extra };
+		const blocked = state === 'ready' ? null : this.#blocked();
+		this.status = {
+			state,
+			progress,
+			summary,
+			instance,
+			refused,
+			...(blocked && { blocked }),
+			...extra,
+		};
 		for (const listener of this.#listeners) listener(this.status);
+	}
+
+	#blocked() {
+		return this.#artiBlocked ?? this.#linkBlocked;
+	}
+
+	/** the status again, for a blocker that came or went */
+	#retell() {
+		if (this.status.state !== 'bootstrapping') return;
+		const before = this.status.blocked?.message;
+		if (before === this.#blocked()?.message) return;
+		const { progress, summary } = this.status;
+		this.#tell({ state: 'bootstrapping', progress, summary });
+	}
+
+	#linkReached() {
+		this.#links.reached++;
+		if (!this.#linkBlocked) return;
+		this.#linkBlocked = null;
+		this.#retell();
+	}
+
+	/**
+	 * A link to a relay that never answered (`code` its Wisp close reason,
+	 * undefined when the Wisp server itself could not be reached): with
+	 * none reached, a few say what blocks bootstrap, rather than a phase
+	 * that never moves or arti's generic error at the end
+	 */
+	#linkFailed(code) {
+		if (this.status.state === 'ready') return;
+		const links = this.#links;
+		links.failed++;
+		links.code = code;
+		if (links.reached) return;
+		if (code === undefined)
+			this.#linkBlocked = {
+				kind: 'offline',
+				message: 'Cannot reach the Wisp server',
+			};
+		else if (code === 0x48)
+			this.#linkBlocked = {
+				kind: 'filtering',
+				message: 'The Wisp server refuses links to Tor relays',
+			};
+		else if (links.failed >= BLOCKED_AFTER)
+			this.#linkBlocked = {
+				kind: 'cant-reach-tor',
+				message: `No Tor relay answered through the Wisp server (${links.failed} links ended with ${WISP_REASONS.get(code) ?? `close reason 0x${code.toString(16)}`})`,
+			};
+		else return;
+		this.#retell();
+	}
+
+	/**
+	 * One of arti's bootstrap events, where tor-js tells them
+	 * (`client.bootstrapEvents(listener)`, arti's bootstrap_events():
+	 * `{ fraction, ready, blocked }`, `blocked` null or `{ kind, message }`
+	 * with arti's BlockageKind). Its progress replaces what the log says.
+	 */
+	#bootstrapEvent(event) {
+		if (!event || typeof event !== 'object') return;
+		const fraction = Number(event.fraction);
+		const blocked = event.blocked;
+		this.#artiBlocked =
+			blocked && typeof blocked === 'object'
+				? {
+						kind: BLOCKAGE_KINDS.has(blocked.kind) ? blocked.kind : 'other',
+						message: String(blocked.message ?? blocked.kind).slice(0, 200),
+					}
+				: null;
+		if (Number.isFinite(fraction) && !event.ready) {
+			const progress = Math.max(5, Math.min(99, Math.round(fraction * 100)));
+			if (progress > (this.status.progress ?? 0)) {
+				this.#phase('bootstrapping', progress, phaseAt(progress));
+				return;
+			}
+		}
+		this.#retell();
 	}
 
 	#log(...args) {
@@ -347,7 +498,13 @@ export class TorService {
 		// a consensus kept since the last look
 		if (this.#storage) await this.#readConsensus();
 		if (this.#relays.has(address)) return;
-		this.status.refused = (this.status.refused ?? 0) + 1;
+		this.status = {
+			...this.status,
+			refused: (this.status.refused ?? 0) + 1,
+		};
+		// the page hears of it: a refusal is arti asking for what Tor mode
+		// never sends past Tor
+		for (const listener of this.#listeners) listener(this.status);
 		this.#say('warn', `[tor] refused a link to ${target}: not a Tor relay`);
 		throw new Error(`${target} is not a Tor relay this client knows`);
 	}
@@ -379,8 +536,11 @@ export class TorService {
 			},
 		};
 		await this.#readConsensus();
+		this.#links = { reached: 0, failed: 0, code: undefined };
+		this.#linkBlocked = null;
+		this.#artiBlocked = null;
 		this.#phase('bootstrapping', 5, 'Connecting to a relay');
-		this.#client = new TorClient({
+		const client = new TorClient({
 			socketProvider: {
 				connect: async (target) => {
 					await this.admit(target);
@@ -395,13 +555,34 @@ export class TorService {
 			log: new Log({ rawLog: (_level, ...args) => this.#log(...args) }),
 			logLevel: 'info',
 		});
+		this.#client = client;
+		// arti's own progress and blocker, where this tor-js tells them
+		const events =
+			typeof client.bootstrapEvents === 'function'
+				? client.bootstrapEvents((event) => this.#bootstrapEvent(event))
+				: null;
 		try {
-			await this.#client.ready();
+			await client.ready();
 		} catch (error) {
-			this.#phase('failed', 0, String(error?.message ?? error));
+			// the blocker, where one is known, says more than arti's error
+			const blocked = this.#blocked();
+			this.#phase(
+				'failed',
+				0,
+				blocked?.message ?? String(error?.message ?? error),
+				{ error: String(error?.message ?? error) },
+			);
 			this.#starting = null;
 			this.#client = null;
+			// nothing of a failed client is used again (a retry makes another)
+			try {
+				client.close();
+			} catch {
+				// closed already
+			}
 			throw error;
+		} finally {
+			if (typeof events === 'function') events();
 		}
 		const bootstrapMs = Math.round(performance.now() - started);
 		this.#phase('ready', 100, 'Done', { bootstrapMs });

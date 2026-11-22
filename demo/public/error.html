@@ -117,10 +117,20 @@
 					const progress =
 						status.progress != null ? ` (${status.progress}%)` : '';
 					const why = `Tor is still connecting${progress}${status.summary ? `: ${status.summary}` : ''}.`;
+					const blocked = status.blocked?.message
+						? ` Blocked: ${status.blocked.message}.`
+						: '';
 					document.title = document.getElementById('title').textContent =
 						'Tor is connecting';
 					document.getElementById('detail').textContent =
-						`${why} This page loads again by itself once Tor is ready.`;
+						`${why}${blocked} This page loads again by itself once Tor is ready.`;
+				};
+				// the client gave up: why, and that nothing went past Tor
+				const failed = (status) => {
+					document.title = document.getElementById('title').textContent =
+						'Tor could not connect';
+					document.getElementById('detail').textContent =
+						`${status.summary || 'The Tor client failed'}. Nothing was sent outside Tor; Retry starts Tor again.`;
 				};
 				let waited = false;
 				const ask = async () => {
@@ -133,7 +143,8 @@
 					if (ready && !waited) return;
 					if (ready) return reload();
 					// no client to hear from, or one that gave up: nothing to wait for
-					if (!client || client.state === 'failed') return;
+					if (!client) return;
+					if (client.state === 'failed') return failed(client);
 					waited = true;
 					tell(client);
 					// at most every 2 s, and only while the page is shown

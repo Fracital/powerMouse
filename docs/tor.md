@@ -58,8 +58,19 @@ protects and what it does not, and how its profile is kept apart.
 - **Progress.** The Tor toggle's tooltip under **Settings > Proxy** (also
   in the browser hamburger's Proxy submenu) and the status line show the
   client's bootstrap in Tor Browser's phases (the toggle has no badge, like
-  the others), and a load that failed while it connected loads
-  again by itself once it is ready. `GET /api/tor` says only whether the
+  the others), what blocks it where the client can tell (the Wisp server
+  cannot be reached, it refuses links to relays, no relay answers, or
+  arti's own reason once tor-js reports it: docs/tor-over-wisp.md
+  "Bootstrap progress and failures"), and a load that failed while it
+  connected loads again by itself once it is ready. A load that failed
+  because the client gave up says why.
+- **It fails closed.** Tor mode's pages have no transport but the Tor
+  client's: while it bootstraps a request waits, when bootstrap fails or no
+  circuit builds the request fails, and a link the client asks for to
+  anything but a relay is refused. Nothing falls back to a direct
+  connection, in any tab or after a reload. A browser tab in Tor mode stays
+  in it across its reloads even when another tab turned Tor off since; only
+  its own toggle takes it out. `GET /api/tor` says only whether the
   server offers the client (`client`, or `off` with `STOMP_TOR_CLIENT=0`).
 
 ## Profiles
@@ -169,5 +180,17 @@ tor does.
   it is turned off or its last tab closes, its history was never kept, the
   normal profile's data outlives it, and a new session gets a new worker;
   and a deployment without Tor refuses Tor mode rather than browse directly.
+- The `demo-tor-fail-closed` suite: Tor mode's own client code (transport,
+  SharedWorker, service, its Wisp links and relay check) with tor-js
+  replaced by a stand-in the suite breaks on purpose
+  (`STOMP_TOR_CLIENT=stand-in-arti`, test/offline-tor-stand-in.mjs). With
+  bootstrap that never ends (in one tab, a second tab and after a reload),
+  bootstrap that fails at the Wisp server, no circuit building (two tabs)
+  and a client that dials the site itself, the fixture page asked for is
+  never reached; the page says why bootstrap failed or is blocked, a
+  failure is followed by a working retry, a Tor tab stays in Tor mode when
+  another turns it off, and a Tor tab's reload keeps its session's site
+  data while the normal tab beside it never sees it. It reaches no Tor
+  network.
 - `node test/tor-client-smoke.mjs`: the real client against the real Tor
   network (docs/tor-over-wisp.md, "Prototype").

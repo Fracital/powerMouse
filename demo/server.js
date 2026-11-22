@@ -37,7 +37,11 @@
 //                       STOMP_TOR_* settings) is gone: they are ignored.
 //                       `stand-in` (test runs only, test/run.mjs) answers
 //                       Tor mode with /test/tor-stand-in.mjs, epoxy over
-//                       /wisp/, which reaches the suites' fixture
+//                       /wisp/, which reaches the suites' fixture;
+//                       `stand-in-arti` (test runs only) runs Tor mode's own
+//                       client with test/offline-tor-stand-in.mjs in tor-js's
+//                       place, whose "Tor streams" reach the fixture and
+//                       which a suite can break on purpose
 //   STOMP_PROXY_ORIGIN  origin that serves the proxy for isolation mode; empty
 //                       or unset runs the same-origin controller (README,
 //                       "Origin isolation")
@@ -293,6 +297,7 @@ Set STOMP_WISP_URL to use an external wisp server instead.`);
 // mode off. The server-side relay a deployer could configure is gone, and
 // its settings are ignored, with a line saying so.
 const torClient = process.env.STOMP_TOR_CLIENT !== '0';
+const torArtiStandIn = process.env.STOMP_TOR_CLIENT === 'stand-in-arti';
 const relaySettings = Object.keys(process.env).filter(
 	(name) =>
 		name.startsWith('STOMP_TOR_') &&
@@ -421,6 +426,11 @@ const pageConfig = {
 	// the in-browser Tor client, Tor mode's transport (docs/tor-over-wisp.md)
 	...(torClient && { torClient: true }),
 	...(process.env.STOMP_TOR_CLIENT === 'stand-in' && { torStandIn: true }),
+	// (named as a host that serves the files itself names them: the
+	// stand-in checks it was given a wasm, and loads none)
+	...(torArtiStandIn && {
+		torClient: { wasm: '/tor-client/tor-js/tor_js_bg.wasm' },
+	}),
 	// on unless turned off; a wisp server without UDP costs it nothing (the
 	// transport stays on HTTP/2, docs/http3.md)
 	http3: process.env.STOMP_HTTP3 !== '0',
@@ -1007,6 +1017,18 @@ app.use('/libcurl/', transportFiles('libcurl-transport'));
 // arti's wasm, which demo/public/tor-client/service.mjs loads. The package
 // is the Fracital build pinned in package.json (deploy/tor-js: the release
 // plus a stream API, so Tor mode runs epoxy on Tor streams)
+if (torArtiStandIn)
+	app.get('/tor-client/tor-js/entryPoints/wasm-file/index.js', (_req, res) => {
+		res.set('Cache-Control', 'no-store');
+		res.type('text/javascript');
+		res.sendFile(
+			fileURLToPath(
+				new URL('../test/offline-tor-stand-in.mjs', import.meta.url),
+			),
+			// (a checkout under a dot directory, as a git worktree can be)
+			{ dotfiles: 'allow' },
+		);
+	});
 try {
 	app.use(
 		'/tor-client/tor-js/',

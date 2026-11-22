@@ -542,6 +542,70 @@ check.torproject.org say `IsTor: true` through it, so the wasm in a
 dedicated worker, the client's IndexedDB and the Wisp socket provider work
 there as in Chrome (bootstrap 4.0 s cold, the first answer 6.2 s).
 
+### Bootstrap progress and failures
+
+The client's status (`TorService.status`, which the transport tells the page
+on its channel) has `blocked: { kind, message }` while something holds
+bootstrap up, and a failed bootstrap's `summary` is that reason rather than
+arti's error (kept as `error`). Two sources, the first winning:
+
+- **arti's own events**, where tor-js gives them:
+  `client.bootstrapEvents(listener)` (returning its removal), each event
+  `{ fraction, ready, blocked }` as arti's `bootstrap_events()` yields its
+  `BootstrapStatus` (`as_frac()`, `ready_for_traffic()`, `blocked()`), with
+  `blocked` null or `{ kind, message }`, `kind` one of arti's
+  `BlockageKind`s (`offline`, `filtering`, `cant-reach-tor`,
+  `clock-skewed`, `cant-bootstrap`). Its progress replaces what the log
+  says. **tor-js has no such call yet**: it needs a patch in deploy/tor-js
+  and a wasm build, neither done yet (deploy/tor-js builds in a container). The
+  service uses it once it is there; the suites' stand-in implements it.
+- **The client's own links**, today: the Wisp server cannot be reached
+  (`offline`, "Cannot reach the Wisp server"), it closes links to relays
+  with "blocked by policy" (`filtering`), or two links or more ended before
+  a byte with none reached (`cant-reach-tor`, "No Tor relay answered
+  through the Wisp server (N links ended with a refused connection)"). A
+  link that is reached clears it.
+
+The toggle's tooltip, the status line and error.html show the reason
+("Tor is connecting (50%): Loading relay descriptors. Blocked: ...", "Tor
+could not connect: ..."). A refused link (the relay check below) is told
+to the page too (`refused`).
+
+### It fails closed
+
+A Tor-mode page has no transport but the Tor client's (`transportFor` gives
+`torClient` whatever is chosen, HTTP/3, WebTransport and ECH DNS are off, a
+deployment without the client refuses Tor mode), and the client's
+transport has no raw client for a page's WebTransport or WebRTC streams.
+So every failure of the client is a failed request, never a direct one:
+while it bootstraps a request waits for it, a failed bootstrap fails the
+request and the next one starts the client again, a circuit that does not
+build fails its stream, and a link arti asks for to anything but a relay
+is refused ("Which relays the worker may reach"). A browser tab in Tor
+mode stays in it across its reloads even when another tab turned Tor off
+since (the saved choice is the origin's: pm/profile.js), so a reload
+cannot bring it back up outside Tor.
+
+The `demo-tor-fail-closed` suite checks it with Tor mode's own client code
+and tor-js replaced by a stand-in it breaks on purpose
+(`STOMP_TOR_CLIENT=stand-in-arti`, test/offline-tor-stand-in.mjs, whose
+"Tor streams" reach the fixture through the run's Wisp server): bootstrap
+that never ends (one tab, a second tab of the same client, a reload),
+every link failing at the Wisp server, circuits that do not build (two
+tabs), and a client that dials the site itself. In each, the fixture page
+asked for records no request. It also checks the reasons shown, the retry
+after a failure, a Tor tab kept in Tor mode when another turns it off, and
+a Tor tab's site data across its reload. It reaches no Tor network.
+
+What it does not cover: a proxied request the service worker does not
+answer (a request under an address no controller of the worker has after
+its revive window, a frame the worker does not control) goes to the host's
+server at its route, `/stomp-tor/<id>/<encoded URL>`. That is no
+connection to the site (the server answers with nothing of the site and
+relays nothing for Tor scopes), but the server can read the address from
+the route. Closing it means a Tor profile's worker answering such a
+request itself; not done.
+
 ## Remaining work
 
 The client is Tor mode. What it still needs
@@ -550,7 +614,9 @@ days, L a week or more).
 
 1. **Stream API in tor-js** (done; S left): `connect(host, port,
 isolationKey)` (deploy/tor-js `0001`); left: `resolve()`,
-   `bootstrap_events()`, per-key circuit retirement, and publishing the
+   `bootstrapEvents()` (arti's `bootstrap_events()`: the JS side and its
+   shape are done, "Bootstrap progress and failures"; the patch and its
+   wasm build are not), per-key circuit retirement, and publishing the
    build (as deploy/epoxy publishes epoxy's) so a deploy serves it without
    a container build.
 2. **epoxy over Tor streams** (done): the in-worker Wisp server for epoxy's
@@ -558,9 +624,12 @@ isolationKey)` (deploy/tor-js `0001`); left: `resolve()`,
 3. **One client per profile** (done; S left): the Tor client in a
    SharedWorker (`sharedWorker` on the descriptor), the transport workers of
    every tab its clients; left: `extendedLifetime`, so a reload keeps it.
-4. **Bootstrap UI** (done; S left): progress in the Tor toggle's tooltip from arti's log;
-   left: arti's own `bootstrap_events()` through tor-js, an error state with
-   the blocker ("cannot reach any relay", "clock skew"), the isolated mode.
+4. **Bootstrap UI** (done; S left): progress in the Tor toggle's tooltip from arti's log,
+   and the blocker and a failure's reason from the client's own links
+   ("Cannot reach the Wisp server", "No Tor relay answered") or from
+   `bootstrapEvents` where tor-js has it; left: the tor-js side of
+   `bootstrapEvents` (so "clock skew" and arti's other blockers show), the
+   isolated mode.
 5. **Fast-bootstrap snapshot** (S): the server builds `bootstrap.zip.zst`
    hourly (tor-js's gateway crate or a fetch of the consensus over Tor) and
    serves it from the app origin; the client passes it as `bootstrap`.
@@ -575,11 +644,16 @@ isolationKey)` (deploy/tor-js `0001`); left: `resolve()`,
    TLS, or the browser's own WebSocket) and Snowflake (WebRTC) as arti
    pluggable transports, so the operator does not see Tor use or the guard.
 10. **Suites** (M; partly done): demo-tor, offline-html and the Firefox
-    smoke's profile part run Tor mode on the stand-in, and the Firefox
-    smoke loads check.torproject.org through the real client when it has
-    the network; left: a local test network (chutney) on CI, the
-    deterministic one. The real-network smoke (`test/tor-client-smoke.mjs`)
-    stays out of CI.
+    smoke's profile part run Tor mode on the stand-in, demo-tor-fail-closed
+    runs Tor mode's own client code on a tor-js stand-in it breaks on
+    purpose ("It fails closed"), and the Firefox smoke loads
+    check.torproject.org through the real client when it has the network;
+    left: a local test network (chutney) on CI, the deterministic one. The
+    real-network smoke (`test/tor-client-smoke.mjs`) stays out of CI.
 11. **Remove the relay** (done): `demo/torWisp.js`, `/wisp-tor/`, the
     `STOMP_TOR_*` settings (now a warning at startup), docs/tor.md's relay
     sections.
+12. **Routes the worker does not answer** (S): a Tor profile's service
+    worker answers a routed request it has no controller for itself, so
+    the host's server never reads a site's address from a route ("It fails
+    closed").
