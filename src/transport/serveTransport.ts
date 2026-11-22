@@ -4,6 +4,7 @@ import type {
 } from '@mercuryworkshop/proxy-transports';
 import { pastASCII, utf8Text } from '../byteString';
 import { sendBody } from './bodyPort';
+import { boundedBody } from './boundedBody';
 import { base64url, httpsQuery } from './http3/dnsHttps';
 import {
 	HANDSHAKE_REFUSED,
@@ -501,12 +502,17 @@ export default function serveTransport(
 					} as Partial<typeof response>);
 				// (a function, which crosses with the body's end)
 				const [plain, encodedBytes] = withoutEncodedBytes(response);
-				// a streamed body goes on a port of its own (bodyPort.ts), and
-				// a large one the reader falls behind on is let go and resumed
-				// by range (resumableBody.ts)
+				// a streamed body goes on a port of its own (bodyPort.ts), a
+				// large one the reader falls behind on is let go and resumed
+				// by range (resumableBody.ts), and one that cannot be, on a
+				// connection that does not hold it back, is reset if its
+				// reader stops (boundedBody.ts)
 				if (plain.body instanceof ReadableStream) {
 					const pushed = sendBody(
-						resumableBody(transport, url, method, sent, response),
+						boundedBody(
+							response,
+							resumableBody(transport, url, method, sent, response),
+						),
 						true,
 						encodedBytes,
 					);

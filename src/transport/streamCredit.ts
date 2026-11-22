@@ -37,6 +37,15 @@ export function namesStreamCredit(packet: Uint8Array): boolean {
 	return false;
 }
 
+/**
+ * Whether this realm's Wisp connection has stream credit, as the last INFOs
+ * that went by said (each StreamCreditWatch's, the carrier host's rider's or
+ * the realm's own carrier's): a body read here on a connection without it
+ * is bounded by boundedBody.ts, since nothing else holds its stream back.
+ * False until a connection's INFOs said otherwise (Wisp v1 has none).
+ */
+export const relayCredit = { on: false };
+
 /** a Wisp connection's stream credit, from the INFOs that go by */
 export class StreamCreditWatch {
 	#server = false;
@@ -47,10 +56,55 @@ export class StreamCreditWatch {
 	}
 	/** a packet of the relay's */
 	fromServer(packet: Uint8Array): void {
-		if (packet[0] === INFO && namesStreamCredit(packet)) this.#server = true;
+		if (packet[0] !== INFO) return;
+		if (namesStreamCredit(packet)) this.#server = true;
+		relayCredit.on = this.on;
 	}
 	/** a packet of the client's (epoxy's) */
 	fromClient(packet: Uint8Array): void {
-		if (packet[0] === INFO && namesStreamCredit(packet)) this.#client = true;
+		if (packet[0] !== INFO) return;
+		if (namesStreamCredit(packet)) this.#client = true;
+		relayCredit.on = this.on;
 	}
+}
+
+/**
+ * `read` and `write`, a Wisp connection's packets each way, with their
+ * INFOs watched for stream credit (`relayCredit`): a carrier this realm
+ * opened itself, which no rider's pace (riderPace.ts) watches
+ */
+export function watchCredit(
+	read: ReadableStream<ArrayBuffer>,
+	write: WritableStream<Uint8Array>,
+): { read: ReadableStream<ArrayBuffer>; write: WritableStream<Uint8Array> } {
+	const watch = new StreamCreditWatch();
+	// only a connection's opening has INFOs: past it, the packets just pass
+	let server = 0;
+	let client = 0;
+	const watched = read.pipeThrough(
+		new TransformStream<ArrayBuffer, ArrayBuffer>({
+			transform(packet, controller) {
+				if (server < 4) {
+					server++;
+					watch.fromServer(new Uint8Array(packet));
+				}
+				controller.enqueue(packet);
+			},
+		}),
+	);
+	const writer = write.getWriter();
+	return {
+		read: watched,
+		write: new WritableStream<Uint8Array>({
+			write(packet) {
+				if (client < 4) {
+					client++;
+					watch.fromClient(packet);
+				}
+				return writer.write(packet);
+			},
+			close: () => writer.close(),
+			abort: (reason) => writer.abort(reason),
+		}),
+	};
 }

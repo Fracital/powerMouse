@@ -924,7 +924,13 @@ that is up already (<n> s, <n> transports on it)` (with its lanes and
   its packets at the pace of its realm's body readers
   (`src/transport/riderPace.ts`, 8 MiB ahead at most) and the host stops
   reading the relay while a rider is far behind, which held every stream
-  of the connection behind the slowest. With credit on both are only a
+  of the connection behind the slowest. A reader that stops holds nothing
+  back there (a pause of the relay is bounded, so the others go on), and
+  an HTTP/1 body that cannot be resumed by range is read as it comes into
+  a queue of its own and reset once 64 MiB wait for its reader
+  (`src/transport/boundedBody.ts`;
+  before it, a paused 384 MB body was all in epoxy's wasm memory, for the
+  tab's life: `paused-body-memory`). With credit on both are only a
   backstop (128 MiB ahead; the host never pauses the relay for a rider,
   and still resets the largest stream of one that took nothing for 2 s
   with more than 64 MiB waiting: a relay that sent past its grants), and

@@ -1,8 +1,8 @@
 // What the proxy's worker targets hold, over CDP (a browser session, each
 // worker through its own session): the service worker of the proxy's
-// origin (`sw`) and each transport worker (`transport`). Suites about
-// memory the page cannot see use it (abandoned-bodies, cache-walks,
-// paused-bodies). A count of objects Blink backs (a Request, a port) can
+// origin (`sw`), each transport worker (`transport`) and the carrier host
+// (`carrier`). Suites about memory the page cannot see use it
+// (abandoned-bodies, cache-walks, paused-bodies, paused-body-memory). A count of objects Blink backs (a Request, a port) can
 // include some no full collection has taken yet: compare it with a margin.
 import { PROXY } from './lib.mjs';
 
@@ -92,7 +92,13 @@ export async function workerMemory(browser) {
 						  // shared browser (test/run.mjs SHARED_BROWSER)
 						  new URL(target.url).port === new URL(PROXY).port
 						? 'transport'
-						: null;
+						: // the carrier host (src/transport/carrierHost.ts): a
+							// SharedWorker of the transport worker's script
+							target.type === 'shared_worker' &&
+							  /transportWorker/.test(target.url) &&
+							  new URL(target.url).port === new URL(PROXY).port
+							? 'carrier'
+							: null;
 			if (kind !== label) continue;
 			let sessionId = attached.get(target.targetId);
 			if (!sessionId) {
@@ -134,11 +140,12 @@ export async function workerMemory(browser) {
 		/**
 		 * Each kind's memory after a collection, summed over its targets (a
 		 * closed tab's may linger): JS heap, ArrayBuffer backing stores, wasm
-		 * memories (epoxy's, the rewriter's: the heap's figures leave them out)
+		 * memories (epoxy's, the rewriter's: the heap's figures leave them out).
+		 * The carrier host (`carrier`) is measured too.
 		 */
 		async memory() {
 			const out = {};
-			for (const label of ['sw', 'transport'])
+			for (const label of ['sw', 'transport', 'carrier'])
 				for (const sessionId of await sessions(label)) {
 					await inTarget(sessionId, 'HeapProfiler.collectGarbage');
 					const usage = await inTarget(sessionId, 'Runtime.getHeapUsage');

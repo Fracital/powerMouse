@@ -71,6 +71,7 @@ import { closeOnDelete, storeName } from '../profile';
 import { askCarrierHost, type CarrierGiven } from './carrierClient';
 import { promptSink } from './promptSink';
 import type { Ride } from './riderPace';
+import { watchCredit } from './streamCredit';
 import { wispNote } from './transportLog';
 import {
 	clean,
@@ -2194,9 +2195,14 @@ export class CarrierTransport implements ProxyTransport {
 				throw new Error(
 					`${CARRIER_LOST}: the ${open.carrier === 'webtransport' ? 'WebTransport session' : 'WebSocket'} to the wisp relay ended`,
 				);
+			// a carrier of this realm's own has no rider's pace to watch its
+			// INFOs for stream credit (riderPace.ts): watched here
+			const { read, write } = mine.hosted
+				? mine.pipe
+				: watchCredit(mine.pipe.read, mine.pipe.write);
 			return {
-				read: mine.pipe.read,
-				write: promptSink(mine.pipe.write),
+				read,
+				write: promptSink(write),
 				...(mine.more && { more: mine.more }),
 			};
 		};
