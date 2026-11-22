@@ -669,7 +669,7 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 				this.#sentURL = target.href;
 				this.#credentialed = null;
 				if (target.username !== '' || target.password !== '') {
-					this.#urlCredentials = `${target.username}:${target.password}`;
+					const userinfo = `${target.username}:${target.password}`;
 					const shown = new URL(target.href);
 					shown.hash = '';
 					target.username = '';
@@ -677,6 +677,9 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 					const plain = new URL(target.href);
 					plain.hash = '';
 					this.#credentialed = { shown: shown.href, plain: plain.href };
+					// with the URL they are for: the browser sends the header again
+					// on a redirect's next hop, which natively has none
+					this.#urlCredentials = `${userinfo} ${plain.href}`;
 				}
 
 				// one the worker's policy refuses fails as the browser fails it

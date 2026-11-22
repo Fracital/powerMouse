@@ -796,7 +796,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				if (this.#password !== null) target.password = this.#password;
 				this.#credentialed = null;
 				if (target.username !== '' || target.password !== '') {
-					this.#urlCredentials = `${target.username}:${target.password}`;
+					const userinfo = `${target.username}:${target.password}`;
 					const shown = new URL(target.href);
 					shown.hash = '';
 					target.username = '';
@@ -804,6 +804,9 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 					const plain = new URL(target.href);
 					plain.hash = '';
 					this.#credentialed = { shown: shown.href, plain: plain.href };
+					// with the URL they are for: the browser sends the header again
+					// on a redirect's next hop, which natively has none
+					this.#urlCredentials = `${userinfo} ${plain.href}`;
 				}
 
 				// mixed content: a synchronous request reaches the worker without

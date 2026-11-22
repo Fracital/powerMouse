@@ -131,6 +131,7 @@ import { errorReportScript, hostErrorPage } from './errorPage';
 import { extensionCommand } from './extensions/api';
 import { extensionRegistry } from './extensions/registry';
 import { webStore } from './extensions/webstore';
+import { forgetAuthorizations } from './httpAuth';
 import { identityDone, identityState } from './identityStates';
 import { INLINE_MAX, INLINE_TOKEN, putInline } from './inline';
 import { openLoadChannel, servedLoadClient } from './loadGrants';
@@ -553,6 +554,7 @@ function registerController(
 					return;
 				}
 				await forgetDeviceIds(host);
+				forgetAuthorizations(origin ? (name) => name === host : undefined);
 			},
 			shields: async (payload) => {
 				// the controller sends { list, seed }; an array is the legacy
@@ -725,6 +727,10 @@ function registerController(
 							// not a URL: the jar refused it above
 						}
 						await forgetDeviceIds(host);
+						// and what their HTTP authentication answered (httpAuth)
+						forgetAuthorizations(
+							command.origin ? (name) => name === host : undefined,
+						);
 						return [undefined, []];
 					}
 				}

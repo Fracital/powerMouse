@@ -470,9 +470,10 @@ export const RESPONSE_TYPE_HEADER = 'x-stomp-response';
 export const OPAQUE_HEADER = 'x-stomp-opaque';
 /**
  * On an XMLHttpRequest with credentials (open()'s user and password, or the
- * URL's): `user:password`, each percent-encoded as in a URL. The worker
- * answers the site's Basic challenge with them, as the browser would
- * (src/server/httpAuth.ts), and strips it
+ * URL's): `user:password`, each percent-encoded as in a URL, a space and the
+ * URL they are for (a redirect's next hop, which carries the header again,
+ * gets none). The worker answers the site's Basic or Digest challenge with
+ * them, as the browser would (src/server/httpAuth.ts), and strips it
  */
 export const CREDENTIALS_HEADER = 'x-stomp-credentials';
 /**

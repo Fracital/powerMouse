@@ -1,8 +1,10 @@
+import { registrableDomain, type PublicSuffix } from '../partition';
 import {
 	LEGACY_FS_CLEAR,
 	type LegacyFileSystemClear,
 } from '../transport/messages';
 import type Cookies from './Cookies';
+import { forgetAuthorizations } from './httpAuth';
 import { serviceWorkers } from './serviceWorkers';
 import { clearStorageKey, type StorageHosts } from './Storage';
 
@@ -24,7 +26,9 @@ export function siteDataTypes(header: string | null): Set<string> {
  * drops besides the caches (cache.ts clearsCache), for its site alone: the
  * browser would wipe every proxied site's state and STomp's own, so it never
  * gets the header (filterHeaders). "cookies": the jar's cookies of the
- * site, unpartitioned or in the context's partition (`partitionKey`);
+ * site, unpartitioned or in the context's partition (`partitionKey`), and
+ * what the site's HTTP authentication answered (as Chrome clears its auth
+ * cache, measured in Chrome 159: of that site alone);
  * "storage": what the storage key of the context (`url`'s origin and its
  * `partition`) keeps, and its emulated service workers. "*" is both.
  * "executionContexts" does nothing natively (measured, Chrome 157).
@@ -36,10 +40,14 @@ export async function clearSiteData(
 	partitionKey: string | undefined,
 	cookies: Cookies,
 	storage: StorageHosts | undefined,
+	publicSuffix: PublicSuffix,
 ): Promise<void> {
 	const all = types.has('*');
-	if (all || types.has('cookies'))
+	if (all || types.has('cookies')) {
 		await cookies.clearSite(url, partitionKey).catch(() => {});
+		const site = registrableDomain(url.hostname, publicSuffix);
+		forgetAuthorizations((host) => host === site || host.endsWith(`.${site}`));
+	}
 	if (all || types.has('storage')) {
 		const key = `${url.origin}${partition}`;
 		if (storage) await clearStorageKey(key, storage);

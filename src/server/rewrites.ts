@@ -352,11 +352,10 @@ import {
 	type RequestShape,
 } from './headerOrder';
 import {
+	authenticate,
 	authorizationAhead,
-	authorizationForRealm,
-	basicAuthorization,
-	basicRealm,
-	rememberAuthorization,
+	refused,
+	requestIdentity,
 } from './httpAuth';
 import { takeInline } from './inline';
 import { formFields, insecureFormPage } from './insecureForm';
@@ -2012,7 +2011,7 @@ function genericForward(
 		// an XMLHttpRequest with upload listeners (the CORS-preflight flag)
 		const forcePreflight = serverRequest.headers.has(PREFLIGHT_HEADER);
 		requestHeaders.delete(PREFLIGHT_HEADER);
-		// an XMLHttpRequest's credentials, for a Basic challenge (httpAuth)
+		// an XMLHttpRequest's credentials, for the site's challenge (httpAuth)
 		const urlCredentials = serverRequest.headers.get(CREDENTIALS_HEADER);
 		requestHeaders.delete(CREDENTIALS_HEADER);
 
@@ -2691,18 +2690,6 @@ function genericForward(
 		};
 		let sentHints = await applyClientHints(requestHeaders, hintsContext);
 
-		// HTTP authentication as the browser's auth cache does it (httpAuth):
-		// a request that may carry credentials and has no Authorization of the
-		// page's own sends the one an earlier answer under this directory
-		// kept, unless it brings credentials of its own, which wait for the
-		// challenge
-		const pageAuthorization = requestHeaders.has('authorization');
-		const mayAuthenticate = credentials && !pageAuthorization;
-		if (mayAuthenticate && !urlCredentials) {
-			const ahead = authorizationAhead(url.url);
-			if (ahead) requestHeaders.set('authorization', ahead);
-		}
-
 		// The same-origin policy between the real origins (cors.ts). The mode
 		// is the request's own; an inject's copy of a page's load is that load
 		// (its grant names it), and any other copy (a download, a load whose
@@ -2728,6 +2715,28 @@ function genericForward(
 			!!rewriter.extensions?.any &&
 			rewriter.extensions.crossOriginAllowed(policyOrigin, url.url);
 		const corsChecked = crossOrigin && policyMode === 'cors' && !extensionReads;
+
+		// HTTP authentication as the browser's auth cache does it (httpAuth):
+		// a request that may carry credentials and has no Authorization of the
+		// page's own sends the one an earlier answer under this directory
+		// kept, unless it brings credentials of its own, which wait for the
+		// challenge. Those are the first hop's alone (the browser follows a
+		// redirect in proxy URL space and sends the inject's header again on
+		// every hop, where natively the URL redirected to has none), and a
+		// cross-origin CORS request's never (Chrome ignores them: it sends
+		// what was kept ahead and answers with the realm's, measured)
+		const pageAuthorization = requestHeaders.has('authorization');
+		const mayAuthenticate = credentials && !pageAuthorization;
+		const ownIdentity =
+			previousHop || (crossOrigin && policyMode === 'cors')
+				? null
+				: requestIdentity(urlCredentials, url.url);
+		const sentAhead =
+			mayAuthenticate && !ownIdentity
+				? authorizationAhead(url.url, serverRequest.method)
+				: null;
+		if (sentAhead) requestHeaders.set('authorization', sentAhead.authorization);
+
 		// a subresource the inject copies for a page under a grant: its bytes
 		// go to the page's process as a blob (not a download, which the page
 		// never holds, nor an object's or embed's document, a navigation)
@@ -4158,25 +4167,22 @@ function genericForward(
 					preloaded ??
 					answered ??
 					(await fetchUpstream(withValidators(requestHeaders)));
-				// a Basic challenge is answered once with the request's own
-				// credentials, else the realm's kept ones; what succeeds is kept
-				const realm =
-					upstream.status === 401 && mayAuthenticate
-						? basicRealm(upstream.headers.get('www-authenticate'))
-						: null;
-				const answer =
-					realm === null
-						? null
-						: urlCredentials
-							? basicAuthorization(urlCredentials)
-							: authorizationForRealm(url.url, realm);
-				if (answer && answer !== requestHeaders.get('authorization')) {
-					await upstream.body?.cancel().catch(() => {});
-					requestHeaders.set('authorization', answer);
-					upstream = await fetchUpstream(withValidators(requestHeaders));
-					if (upstream.status !== 401)
-						rememberAuthorization(url.url, realm!, answer);
-				}
+				// a challenge is answered with the request's own credentials, else
+				// the realm's kept ones; what succeeds is kept, what is refused
+				// forgotten (httpAuth)
+				if (mayAuthenticate)
+					upstream = await authenticate(
+						upstream,
+						url.url,
+						serverRequest.method,
+						sentAhead,
+						ownIdentity,
+						(authorization) => {
+							requestHeaders.set('authorization', authorization);
+							return fetchUpstream(withValidators(requestHeaders));
+						},
+					);
+				else if (credentials) refused(upstream, url.url);
 				// a top-level answer whose Critical-CH names a hint its own
 				// Accept-CH asks for and the request lacked: Chrome restarts the
 				// navigation once with the hints
@@ -4344,6 +4350,7 @@ function genericForward(
 				partitionKey,
 				rewriter.cookies,
 				rewriter.storage,
+				publicSuffix,
 			);
 		const cleared = fromOrigin && clears(response.headers);
 		if (cleared) {

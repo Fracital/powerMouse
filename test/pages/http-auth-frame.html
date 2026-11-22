@@ -1,0 +1,22 @@
+<!doctype html>
+<title>HTTP auth frame</title>
+<script>
+	// a document of origin B in A's page (http-auth suite): its own requests
+	// to the paths A authenticated on get none of A's credentials
+	(async () => {
+		const query = new URLSearchParams(location.search);
+		const ask = (path) =>
+			new Promise((resolve) => {
+				const request = new XMLHttpRequest();
+				request.open(
+					'GET',
+					`/auth/${path}?k=${query.get('k')}&c=${encodeURIComponent(query.get('c'))}`,
+				);
+				request.onloadend = () => resolve(request.status);
+				request.send();
+			});
+		const basic = await ask('basic/b1/frame');
+		const md5 = await ask('md5/d1/frame');
+		parent.postMessage({ basic, md5 }, '*');
+	})();
+</script>
