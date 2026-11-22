@@ -1,7 +1,7 @@
 {
 	"views": {
 		"landing": {
-			"digest": "bb3bdbbf8f2409a0eb2771252eeba3f3b939feed20bcbae9717578708ae5fcd8",
+			"digest": "09132994e9e54e4664f034f9e26f55462970deef0035da87e7b9460c740d8c93",
 			"common": {
 				"::placeholderbackground-color": "rgba(0, 0, 0, 0)",
 				"::placeholderbackground-image": "none",
@@ -394,7 +394,7 @@
 			}
 		},
 		"browser": {
-			"digest": "f25921c2101f2b53b6edce29d100bd369fe9e7ca1168e57750809eb29d694c83",
+			"digest": "631cfceeed98530dff40e0533a02176e7e1f8a31f06c17cff357eee6f0746d6a",
 			"common": {
 				"::placeholderbackground-color": "rgba(0, 0, 0, 0)",
 				"::placeholderbackground-image": "none",
@@ -800,7 +800,7 @@
 			}
 		},
 		"shields": {
-			"digest": "e63ebe3a6685eef3b8bb2678f44dffa0f8c04282a0420d82049bcec16e1a3604",
+			"digest": "7dfef31e392fc09572531a43fe551bef0328801d120be6177810731eb2d9d92f",
 			"common": {
 				"::afterbackground-color": null,
 				"::afterbackground-image": null,
@@ -814,10 +814,10 @@
 				"background-position": "0% 0%",
 				"background-repeat": "repeat",
 				"background-size": "auto",
-				"border-bottom-color": "rgb(228, 228, 229)",
+				"border-bottom-color": "rgb(201, 201, 202)",
 				"border-left-color": "rgb(228, 228, 229)",
 				"border-right-color": "rgb(228, 228, 229)",
-				"border-top-color": "rgb(228, 228, 229)",
+				"border-top-color": "rgb(201, 201, 202)",
 				"box-shadow": "none",
 				"caret-color": "rgb(228, 228, 229)",
 				"color": "rgb(228, 228, 229)",
@@ -1245,19 +1245,27 @@
 				},
 				"div#shieldsPanel": {
 					"background-color": "rgb(28, 28, 29)",
+					"border-bottom-color": "rgb(228, 228, 229)",
+					"border-top-color": "rgb(228, 228, 229)",
 					"box-shadow": "rgba(0, 0, 0, 0.55) 0px 12px 40px 0px, rgba(255, 255, 255, 0.06) 0px 0px 0px 1px"
 				},
 				"div#shieldsPanel>div.shieldsCard:0": {
 					"background-color": "rgb(37, 37, 39)",
-					"border-bottom-color": "rgb(48, 48, 50)"
+					"border-bottom-color": "rgb(48, 48, 50)",
+					"border-top-color": "rgb(228, 228, 229)"
 				},
-				"div#shieldsPanel>div.shieldsCard:0>div.shieldsHead:0": {},
+				"div#shieldsPanel>div.shieldsCard:0>div.shieldsHead:0": {
+					"border-bottom-color": "rgb(228, 228, 229)",
+					"border-top-color": "rgb(228, 228, 229)"
+				},
 				"div#shieldsPanel>div.shieldsCard:0>div.shieldsHead:0>span.shieldsFavicon:0": {
 					"background-color": "rgb(28, 28, 29)",
 					"background-image": "sha256:a7b9c2d0af916a01",
 					"background-position": "50% 50%",
 					"background-repeat": "no-repeat",
 					"background-size": "20px 20px",
+					"border-bottom-color": "rgb(228, 228, 229)",
+					"border-top-color": "rgb(228, 228, 229)",
 					"box-shadow": "rgba(0, 0, 0, 0.4) 0px 1px 4px 0px"
 				},
 				"input#shMaster": {
@@ -1277,10 +1285,8 @@
 				"div#shieldsPanel>div.shieldsCard:0>div.shieldsCount:1": {
 					"::placeholdercolor": "rgb(201, 201, 202)",
 					"background-color": "rgb(28, 28, 29)",
-					"border-bottom-color": "rgb(201, 201, 202)",
 					"border-left-color": "rgb(201, 201, 202)",
 					"border-right-color": "rgb(201, 201, 202)",
-					"border-top-color": "rgb(201, 201, 202)",
 					"box-shadow": "rgba(0, 0, 0, 0.4) 0px 1px 4px 0px",
 					"caret-color": "rgb(201, 201, 202)",
 					"color": "rgb(201, 201, 202)",
@@ -1309,10 +1315,8 @@
 				},
 				"div#shAdvanced>div.shieldsRows>div.shieldsRow:0>svg.shieldsIcon": {
 					"::placeholdercolor": "rgb(201, 201, 202)",
-					"border-bottom-color": "rgb(201, 201, 202)",
 					"border-left-color": "rgb(201, 201, 202)",
 					"border-right-color": "rgb(201, 201, 202)",
-					"border-top-color": "rgb(201, 201, 202)",
 					"caret-color": "rgb(201, 201, 202)",
 					"color": "rgb(201, 201, 202)",
 					"fill": "rgb(201, 201, 202)",
@@ -1327,10 +1331,8 @@
 				},
 				"div#shAds>ul.shieldsDropList>li:0": {
 					"::placeholdercolor": "rgb(201, 201, 202)",
-					"border-bottom-color": "rgb(201, 201, 202)",
 					"border-left-color": "rgb(201, 201, 202)",
 					"border-right-color": "rgb(201, 201, 202)",
-					"border-top-color": "rgb(201, 201, 202)",
 					"caret-color": "rgb(201, 201, 202)",
 					"color": "rgb(201, 201, 202)",
 					"outline-color": "rgb(201, 201, 202)"
@@ -1361,6 +1363,7 @@
 					"outline-color": "rgb(0, 0, 0)"
 				},
 				"div#shieldsPanel>div.shieldsFooter:2": {
+					"border-bottom-color": "rgb(228, 228, 229)",
 					"border-top-color": "rgb(48, 48, 50)"
 				},
 				"button#shFilterLists": {
@@ -1386,10 +1389,8 @@
 				},
 				"button#menuFullscreen>svg.shieldsIcon>path": {
 					"::placeholdercolor": "rgb(201, 201, 202)",
-					"border-bottom-color": "rgb(201, 201, 202)",
 					"border-left-color": "rgb(201, 201, 202)",
 					"border-right-color": "rgb(201, 201, 202)",
-					"border-top-color": "rgb(201, 201, 202)",
 					"caret-color": "rgb(201, 201, 202)",
 					"color": "rgb(201, 201, 202)",
 					"fill": "none",

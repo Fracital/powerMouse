@@ -1,10 +1,4 @@
 {
-	"/xhr/access-control-preflight-credential-async.htm": {
-		"CORS async request with URL credentials": "FAIL: assert_equals: Request raises HTTP 401: Unauthorized error. expected 401 but got 200"
-	},
-	"/xhr/access-control-preflight-credential-sync.htm": {
-		"CORS sync request with URL credentials": "FAIL: assert_equals: Request raises HTTP 401: Unauthorized error. expected 401 but got 200"
-	},
 	"/xhr/cors-upload-listener-timing.any.html": {
 		"CORS allow, upload listeners late": "FAIL: assert_array_equals: No late upload events lengths differ, expected array [] length 0, got [\"progress\", \"load\", \"loadend\"] length 3",
 		"CORS allow, upload listeners late with upload object": "FAIL: assert_array_equals: No late upload events lengths differ, expected array [] length 0, got [\"progress\", \"load\", \"loadend\"] length 3",
