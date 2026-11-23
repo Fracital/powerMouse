@@ -62,6 +62,10 @@
 //                       for one visit, `?http3` on for one
 //   STOMP_OFFLINE_FILE  where /offline.html is served from and built into
 //                       (default build/offline.html)
+//   STOMP_DEMO_SITE     a protected site (npm run build:demo-site writes
+//                       build/demo-site): its public/, stomp/, epoxy/,
+//                       libcurl/, tor-js/ and examples/ are served in place
+//                       of demo/public, dist and the packages'
 //   STOMP_ECH_DNS       the DNS-over-HTTPS endpoint epoxy asks for HTTPS
 //                       records, to offer real Encrypted Client Hello where a
 //                       site publishes a config, as Chrome does (default
@@ -202,7 +206,15 @@ import { createCommits, DEFAULT_REPO } from './commits.js';
 import { heldLoads, syncRelay } from './syncRelay.js';
 
 const require = createRequire(import.meta.url);
-const { stompPath } = require('../lib/index.cjs');
+// the protected site (STOMP_DEMO_SITE, scripts/build-demo-site.mjs) holds
+// a copy of every directory below that the page loads from, run through
+// estrogen; served in place of them, each where the checkout's is
+const demoSite = process.env.STOMP_DEMO_SITE
+	? resolve(process.env.STOMP_DEMO_SITE)
+	: null;
+const stompPath = demoSite
+	? join(demoSite, 'stomp')
+	: require('../lib/index.cjs').stompPath;
 
 // deployment settings live in an uncommitted .env next to package.json
 try {
@@ -242,7 +254,9 @@ const DIAL = (() => {
 
 // the transports only export their dist entry; serve its directory
 const transportDir = (name) =>
-	dirname(fileURLToPath(import.meta.resolve(`@mercuryworkshop/${name}`)));
+	demoSite
+		? join(demoSite, name.replace(/-transport$/, ''))
+		: dirname(fileURLToPath(import.meta.resolve(`@mercuryworkshop/${name}`)));
 
 // The built-in /wisp/ is holyWisp, the server behind wss://holywisp.fracit.al/,
 // so a local run relays the way stomp.fracit.al does. The settings that change
@@ -620,7 +634,9 @@ const fresh = {
 };
 const cached = { maxAge: '1d', immutable: false };
 const KEPT = 'public, max-age=31536000, immutable';
-const publicDir = fileURLToPath(new URL('./public/', import.meta.url));
+const publicDir = demoSite
+	? join(demoSite, 'public')
+	: fileURLToPath(new URL('./public/', import.meta.url));
 // vibeOS's module, stylesheet and files (none of them asked for before the
 // page's first switch to it), its pages under their neutral names
 app.use(
@@ -967,7 +983,9 @@ app.use(['/stomp-tor/', DIAL.torDirectory], (_req, res) => {
 app.use(
 	'/examples/',
 	express.static(
-		fileURLToPath(new URL('../examples/', import.meta.url)),
+		demoSite
+			? join(demoSite, 'examples')
+			: fileURLToPath(new URL('../examples/', import.meta.url)),
 		fresh,
 	),
 );
@@ -1044,7 +1062,9 @@ try {
 	app.use(
 		'/tor-client/tor-js/',
 		express.static(
-			join(dirname(fileURLToPath(import.meta.resolve('tor-js'))), '../..'),
+			demoSite
+				? join(demoSite, 'tor-js')
+				: join(dirname(fileURLToPath(import.meta.resolve('tor-js'))), '../..'),
 			fresh,
 		),
 	);
