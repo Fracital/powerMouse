@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+	<head>
+		<title>ext frames</title>
+	</head>
+	<body>
+		<!-- (test/suites/ext-frames.mjs: frames of each kind a content script
+		may run in, and one whose navigation fails) -->
+		<iframe id="child" src="ext-frames-child.html"></iframe>
+		<iframe id="srcdoc" srcdoc="<!doctype html><p>srcdoc</p>"></iframe>
+		<iframe id="failing" src="http://ext-frames-nowhere.invalid/"></iframe>
+		<a id="open" href="ext-frames-grand.html?opened" target="_blank">open</a>
+		<script>
+			const blank = document.createElement('iframe');
+			blank.id = 'blank';
+			document.body.append(blank);
+			blank.contentDocument.body.innerHTML = '<p>blank</p>';
+			const blobFrame = document.createElement('iframe');
+			blobFrame.id = 'blob';
+			blobFrame.src = URL.createObjectURL(
+				new Blob(['<!doctype html><p>blob</p>'], { type: 'text/html' }),
+			);
+			document.body.append(blobFrame);
+			const dataFrame = document.createElement('iframe');
+			dataFrame.id = 'data';
+			dataFrame.src = 'data:text/html,<!doctype html><p>data</p>';
+			document.body.append(dataFrame);
+		</script>
+	</body>
+</html>

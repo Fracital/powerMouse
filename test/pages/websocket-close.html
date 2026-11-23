@@ -121,6 +121,89 @@
 					})) +
 					'; ' +
 					order.join(' ');
+				// what the constructor, close() and send() refuse, and in which
+				// words: subprotocols that are no token or are there twice, a
+				// close code outside 1000 and 3000-4999 (a [Clamp] conversion,
+				// which cuts a fraction off), a reason over 123 bytes, a send
+				// while connecting, and arguments that do not convert
+				const thrown = (call) => {
+					try {
+						call();
+						return 'none';
+					} catch (error) {
+						return [
+							error.constructor.name,
+							error.name,
+							error.message,
+							String(error.stack).split('\n')[0],
+						].join(' | ');
+					}
+				};
+				const checks = [];
+				for (const args of [
+					[Symbol()],
+					[base + '/hold', Symbol()],
+					[base + '/hold', 'a b'],
+					[base + '/hold', ['a', 'b', 'a']],
+					[base + '/hold', ['a', 'a', 'b c']],
+					[base + '/hold', ''],
+					[base + '/hold', 'a\0b\x7f'],
+					[base + '/hold', '\x80\u00e9\ud800'],
+					[base + '/hold', 'a\\b'],
+					[base + '/hold', { toString: () => ({}) }],
+					[base + '/hold', { [Symbol.iterator]: 5 }],
+					['ftp://127.0.0.1/', ['a', 'a']],
+					[base + '/hold#f', 'a b'],
+				])
+					checks.push(thrown(() => new WebSocket(...args).close()));
+				const connecting = new WebSocket(base + '/hold');
+				for (const args of [
+					[1005, 'r'],
+					[2999.5],
+					['reason'],
+					[NaN],
+					[65536],
+					[-1],
+					[999.5],
+					[1000, 'x'.repeat(124)],
+					[undefined, 'x'.repeat(124)],
+					[1n],
+					[1000, Symbol()],
+					[10, 'x'.repeat(200)],
+					[{ valueOf: () => ({}) }],
+				])
+					checks.push(thrown(() => connecting.close(...args)));
+				checks.push(
+					thrown(() => connecting.send('a\udc00')),
+					thrown(() => connecting.send(Symbol())),
+					thrown(() =>
+						connecting.send({
+							toString() {
+								throw new RangeError('mine');
+							},
+						}),
+					),
+				);
+				connecting.close();
+				results.argumentChecks = checks.join('; ');
+				// a close() while connecting fails the connection: CLOSING at
+				// once, then (a task later) an error and a close with 1006, not
+				// clean, both reading CLOSED; what is sent meanwhile is counted
+				results.closeConnecting = await new Promise((resolve) => {
+					const events = [];
+					const ws = new WebSocket(base + '/hold');
+					ws.onopen = () => events.push('open');
+					ws.onerror = () => events.push('error ' + ws.readyState);
+					ws.onclose = (e) => {
+						events.push(
+							['close', e.code, e.reason, e.wasClean, ws.readyState].join(' '),
+						);
+						setTimeout(() => resolve(events.join(', ')), 300);
+					};
+					ws.close(4999.5, 'bye');
+					ws.send('abc');
+					events.push('closing ' + ws.readyState + ' ' + ws.bufferedAmount);
+				});
 				window.__wsClose = results;
 			})();
 		</script>

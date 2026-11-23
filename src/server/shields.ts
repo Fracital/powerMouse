@@ -118,13 +118,44 @@ export class ShieldsStore {
 		return !!entry && entry.enabled && entry.mode === 'standard';
 	}
 
-	/** whether the host's requests are upgraded to HTTPS (shields-up, not 'off') */
+	/**
+	 * Whether the host's requests are upgraded to HTTPS (shields up, 'upgrade'
+	 * or 'strict'), unless the user went on to the host over http from the
+	 * strict interstitial (allowHttp)
+	 */
 	httpsUpgrade(host: string): boolean {
 		const entry = this.get(host);
-		if (!entry || shieldsDown(entry)) return false;
-		// 'strict' ("only connect with HTTPS") also upgrades; its "block when
-		// HTTPS is unavailable" is not distinguished from 'upgrade' yet (FINDINGS)
+		if (!entry || shieldsDown(entry) || this.#httpAllowed.has(host))
+			return false;
 		return entry.httpsUpgrade === 'upgrade' || entry.httpsUpgrade === 'strict';
+	}
+
+	/**
+	 * Whether the host is HTTPS only ('strict', Brave's "require HTTPS"):
+	 * its top-level page is upgraded as well, and an upgraded page whose
+	 * https load fails at the connection or at TLS gets the interstitial
+	 * (./httpsOnly.ts), never the http page in its place. 'upgrade' leaves
+	 * the top-level page as it was asked for, so a host with no https still
+	 * loads.
+	 */
+	httpsOnly(host: string): boolean {
+		const entry = this.get(host);
+		return (
+			!!entry &&
+			!shieldsDown(entry) &&
+			entry.httpsUpgrade === 'strict' &&
+			!this.#httpAllowed.has(host)
+		);
+	}
+
+	/**
+	 * The hosts the user went on to over http from the strict interstitial,
+	 * kept for the worker's life (Chrome's HTTPS-Only Mode keeps its
+	 * exceptions for the session) and across shield pushes
+	 */
+	#httpAllowed = new Set<string>();
+	allowHttp(host: string): void {
+		if (host) this.#httpAllowed.add(host);
 	}
 
 	/**

@@ -229,28 +229,6 @@ fix).
 
 ## wpt-encoding-legacy
 
-- The document's encoding is lost (420 entries): every non-ASCII character a
-  link's query or a submitted GET form carries in a legacy-encoded document
-  goes as UTF-8, where Chrome percent-encodes it in the document's encoding
-  (an unencodable one as `%26%23<decimal>%3B`).
-  `encoding/legacy-mb-korean/euc-kr/euckr-encode-form.html?17001-last` (48),
-  `encoding/legacy-mb-korean/euc-kr/euckr-encode-href.html?17001-last` (48),
-  `encoding/big5-encoder.html` (12), `encoding/iso-2022-jp-encoder.html`
-  (11), `encoding/legacy-mb-schinese/gbk/gbk-encoder.html` (48),
-  `encoding/legacy-mb-schinese/gb18030/gb18030-encoder.html` (253). The
-  worker decodes each document with the encoding the browser would pick and
-  serves it as UTF-8 (`decodeDocument` / `utf8ContentType` in
-  `src/server/charset.ts`), and the page is never told what it was, so the
-  browser encodes its URL queries as UTF-8 and `document.characterSet`,
-  `charset` and `inputEncoding` read `UTF-8`. A fix passes the sniffed label
-  to the shell (a new Config field), answers the three getters with it, and
-  encodes the query of every URL the hooks route and every form submission
-  in that encoding; the browser exposes no legacy encoder to script, so the
-  inject needs one (tables built by decoding every pointer with TextDecoder
-  and inverting, or a detached helper document in that encoding), with the
-  standard's stateful steps for ISO-2022-JP. Every variant of these pages but
-  the last is in the suite's `skip` until then. `url/percent-encoding.window.html`
-  in `wpt-url-elements` has the same cause.
 - `encoding/utf-32-from-win1252.html` (3): three frames without a
   declaration read `UTF-8` where they take their same-origin parent's
   `windows-1252`. `decodeDocument` knows nothing of the embedding document,
@@ -270,8 +248,17 @@ fix).
   `routeHTML`, which makes a rewritten data: URI rather than the `inline:`
   route a frame's `src` gets; the shell in that opaque data: document dies at
   boot (`Failed to execute 'open' on 'XMLHttpRequest': Invalid URL`), so the
-  framed document never posts its answer. The encoding cause above waits
-  behind it.
+  framed document never posts its answer. Whether its encoding then matches
+  is not measured.
+
+Cleared since the combined tree: the 420 entries of the encode pages
+(`euckr-encode-form`, `euckr-encode-href`, `big5-encoder`,
+`iso-2022-jp-encoder`, `gbk-encoder`, `gb18030-encoder`), where a link's
+query and a submitted GET form went as UTF-8 in a legacy-encoded document.
+A document keeps its encoding (e52230ffc, document-encoding suite): the
+shell goes out in it and the inject encodes what it routes in it. The suite
+runs every encode-href variant and two of each encode-form page since, 6
+entries on its list.
 
 Cleared on the combined tree: one MISSING entry each of
 `iso2022jp-decode.html?7001-last` and `sjis-decode.html?7001-last`, a
@@ -790,19 +777,6 @@ The list is empty.
 
 ## wpt-url-elements
 
-- `url/failure.html` (186: "XHR: <input> should throw"): `open()` does not
-  throw. The stand-in's `open()` stores `String(url)` and resolves it only at
-  `send()`. Fix: parse against the client's base URL in `open()`, after the
-  method checks, and throw the browser's SyntaxError DOMException.
-- `url/failure.html` (186: "window.open(): <input> should throw"):
-  `TypeError: Failed to construct 'URL': Invalid URL` for a SyntaxError. The
-  `window.open` hook (`src/inject/dom/modules/DOMHooks.ts`) parses its first
-  argument unguarded; it needs the same catch, with Chrome's message
-  ("Unable to open a window with invalid URL").
-- `url/percent-encoding.window.html` (8: big5, euc-kr, windows-1252,
-  iso-2022-jp (2), gb18030, shift_jis, iso-8859-2): a link's query is
-  percent-encoded as UTF-8, not in the document's encoding. The same cause as
-  the encode pages of `wpt-encoding-legacy`.
 - `url/a-element.html?exclude=(file|javascript|mailto)`,
   `url/a-element-xhtml.xhtml?exclude=(file|javascript|mailto)` (3 each,
   against a base with `user:pass@`): the href loses the base's credentials.
@@ -828,90 +802,23 @@ The list is empty.
 Cleared on the combined tree: the 186 "Location's href: <input> should
 throw" subtests of `url/failure.html`, where the Location stand-in threw
 URL's TypeError for the frame realm's SyntaxError (the unparsable Location
-URL fix hands such a URL to the browser's own setter).
+URL fix hands such a URL to the browser's own setter). Cleared since:
+`url/percent-encoding.window.html` (8), a link's query percent-encoded as
+UTF-8 rather than in the document's encoding (e52230ffc, as in
+`wpt-encoding-legacy`); and the other 372 subtests of `url/failure.html`,
+"XHR: <input> should throw" and "window.open(): <input> should throw" (186
+each): the XHR stand-in's `open()` parses its URL there, against the
+document's base, and both throw the browser's SyntaxError where they threw
+nothing or URL's TypeError.
 
 ## wpt-websockets
 
-The stand-in is `src/inject/modules/WebSocket.ts` (`MockWebSocket`). The
-pages that need the server's answer to a message run since epoxy-transport
-delivers a frame as it arrives (README, websockets); the ten of them that
-still fail are the last group below.
+The stand-in is `src/inject/modules/WebSocket.ts` (`MockWebSocket`), what
+an instance does `src/inject/bareClient.ts`. The pages that need the
+server's answer to a message run since epoxy-transport delivers a frame as
+it arrives (README, websockets); the two of them that still fail are the
+last group below.
 
-- Argument checks and errors of the stand-in (S each):
-  - the constructor never validates the subprotocols (token, no separators,
-    no duplicates), so it connects where Chrome throws a SyntaxError:
-    `websockets/constructor/004.html?default` (161),
-    `websockets/constructor/007.html?default` (1),
-    `websockets/constructor/021.html?default` (1),
-    `websockets/Create-asciiSep-protocol-string.any.html?default`,
-    `websockets/Create-asciiSep-protocol-string.any.worker.html?default`,
-    `websockets/Create-nonAscii-protocol-string.any.html?default`,
-    `websockets/Create-nonAscii-protocol-string.any.worker.html?default`,
-    `websockets/Create-protocol-with-space.any.html?default`,
-    `websockets/Create-protocol-with-space.any.worker.html?default`,
-    `websockets/Create-protocols-repeated.any.html?default`,
-    `websockets/Create-protocols-repeated.any.worker.html?default` (1 each);
-  - `close()` throws a DOMException without a name, turns a non-number code
-    into 0 instead of clamping it, and has no reason length check:
-    `websockets/Close-1005.any.html?default`,
-    `websockets/Close-1005.any.worker.html?default`,
-    `websockets/Close-2999-reason.any.html?default`,
-    `websockets/Close-2999-reason.any.worker.html?default`,
-    `websockets/Close-onlyReason.any.html?default`,
-    `websockets/Close-onlyReason.any.worker.html?default`,
-    `websockets/Close-Reason-124Bytes.any.html?default`,
-    `websockets/Close-Reason-124Bytes.any.worker.html?default` (1 each),
-    `websockets/close-invalid.any.html?default`,
-    `websockets/close-invalid.any.worker.html?default` (6 each);
-  - a close reason with an unpaired surrogate is not made well-formed:
-    `websockets/Close-reason-unpaired-surrogates.any.html?default`,
-    `websockets/Close-reason-unpaired-surrogates.any.worker.html?default` (1
-    each);
-  - `send()` while connecting throws a DOMException without the name
-    InvalidStateError: `websockets/Send-before-open.any.html?default`,
-    `websockets/Send-before-open.any.worker.html?default`,
-    `websockets/interfaces/WebSocket/send/003.html?default` (1 each);
-  - lone surrogates throw (from the transport's encoder) where they go as
-    U+FFFD: `websockets/interfaces/WebSocket/send/004.html?default` (3);
-  - `send()` after `close()` must drop the data and count it in
-    bufferedAmount: `websockets/interfaces/WebSocket/send/007.html?default`
-    (1).
-- bufferedAmount is always 0 (`get bufferedAmount() { return 0; }`; the
-  stand-in never counts what it handed the transport):
-  `websockets/Send-data.any.html?default`,
-  `websockets/Send-data.any.worker.html?default`,
-  `websockets/Send-65K-data.any.html?default`,
-  `websockets/Send-65K-data.any.worker.html?default`,
-  `websockets/Send-paired-surrogates.any.html?default`,
-  `websockets/Send-paired-surrogates.any.worker.html?default`,
-  `websockets/Send-unicode-data.any.html?default`,
-  `websockets/Send-unicode-data.any.worker.html?default`,
-  `websockets/bufferedAmount-unchanged-by-sync-xhr.any.html?default`,
-  `websockets/bufferedAmount-unchanged-by-sync-xhr.any.worker.html?default`,
-  `websockets/interfaces/WebSocket/bufferedAmount/bufferedAmount-getting.html?default`,
-  `websockets/interfaces/WebSocket/bufferedAmount/bufferedAmount-large.html?default`,
-  `websockets/interfaces/WebSocket/bufferedAmount/bufferedAmount-unicode.html?default`
-  (1 each). The stand-in now counts a message until the transport says it
-  left (src/transport/socketSends.ts, the `websocket-buffered` suite).
-- Closing while connecting: `readyState` reports CLOSING only when the
-  transport socket is open, and `close()` during CONNECTING does not fail
-  the connection (error, then close 1006, in a task of their own):
-  `websockets/interfaces/WebSocket/close/close-basic.html?default`,
-  `websockets/interfaces/WebSocket/close/close-connecting.html?default`,
-  `websockets/interfaces/WebSocket/close/close-connecting-async.any.html?default`,
-  `websockets/interfaces/WebSocket/close/close-connecting-async.any.worker.html?default`,
-  `websockets/interfaces/WebSocket/close/close-nested.html?default`,
-  `websockets/interfaces/WebSocket/readyState/003.html?default` (1 each,
-  `expected 2 but got 0`); in the same area
-  `websockets/Close-delayed.any.html?default`,
-  `websockets/Close-delayed.any.worker.html?default` (1 each: the close event
-  fires before the server's delayed handshake answer) and
-  `websockets/interfaces/WebSocket/events/013.html?default` (4: event objects
-  `null`).
-- `websockets/opening-handshake/005.html?default` (1: "response header and
-  close frame in same packet"): 1005 for 1001. A close frame that arrives
-  with the handshake response is reported as no status; the transport or the
-  stand-in's close code mapping, not traced.
 - Event handler attributes: setting `onopen`, `onclose`, `onerror` or
   `onmessage` to null or a non-callable keeps the old handler
   (`onEventTarget()` in `src/inject/modules/Proxy.ts` ignores a set to a
@@ -919,19 +826,23 @@ still fail are the last group below.
   `websockets/eventhandlers.any.html?default`,
   `websockets/eventhandlers.any.worker.html?default`,
   `websockets/interfaces/WebSocket/events/010.html?default`,
-  `websockets/interfaces/WebSocket/events/014.html?default` (4 each).
-- `websockets/Create-on-worker-shutdown.any.html`,
-  `websockets/Create-on-worker-shutdown.any.worker.html` (1 each: "WebSocket
-  created after a worker self.close()"): the stand-in does not know the
-  worker is closing (natively the socket is born failing).
+  `websockets/interfaces/WebSocket/events/014.html?default` (4 each); in
+  the same place, a handler set to an object with `handleEvent` reads
+  `null`: `websockets/interfaces/WebSocket/events/013.html?default` (4).
+- `websockets/Close-delayed.any.html?default`,
+  `websockets/Close-delayed.any.worker.html?default` (1 each: the close
+  event fires before the server's delayed answer to the page's close).
+  epoxy reports no close for most closes the page starts, so the stand-in
+  fires the close event `CLOSE_ANSWER_MS` (500 ms) after the close frame
+  left (`src/inject/bareClient.ts` close), and the page reads 500 ms where
+  the server took a second.
+- `websockets/opening-handshake/005.html?default` (1: "response header and
+  close frame in same packet"): 1005 for 1001. A close frame that arrives
+  with the handshake response is reported as no status; the transport or the
+  stand-in's close code mapping, not traced.
 - Pages that wait for the server's answer, run since the transport's frame
   flush (epoxy 0061), failing for their own reasons (measured identical in
   six runs on Chrome 152 and 156 with the fixed transport):
-  - bufferedAmount reads 0 right after `send()` (the bufferedAmount group
-    above): `websockets/Send-binary-arraybuffer.any.html?default`,
-    `websockets/Send-binary-arraybuffer.any.worker.html?default`,
-    `websockets/Send-binary-65K-arraybuffer.any.html?default`,
-    `websockets/Send-binary-65K-arraybuffer.any.worker.html?default`;
   - a frame with a reserved opcode after open fires no error event through
     the proxy (epoxy's read loop errors; not traced where the error is lost:
     the transport's connect, the transport worker or the stand-in):
@@ -940,6 +851,24 @@ still fail are the last group below.
     `verify()` (client/src/websocket.rs) never checks the accept key, so the
     socket opens where Chrome fails it:
     `websockets/security/001.html?default`.
+
+Cleared on the stand-in's argument and state checks (2026-11-23, 207
+subtests): the constructor's subprotocol checks
+(`websockets/constructor/004.html?default` (161), `constructor/007`,
+`constructor/021`, `Create-asciiSep-protocol-string`,
+`Create-nonAscii-protocol-string`, `Create-protocol-with-space`,
+`Create-protocols-repeated`); `close()`'s code and reason checks
+(`Close-1005`, `Close-2999-reason`, `Close-onlyReason`,
+`Close-Reason-124Bytes`, `close-invalid` (6 each),
+`Close-reason-unpaired-surrogates`); `send()` while connecting
+(`Send-before-open`, `send/003`) and with lone surrogates (`send/004`, 3);
+and `close()` while connecting (`close/close-basic`, `close/close-connecting`,
+`close/close-connecting-async`, `close/close-nested`, `readyState/003`,
+`Create-on-worker-shutdown`, whose page closes the socket it makes). The
+bufferedAmount entries (`Send-data`, `Send-65K-data`,
+`Send-binary-arraybuffer` and the others) left the list earlier, with the
+count of what the transport has not sent (src/transport/socketSends.ts, the
+`websocket-buffered` suite).
 
 ## wpt-webstorage
 
@@ -1037,10 +966,6 @@ relays the child frame's message to the opener, which reads `iframeParent`.
   `error`; the two constructions are two routes (`js:worker` and
   `js:workerModule`, `src/scriptRoutes.ts`). The constructor hook would have
   to remember type and credentials per URL and name.
-- `workers/worker-url-encoding.html` (1): `?%C3%9F` for `?%DF`. Every
-  proxied document is UTF-8 (`src/server/charset.ts`), so URL queries of a
-  legacy-encoded page are percent-encoded as UTF-8; the cause of the
-  `wpt-encoding-legacy` encode pages.
 - `workers/dedicated-worker-in-data-url-context.window.html` (1):
   `Failed to execute 'open' on 'XMLHttpRequest': Invalid URL`. A data: URL
   worker that
@@ -1049,7 +974,9 @@ relays the child frame's message to the opener, which reads `iframeParent`.
 
 Cleared on the combined tree: `SharedWorker-detach-frame-in-error-event.html`
 (a frame's `document` read as cross-origin; the lead's about:blank origin
-fix, by its message).
+fix, by its message). Cleared since: `workers/worker-url-encoding.html`
+(1), a legacy-encoded page's worker URL query percent-encoded as UTF-8
+(e52230ffc, as in `wpt-encoding-legacy`).
 
 ## wpt-workers-constructors
 
@@ -1217,18 +1144,19 @@ not built or tested.
   second `open()` survive in some path. Not traced.
 - The server's reason phrase is replaced by the standard one for the code
   (`Not Modified`, `Moved Permanently`): `xhr/send-conditional.htm` (2),
-  `xhr/send-redirect-no-location.htm` (4). Not traced: the transport (epoxy
-  exposes the canonical reason) or the worker's `new Response`.
+  `xhr/send-redirect-no-location.htm` (4). The transport: epoxy's
+  `statusText` is hyper's canonical reason for the code (its table is in
+  `epoxy.wasm`), not the status line's, so the fix is a patch of epoxy-tls
+  (`deploy/epoxy/`) that hands on hyper's `ReasonPhrase` when there is one.
 - blob: URL requests: the Content-Length of a fetched blob: URL:
   `xhr/request-content-length.any.html`,
   `xhr/request-content-length.any.worker.html` (1 each).
-- `xhr/open-url-base-inserted-after-open.htm` (1): "bottom" for "top". The
-  stand-in resolves the URL at `send()`, not at `open()`.
 
 Cleared on the combined tree: `open-url-about-blank-window.htm` (an
 about:blank window's `XMLHttpRequest` read as cross-origin; the lead's
-about:blank origin fix). Passing since the rebase onto 082ac470:
-`open-url-multi-window-6.htm`. Passing at d600d112 (a worker's synchronous
+about:blank origin fix), `open-url-base-inserted-after-open.htm` (1: the
+stand-in resolves its URL at `open()`, not at `send()`). Passing since the
+rebase onto 082ac470: `open-url-multi-window-6.htm`. Passing at d600d112 (a worker's synchronous
 XMLHttpRequest): `blob-range.any.worker.html` (17).
 
 ## wpt-xhr-response
@@ -1237,13 +1165,21 @@ XMLHttpRequest): `blob-range.any.worker.html` (17).
   (`xhr/status-async.htm`, `xhr/status-basic.htm`, 18 each, with the status
   699 cases), and a status outside 200 to 599 makes the worker's
   `new Response(..., { status })` throw a RangeError, so the page sees a
-  network error (`xhr/status-error.htm`, 4).
+  network error (`xhr/status-error.htm`, 4). The reason phrase is the
+  transport's (see `wpt-xhr-request`); the RangeError is thrown in
+  proxy-transports' `BareResponse.fromTransferrableResponse`, under
+  `bare.fetch`, before the worker has the response, and no Response the
+  worker can make carries 699 to the page.
 - A response header `Headers` or the transport refuses (odd names, values,
   whitespace) ends in an error event: `xhr/getallresponseheaders.htm` (7),
   `xhr/getresponseheader.any.html`, `xhr/getresponseheader.any.worker.html`
-  (6 each), `xhr/getallresponseheaders-after-reuse.html` (1). Not traced.
-- `xhr/getresponseheader-special-characters.htm` (1): `Headers.get` throws
-  for a name that is no token; return null first.
+  (6 each), `xhr/getallresponseheaders-after-reuse.html` (1). Every one of
+  them is an `.asis` resource whose header block ends at the end of the
+  stream, with no empty line (and lines that end in LF alone);
+  `headers-basic.asis`, with nothing odd in its fields, fails the same way.
+  Chrome reads such a response; hyper (in epoxy) most likely refuses it as
+  incomplete (not measured in the transport itself), which would put the
+  fix in `deploy/epoxy/patches/hyper`, not the worker.
 - responseType: an unknown value is kept, and the setter checks the state
   before the value: `xhr/responsetype.any.html` (4),
   `xhr/responsetype.any.worker.html` (6), `xhr/historical.html` (1,
@@ -1263,6 +1199,9 @@ XMLHttpRequest): `blob-range.any.worker.html` (17).
 
 Passing at d600d112 (a worker's synchronous XMLHttpRequest throws on a
 network error): `response-body-errors.any.worker.html` (1).
+Cleared: `getresponseheader-special-characters.htm` (1: the stand-in's
+`getResponseHeader` answers null for a name that is no header name, where
+`Headers.get` threw).
 
 ## wpt-xhr-timeout
 

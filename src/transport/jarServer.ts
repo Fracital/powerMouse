@@ -7,6 +7,8 @@ import { storeName as profileName } from '../profile';
 import {
 	DEVICE_GRANTS_DATABASE,
 	DEVICE_GRANTS_STORE,
+	HSTS_DATABASE,
+	HSTS_STORE,
 	JAR_DATABASE,
 	JAR_STORE,
 	PASSKEYS_DATABASE,
@@ -54,7 +56,8 @@ const keptOpen = new Map<string, Promise<IDBDatabase>>();
 /**
  * A store the host's service worker keeps, by its database: the sites'
  * permission states and the devices they chose, out of line
- * (src/server/permissions.ts), and the passkeys, in line
+ * (src/server/permissions.ts), the partitions' HSTS hosts, out of line
+ * (src/server/hsts.ts), and the passkeys, in line
  * (src/passkeys/authenticator.ts), whose version and store this makes when
  * the host's worker has not yet
  */
@@ -92,6 +95,7 @@ const KEPT: Record<string, string> = {
 	[PERMISSIONS_STORE]: PERMISSIONS_DATABASE,
 	[DEVICE_GRANTS_STORE]: DEVICE_GRANTS_DATABASE,
 	[PASSKEYS_STORE]: PASSKEYS_DATABASE,
+	[HSTS_STORE]: HSTS_DATABASE,
 };
 
 function settled<T>(request: IDBRequest<T>): Promise<T> {

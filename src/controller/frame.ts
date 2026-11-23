@@ -63,6 +63,7 @@ function hostTabs(
 	return {
 		list: call('list'),
 		ofClient: call('ofClient'),
+		localFrame: call('localFrame'),
 		create: call('create'),
 		navigate: call('navigate'),
 		reload: call('reload'),

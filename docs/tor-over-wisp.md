@@ -216,7 +216,40 @@ New Identity keeps `state` and its guards), **the client's state is not part
 of the `tor` profile's site data**: it is one store of its own, kept across
 sessions and New Identity, holding only guards and public directory data,
 forgotten only by an explicit "Forget Tor state" and by clearing site data
-of the host. Its name goes through `profileStoreName` (`test/store-names.mjs`).
+of the host. Its name, IndexedDB `stomp-tor-client` (tor-js's
+`IndexedDBStorage`, opened in the client's realm), is of no profile
+(`profileOfName` gives the default profile's ''), so forgetting the `tor`
+profile leaves it; `test/store-names.mjs` checks it is the client's only
+store and that name.
+
+**Forget Tor state** (the menu, in Tor mode with the client) is the only
+way to drop it short of the browser's site data: the page asks its
+transport on its channel, the transport the shared client
+(`TorService.forgetState`), which closes arti's client and its links,
+deletes every key of the store (and of the memory tor-js's locking wrapper
+keeps when another holds the store's lock), forgets the consensus's relays
+and the session's circuits, and starts the client again: it samples new
+guards and downloads the directory anew. Every tab of the shared client
+hears its status start over and drops its connections. Tor Browser has no
+such control (a new profile is its way); here the Wisp server's operator
+sees the guard, so a user may want it changed, at the cost Tor's guard
+design warns of when it is done often.
+
+What tor-js does and does not give for it:
+
+- The state is tor-js's whole `TorStorage`: arti's state manager writes
+  under `state:` keys (its guards are the `guards` value, tor-guardmgr's
+  `GuardSets` as JSON: `default.guards` with each guard's `id`, `ed25519`
+  and `rsa`, and its `orports`; `default.confirmed` in arti's order), its
+  directory under `dir:` keys. The client keeps the store itself, so it can
+  read and empty it, but tor-js has no call to forget the guards alone or
+  to reset a running client's guard manager: Forget Tor state closes the
+  client and makes another, and the guards' JSON is arti's internal
+  format, read best-effort (a value that does not read as one is no guard).
+- Where a tab runs a client of its own (no SharedWorker: Chrome on
+  Android, or the SharedWorker did not answer), Forget Tor state restarts
+  only that tab's client; another tab's own client keeps its guards in
+  memory and may write them back.
 
 The cost: the operator sees the same guard from the same browser across
 sessions, a pseudonym that survives an IP change. A Tor user's ISP sees the
@@ -336,6 +369,50 @@ after about ten minutes and on "New Tor connection for this site"
   profile forgotten (cookies, storage, caches), as Tor mode's "turn off and on"
   does today. Guards and directory data stay, as in Tor Browser.
 - **Circuit lifetime**: arti's dirtiness (ten minutes) applies per key.
+- **A new Tor session**: the shared client outlives its pages by up to five
+  minutes (`extendedLifetime`), so the first page of a new session (the
+  profile forgotten, `torSession.fresh` in pm/main.js) passes a token in
+  its transport's options (`session`) and the client takes a new session
+  nonce for it (`TorService.newSession`), once per token: a site visited
+  in both sessions gets a circuit of its own in each.
+
+### Circuit display
+
+Tor Browser's "Circuit for this site" lists the hops (this browser, the
+guard, a middle relay, the exit, the site) with each relay's country and
+address. The menu's **Tor circuit for this site** (a submenu, in Tor mode
+with the client) shows what the client can tell of the active tab's
+site's circuits (`TorService.circuitFor(url)`, asked on the page's
+channel):
+
+- **The guard**: the first of arti's guards (its guard state's confirmed
+  order, "Guard persistence") that a link is open to now, as arti's exit
+  circuits all go through its first usable primary guard
+  (`guard_use_parallelism` 1); where the state names none, the one relay a
+  link is open to; with no link open (idle connections), the guard arti
+  tries first, said so. Its nickname and fingerprint come from the
+  consensus the client keeps (the `r` line of its ORPort), its address from
+  the link.
+- **The site**: its circuit key and since when the key's circuits are used
+  and how many streams went on them (a New Tor circuit for this site or a
+  New Identity starts it again).
+
+What tor-js does not give, and the display says so:
+
+- **The middle and exit relays.** tor-js returns a stream, not its
+  circuit: arti's `ClientCirc` and its path (`path_ref()`, each hop's
+  identities) never reach JS, and arti logs no relay of a circuit at the
+  levels we read (its `safelog` redacts them). A patch to tor-js that
+  returned the path with `connect()`, or an `isolationKey`'s circuit on
+  request, would let the display name every hop.
+- **Countries.** A consensus has no country; arti's `tor-geoip` database
+  is not in tor-js's build, nor any call to it. Tor Browser's countries
+  come from tor's GeoIP files.
+- **Which guard a circuit took.** The display reads the guard from links
+  and state, not from the circuit; with more than one primary guard in
+  use (a guard that failed, directory fetches over others) it shows the
+  first that is linked, which is the exit circuits' guard in arti's
+  default configuration.
 
 ## The old relay
 
@@ -381,8 +458,17 @@ start a SharedWorker, so the controller starts it and gives the transport a
 port to it) is `demo/public/tor-client/shared.mjs`, which runs the client
 (`service.mjs`) and opens every tab's Tor streams over its port, each
 stream on a port of its own (`remote.mjs`, `streamPort.mjs`). Where no SharedWorker starts, or it does not answer in 15 s,
-the tab runs a client of its own in its transport worker. The client ends
-with the origin's last page. The client is tor-js 0.4.4 with deploy/tor-js's stream API
+the tab runs a client of its own in its transport worker. The controller
+starts the SharedWorker with `extendedLifetime: true`
+(`src/transport/sharedWorker.ts`, as the carrier host:
+docs/webtransport.md), so in Chrome 157 and later it outlives the
+origin's last page by up to five minutes: a reload or a navigation gets
+the same client back, bootstrapped, its circuits and its link to the
+guard open, and a new Tor session's first page says so to it ("Per-site
+circuits and New Identity"). Every page asks with the option (Chrome
+refuses a page that asks for the same worker without it); a browser that
+does not know it (Firefox, Safari) ignores it, and there the client still
+ends with the origin's last page. The client is tor-js 0.4.4 with deploy/tor-js's stream API
 (`node_modules/tor-js`, served at `/tor-client/tor-js/`), its socket provider a Wisp v1 client of its own over
 the demo's ordinary `/wisp/`, its storage IndexedDB `stomp-tor-client` (the
 app's origin; not the `tor` profile's, so it survives the
@@ -397,10 +483,12 @@ the Tor toggle's tooltip and the status line show it. The menu
 (the three dots) has **New Identity** (a new Tor session: the page loads
 again with a new transport worker, so no circuit of before, and the `tor`
 profile is forgotten; with other Tor tabs open it asks to close them first,
-since they share the identity) and **New Tor circuit for this site** (a new
-isolation nonce for the tab's site, and the tab loads again). The channel is
+since they share the identity), **New Tor circuit for this site** (a new
+isolation nonce for the tab's site, and the tab loads again), **Tor circuit
+for this site** ("Circuit display") and **Forget Tor state** ("Guard
+persistence"). The channel is
 same-origin, so in the isolated mode (the controller in the proxy's frame)
-the page hears nothing and the two items are not offered; the dialing mode,
+the page hears nothing and the items are not offered; the dialing mode,
 which production uses, is same-origin.
 
 `node test/tor-client-smoke.mjs` (after `node build.js`; `SKIP_NETWORK=1`
@@ -409,8 +497,10 @@ demo server of its own with holyWisp logging every stream, opens the demo
 with `?tor=1` in the suites' Chrome (`--host-resolver-rules` resolves no
 name but localhost, so nothing but the Wisp connection leaves), loads
 `https://check.torproject.org/api/ip`, `https://api.ipify.org/?format=json`
-and the first again, keeps the session 90 s, opens a fresh host page (a new
-transport worker and client) and loads the first site once more. It checks
+and the first again, keeps the session 90 s, ends the client's
+SharedWorker (DevTools' terminate, `Target.closeTarget`: it would outlive
+the page), opens a fresh host page (a new transport worker and client)
+and loads the first site once more. It checks
 that the site says `IsTor: true`, that every Wisp stream went to an IP
 address (never a name), and that the fresh client went only to relays the
 first one had (its guards were kept).
@@ -492,9 +582,10 @@ What the client does not do yet:
 - **Progress and the menu items need the same origin**: in the isolated
   mode the page hears nothing from the proxy origin's worker; the status
   says "Tor route selected" and the items are not offered.
-- **A reload starts the client again** where it was the origin's only page
-  (the SharedWorker ends with it): a warm bootstrap, 1 to 2 s. The carrier
-  host's `extendedLifetime` (Chrome 157) would keep it across reloads.
+- **A reload starts the client again outside Chrome** where it was the
+  origin's only page: Firefox and Safari have no `extendedLifetime`, so
+  the SharedWorker ends with the page (a warm bootstrap, 1 to 2 s). In
+  Chrome it outlives the page by up to five minutes.
 - **The ordinary `/wisp/`**: no Tor-only endpoint on the server (the worker's
   own check refuses non-relays, "Which relays the worker may reach").
 - Not covered: the sync relay of WebKit's frozen pages (Tor mode's
@@ -595,7 +686,12 @@ every link failing at the Wisp server, circuits that do not build (two
 tabs), and a client that dials the site itself. In each, the fixture page
 asked for records no request. It also checks the reasons shown, the retry
 after a failure, a Tor tab kept in Tor mode when another turns it off, and
-a Tor tab's site data across its reload. It reaches no Tor network.
+a Tor tab's site data across its reload. And the client's life and state:
+the same client, bootstrapped, after a reload and a navigation
+(`extendedLifetime`), a new Tor session on it with none of the last one's
+circuits, the circuit display's guard (the stand-in keeps a guard state and
+a consensus as arti does), and Forget Tor state emptying the store and
+starting the client again. It reaches no Tor network.
 
 Nor does the host's server read a site's address from a route. Some
 proxied requests reach it at their route,
@@ -636,9 +732,13 @@ isolationKey)` (deploy/tor-js `0001`); left: `resolve()`,
    a container build.
 2. **epoxy over Tor streams** (done): the in-worker Wisp server for epoxy's
    function transport, credit and CLOSE mapping, UDP refusal.
-3. **One client per profile** (done; S left): the Tor client in a
-   SharedWorker (`sharedWorker` on the descriptor), the transport workers of
-   every tab its clients; left: `extendedLifetime`, so a reload keeps it.
+3. **One client per profile** (done): the Tor client in a SharedWorker
+   (`sharedWorker` on the descriptor), the transport workers of every tab
+   its clients, started with `extendedLifetime` so a reload or a
+   navigation keeps it in Chrome (a new Tor session gets a new session
+   nonce from it, "Per-site circuits and New Identity"). Firefox and
+   Safari have no such option: there a reload of the last page still
+   starts the client again.
 4. **Bootstrap UI** (done; S left): progress in the Tor toggle's tooltip from arti's log,
    and the blocker and a failure's reason from the client's own links
    ("Cannot reach the Wisp server", "No Tor relay answered") or from
@@ -650,11 +750,20 @@ isolationKey)` (deploy/tor-js `0001`); left: `resolve()`,
    serves it from the app origin; the client passes it as `bootstrap`.
 6. **Tor-only Wisp endpoint** (M): `/wisp-or/` with the consensus allowlist,
    refreshed hourly; `STOMP_CONFIG.torClient.wisp`.
-7. **Isolation UI** (done; S left): New Identity and New Tor circuit for this
-   site in the menu; left: the circuit display (Tor Browser's "Circuit for
-   this site") from arti's circuit info, the isolated mode.
-8. **Guard state store** (S): the client's state outside the `tor` profile,
-   its own "Forget Tor state", store-names coverage.
+7. **Isolation UI** (done; S left): New Identity, New Tor circuit for this
+   site and Tor circuit for this site in the menu, the last with the guard
+   of the site's circuits (from arti's guard state and the kept consensus)
+   and the site's circuit's age ("Circuit display"); left: the middle and
+   exit relays and the countries, which tor-js does not expose (a tor-js
+   patch returning a stream's circuit path, and arti's `tor-geoip` in its
+   build), and the isolated mode.
+8. **Guard state store** (done): the client's state in IndexedDB
+   `stomp-tor-client`, outside the `tor` profile, one store wrapper for
+   every start of the client, Forget Tor state in the menu (the store
+   emptied and the client started again), store-names coverage ("Guard
+   persistence"). tor-js has no call to forget the guards of a running
+   client, so it is made again; a tab with a client of its own (no
+   SharedWorker) is not restarted by another tab's Forget Tor state.
 9. **Bridges** (L): WebTunnel (HTTPS + WebSocket, over Wisp TCP with epoxy's
    TLS, or the browser's own WebSocket) and Snowflake (WebRTC) as arti
    pluggable transports, so the operator does not see Tor use or the guard.

@@ -1278,6 +1278,58 @@ async function offlineVibeOS(tab) {
 	await tab.close();
 }
 
+// ---- offline.html on the real network, with and without Tor ----
+// (the build's own file, its real Tor client, through the run's wisp
+// server): a real https site renders, as a user who types it in sees it.
+// Its markup comes in pieces, so the document is streamed
+// (DocumentClient.loadHTMLStream); in Tor mode the page's worker runs Tor's
+// profile, and a document there that read its store before its markup
+// (primeStore) never rendered: the tab said Loading for good
+
+if (process.env.SKIP_NETWORK === '1')
+	console.log('SKIP offline.html on the real network (SKIP_NETWORK=1)');
+else {
+	const file = pathToFileURL(`${root}build/offline.html`).href;
+	const wisp = encodeURIComponent(`ws://127.0.0.1:${servers.port}/wisp/`);
+	const site = 'https://en.wikipedia.org/wiki/Web_proxy';
+	const WIKIPEDIA = () => {
+		if (document.URL !== 'https://en.wikipedia.org/wiki/Web_proxy') return null;
+		const heading = document.querySelector('#firstHeading')?.textContent;
+		const links = document.querySelectorAll('#bodyContent a').length;
+		return heading && links > 50 && document.readyState !== 'loading'
+			? { heading, links }
+			: null;
+	};
+	for (const [mode, query, timeout] of [
+		['offline.html', '', 60000],
+		['offline.html Tor mode', '&tor=1', 180000],
+	]) {
+		const tab = await firefox.newTab();
+		const from = firefox.logs.length;
+		await tab.go(`${file}?wisp=${wisp}${query}`);
+		const ready = await tab.until(
+			() => {
+				const text = document.getElementById('logMsg')?.textContent ?? '';
+				return /^(Ready|Error)/.test(text) ? text : null;
+			},
+			{ timeout },
+		);
+		await submitLanding(tab, site);
+		const page = await tab.find(WIKIPEDIA, { skipTop: true, timeout });
+		const failed = firefox.logs
+			.slice(from)
+			.filter((entry) => /markup stream failed/.test(entry.text))
+			.map((entry) => entry.text);
+		ok(
+			`${mode}: a real https site typed in renders (Wikipedia)`,
+			/^Ready/.test(ready ?? '') && !!page && !failed.length,
+			short({ ready, page: page?.value, failed }),
+		);
+		await shot(tab, `offline-real-${query ? 'tor' : 'direct'}`);
+		await tab.close();
+	}
+}
+
 // ---- Tor mode through the client, on the real network ----
 // (arti's wasm in Firefox's transport worker, its IndexedDB state and its
 // Wisp streams to Tor relays: test/tor-client-smoke.mjs checks the rest in

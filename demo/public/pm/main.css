@@ -3743,6 +3743,49 @@ input:focus-visible {
 .extSubmenu {
 	z-index: 62;
 }
+/* Tor mode's circuit display (main.js torCircuitRows): Tor Browser's
+   "Circuit for this site", each hop a dot on one rail */
+.torCircuit {
+	max-width: 320px;
+	padding: 8px 12px;
+	color: var(--pm-panel-text);
+}
+.torCircuitHead {
+	margin-bottom: 6px;
+	color: var(--pm-panel-strong);
+	font-weight: 600;
+}
+.torCircuitHop {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	padding: 0 0 8px 18px;
+	border-left: 2px solid var(--pm-panel-divider);
+	margin-left: 4px;
+}
+.torCircuitHop:last-child {
+	border-left-color: transparent;
+	padding-bottom: 0;
+}
+.torCircuitHop::before {
+	content: '';
+	position: absolute;
+	left: -6px;
+	top: 4px;
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+	background: var(--pm-panel-accent);
+}
+.torCircuitRole {
+	font-weight: 600;
+}
+.torCircuitRelay,
+.torCircuitNote {
+	color: var(--pm-panel-text-3);
+	font-size: 0.9em;
+	overflow-wrap: anywhere;
+}
 /* a submenu's item: its arrow at the end */
 .pmMenuItem .pmSubmenuArrow {
 	flex: none;

@@ -10,3 +10,23 @@
  * bundle carries it.
  */
 export const NETWORK_PARTITION = '$stomp$network';
+
+/**
+ * A network partition's name, as the field carries it: the top-level site
+ * (`top`, or the context's own site `frame` when it has none) and whether
+ * the context is cross-site to it (another site, or a context in a
+ * partition: `partitioned`); 'opaque' for a context with neither. The
+ * service worker's HSTS store is kept under the same names
+ * (src/server/hsts.ts).
+ */
+export function networkPartitionName(
+	top: string | null,
+	frame: string | null,
+	partitioned: boolean,
+): string {
+	const networkTop = top ?? frame;
+	if (networkTop === null) return 'opaque';
+	return `${networkTop} ${
+		networkTop !== frame || partitioned ? 'cross-site' : 'same-site'
+	}`;
+}

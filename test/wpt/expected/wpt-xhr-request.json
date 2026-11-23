@@ -1,7 +1,4 @@
 {
-	"/xhr/open-url-base-inserted-after-open.htm": {
-		"XMLHttpRequest: open() resolving URLs - insert <base> after open()": "FAIL: assert_equals: expected \"top\\n\" but got \"bottom\\n\""
-	},
 	"/xhr/request-content-length.any.html": {
 		"Fetched blob: URLs set the Content-Length header": "FAIL: assert_true: expected true got false"
 	},

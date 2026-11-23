@@ -16,7 +16,7 @@ import {
 	validConfigCodecKey,
 } from '../config';
 import type { IsolationEngine } from '../isolation';
-import { workerKindPartition } from '../partition';
+import { registrableDomain, siteOf, workerKindPartition } from '../partition';
 import { usePasskeysRemote } from '../passkeys/authenticator';
 import { checkProfile, realmProfile } from '../profile';
 import { isDocumentKind, parseRoutedURL, proxyOrigins } from '../routeURL';
@@ -29,6 +29,7 @@ import type {
 	RequestRule,
 } from '../transport/messages';
 import { ECHO_ROUTE, SEALER_ROUTE, SEALER_SOURCE } from '../transport/messages';
+import { networkPartitionName } from '../transport/networkPartition';
 import {
 	contextText,
 	linkRoute,
@@ -51,6 +52,14 @@ import { DnrHost } from './dnr';
 import { errorReportScript, hostErrorPage } from './errorPage';
 import { extensionRegistry } from './extensions/registry';
 import { extensionTransport } from './extensions/serve';
+import {
+	forgetHsts,
+	forgetHstsOfSite,
+	hstsUpgrades,
+	hstsURL,
+	ipLiteral,
+	useHstsRemote,
+} from './hsts';
 import { registerIntegrityLoads } from './integrityLoads';
 import { RemoteJar, type JarPort } from './jarDB';
 import { registerKeptLoads } from './keptLoads';
@@ -60,7 +69,11 @@ import type { ExtensionsServe, RemoteExtensions } from './remoteExtensions';
 import { dedicatedOwnerOf } from './requestClients';
 import { RewriteCache } from './rewriteCache';
 import type { RewritePool } from './rewritePool';
-import { clientTopSiteOf, registerRewrites } from './rewrites';
+import {
+	clientShieldsHostOf,
+	clientTopSiteOf,
+	registerRewrites,
+} from './rewrites';
 import Router, { json } from './Router';
 import { serviceWorkers } from './serviceWorkers';
 import { ShieldsStore } from './shields';
@@ -79,7 +92,11 @@ export interface StompServer {
 	router: Router;
 	/** turn a URL into the proxied URL a frame should navigate to */
 	route(url: string): string;
-	/** drop every entry of the HTTP cache and the rewrite cache (a no-op when they are off) */
+	/**
+	 * drop every entry of the HTTP cache and the rewrite cache (a no-op when
+	 * they are off), and every host HSTS keeps (src/server/hsts.ts), as
+	 * Chrome's clearing of the whole cache drops its HSTS state
+	 */
 	clearCache(): Promise<void>;
 	/** the host page was reloaded: what it restores takes that cache mode (rewrites.ts) */
 	hostReloaded(mode: HostReload): void;
@@ -92,8 +109,9 @@ export interface StompServer {
 	/**
 	 * Clear every virtualized store of a site on the proxy origin (the "Forget
 	 * me when I close this site" shield): its localStorage, sessionStorage,
-	 * IndexedDB and Cache Storage (src/server/Storage.ts). The cookie jar is
-	 * cleared through `cookies`.
+	 * IndexedDB and Cache Storage (src/server/Storage.ts), and what HSTS
+	 * keeps of its hosts and in its partitions (src/server/hsts.ts). The
+	 * cookie jar is cleared through `cookies`.
 	 */
 	forgetStorage(origin: string): Promise<void>;
 	/** replace the host's request rules */
@@ -142,6 +160,22 @@ export interface StompServer {
 	 * worker cannot tell (rewrites.ts clientTopSiteOf)
 	 */
 	topSiteOf(client: string): Promise<string | null>;
+	/**
+	 * the host whose per-site shields govern a service worker client of this
+	 * controller (its tab's top-level page's), or null when the worker
+	 * cannot place it (rewrites.ts clientShieldsHostOf)
+	 */
+	shieldsHostOf(client: string): Promise<string | null>;
+	/**
+	 * the wss: URL a WebSocket to a ws: URL goes to under HSTS, or null (the
+	 * controller's `hsts` call, src/server/hsts.ts)
+	 */
+	hstsSocket(asked: {
+		url: string;
+		origin?: string;
+		partitionKey?: string;
+		client?: string;
+	}): Promise<string | null>;
 }
 
 /** the public suffix of a host, private registries counted, as Chrome's sites have it */
@@ -250,6 +284,7 @@ function sharedStores(scope: string, jar?: JarPort): Promise<SharedStores> {
 		(remoteJar ??= new RemoteJar()).bind(jar);
 		usePermissionsRemote(remoteJar);
 		usePasskeysRemote(remoteJar);
+		useHstsRemote(remoteJar);
 	}
 	let stores = shared.get(scope);
 	if (!stores) {
@@ -718,10 +753,24 @@ export default async function createServer(
 				? reconfigureBlocker(init.scope, blocker, next, force)
 				: Promise.resolve(),
 		cookies,
-		forgetStorage: (origin) => forgetSiteStorage(origin, stores.storage),
+		forgetStorage: async (origin) => {
+			await forgetSiteStorage(origin, stores.storage);
+			try {
+				const domain = registrableDomain(
+					new URL(origin).hostname,
+					publicSuffix,
+				);
+				await forgetHstsOfSite(domain, (host) =>
+					registrableDomain(host, publicSuffix),
+				);
+			} catch (error) {
+				// not an origin: no site to forget
+			}
+		},
 		clearCache: async () => {
 			await cache?.clear();
 			await rewrites?.clear();
+			await forgetHsts();
 			// and what the renderer keeps under the sites' marks is no later
 			// document's (natively the renderers' memory caches go too)
 			await renewCacheSecret();
@@ -749,6 +798,41 @@ export default async function createServer(
 		},
 		linkOf,
 		topSiteOf: (client) => clientTopSiteOf(client, init.directory, init.codec),
+		shieldsHostOf: (client) =>
+			clientShieldsHostOf(client, init.directory, init.codec),
+		hstsSocket: async ({ url, origin, partitionKey, client }) => {
+			let target: URL;
+			try {
+				target = new URL(url);
+			} catch (error) {
+				return null;
+			}
+			if (target.protocol !== 'ws:' || ipLiteral(target.hostname)) return null;
+			// the socket's network partition, as a subresource's of its
+			// document (rewrites.ts partitionsOf): the top-level site its
+			// client is judged by, else the document's own, and whether the
+			// document is cross-site to it or in a partition
+			let frame: string | null = null;
+			try {
+				if (origin && origin !== 'null') frame = siteOf(origin, publicSuffix);
+			} catch (error) {
+				// no origin: a context of no site
+			}
+			const top =
+				partitionKey ??
+				(client
+					? await clientTopSiteOf(client, init.directory, init.codec)
+					: null) ??
+				frame;
+			const partition = networkPartitionName(
+				top,
+				frame,
+				partitionKey !== undefined,
+			);
+			return (await hstsUpgrades(partition, target.hostname))
+				? hstsURL(target).href
+				: null;
+		},
 		codecKey,
 		linkRoute: (context, url) =>
 			linkRoute(

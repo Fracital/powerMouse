@@ -771,7 +771,6 @@ export default class FetchModule extends Module<Client> {
 						});
 				}
 				// [input, init]
-				//TODO: COOKIES
 				// through a controlled realm (this one, or an ancestor when this
 				// document is one no service worker controls)
 				const res = await client.routedFetch(

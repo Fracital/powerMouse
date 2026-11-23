@@ -42,6 +42,7 @@ import { methodLike, presentExtensionPage } from './present';
 import { workerContainer, workerGlobal } from './serviceWorker';
 import { storePage } from './webstore';
 import type { World } from './world/index';
+import type { PageSide } from './world/page';
 import { makeWorld, pageSide } from './worlds';
 
 /** a route's function, or an isolated world's source and the URL it is code at */
@@ -77,10 +78,9 @@ function readGuardNonce(): string {
 	return '';
 }
 let started = false;
-const defined = new Map<string, Defined>();
-const waiting = new Map<string, (fn: Defined) => void>();
 
-const global = globalThis as typeof globalThis & Record<string, unknown>;
+type Global = typeof globalThis & Record<string, unknown>;
+const global = globalThis as Global;
 const web = webNatives(global);
 useNatives({ ...web, ...scriptNatives(global) });
 /** what an isolated world is handed of the page's, taken before the inject runs */
@@ -102,24 +102,7 @@ const runtime = {
 	 * the page runs can stand in for an extension's code
 	 */
 	define(id: string, key: string, given: unknown, url?: unknown) {
-		const script = natives.currentScript(natives.document);
-		const src = script ? natives.scriptSrc(script) : '';
-		if (
-			(typeof given !== 'function' && typeof given !== 'string') ||
-			!src.includes(`/${CONTENT_SCRIPT_ROUTE}/${id}/`) ||
-			!src.split('?')[0].endsWith(`/${key}.js`)
-		)
-			return;
-		const fn: Defined =
-			typeof given === 'string'
-				? { source: given, url: String(url ?? '') }
-				: (given as Defined);
-		const name = `${id}|${key}`;
-		const waiter = waiting.get(name);
-		if (waiter) {
-			waiting.delete(name);
-			waiter(fn);
-		} else defined.set(name, fn);
+		defineIn(mainDoc, id, key, given, url);
 	},
 	/**
 	 * The inject's hiddenMutation (src/inject/dom/modules/MutationObserver.ts),
@@ -130,8 +113,161 @@ const runtime = {
 		if (typeof given === 'function' && !hiddenRun)
 			hiddenRun = given as unknown as typeof hiddenRun;
 	},
+	/**
+	 * What the inject's client of a local document this one made (an
+	 * about:blank, about:srcdoc, blob: or data: frame's) calls, once the
+	 * inject runs there: the content scripts that match it run in it
+	 * (localDocument). The inject takes it as its client is made
+	 * (src/inject/dom/modules/IFrame.ts)
+	 */
+	localDocument(child: unknown, url: unknown, hidden: unknown) {
+		try {
+			localDocument(child, url, hidden);
+		} catch (error) {
+			console.error('STomp: the extensions could not run in a frame:', error);
+		}
+	},
 };
 let hiddenRun: (<T>(run: () => T) => T) | null = null;
+
+/**
+ * A document the runtime runs content scripts in: its own, or the
+ * document of a local frame it made (localDocument), which has no runtime
+ * of its own: its contexts are this realm's, and its scripts load and run
+ * in its own realm
+ */
+interface Doc {
+	global: Global;
+	document: Document;
+	/** the routes' functions, by `<id>|<key>`, and the loads waiting for them */
+	defined: Map<string, Defined>;
+	waiting: Map<string, (fn: Defined) => void>;
+	/** the route loads under way, and whether they put the global there (the document's own entries may have it already) */
+	loading: number;
+	ownGlobal: boolean;
+	/** what its route scripts' `self.<RUNTIME_GLOBAL>` is while they load */
+	runtime: object;
+	/** the nonce its scripts carry */
+	nonce(): string;
+	/** what its isolated worlds are handed of its page */
+	page: PageSide;
+	hidden(): (<T>(run: () => T) => T) | null;
+	/** its document_start point: once its root is there */
+	rooted(run: () => void): void;
+	/** its own stylesheets' constructor (a constructed sheet is its document's only) */
+	CSSStyleSheet: typeof CSSStyleSheet;
+	/** its URL, as its contexts' errors name it */
+	href(): string;
+	/** its realm's own indirect eval: an injected file's completion value is its result */
+	evaluate(code: string): unknown;
+	/** a local frame's: the script element of the route being run there now */
+	inline?: HTMLScriptElement | null;
+}
+
+/** the browser's eval of `global`: the inject leaves the global's own, and answers the page's reads with its hook */
+const evalOf = (target: Global) =>
+	natives.getOwnPropertyDescriptor(target, 'eval')?.value as
+		((code: string) => unknown) | undefined;
+const textSet = natives.getOwnPropertyDescriptor(
+	global.Node.prototype,
+	'textContent',
+)?.set;
+
+/**
+ * An injected file's code, run as global code of the document's realm,
+ * and its completion value (Chrome's result of a file). Where the
+ * document's policy refuses eval (a sandboxed frame's guard), the code runs
+ * as a script element with the policy's nonce, and has no result
+ */
+function evaluator(doc: Doc, own: ((code: string) => unknown) | undefined) {
+	return (code: string): unknown => {
+		try {
+			if (own) return natives.Reflect.apply(own, doc.global, [code]);
+		} catch (error) {
+			if ((error as Error | null)?.name !== 'EvalError') throw error;
+		}
+		runInline(doc, code);
+		return undefined;
+	};
+}
+
+/** run `code` as a script element of the document's (its nonce's) */
+function runInline(doc: Doc, code: string, before?: () => void) {
+	const script = call<HTMLScriptElement>(
+		natives.createElement,
+		doc.document,
+		'script',
+	);
+	const scriptNonce = doc.nonce();
+	if (scriptNonce) call(natives.setAttribute, script, 'nonce', scriptNonce);
+	if (textSet) call(textSet, script, code);
+	const parent = natives.documentElement(doc.document) ?? doc.document;
+	before?.();
+	doc.inline = script;
+	try {
+		call(natives.appendChild, parent, script);
+	} finally {
+		doc.inline = null;
+		try {
+			call(natives.removeChild, parent, script);
+		} catch (error) {
+			// the page took it out already
+		}
+	}
+}
+
+const mainDoc: Doc = {
+	global,
+	document: natives.document,
+	defined: new Map(),
+	waiting: new Map(),
+	loading: 0,
+	ownGlobal: false,
+	runtime,
+	nonce: () => guardNonce || nonce,
+	page,
+	hidden: () => hiddenRun,
+	rooted: (run) => whenRooted(run),
+	CSSStyleSheet: natives.CSSStyleSheet,
+	href: () => natives.location.href,
+	evaluate: (code) => mainEval(code),
+};
+const mainEval = evaluator(mainDoc, evalOf(global));
+
+/**
+ * A route's function, taken only from the route's own script element in
+ * the document, so nothing the page runs can stand in for an extension's
+ * code
+ */
+function defineIn(
+	doc: Doc,
+	id: string,
+	key: string,
+	given: unknown,
+	url?: unknown,
+) {
+	const script = natives.currentScript(doc.document);
+	const src = script ? natives.scriptSrc(script) : '';
+	// (a local frame's route runs as the text the runtime fetched: loadRoute)
+	const own = !!script && script === doc.inline;
+	if (
+		(typeof given !== 'function' && typeof given !== 'string') ||
+		(!own &&
+			(!src.includes(`/${CONTENT_SCRIPT_ROUTE}/${id}/`) ||
+				!src.split('?')[0].endsWith(`/${key}.js`)))
+	)
+		return;
+	const fn: Defined =
+		typeof given === 'string'
+			? { source: given, url: String(url ?? '') }
+			: (given as Defined);
+	const name = `${id}|${key}`;
+	const waiter = doc.waiting.get(name);
+	if (waiter) {
+		doc.waiting.delete(name);
+		waiter(fn);
+	} else doc.defined.set(name, fn);
+}
 
 natives.defineProperty(global, RUNTIME_GLOBAL, {
 	value: runtime,
@@ -212,9 +348,9 @@ natives.defineProperty(global.Document.prototype, 'write', {
 });
 
 /** a stylesheet of an extension's, on the document as Chrome's injected sheets are: no element of the page's */
-function addSheet(css: string): CSSStyleSheet | null {
+function addSheet(doc: Doc, css: string): CSSStyleSheet | null {
 	if (!css || !natives.adoptedStyleSheets?.get) return null;
-	const sheet = new natives.CSSStyleSheet();
+	const sheet = new doc.CSSStyleSheet();
 	try {
 		sheet.replaceSync(css);
 	} catch (error) {
@@ -222,60 +358,95 @@ function addSheet(css: string): CSSStyleSheet | null {
 	}
 	const list = call<CSSStyleSheet[]>(
 		natives.adoptedStyleSheets.get,
-		natives.document,
+		doc.document,
 	);
-	call(natives.adoptedStyleSheets.set!, natives.document, [...list, sheet]);
+	call(natives.adoptedStyleSheets.set!, doc.document, [...list, sheet]);
 	return sheet;
 }
 
-function removeSheet(sheet: CSSStyleSheet) {
+function removeSheet(doc: Doc, sheet: CSSStyleSheet) {
 	if (!natives.adoptedStyleSheets?.get) return;
 	const list = call<CSSStyleSheet[]>(
 		natives.adoptedStyleSheets.get,
-		natives.document,
+		doc.document,
 	);
 	call(
 		natives.adoptedStyleSheets.set!,
-		natives.document,
+		doc.document,
 		list.filter((other) => other !== sheet),
 	);
 }
 
-/** the function a route defines, once its script has run */
-function definedFn(id: string, key: string): Promise<Defined> {
+/** the function a route defines in the document, once its script has run */
+function definedFn(doc: Doc, id: string, key: string): Promise<Defined> {
 	const name = `${id}|${key}`;
-	const found = defined.get(name);
+	const found = doc.defined.get(name);
 	if (found) return natives.Promise.resolve(found);
-	return new natives.Promise((resolve) => waiting.set(name, resolve));
+	return new natives.Promise((resolve) => doc.waiting.set(name, resolve));
 }
 
-/** the route loads under way, and whether they put the global there (the document's own entries may have it already) */
-let loading = 0;
-let ownGlobal = false;
-
-/** load a route's script now (an injection): its function, when it ran */
-function loadRoute(id: string, key: string, route: string): Promise<Defined> {
-	const loaded = definedFn(id, key);
+/** load a route's script in the document now (an injection): its function, when it ran */
+function loadRoute(
+	doc: Doc,
+	id: string,
+	key: string,
+	route: string,
+): Promise<Defined> {
+	const loaded = definedFn(doc, id, key);
+	const target = doc.global;
+	// a local frame's realm loads nothing of the worker's itself (an
+	// about:blank one's requests do not reach it): its creator fetches the
+	// route, and it runs as the frame's script
+	if (doc !== mainDoc) {
+		const failed = () =>
+			doc.waiting.get(`${id}|${key}`)?.(() => {
+				throw new natives.Error(`Could not load the script ${route}`);
+			});
+		natives
+			.fetch(route)
+			.then((response) =>
+				response.ok ? response.text() : natives.Promise.reject(),
+			)
+			.then((text) => {
+				const had = natives.getOwnPropertyDescriptor(target, RUNTIME_GLOBAL);
+				try {
+					runInline(doc, text, () =>
+						natives.defineProperty(target, RUNTIME_GLOBAL, {
+							value: doc.runtime,
+							configurable: true,
+							writable: true,
+							enumerable: false,
+						}),
+					);
+				} finally {
+					if (had) natives.defineProperty(target, RUNTIME_GLOBAL, had);
+					else delete target[RUNTIME_GLOBAL];
+				}
+				if (doc.waiting.has(`${id}|${key}`)) failed();
+			})
+			.catch(failed);
+		return loaded;
+	}
 	// (the global is there while any load is under way: two injections at
 	// once share it, and the last to finish takes it away)
-	if (loading++ === 0 && !(RUNTIME_GLOBAL in global)) {
-		natives.defineProperty(global, RUNTIME_GLOBAL, {
-			value: runtime,
+	if (doc.loading++ === 0 && !(RUNTIME_GLOBAL in target)) {
+		natives.defineProperty(target, RUNTIME_GLOBAL, {
+			value: doc.runtime,
 			configurable: true,
 			writable: true,
 			enumerable: false,
 		});
-		ownGlobal = true;
+		doc.ownGlobal = true;
 	}
 	const script = call<HTMLScriptElement>(
 		natives.createElement,
-		natives.document,
+		doc.document,
 		'script',
 	);
-	if (guardNonce || nonce)
-		call(natives.setAttribute, script, 'nonce', guardNonce || nonce);
+	const scriptNonce = doc.nonce();
+	if (scriptNonce) call(natives.setAttribute, script, 'nonce', scriptNonce);
 	call(natives.setAttribute, script, 'src', route);
-	const parent = natives.documentElement(natives.document) ?? natives.document;
+	const parent = natives.documentElement(doc.document) ?? doc.document;
 	let finished = false;
 	const done = () => {
 		if (finished) return;
@@ -285,15 +456,15 @@ function loadRoute(id: string, key: string, route: string): Promise<Defined> {
 		} catch (error) {
 			// the page took it out already
 		}
-		if (--loading === 0 && ownGlobal) {
-			delete global[RUNTIME_GLOBAL];
-			ownGlobal = false;
+		if (--doc.loading === 0 && doc.ownGlobal) {
+			delete target[RUNTIME_GLOBAL];
+			doc.ownGlobal = false;
 		}
 	};
 	loaded.then(done, done);
 	call(natives.addEventListener, script, 'error', () => {
 		done();
-		waiting.get(`${id}|${key}`)?.(() => {
+		doc.waiting.get(`${id}|${key}`)?.(() => {
 			throw new natives.Error(`Could not load the script ${route}`);
 		});
 	});
@@ -307,11 +478,12 @@ function loadRoute(id: string, key: string, route: string): Promise<Defined> {
  * `globalThis.chrome` as it runs (the worker rewrote the plain forms of
  * those to its `chrome` already, for what reads them later)
  */
-function inWorld<T>(chrome: unknown, run: () => T): T {
-	const had = natives.getOwnPropertyDescriptor(global, 'chrome');
+function inWorld<T>(doc: Doc, chrome: unknown, run: () => T): T {
+	const target = doc.global;
+	const had = natives.getOwnPropertyDescriptor(target, 'chrome');
 	let swapped = false;
 	try {
-		natives.defineProperty(global, 'chrome', {
+		natives.defineProperty(target, 'chrome', {
 			value: chrome,
 			writable: true,
 			configurable: true,
@@ -325,8 +497,8 @@ function inWorld<T>(chrome: unknown, run: () => T): T {
 		return run();
 	} finally {
 		if (swapped)
-			if (had) natives.defineProperty(global, 'chrome', had);
-			else delete global.chrome;
+			if (had) natives.defineProperty(target, 'chrome', had);
+			else delete target.chrome;
 	}
 }
 
@@ -353,7 +525,11 @@ const USER_SCRIPT_RUNTIME = [
 ];
 
 /** a USER_SCRIPT world's `chrome`: the page's own members and messaging, where configureWorld allowed it */
-function userScriptChrome(ctx: Context, given: RuntimePayload): unknown {
+function userScriptChrome(
+	doc: Doc,
+	ctx: Context,
+	given: RuntimePayload,
+): unknown {
 	if (!ctx.ext.userScriptMessaging) return undefined;
 	const world = new Context(
 		ctx.ext,
@@ -373,7 +549,7 @@ function userScriptChrome(ctx: Context, given: RuntimePayload): unknown {
 	const own: Record<string, unknown> = {};
 	for (const name of USER_SCRIPT_RUNTIME) own[name] = runtime[name];
 	// (the world's chrome has the page's csi and loadTimes, as every world's)
-	const page = global.chrome as Record<string, unknown> | undefined;
+	const page = doc.global.chrome as Record<string, unknown> | undefined;
 	const chrome: Record<string, unknown> = {};
 	for (const name of ['csi', 'loadTimes'])
 		if (page && typeof page[name] === 'function') chrome[name] = page[name];
@@ -388,7 +564,26 @@ interface Isolated {
 	chrome(): unknown;
 }
 
+/**
+ * An entry's function in the document: the one its shell's route defined,
+ * or, in a local frame, the creator's (an isolated world's source is no
+ * realm's) or the route loaded there (a MAIN or USER_SCRIPT one is code of
+ * the frame's realm)
+ */
+function entryFn(
+	doc: Doc,
+	id: string,
+	entry: ShippedEntry,
+	route: string,
+): Promise<Defined> {
+	if (doc === mainDoc) return definedFn(doc, id, entry.key);
+	if (entry.world === 'MAIN' || entry.world === 'USER_SCRIPT')
+		return loadRoute(doc, id, entry.key, route);
+	return definedFn(mainDoc, id, entry.key);
+}
+
 function runEntry(
+	doc: Doc,
 	ctx: Context,
 	entry: ShippedEntry,
 	route: string,
@@ -396,21 +591,24 @@ function runEntry(
 	isolated: Isolated,
 ) {
 	if (!entry.js) return;
-	definedFn(ctx.ext.id, entry.key).then(async (fn) => {
+	const target = doc.global;
+	entryFn(doc, ctx.ext.id, entry, route).then(async (fn) => {
 		try {
 			if (typeof fn !== 'function') {
 				const world = isolated.world();
 				if (world) return world.run(fn.source, fn.url);
-				const shared = await sharedFn(ctx.ext.id, entry.key, route);
+				const shared = await sharedFn(doc, ctx.ext.id, entry.key, route);
 				const own = isolated.chrome();
-				inWorld(own, () =>
-					natives.Reflect.apply(shared, global, [own, undefined]),
+				inWorld(doc, own, () =>
+					natives.Reflect.apply(shared, target, [own, undefined]),
 				);
-			} else if (entry.world === 'MAIN') natives.Reflect.apply(fn, global, []);
+			} else if (entry.world === 'MAIN') natives.Reflect.apply(fn, target, []);
 			else {
 				// its window's chrome is its world's too (`const { chrome } = window`)
 				const own = userChrome();
-				inWorld(own, () => natives.Reflect.apply(fn, global, [own, undefined]));
+				inWorld(doc, own, () =>
+					natives.Reflect.apply(fn, target, [own, undefined]),
+				);
 			}
 		} catch (error) {
 			console.error(error);
@@ -425,12 +623,13 @@ function runEntry(
  * world be made
  */
 function sharedFn(
+	doc: Doc,
 	id: string,
 	key: string,
 	route: string,
 ): Promise<(...args: unknown[]) => unknown> {
-	defined.delete(`${id}|${key}`);
-	return loadRoute(id, key, `${route}?shared`) as Promise<
+	doc.defined.delete(`${id}|${key}`);
+	return loadRoute(doc, id, key, `${route}?shared`) as Promise<
 		(...args: unknown[]) => unknown
 	>;
 }
@@ -441,8 +640,9 @@ function sharedFn(
  * window, where the event ends), document_idle a task after that or at the
  * window's load, whichever is first
  */
-function schedule(runAt: string, run: () => void) {
-	if (runAt === 'document_start') return whenRooted(run);
+function schedule(doc: Doc, runAt: string, run: () => void) {
+	if (runAt === 'document_start') return doc.rooted(run);
+	const target = doc.global;
 	const idle = () => {
 		let ran = false;
 		const once = () => {
@@ -451,25 +651,25 @@ function schedule(runAt: string, run: () => void) {
 			run();
 		};
 		natives.setTimeout(once, 0);
-		call(natives.addEventListener, global, 'load', once, { once: true });
+		call(natives.addEventListener, target, 'load', once, { once: true });
 	};
 	const later = runAt === 'document_end' ? run : idle;
-	if (natives.readyState(natives.document) !== 'loading') return later();
-	call(natives.addEventListener, global, 'DOMContentLoaded', later, {
+	if (natives.readyState(doc.document) !== 'loading') return later();
+	call(natives.addEventListener, target, 'DOMContentLoaded', later, {
 		once: true,
 	});
 }
 
 /** a frame's DOMContentLoaded and load, told to the hub (webNavigation) */
-function subframeLifecycle(ctx: Context) {
+function subframeLifecycle(doc: Doc, ctx: Context) {
 	const tell = (state: string) => () => {
 		ctx.hub('nav', state).catch(() => {});
 	};
-	const state = natives.readyState(natives.document);
+	const state = natives.readyState(doc.document);
 	if (state === 'loading')
 		call(
 			natives.addEventListener,
-			natives.document,
+			doc.document,
 			'DOMContentLoaded',
 			tell('dom'),
 			{
@@ -479,12 +679,22 @@ function subframeLifecycle(ctx: Context) {
 	else tell('dom')();
 	if (state === 'complete') tell('load')();
 	else
-		call(natives.addEventListener, global, 'load', tell('load'), {
+		call(natives.addEventListener, doc.global, 'load', tell('load'), {
 			once: true,
 		});
 }
 
-function contentContext(given: RuntimePayload, ext: ShippedExtension) {
+/**
+ * An extension's content context in the document. A local frame's
+ * (`local`) is placed by its creator's context: in its tab, below its
+ * frame, with the frame id the hub keeps for the frame's key
+ */
+function contentContext(
+	doc: Doc,
+	given: RuntimePayload,
+	ext: ShippedExtension,
+	local?: { creator: Context; key: string },
+) {
 	const ctx = new Context(
 		ext,
 		'content',
@@ -499,46 +709,56 @@ function contentContext(given: RuntimePayload, ext: ShippedExtension) {
 	ctx.errors = errorConsole(ctx, {
 		win: null,
 		console: null,
-		contextUrl: () => natives.location.href,
+		contextUrl: () => doc.href(),
 	});
-	ctx.placed = ctx
-		.hub('hello', {
-			client: given.client,
-			url: given.url,
-			top: given.top,
-			name: '',
-		})
+	const hello = local
+		? local.creator.placed.then(() =>
+				ctx.hub('hello', {
+					client: '',
+					url: given.url,
+					top: false,
+					name: '',
+					local: {
+						key: local.key,
+						tabId: local.creator.place.tabId,
+						parentFrameId: local.creator.place.frameId,
+					},
+				}),
+			)
+		: ctx.hub('hello', {
+				client: given.client,
+				url: given.url,
+				top: given.top,
+				name: '',
+			});
+	ctx.placed = hello
 		.then((place) => {
 			if (place) ctx.place = place as Context['place'];
 			ctx.announce();
 			// a document below its tab's top: its webNavigation events past the
 			// commit are the hub's to tell from here (the host sees only tops)
 			if (ctx.place.frameId > 0 && ext.permissions.includes('webNavigation'))
-				subframeLifecycle(ctx);
+				subframeLifecycle(doc, ctx);
 		})
 		.catch(() => {
 			ctx.announce();
 		});
+	const routeOf = (key: string) =>
+		`${given.channel}${CONTENT_SCRIPT_ROUTE}/${ext.id}/${ext.generation ?? 0}/${key}.js`;
 	// the CSS goes in first, before any of the page's markup (a site its
 	// site access withholds: once a click on its button runs them)
 	const start = (now: boolean) => {
-		for (const entry of ext.entries ?? []) addSheet(entry.css);
+		for (const entry of ext.entries ?? []) addSheet(doc, entry.css);
 		for (const entry of ext.entries ?? []) {
 			const run = () =>
-				runEntry(
-					ctx,
-					entry,
-					`${given.channel}${CONTENT_SCRIPT_ROUTE}/${ext.id}/${ext.generation ?? 0}/${entry.key}.js`,
-					userWorld,
-					isolated,
-				);
+				runEntry(doc, ctx, entry, routeOf(entry.key), userWorld, isolated);
 			if (now) run();
-			else schedule(entry.runAt, run);
+			else schedule(doc, entry.runAt, run);
 		}
 	};
 	let userChrome: { value: unknown } | null = null;
 	const userWorld = () =>
-		(userChrome ??= { value: userScriptChrome(ctx, given) }).value;
+		(userChrome ??= { value: userScriptChrome(doc, ctx, given) }).value;
 	// the extension's isolated world, made where its first script runs
 	let world: World | null | undefined;
 	let shared: unknown = null;
@@ -549,14 +769,15 @@ function contentContext(given: RuntimePayload, ext: ShippedExtension) {
 	const makeIsolated = () => {
 		if (world !== undefined) return world;
 		world = makeWorld(
-			page,
+			doc.page,
 			{
 				ext: natives.JSON.stringify(ext),
 				channel: given.channel,
 				url: given.url,
 				token: given.tokens[ext.id],
 			},
-			hiddenRun,
+			doc.hidden(),
+			doc.document,
 		);
 		const made = world;
 		if (made)
@@ -569,7 +790,7 @@ function contentContext(given: RuntimePayload, ext: ShippedExtension) {
 		ctx.on('unblock', (message) => {
 			if (unblocked || message.tabId !== ctx.place.tabId) return;
 			unblocked = true;
-			ctx.placed.then(() => schedule('document_end', () => start(true)));
+			ctx.placed.then(() => schedule(doc, 'document_end', () => start(true)));
 		});
 		// the button shows that scripts wait here (Chrome's ring around its icon)
 		ctx.placed.then(() => {
@@ -596,16 +817,18 @@ function contentContext(given: RuntimePayload, ext: ShippedExtension) {
 			const key = message.cssKey;
 			if (message.remove) {
 				const sheet = sheets.get(key);
-				if (sheet) removeSheet(sheet);
+				if (sheet) removeSheet(doc, sheet);
 				sheets.delete(key);
 			} else {
-				const sheet = addSheet(String(message.css ?? ''));
+				const sheet = addSheet(doc, String(message.css ?? ''));
 				if (sheet) sheets.set(key, sheet);
 			}
 			return reply({});
 		}
+		const target = doc.global;
 		try {
 			const fn = await loadRoute(
+				doc,
 				ctx.ext.id,
 				String(message.key),
 				String(message.route),
@@ -622,20 +845,27 @@ function contentContext(given: RuntimePayload, ext: ShippedExtension) {
 				if (world) result = world.exec(fn.source, fn.url);
 				else {
 					const shared = await sharedFn(
+						doc,
 						ctx.ext.id,
 						String(message.key),
 						String(message.route),
 					);
 					const own = isolated.chrome();
-					inWorld(own, () =>
-						natives.Reflect.apply(shared, global, [own, undefined, take]),
+					inWorld(doc, own, () =>
+						natives.Reflect.apply(shared, target, [own, undefined, take]),
 					);
 				}
-			} else if (fn.length < 3) natives.Reflect.apply(fn, global, [take]);
+			} else if (fn.length < 3)
+				natives.Reflect.apply(fn, target, [take, doc.evaluate]);
 			else {
 				const own = userWorld();
-				inWorld(own, () =>
-					natives.Reflect.apply(fn, global, [own, undefined, take]),
+				inWorld(doc, own, () =>
+					natives.Reflect.apply(fn, target, [
+						own,
+						undefined,
+						take,
+						doc.evaluate,
+					]),
 				);
 			}
 			if (result && typeof (result as Promise<unknown>).then === 'function')
@@ -648,6 +878,129 @@ function contentContext(given: RuntimePayload, ext: ShippedExtension) {
 	});
 	return ctx;
 }
+
+// ---- local frames -----------------------------------------------------------
+
+/** this document's content contexts, by extension: the creators of its local frames' */
+const creators = new Map<string, Context>();
+/** a key per local frame's window, which its next local documents keep (its frame id) */
+const localKeys = new WeakMap<object, string>();
+/** the local documents the runtime runs in already */
+const localRuns = new WeakSet<object>();
+const ownGet = (name: string) =>
+	natives.getOwnPropertyDescriptor(global, name)?.get;
+const parentGet = ownGet('parent');
+const documentGet = ownGet('document');
+
+/**
+ * A local document of a frame of this document's (about:blank,
+ * about:srcdoc, blob:, data:), as the inject's client there tells it. Its
+ * URL is none a pattern matches, so Chrome matches the creator's URL for
+ * an entry with match_about_blank (about: only) and its origin for one
+ * with match_origin_as_fallback (blob: and data: too), and only where the
+ * entry is all_frames: such an entry matched this document already
+ * (ShippedEntry `local`). Each extension this document has a context of
+ * gets one there too (executeScript reaches the frame, and webNavigation
+ * sees it), and its entries run in the frame's realm
+ */
+function localDocument(child: unknown, url: unknown, hidden: unknown) {
+	if (!creators.size || !payload?.content || typeof url !== 'string') return;
+	const about = /^about:(blank|srcdoc)$/.test(url);
+	if (!about && !/^(blob|data):/.test(url)) return;
+	if (!parentGet || !documentGet) return;
+	const win = child as Global;
+	let document: Document;
+	try {
+		// a frame of this document only: no other window is its to speak for
+		if (natives.Reflect.apply(parentGet, win, []) !== global) return;
+		document = natives.Reflect.apply(documentGet, win, []) as Document;
+	} catch (error) {
+		// a window of another real origin
+		return;
+	}
+	if (!document || localRuns.has(document)) return;
+	localRuns.add(document);
+	let key = localKeys.get(win);
+	if (!key) {
+		key = natives.randomUUID();
+		localKeys.set(win, key);
+	}
+	const childWeb = webNatives(win);
+	const childPage = pageSide(
+		win,
+		{
+			...web,
+			global: win,
+			document,
+			location: childWeb.location,
+		},
+		() => payload?.access ?? '',
+	);
+	const childHidden =
+		typeof hidden === 'function'
+			? (hidden as <T>(run: () => T) => T)
+			: hiddenRun;
+	const doc: Doc = {
+		global: win,
+		document,
+		defined: new Map(),
+		waiting: new Map(),
+		loading: 0,
+		ownGlobal: false,
+		runtime: {},
+		nonce: () => '',
+		page: childPage,
+		hidden: () => childHidden,
+		rooted: (run) => {
+			if (natives.documentElement(document)) run();
+			else
+				call(natives.addEventListener, document, 'DOMContentLoaded', run, {
+					once: true,
+				});
+		},
+		CSSStyleSheet: childWeb.CSSStyleSheet,
+		href: () => url,
+		evaluate: (code) => childEval(code),
+	};
+	const childEval = evaluator(doc, evalOf(win));
+	doc.runtime = {
+		define(id: string, key: string, given: unknown, at?: unknown) {
+			defineIn(doc, id, key, given, at);
+		},
+	};
+	const given: RuntimePayload = {
+		...payload,
+		url,
+		client: '',
+		top: false,
+	};
+	let snapshot = false;
+	for (const ext of payload.content) {
+		const creator = creators.get(ext.id);
+		if (!creator) continue;
+		const entries = (ext.entries ?? []).filter(
+			(entry) => entry.local === 'origin' || (entry.local === 'about' && about),
+		);
+		// (one that may not inject and runs nothing there has no context there)
+		if (!entries.length && !injects(ext)) continue;
+		const own = { ...ext, entries };
+		if (!snapshot && isolates(own)) {
+			snapshot = true;
+			childPage.snapshot();
+		}
+		contentContext(doc, given, own, { creator, key });
+	}
+}
+
+/** whether an extension may inject into a document (scripting, tabs, activeTab) or sees its frames (webNavigation) */
+const injects = (ext: ShippedExtension) =>
+	ext.permissions.some(
+		(name) =>
+			name === 'scripting' ||
+			name === 'tabs' ||
+			name === 'activeTab' ||
+			name === 'webNavigation',
+	);
 
 /** the kind the hub gave the page's frame (its real name), else the worker's */
 function pageKind(given: RuntimePayload): {
@@ -696,7 +1049,10 @@ function pageContext(given: RuntimePayload) {
 	// the stylesheet Chrome gives every extension page (extension_fonts.css):
 	// the platform's web UI font at 75%, which the page's own rules override
 	// (a layer under them, as Chrome's injected sheet comes before them)
-	addSheet(`@layer{body{font-family:${extensionFont()};font-size:75%}}`);
+	addSheet(
+		mainDoc,
+		`@layer{body{font-family:${extensionFont()};font-size:75%}}`,
+	);
 	const chrome = buildChrome(ctx);
 	receiveMessages(ctx);
 	// its errors for the extensions page (an emulated service worker's are
@@ -996,7 +1352,8 @@ function start(given: RuntimePayload) {
 	// what an isolated world reads of the page's members is what they are
 	// now, before the page's scripts and its MAIN world's run
 	if (given.content?.some(isolates)) page.snapshot();
-	for (const ext of given.content ?? []) contentContext(given, ext);
+	for (const ext of given.content ?? [])
+		creators.set(ext.id, contentContext(mainDoc, given, ext));
 	if (given.store)
 		storePage(given.channel, given.store.changes, given.store.token);
 }

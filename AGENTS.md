@@ -414,7 +414,13 @@ on every save (use a `git worktree`).
   publishes master as `@sysce/stomp@nightly` every night (and on manual
   dispatch) once CI passed on that commit, through npm trusted publishing
   (OIDC, no token in the repository) with provenance. There is no `dist`
-  branch any more; hosts pin an exact nightly version.
+  branch any more; hosts pin an exact nightly version. GitHub Actions is
+  disabled for the account at present, so none of the workflows here runs
+  (this one, CI and deploy included): a nightly is published by hand from
+  a clean clone (`scripts/nightly-version.mjs`, `npm pack`, then
+  `npm publish --tag nightly` with the npm account's two-factor code),
+  without provenance, after the CI steps were replayed by hand on that
+  commit.
 - libcurl-transport 2.0.6: WebSockets fine, HTTP stops answering after ~70
   requests (default pool) or ~160 (`connections: [500, 400, 200]`).
 - HTTP/3 is opt-in for hosts (`TransportDescriptor.http3`,

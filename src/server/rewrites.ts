@@ -136,8 +136,8 @@ import {
 	setBlobRoute,
 	unwrapRoute,
 } from '../routeURL';
-import { MODULE_PREFIX_ROUTE } from '../scriptRoutes';
-import type { ControlInfo } from '../serviceWorkerTypes';
+import { MODULE_PREFIX_ROUTE, withImportKind } from '../scriptRoutes';
+import { SW_IMPORT_ROUTE, type ControlInfo } from '../serviceWorkerTypes';
 import { siteFacts, type SiteFacts } from '../siteFacts';
 import {
 	INTEGRITY_MARK,
@@ -197,7 +197,10 @@ import {
 	WORKER_SCRIPT_MARKER,
 	XHR_MARKER,
 } from '../transport/messages';
-import { NETWORK_PARTITION } from '../transport/networkPartition';
+import {
+	NETWORK_PARTITION,
+	networkPartitionName,
+} from '../transport/networkPartition';
 import RemoteTransport from '../transport/RemoteTransport';
 import {
 	FIRST_IMAGES_URGENCY,
@@ -351,12 +354,20 @@ import {
 	queueUrgency,
 	type RequestShape,
 } from './headerOrder';
+import { forgetHsts, hstsUpgrades, hstsURL, ipLiteral, noteHsts } from './hsts';
 import {
 	authenticate,
 	authorizationAhead,
 	refused,
 	requestIdentity,
 } from './httpAuth';
+import {
+	HTTPS_ONLY_ROUTE,
+	httpsOnlyPage,
+	httpsOnlyUpgradeOf,
+	rememberHttpsOnlyUpgrade,
+	takeHttpsOnlyOffer,
+} from './httpsOnly';
 import { takeInline } from './inline';
 import { formFields, insecureFormPage } from './insecureForm';
 import {
@@ -518,6 +529,13 @@ const clientURLs = new Map<string, URL>();
 const clientRoutes = new Map<string, string>();
 /** the top-level site of a client whose URL names none (a partitioned blob: worker's, an inline document's) */
 const clientTopSites = new Map<string, string>();
+/**
+ * The host whose shields govern each document, by the client id its
+ * navigation made (its tab's top-level page's): a dialed frame's document
+ * is written into a call page, whose URL names no route and so no top
+ * (docs/dialing.md), but its call was a navigation of its route
+ */
+const shieldsTops = new Map<string, string>();
 /**
  * What this worker gave each site's documents since it started, by the
  * memory cache's key (fresh or not, which MemoryCache does not keep): a
@@ -1062,7 +1080,6 @@ export function departingMixedContent(
 		} catch (error) {
 			// not a routed page: judged by the top alone
 		}
-	const source = context?.href ?? urlOrNull(top)?.href ?? '';
 	const verdict = mixedContentVerdict({
 		url: new URL(reportURL(url)),
 		destination: request.destination || 'empty',
@@ -1072,7 +1089,8 @@ export function departingMixedContent(
 		top,
 		upgradeInsecure:
 			upgradesInsecure(undefined, null, referrer) ||
-			!!rewriter.shields?.httpsUpgrade(hostOf(source || reportURL(url))),
+			// (by the tab's top-level page's shields, as every frame's are)
+			!!rewriter.shields?.httpsUpgrade(hostOf(top)),
 	});
 	postNotices(verdict.notices, undefined, referrer);
 	if (verdict.action === 'block') return new Response(null, { status: 204 });
@@ -1513,6 +1531,84 @@ export async function clientTopSiteOf(
 		clientTopSite ??
 		(clientRoute ? routeTopSite(clientRoute, directory, codec) : null) ??
 		(client && client.origin !== 'null' ? siteOf(client, publicSuffix) : null)
+	);
+}
+
+/**
+ * The host of the top-level page above client `id` that its facts name,
+ * whose shields govern what the client does (Brave keys every frame's
+ * shields by its tab's main frame, so a frame of another site has no
+ * shields of its own to get past the site's): a nested document's route
+ * names its top; a dialed document's call did (shieldsTops); a partitioned
+ * worker, blob: worker or inline document names its top's site only, whose
+ * host stands for it. Null when the client names no top: a top-level
+ * document, or a worker of one, whose own host governs it.
+ */
+function clientShieldsTop(
+	id: string | undefined,
+	facts: ClientFacts,
+	directory: string,
+	codec: GenericCodec,
+): string | null {
+	if (facts.clientRoute)
+		try {
+			const top = nestedTopOf(
+				new URL(facts.clientRoute).pathname,
+				directory,
+				codec,
+			);
+			if (top) return hostOf(top);
+		} catch (error) {
+			// not a URL: no top to name
+		}
+	const recorded = id ? shieldsTops.get(id) : undefined;
+	if (recorded) return recorded;
+	const site =
+		facts.clientTopSite ??
+		(facts.clientRoute
+			? routeTopSite(facts.clientRoute, directory, codec)
+			: null);
+	return site ? hostOf(site) || null : null;
+}
+
+/** the client's navigation made it a document under the top-level page of `host` */
+function recordShieldsTop(id: string, host: string) {
+	if (!id || !host) return;
+	shieldsTops.delete(id);
+	if (shieldsTops.size >= CLIENT_URLS_KEPT)
+		shieldsTops.delete(shieldsTops.keys().next().value!);
+	shieldsTops.set(id, host);
+}
+
+/**
+ * The host whose shields govern a socket client `id` of the controller at
+ * `directory` opens (its tab's top-level page's, as a request's), or null
+ * when the worker cannot place the client: the caller then keys it by the
+ * document that opens it
+ */
+export async function clientShieldsHostOf(
+	id: string,
+	directory: string,
+	codec: GenericCodec,
+): Promise<string | null> {
+	const routedPrefix = `${location.origin}${directory}`;
+	const facts = await clientFacts(
+		id,
+		(routed) => {
+			try {
+				return parseRoutedURL(routed, codec, routedPrefix).url.url;
+			} catch (error) {
+				return null;
+			}
+		},
+		routedPrefix,
+		true,
+	);
+	return (
+		clientShieldsTop(id, facts, directory, codec) ??
+		(facts.client && facts.client.origin !== 'null'
+			? facts.client.hostname
+			: null)
 	);
 }
 
@@ -2233,13 +2329,53 @@ function genericForward(
 				? (refererSource ?? (nestedRoute ? urlOrNull(nestedRoute) : null))
 				: (client ?? refererSource)
 			)?.href ?? '';
-		// the host whose shields govern this request: a top-level navigation is
-		// its own page, otherwise the document that makes the request. A deeply
-		// nested third-party frame's subresources are keyed by that frame, not
-		// the real top page (phase-1 limit, FINDINGS)
-		const shieldsHost = hostOf(
-			navigation && topLevel ? reportURL(url) : blockerSource || reportURL(url),
-		);
+		// the host whose shields govern this request: its tab's top-level
+		// page's, for every frame of the tab however deep, as Brave keys a
+		// frame's shields by the main frame (a third-party frame gets none of
+		// its own to get past the site's). A top-level navigation is that page;
+		// a nested one names its top in its route; a subresource's client
+		// names it (clientShieldsTop), else the document at its Referer does in
+		// its route; else the request's document is a top-level one itself
+		let shieldsHost: string;
+		if (navigation)
+			shieldsHost = hostOf(
+				topLevel
+					? reportURL(url)
+					: (nestedRoute ?? (blockerSource || reportURL(url))),
+			);
+		else {
+			let refererTop: string | null = null;
+			if (referrer)
+				try {
+					refererTop = nestedTopOf(
+						new URL(referrer).pathname,
+						rewriter.directory,
+						rewriter.codec,
+					);
+				} catch (error) {
+					// not a URL: no top to name
+				}
+			shieldsHost =
+				(context?.clientId
+					? clientShieldsTop(
+							context.clientId,
+							{
+								client,
+								clientRoute,
+								unknownBlob,
+								unknownClient,
+								clientTopSite,
+							},
+							rewriter.directory,
+							rewriter.codec,
+						)
+					: null) ??
+				(refererTop ? hostOf(refererTop) : null) ??
+				hostOf(blockerSource || reportURL(url));
+		}
+		// (a document's own requests find it by its client)
+		if (navigation && context?.resultingClientId)
+			recordShieldsTop(context.resultingClientId, shieldsHost);
 
 		// mixed content (src/mixedContent.ts), decided by the real URL of the
 		// document that makes the request (for a nested navigation, the
@@ -2329,6 +2465,174 @@ function genericForward(
 					});
 				url.url = verdict.url;
 				mediaUpgraded = !!verdict.media;
+			}
+		} else if (
+			rewriter.shields?.httpsOnly(shieldsHost) &&
+			insecure(url.url) &&
+			!/^\d{1,3}(\.\d{1,3}){3}$|^\[/.test(url.url.hostname)
+		) {
+			// strict shields (Brave's "require HTTPS") upgrade the site's own
+			// page too, an address excepted, as Chromium's HTTPS-Only Mode does.
+			// Its route is remembered: should the https load fail at the
+			// connection or TLS, the tab gets the interstitial, not the http
+			// page (./httpsOnly.ts)
+			const location = `${oURL.origin}${rewriter.directory}${resource}/${new StompURL(
+				upgradedURL(url.url),
+				url,
+			).encode()}`;
+			rememberHttpsOnlyUpgrade(location, url.url.href);
+			return new Response(null, {
+				status: 307,
+				headers: { location, 'cache-control': 'no-store' },
+			});
+		}
+
+		// The request's partitions, for the URL it would go to (its own, or
+		// the https one HSTS would make of it, below): the nested top its route
+		// or its referrer's names, its top-level site, the partition of its
+		// context and the site of its frame, and with them its network
+		// partition
+		const partitionsOf = (target: URL) => {
+			// the top origin the navigation's route kind names, or the
+			// referrer's when a nested document is the initiator (nestedSite,
+			// below)
+			const nestedTop =
+				nestedRoute ??
+				(referrer
+					? nestedTopOf(
+							new URL(referrer).pathname,
+							rewriter.directory,
+							rewriter.codec,
+						)
+					: null);
+			// the partition of the request's Partitioned cookies (CHIPS): its
+			// top-level site, when that is not the target's own. A top-level
+			// navigation's is its own; a nested one's top is in its route; a
+			// subresource's in its client's route (a nested document's, a
+			// partitioned worker's), else it is the client's own site (a
+			// top-level document)
+			const topSite = navigation
+				? topLevel || !nestedRoute
+					? null
+					: siteOf(nestedRoute, publicSuffix)
+				: (clientTopSite ??
+					(clientRoute
+						? routeTopSite(clientRoute, rewriter.directory, rewriter.codec)
+						: null) ??
+					(nestedTop ? siteOf(nestedTop, publicSuffix) : null) ??
+					(client && client.origin !== 'null'
+						? siteOf(client, publicSuffix)
+						: null));
+			// A context in a partition (a site framed by another, or framed under
+			// a frame of another site) keeps its Partitioned cookies under its top
+			// site whatever it asks for; a first-party one only those of another
+			// site, as Chrome's cookie partition key has the ancestor chain bit
+			// (measured: B framed by A reads what B set for A's own request, and B
+			// framed by A framed by B none of B's top-level page's)
+			const clientPartition = navigation
+				? topLevel
+					? ''
+					: kindPartition(resource, target.origin, publicSuffix, rewriter.codec)
+				: clientTopSite
+					? `^${clientTopSite}`
+					: clientRoute && client
+						? routePartition(
+								clientRoute,
+								rewriter.directory,
+								client.origin,
+								rewriter.codec,
+							)
+						: '';
+			// a grant's `^` moves a first-party client's request into the
+			// partition its site has under itself with another site between
+			// (Chrome's ancestor chain bit), and no other
+			const contextPartition =
+				crossGranted &&
+				clientPartition === '' &&
+				client &&
+				client.origin !== 'null'
+					? `^${siteOf(client, publicSuffix)}`
+					: clientPartition;
+			// the site of the frame or worker that makes the request (a
+			// navigation's is its destination's), null for an opaque or unknown
+			// one: with the top-level site, the network partition (the HTTP and
+			// preflight caches, the connections, HSTS)
+			const requestFrameSite = navigation
+				? siteOf(target, publicSuffix)
+				: client && client.origin !== 'null' && !opaque
+					? siteOf(client, publicSuffix)
+					: null;
+			return {
+				nestedTop,
+				topSite,
+				contextPartition,
+				requestFrameSite,
+				networkPartition: networkPartitionName(
+					topSite,
+					requestFrameSite,
+					partitionSite(contextPartition) !== null,
+				),
+			};
+		};
+
+		// HSTS (src/server/hsts.ts): an http URL of a host its network
+		// partition knows to be https only goes out over https, decided after
+		// mixed content (which judges the URL as written) and before anything
+		// of the request is made, as Chrome's network stack decides it. Chrome
+		// makes it an internal redirect: the browser follows it here as a 307,
+		// so a document's, a fetch's or a worker's URL is the https one, and
+		// what the worker keeps for this request by its URL moves with it. A
+		// request that may not follow one (its redirect mode, or the worker's
+		// own) is changed in place, as the fetch standard changes it
+		if (url.url.protocol === 'http:' && !ipLiteral(url.url.hostname)) {
+			const secure = hstsURL(url.url);
+			if (
+				await hstsUpgrades(
+					partitionsOf(secure).networkPartition,
+					url.url.hostname,
+				)
+			) {
+				if (
+					navigation ||
+					(serverRequest.redirect === 'follow' && !context?.internal)
+				) {
+					const kind = oURL.pathname
+						.slice(rewriter.directory.length)
+						.split('/')[0];
+					const location = `${oURL.origin}${rewriter.directory}${kind}/${new StompURL(
+						secure,
+						url,
+					).encode()}`;
+					const hopClient = navigation ? '' : (context?.clientId ?? '');
+					const hop = takeRedirect(
+						hopClient,
+						requestReferrer,
+						returned?.url ?? serverRequest.url,
+					);
+					if (hop)
+						rememberRedirect(
+							hopClient,
+							requestReferrer,
+							location,
+							location,
+							hop,
+						);
+					if (returned)
+						rememberReturn(location, {
+							referrer: returned.referrer,
+							policy: returned.policy,
+							url: location,
+							...(returned.fresh ? { fresh: true } : {}),
+						});
+					if (initiated) recordNavigationInitiator(secure.href, initiated);
+					const hint = navigation ? takeNavigationHint(url.url.href) : null;
+					if (hint) recordNavigationHint(secure.href, hint);
+					return new Response(null, {
+						status: 307,
+						headers: { location, 'cache-control': 'no-store' },
+					});
+				}
+				url.url = secure;
 			}
 		}
 
@@ -2471,66 +2775,16 @@ function genericForward(
 		// nested document is the initiator, names that top origin. A
 		// cross-site link into a site that keeps its login in Lax cookies
 		// still works, a nested cross-site frame gets None only
-		const nestedTop =
-			nestedRoute ??
-			(referrer
-				? nestedTopOf(
-						new URL(referrer).pathname,
-						rewriter.directory,
-						rewriter.codec,
-					)
-				: null);
+		const {
+			nestedTop,
+			topSite,
+			contextPartition,
+			requestFrameSite,
+			networkPartition,
+		} = partitionsOf(url.url);
 		const nestedSite = nestedTop
 			? widestSite(site, siteBetween(new URL(nestedTop), url.url))
 			: site;
-		// the partition of the request's Partitioned cookies (CHIPS): its
-		// top-level site, when that is not the target's own. A top-level
-		// navigation's is its own; a nested one's top is in its route; a
-		// subresource's in its client's route (a nested document's, a
-		// partitioned worker's), else it is the client's own site (a
-		// top-level document)
-		const topSite = navigation
-			? topLevel || !nestedRoute
-				? null
-				: siteOf(nestedRoute, publicSuffix)
-			: (clientTopSite ??
-				(clientRoute
-					? routeTopSite(clientRoute, rewriter.directory, rewriter.codec)
-					: null) ??
-				(nestedTop ? siteOf(nestedTop, publicSuffix) : null) ??
-				(client && client.origin !== 'null'
-					? siteOf(client, publicSuffix)
-					: null));
-		// A context in a partition (a site framed by another, or framed under
-		// a frame of another site) keeps its Partitioned cookies under its top
-		// site whatever it asks for; a first-party one only those of another
-		// site, as Chrome's cookie partition key has the ancestor chain bit
-		// (measured: B framed by A reads what B set for A's own request, and B
-		// framed by A framed by B none of B's top-level page's)
-		const clientPartition = navigation
-			? topLevel
-				? ''
-				: kindPartition(resource, url.url.origin, publicSuffix, rewriter.codec)
-			: clientTopSite
-				? `^${clientTopSite}`
-				: clientRoute && client
-					? routePartition(
-							clientRoute,
-							rewriter.directory,
-							client.origin,
-							rewriter.codec,
-						)
-					: '';
-		// a grant's `^` moves a first-party client's request into the
-		// partition its site has under itself with another site between
-		// (Chrome's ancestor chain bit), and no other
-		const contextPartition =
-			crossGranted &&
-			clientPartition === '' &&
-			client &&
-			client.origin !== 'null'
-				? `^${siteOf(client, publicSuffix)}`
-				: clientPartition;
 		const partitionKey =
 			partitionSite(contextPartition) ??
 			(topSite !== null && topSite !== siteOf(url.url, publicSuffix)
@@ -2758,15 +3012,6 @@ function genericForward(
 			load.mode === 'no-cors' &&
 			loadToken !== null &&
 			!!context?.clientId;
-		// the site of the frame or worker that makes the request (a
-		// navigation's is its destination's), null for an opaque or unknown
-		// one: with the top-level site, the network partition (the HTTP and
-		// preflight caches)
-		const requestFrameSite = navigation
-			? siteOf(url.url, publicSuffix)
-			: client && client.origin !== 'null' && !opaque
-				? siteOf(client, publicSuffix)
-				: null;
 		// some hop of this request's chain, this one or an earlier, was of
 		// another origin: a no-cors answer is opaque (A to B to A included)
 		const chainCrossed = crossOrigin || !!previousHop?.crossed;
@@ -3424,17 +3669,7 @@ function genericForward(
 		// with no site of its own and no top-level site shares one partition.
 		// Chrome also keeps a request without credentials off the connections
 		// of those with: not done, since it tells no site anything of
-		// another's (and doubles the pools)
-		const networkTop = topSite ?? requestFrameSite;
-		const networkPartition =
-			networkTop === null
-				? 'opaque'
-				: `${networkTop} ${
-						networkTop !== requestFrameSite ||
-						partitionSite(contextPartition) !== null
-							? 'cross-site'
-							: 'same-site'
-					}`;
+		// another's (and doubles the pools). It is partitionsOf's, above
 		const partitioned = (headers: RawHeaders): RawHeaders => [
 			...headers.filter(([name]) => name.toLowerCase() !== NETWORK_PARTITION),
 			[NETWORK_PARTITION, networkPartition],
@@ -4361,7 +4596,20 @@ function genericForward(
 			await renewCacheSecret();
 			for (const key of rendererHas)
 				if (MemoryCache.origin(key) === url.url.origin) rendererHas.delete(key);
+			// and its host's HSTS, in every partition (as Chrome clears the
+			// network state that is not a representation with the cache; the
+			// host could drop it with max-age=0 all the same)
+			await forgetHsts((entry) => entry.host === url.url.hostname);
 		}
+		// a secure answer's Strict-Transport-Security, for its host in the
+		// request's network partition (hsts.ts); the browser never gets it
+		// (filterHeaders)
+		if (fromOrigin)
+			await noteHsts(
+				networkPartition,
+				url.url,
+				response.headers.get('strict-transport-security'),
+			);
 		// what this site's renderer has from here on, fresh or not
 		if (memoryKey !== null && response.status === 200 && !cleared) {
 			rendererHas.delete(memoryKey);
@@ -5788,28 +6036,42 @@ function genericForward(
 			)
 				throw error;
 			let real = serverRequest.url;
+			let routed: ReturnType<typeof parseRoutedURL> | null = null;
 			try {
-				real = reportURL(
-					parseRoutedURL(
-						serverRequest.url,
-						rewriter.codec,
-						`${new URL(serverRequest.url).origin}${rewriter.directory}`,
-					).url,
+				routed = parseRoutedURL(
+					serverRequest.url,
+					rewriter.codec,
+					`${new URL(serverRequest.url).origin}${rewriter.directory}`,
 				);
+				real = reportURL(routed.url);
 			} catch (parseError) {
 				// not a routed URL after all: reported as it came
 			}
-			// the report says 0 (no response); the document needs a status: 502
-			const page = await hostErrorPage(
-				rewriter,
-				{
-					url: real,
-					status: 502,
-					error: String(error),
-					kind: 'transport',
-				},
-				{ client: context?.clientId },
-			);
+			// a strict site's page whose https load failed (the site has no
+			// https): the interstitial, never the http page (./httpsOnly.ts)
+			const insecureFrom = navigation ? httpsOnlyUpgradeOf(navigation) : null;
+			const page =
+				insecureFrom && routed
+					? httpsOnlyPage(
+							insecureFrom,
+							`${new URL(serverRequest.url).origin}${rewriter.directory}${routed.resource}/${new StompURL(
+								new URL(insecureFrom),
+								routed.url,
+							).encode()}`,
+							`${new URL(serverRequest.url).origin}${rewriter.directory}${HTTPS_ONLY_ROUTE}`,
+							context?.clientId,
+						)
+					: // the report says 0 (no response); the document needs a status: 502
+						await hostErrorPage(
+							rewriter,
+							{
+								url: real,
+								status: 502,
+								error: String(error),
+								kind: 'transport',
+							},
+							{ client: context?.clientId },
+						);
 			if (!(error as { stompReported?: boolean }).stompReported)
 				rewriter.log?.({
 					url: real,
@@ -7786,6 +8048,19 @@ export function registerRewrites(
 	// fails its connection on a response that is not a stream, and is closed
 	// as natively (on a network error it would reconnect)
 	router.routes.set(new RegExp(`^/${REFUSED_ROUTE}/`), () => Response.error());
+	// "Continue to site" on a strict site's interstitial (./httpsOnly.ts):
+	// the token its page was given lets the user go on to that host over
+	// http. Nothing else does: a page cannot make up a token
+	router.routes.set(new RegExp(`^/${HTTPS_ONLY_ROUTE}$`), async (request) => {
+		if (request.method !== 'POST') return new Response(null, { status: 405 });
+		const text = await request.text().catch(() => '');
+		const host = /^[0-9a-f]{32}$/.test(text) ? takeHttpsOnlyOffer(text) : null;
+		if (host) rewriter.shields?.allowHttp(host);
+		return new Response(null, {
+			status: host ? 204 : 403,
+			headers: { 'cache-control': 'no-store' },
+		});
+	});
 	router.routes.set(
 		new RegExp(`^/${REFUSED_SOURCE_ROUTE}/`),
 		() => new Response(null, { status: 204 }),
@@ -8499,13 +8774,31 @@ export function registerRewrites(
 					// another slot shows goes there by a 307 the browser judges)
 					rewriter.config.sites?.origins,
 				);
+				// the host whose shields govern the document: its tab's top-level
+				// page's (a nested document's route names it, a dialed one's call
+				// did), as for its requests
+				let documentTop: string | null = null;
+				try {
+					documentTop = nestedTopOf(
+						new URL(request.routed).pathname,
+						rewriter.directory,
+						rewriter.codec,
+					);
+				} catch (error) {
+					// not a URL: no top to name
+				}
+				const shieldsHost = documentTop
+					? hostOf(documentTop)
+					: ((request.clientId
+							? shieldsTops.get(request.clientId)
+							: undefined) ?? url.url.hostname);
 				// "Block scripts" shield: the inject enforces script-src 'none'
 				// against the page's own code (src/csp.ts stage 2; the inject's own
 				// scripts are exempt by design). It rides as a page policy with no
 				// browser text, so the browser never gets it (a script-src header
 				// would kill STomp's shell) and only the inject's page-code
-				// enforcement sees it. Off unless the host's shields turn it on.
-				if (rewriter.shields?.blockScripts(url.url.hostname))
+				// enforcement sees it. Off unless the site's shields turn it on.
+				if (rewriter.shields?.blockScripts(shieldsHost))
 					policies.texts.push(['', "script-src 'none'", 'enforce']);
 				// whether code made from a string runs, under the headers' policies
 				// and the metas' of the head (src/csp.ts ScriptFacts)
@@ -8699,12 +8992,12 @@ export function registerRewrites(
 				// the blocker's side of the document (docs/adblock.md): the
 				// lists' `$csp=` policies the proxy can enforce, beside its own,
 				// and the cosmetic rules and scriptlets its inject applies. Shields
-				// down (or the blocker off) for this document's host hides nothing
+				// down (or the blocker off) for the document's site hides nothing
 				// and runs no scriptlet, as a content blocker the user turned off
 				// for the site would not; STomp's own rewriting is untouched
 				const adblockOn =
 					!!rewriter.blocker?.ready &&
-					(!rewriter.shields || rewriter.shields.blocks(url.url.hostname));
+					(!rewriter.shields || rewriter.shields.blocks(shieldsHost));
 				const adblock = adblockOn
 					? await rewriter.blocker!.cosmetic(url.url.href, (script) =>
 							modifyJS(script, url, rewriter.config, 'generic'),
@@ -8722,15 +9015,13 @@ export function registerRewrites(
 						)
 					: null;
 				if (listCsp) responseHeaders.append('content-security-policy', listCsp);
-				// the fingerprint surfaces STomp protects for this host (its
+				// the fingerprint surfaces STomp protects for the site (its
 				// shields): the shell tells the inject which to hook
 				// (Config.fingerprintOn), omitted when it is the default set so a
 				// default page's config is unchanged. The per-session farbling
 				// seed rides along only when a seeded surface (canvas/webgl/audio)
 				// is active.
-				const fingerprintOn = rewriter.shields?.fingerprintConfig(
-					url.url.hostname,
-				);
+				const fingerprintOn = rewriter.shields?.fingerprintConfig(shieldsHost);
 				const fingerprintSeed =
 					rewriter.shields &&
 					(fingerprintOn ?? FP_DEFAULT_ON_SURFACES).some((surface) =>
@@ -9532,9 +9823,11 @@ const JS_MIME =
  * (docs/service-workers.md): `sw:<version>/<url>` is a version's main
  * script, from storage, rewritten as a worker's with the preamble that makes
  * its global a service worker's; `swimport:<version>/<url>` is what it
- * imports, fetched and kept while it installs and served from storage after.
- * Only the controller's Worker gets the first and only the version's own
- * worker the second.
+ * imports, fetched and kept while it installs and served from storage after,
+ * and `swimport:<version>:m/<url>` a module of a module worker's graph,
+ * kept the same way (its own static imports routed there too). Only the
+ * controller's Worker gets the first, only the version's own worker the
+ * second, and no proxied page the third.
  */
 function registerServiceWorkerScripts(router: Router, rewriter: Rewriter) {
 	const refused = () =>
@@ -9571,7 +9864,7 @@ function registerServiceWorkerScripts(router: Router, rewriter: Rewriter) {
 					),
 				);
 			const client = helperNames(rewriter.config).client;
-			const script =
+			const rewrite = () =>
 				modifyJS(
 					found.script,
 					url,
@@ -9581,8 +9874,99 @@ function registerServiceWorkerScripts(router: Router, rewriter: Rewriter) {
 						(found.policies
 							? `${client}.judgeConnections(${JSON.stringify(found.policies)});`
 							: ''),
-				) + `\n;${client}.serviceWorkerEvaluated();`;
+				);
+			// a module worker's static imports are kept with the version, as
+			// a browser keeps its graph's scripts with the worker
+			const script =
+				(found.info.type === 'module'
+					? withImportKind(moduleImportKind(version), rewrite)
+					: rewrite()) + `\n;${client}.serviceWorkerEvaluated();`;
 			return new Response(script, { headers: SCRIPT_HEADERS });
+		},
+	);
+
+	/**
+	 * What the version imports at `url` (its real URL): while the version
+	 * is parsed or installing, fetched and kept (one that is no 2xx script
+	 * is answered as it came, and not kept); after that, what was kept, and
+	 * a network error for anything else, as the browser serves an installed
+	 * worker's imports from its script cache only. A redirect is a network
+	 * error, as Chrome 159 fails a service worker's imported script that
+	 * redirects (an importScripts throws, a module graph does not load):
+	 * handed to the browser it would be followed to the target's binary
+	 * route, and run unrewritten
+	 */
+	const imported = async (
+		version: string,
+		url: StompURL,
+		clientId: string | undefined,
+	): Promise<{ text: string } | Response> => {
+		const real = url.url.href;
+		const state = serviceWorkers.versionState(version);
+		if (state === 'parsed' || state === 'installing') {
+			const response = await router.route(new Request(routeBinary(url)), {
+				clientId,
+				internal: true,
+			});
+			if (
+				response.type === 'opaqueredirect' ||
+				(response.status >= 300 && response.status < 400)
+			) {
+				await response.body?.cancel();
+				return Response.error();
+			}
+			const mime = (response.headers.get('content-type') ?? '')
+				.split(';')[0]
+				.trim()
+				.toLowerCase();
+			if (!response.ok || !JS_MIME.test(mime)) return response;
+			const text = await response.text();
+			await serviceWorkers.storeImport(version, real, text);
+			return { text };
+		}
+		const text = state
+			? await serviceWorkers.storedImport(version, real)
+			: null;
+		return text === null ? Response.error() : { text };
+	};
+	/** an imported script's headers: it reads as its script cache's */
+	const importHeaders = (text: string) => ({
+		...SCRIPT_HEADERS,
+		// a service worker's imported script reads in its resource
+		// timing as its script cache's (measured natively, at its
+		// first install too): nothing transferred, no encoded
+		// bytes, the script's own decoded
+		'server-timing': `${CACHED_MARKER}, ${MEMORY_MARKER}, ${SIZE_MARKER};dur=0;desc=${utf8Length(text)}`,
+	});
+
+	router.routes.set(
+		/^\/swimport:([A-Za-z0-9_-]+):m\//,
+		async (request, path, context) => {
+			if (rewriter.config.serviceWorkers === false)
+				return new Response(null, { status: 404 });
+			const version = /^\/swimport:([A-Za-z0-9_-]+):m\//.exec(path)![1];
+			// the worker's module graph is fetched for the worker, by the
+			// controller's Worker: any client but a proxied page (one that is
+			// the version's own worker included)
+			const clientId = context?.requestClientId ?? context?.clientId;
+			const client =
+				clientId && typeof clients !== 'undefined'
+					? await clients.get(clientId)
+					: undefined;
+			if (
+				!serviceWorkers.isEmulated(clientId, client?.url, version) &&
+				(await serviceWorkers.isProxiedClient(clientId))
+			)
+				return refused();
+			const url = parse(request);
+			const found = await imported(version, url, clientId);
+			if (found instanceof Response) return found;
+			return new Response(
+				withImportKind(moduleImportKind(version), () =>
+					modifyJS(found.text, url, rewriter.config, 'workerModule'),
+				),
+				{ headers: importHeaders(found.text) },
+			);
 		},
 	);
 
@@ -9598,35 +9982,15 @@ function registerServiceWorkerScripts(router: Router, rewriter: Rewriter) {
 			if (!serviceWorkers.isEmulated(clientId, client?.url, version))
 				return refused();
 			const url = parse(request);
-			const real = url.url.href;
-			const state = serviceWorkers.versionState(version);
-			let text: string | null = null;
-			if (state === 'parsed' || state === 'installing') {
-				// what it imports now is kept for its later starts
-				const response = await router.route(new Request(routeBinary(url)), {
-					clientId,
-					internal: true,
-				});
-				const mime = (response.headers.get('content-type') ?? '')
-					.split(';')[0]
-					.trim()
-					.toLowerCase();
-				if (!response.ok || !JS_MIME.test(mime)) return response;
-				text = await response.text();
-				await serviceWorkers.storeImport(version, real, text);
-			} else if (state) text = await serviceWorkers.storedImport(version, real);
-			// after install, a script it did not import then is a network error
-			if (text === null) return Response.error();
-			return new Response(modifyJS(text, url, rewriter.config, 'generic'), {
-				headers: {
-					...SCRIPT_HEADERS,
-					// a service worker's imported script reads in its resource
-					// timing as its script cache's (measured natively, at its
-					// first install too): nothing transferred, no encoded
-					// bytes, the script's own decoded
-					'server-timing': `${CACHED_MARKER}, ${MEMORY_MARKER}, ${SIZE_MARKER};dur=0;desc=${utf8Length(text)}`,
-				},
-			});
+			const found = await imported(version, url, clientId);
+			if (found instanceof Response) return found;
+			return new Response(
+				modifyJS(found.text, url, rewriter.config, 'generic'),
+				{ headers: importHeaders(found.text) },
+			);
 		},
 	);
 }
+
+/** the route kind of a module in the graph of a module worker's `version` */
+const moduleImportKind = (version: string) => `${SW_IMPORT_ROUTE}:${version}:m`;

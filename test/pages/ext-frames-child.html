@@ -1,0 +1,15 @@
+<!doctype html>
+<html>
+	<head>
+		<title>ext frames child</title>
+	</head>
+	<body>
+		<iframe id="grand" src="ext-frames-grand.html"></iframe>
+		<script>
+			// an about:blank frame of a frame: its creator is the child
+			const blank = document.createElement('iframe');
+			document.body.append(blank);
+			blank.contentDocument.body.innerHTML = '<p>child blank</p>';
+		</script>
+	</body>
+</html>

@@ -144,6 +144,12 @@ is left out stays unwritten (fail closed below the top).
   by site (HTTP cache, network partitions, `SameSite`, permission grants).
 - **Not anonymity.** The front, the edge and the wisp relay see what they
   see without slots.
+- **A slot that dies.** A call page that goes says so (`{ gone }`), and
+  while its call is out the host pings it (`{ ping }`, `CALL_PING_MS`);
+  one that answers nothing for `CALL_GONE_MS` (10 s, a slot whose process
+  went, which says nothing) is taken for gone. Before it said it was ready
+  no call went, and the call is made elsewhere; after, the call went (it
+  may have been a POST), so it fails then and is not made again.
 - **Nothing is relaxed for them.** The slots change which origin a call
   page is on, nothing of what a document may do: the call page's own
   headers are unchanged, a response's policies are applied as dialing
@@ -156,8 +162,5 @@ is left out stays unwritten (fail closed below the top).
 
 ## Open
 
-- A slot that dies after its call page said it is ready leaves the call
-  without an answer until the call's own wait (45 s, `CALL_WAIT_MS`); the
-  call went (it may have been a POST), so it is not made again elsewhere.
 - `RemoteController` (the demo's `STOMP_PROXY_ORIGIN`) does not dial yet;
   the demo keeps such a page in the navigated mode.

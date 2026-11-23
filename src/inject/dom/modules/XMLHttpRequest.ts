@@ -639,6 +639,15 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 					method === 'PATCH'
 						? method
 						: deferred('checkedMethod')(that.client.global, method);
+				// the URL is parsed now, against the base the document has now
+				// (one inserted later changes nothing), and one that does not
+				// parse is the browser's SyntaxError, before anything changes
+				let parsed: URL;
+				try {
+					parsed = that.client.encodingParse(String(url), that.client.baseHref);
+				} catch (error) {
+					throw withStack(new DOMException(message('url'), 'SyntaxError'));
+				}
 				// a document may not make a synchronous request with a response
 				// type or a timeout set beforehand
 				if (!async && (this.#timeout !== 0 || this.#responseType !== ''))
@@ -669,7 +678,7 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				this.#responseXML = null;
 				this.#method = checked;
 
-				this.#url = String(url);
+				this.#url = parsed.href;
 
 				if (async) {
 					this.#async = true;
@@ -837,7 +846,13 @@ export default class XMLHttpRequestModule extends Module<DocumentClient> {
 				this.#fetch(routeXHR(new StompURL(sent, that.client.url)), options);
 			}
 			getResponseHeader(header: string) {
-				return this.#responseHeaders.get(header);
+				const name = `${header}`;
+				// a name that is no header name is in no response: the browser
+				// answers null where Headers.get throws (a name beyond Latin-1
+				// still throws, as the browser's ByteString does)
+				if (!/^[\w!#$%&'*+.^`|~-]+$/.test(name) && !/[^\0-\xff]/.test(name))
+					return null;
+				return this.#responseHeaders.get(name);
 			}
 			getAllResponseHeaders() {
 				let result = '';

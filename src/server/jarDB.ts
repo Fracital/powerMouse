@@ -54,6 +54,14 @@ export const DEVICE_GRANTS_STORE = 'grants';
  */
 export const PASSKEYS_DATABASE = 'stompPasskeys';
 export const PASSKEYS_STORE = 'credentials';
+/**
+ * The hosts each network partition knows to reach over https only
+ * (src/server/hsts.ts), asked the same way: a frame may be shown from
+ * another slot than its top, and an http URL of such a host must be
+ * upgraded whichever slot's worker fetches it (keyed out of line)
+ */
+export const HSTS_DATABASE = 'stompHsts';
+export const HSTS_STORE = 'hosts';
 
 export type JarOp = keyof JarDB;
 /** slot worker -> host: one request of the jar */

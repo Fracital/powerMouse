@@ -1,4 +1,5 @@
 import { parseConfig } from '../../../config';
+import { RUNTIME_GLOBAL } from '../../../extensions/types';
 import { FRESH_FRAME_EVENT } from '../../../freshFrame';
 import { routeHTML } from '../../../rewriteHTML';
 import StompURL from '../../../StompURL';
@@ -24,7 +25,7 @@ import { baseTarget, clickedLink } from '../links';
 import { pageSandbox, sandboxTokens } from '../sandbox';
 import ContextModule, { initialBlank, isStomp } from './Context';
 import { nativeElement } from './DOMHooks';
-import { markerPrefix } from './MutationObserver';
+import { hiddenMutation, markerPrefix } from './MutationObserver';
 import NavigationHintModule from './NavigationHint';
 
 export default class IFrameModule extends Module<DocumentClient> {
@@ -134,6 +135,53 @@ export default class IFrameModule extends Module<DocumentClient> {
 				injectContext,
 				moduleClient.names.client,
 			);
+
+		// The extensions' runtime, when the shell loaded one, runs the
+		// content scripts of the local documents this one makes (an
+		// about:blank, about:srcdoc, blob: or data: frame's, whose URL is none
+		// a pattern matches: Chrome matches its creator's). Such a document
+		// tells its creator once the inject runs there: an about:blank one at
+		// once, one with a shell of its own once its document is opened for
+		// its markup (an open drops the window's listeners)
+		const runtime = (realm as unknown as Record<string, unknown>)[
+			RUNTIME_GLOBAL
+		] as { localDocument?: unknown } | undefined;
+		if (typeof runtime?.localDocument === 'function')
+			moduleClient.localDocument =
+				runtime.localDocument as DocumentClient['localDocument'];
+		const href = realm.location.href;
+		// (a blob: or data: document is the worker's inline one: a data:
+		// one's shell names its URL, a blob: one reads its creator's, and the
+		// realm that minted it knows its blob: URL by the route's token)
+		const inline =
+			href !== 'about:blank' && href !== 'about:srcdoc'
+				? /\/inline:([\w-]{22})\//.exec(realm.location.pathname)
+				: null;
+		const shown = inline ? moduleClient.locationHref : '';
+		const own =
+			href === 'about:blank' || href === 'about:srcdoc'
+				? href
+				: shown.startsWith('data:')
+					? shown
+					: inline
+						? (moduleClient.creatorClient()?.inlineBlobs?.get(inline[1]) ??
+							null)
+						: null;
+		if (own !== null && moduleClient.nested) {
+			const tell = () =>
+				moduleClient
+					.creatorClient()
+					?.localDocument?.(realm, own, hiddenMutation);
+			if (href === 'about:blank') queueMicrotask(tell);
+			else {
+				let told = false;
+				addDocumentOpenListener(realm, () => {
+					if (told) return;
+					told = true;
+					tell();
+				});
+			}
+		}
 
 		const windowModule = moduleClient.getModule(ContextModule)!;
 

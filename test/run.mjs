@@ -109,6 +109,10 @@ const SUITE_ENV = {
 	'demo-tor-routes': { STOMP_TOR_CLIENT: 'stand-in' },
 	// epoxy plus the fixture hosts of test/mixed-servers.mjs
 	'mixed-content': { STOMP_TEST_TRANSPORT: '1' },
+	// (strict HTTPS against plain.mixed.test, which has no https)
+	'shields-sites': { STOMP_TEST_TRANSPORT: '1' },
+	// and the hsts suite's names and address
+	hsts: { STOMP_TEST_TRANSPORT: '1' },
 	// an https page of the fixture's mixed.test, whose report-to the Reporting
 	// API sends only for an https document
 	'csp-reports': { STOMP_TEST_TRANSPORT: '1' },

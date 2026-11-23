@@ -1,0 +1,103 @@
+<!doctype html>
+<html data-step="shadow">
+	<head>
+		<title>Dial shadow</title>
+		<script src="jcs-probe.js"></script>
+	</head>
+	<body>
+		<!-- frames in shadow roots (test/suites/dial-shadow-frames.mjs): one in
+		an open root, one in a closed root, one sandboxed in a closed root (as
+		Turnstile's challenge frame is), one in a closed root inside an open
+		one, and one each in an open and a closed declarative root of the
+		markup (the closed one read through its custom element's internals), and
+		one in a closed declarative root the page never reads -->
+		<div id="declarativeOpen">
+			<template shadowrootmode="open">
+				<iframe src="jcs-child.html?shadow-declarativeOpen"></iframe>
+			</template>
+		</div>
+		<div>
+			<template shadowrootmode="closed">
+				<iframe src="jcs-child.html?shadow-declarativeUnread"></iframe>
+			</template>
+		</div>
+		<dial-closed id="declarativeClosed">
+			<template shadowrootmode="closed">
+				<iframe src="jcs-child.html?shadow-declarativeClosed"></iframe>
+			</template>
+		</dial-closed>
+		<script>
+			(() => {
+				const out = {};
+				const report = (why) =>
+					console.log(`SHADOW:${JSON.stringify({ why, ...out })}`);
+				// the page's own listeners, on the frame and capturing on its root:
+				// natively each hears the frame's document's load once
+				const watch = (name, frame, root) => {
+					out[`${name}Loads`] = 0;
+					out[`${name}RootLoads`] = 0;
+					frame.addEventListener('load', () => {
+						out[`${name}Loads`]++;
+						let title;
+						try {
+							title = frame.contentDocument?.title ?? null;
+						} catch (error) {
+							title = `throws ${error.name}`;
+						}
+						out[`${name}Title`] = title;
+						report(`${name}-load`);
+					});
+					root.addEventListener(
+						'load',
+						(event) => {
+							if (event.target === frame) out[`${name}RootLoads`]++;
+						},
+						true,
+					);
+				};
+				const framed = (name, root, sandbox) => {
+					const frame = document.createElement('iframe');
+					if (sandbox) frame.setAttribute('sandbox', sandbox);
+					watch(name, frame, root);
+					frame.src = `jcs-child.html?shadow-${name}`;
+					root.append(frame);
+				};
+				const host = () =>
+					document.body.appendChild(document.createElement('div'));
+
+				framed('open', host().attachShadow({ mode: 'open' }));
+				framed('closed', host().attachShadow({ mode: 'closed' }));
+				framed(
+					'sandboxed',
+					host().attachShadow({ mode: 'closed' }),
+					'allow-same-origin allow-scripts allow-popups',
+				);
+				const outer = host().attachShadow({ mode: 'open' });
+				const inner = outer
+					.appendChild(document.createElement('div'))
+					.attachShadow({ mode: 'closed' });
+				framed('nested', inner);
+
+				const open = document.getElementById('declarativeOpen').shadowRoot;
+				watch('declarativeOpen', open.querySelector('iframe'), open);
+				customElements.define(
+					'dial-closed',
+					class extends HTMLElement {
+						constructor() {
+							super();
+							const root = this.attachInternals().shadowRoot;
+							watch('declarativeClosed', root.querySelector('iframe'), root);
+						}
+					},
+				);
+				// the host's word between a frame's call page and itself is none
+				// of the page's
+				out.heardHere = 0;
+				for (const target of [window, document])
+					target.addEventListener('$stomp$here', () => out.heardHere++, true);
+
+				addEventListener('load', () => setTimeout(report, 1500, 'load'));
+			})();
+		</script>
+	</body>
+</html>

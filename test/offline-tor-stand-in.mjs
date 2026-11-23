@@ -9,7 +9,9 @@
 // stream to the exit's own resolution of every name, 127.0.0.1: the suite's
 // fixture, through the run's holyWisp. The stream's address is first kept
 // as the relays of a consensus, so the service's refusal of anything that is
-// not a relay (service.mjs admit) lets it through as it lets a relay.
+// not a relay (service.mjs admit) lets it through as it lets a relay, and
+// as the client's guard in arti's guard state (`state:guards`), which the
+// circuit display reads.
 //
 // What the client does can be broken on purpose, for the suites that check
 // Tor mode fails closed: the origin's IndexedDB `tor-stand-in-control` (store
@@ -114,11 +116,18 @@ async function controlMode() {
 	}
 }
 
+// the stand-in's guard: its nickname and identity as a consensus writes
+// them (base64 of the 20 bytes 01 to 14), and that identity in hex as
+// arti's guard state writes it
+export const GUARD_NICKNAME = 'StandInGuard';
+const GUARD_IDENTITY = 'AQIDBAUGBwgJCgsMDQ4PEBESExQ';
+export const GUARD_FINGERPRINT = '0102030405060708090A0B0C0D0E0F1011121314';
+
 /** a microdesc consensus's relay lines: `addresses` and enough others to read as one */
 function consensus(...addresses) {
 	const lines = addresses.map((address) => {
 		const [ip, port] = address.split(':');
-		return `r standin AAAA 2026-01-01 00:00:00 ${ip} ${port} 0`;
+		return `r ${GUARD_NICKNAME} ${GUARD_IDENTITY} 2026-01-01 00:00:00 ${ip} ${port} 0`;
 	});
 	for (let i = 1; i <= 120; i++)
 		lines.push(`r other${i} AAAA 2026-01-01 00:00:00 192.0.2.${i} 9001 0`);
@@ -209,6 +218,33 @@ export class TorClient {
 			await this.#options.storage.set(
 				`dir:consensus:stand-in-${port}`,
 				consensus(address),
+			);
+			// the "relay" a stream goes to is the client's guard, kept as
+			// arti's guard manager keeps its GuardSets (state manager key
+			// `guards`), so the circuit display reads it as it would arti's
+			const id = {
+				ed25519: 'c3RhbmQtaW4gZ3VhcmQncyBlZDI1NTE5IGlkZW50aXR5',
+				rsa: GUARD_FINGERPRINT.toLowerCase(),
+			};
+			await this.#options.storage.set(
+				'state:guards',
+				JSON.stringify({
+					default: {
+						guards: [
+							{
+								id,
+								orports: [address],
+								added_at: '2026-01-01T00:00:00Z',
+								added_by: null,
+								disabled: null,
+								confirmed_at: '2026-01-01T00:00:00Z',
+								unlisted_since: null,
+							},
+						],
+						confirmed: [id],
+					},
+					restricted: { guards: [], confirmed: [] },
+				}),
 			);
 		}
 		const socket = await this.#options.socketProvider.connect(address);

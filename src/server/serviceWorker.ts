@@ -514,6 +514,9 @@ function registerController(
 			navigationSent: async (routed) => {
 				navigationSent(routed);
 			},
+			serviceWorkerUnstarted: async (id) => {
+				serviceWorkers.unstarted(id);
+			},
 			callToken: async ({ token, routed }) => {
 				const ready = await server;
 				let target: URL | null = null;
@@ -594,7 +597,10 @@ function registerController(
 				// its handshake hook and refuses the socket on a yes
 				// a WebSocket the site's shields let through (shields down, or the
 				// blocker in "allow all") is not refused; a host with no entry is
-				// checked as before. The Origin the handshake carries is the host
+				// checked as before. The shields are its tab's top-level page's,
+				// as a request's are (rewrites.ts clientShieldsHostOf); a socket
+				// whose client the worker cannot place is keyed by the document
+				// that opens it
 				const srv = await server;
 				let socketHost: string;
 				try {
@@ -602,6 +608,8 @@ function registerController(
 				} catch (error) {
 					socketHost = '';
 				}
+				if (typeof client === 'string')
+					socketHost = (await srv.shieldsHostOf(client)) ?? socketHost;
 				// the extensions' rules (src/server/dnr.ts) first: the site's
 				// shields are the built-in blocker's, not theirs
 				const ruled = srv.dnr.socketBlocked(
@@ -667,6 +675,7 @@ function registerController(
 			retire: async () => {
 				drainController(ref);
 			},
+			hsts: async (asked) => [await (await server).hstsSocket(asked), []],
 			goneClients: async (asked) => {
 				const gone = Array.isArray(asked) ? await goneClients(asked) : [];
 				// (a gone document's frame no longer holds allowAllRequests)
@@ -821,11 +830,12 @@ function workerHost(ref: ControllerRef, ready: StompServer): WorkerHost {
 		},
 		scriptRoute: (version, scriptURL) =>
 			ready.routeAs(`${SW_ROUTE}:${version}`, scriptURL),
-		fetchScript: (url, clientId, bypassCache) =>
+		fetchScript: (url, clientId, bypassCache, imported) =>
 			ready.router.route(
-				new Request(ready.routeAs('binary', url), {
-					headers: { 'service-worker': 'script' },
-				}),
+				new Request(
+					ready.routeAs('binary', url),
+					imported ? {} : { headers: { 'service-worker': 'script' } },
+				),
 				{ clientId, bypassCache, internal: true },
 			),
 		routeDocument: (url) => ready.route(url),

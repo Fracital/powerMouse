@@ -15,7 +15,9 @@
 // shown on the page (the client's link failures, and arti's own events
 // through `bootstrapEvents` as the stand-in gives them: tor-js has no such
 // call yet), a Tor tab that stays in Tor mode when another tab turns it
-// off, and a Tor tab's site data across its reload.
+// off, a Tor tab's site data across its reload, and the shared client's
+// life (extendedLifetime, a new session on it), its circuit display and
+// Forget Tor state.
 /* global TOR_REQUESTED, DIRECTORY */
 import {
 	activeFrame,
@@ -29,6 +31,7 @@ import {
 	waitActive,
 	waitForServer,
 } from '../lib.mjs';
+import { GUARD_FINGERPRINT } from '../offline-tor-stand-in.mjs';
 
 await waitForServer(PROXY);
 const browser = await launch();
@@ -146,7 +149,7 @@ async function askFor(page, name, ms = 6000) {
 
 // Bootstrap that never ends: the request waits for Tor, and nothing goes
 // past it, in this tab, in a second tab of the same client, or after a
-// reload of the first (the client torn down and made again)
+// reload of the first (the client, which outlives the page, still stuck)
 {
 	const context = await browser.newContext();
 	await breakClient(context, 'hang');
@@ -440,6 +443,191 @@ async function askFor(page, name, ms = 6000) {
 				!seen.dbs.includes('tordb'),
 		),
 		JSON.stringify({ normalSees, normalAfter }),
+	);
+	await context.close();
+}
+
+// The shared client's life, its state and its circuit display. The
+// SharedWorker is started with extendedLifetime (src/transport/
+// sharedWorker.ts): a reload and a navigation of the origin's only page get
+// the same client back, bootstrapped already. A new Tor session (the last
+// Tor tab closed, a new one opened) gets that client too, but none of the
+// last session's circuits. The menu's Tor circuit for this site shows the
+// guard of the active tab's site's circuits, read from arti's guard state
+// and the consensus the client keeps (the stand-in writes both as arti
+// does); Forget Tor state empties the client's store and starts it again.
+{
+	const STORE = 'stomp-tor-client-stand-in';
+	/** the stand-in client's store (tor-js's IndexedDB in its place): its keys and its count of bootstraps */
+	const store = (page) =>
+		page.evaluate(
+			(name) =>
+				new Promise((resolve, reject) => {
+					const open = indexedDB.open(name, 1);
+					open.onupgradeneeded = () => open.result.createObjectStore('kv');
+					open.onerror = () => reject(open.error);
+					open.onsuccess = () => {
+						const db = open.result;
+						const kv = db.transaction('kv', 'readonly').objectStore('kv');
+						const keys = kv.getAllKeys();
+						const started = kv.get('stand-in:started');
+						keys.transaction.oncomplete = () => {
+							db.close();
+							resolve({
+								keys: keys.result.map(String).sort(),
+								started: Number(started.result ?? 0),
+							});
+						};
+					};
+				}),
+			STORE,
+		);
+	/** the circuit display for the active tab, opened from the menu, once it shows `want` */
+	const circuitShown = async (page, want) => {
+		await page.click('#toolMenu');
+		await page.click('#menuTorCircuit');
+		const shown = await until(
+			page,
+			() => {
+				const box = document.querySelector('.extSubmenu .torCircuit');
+				return box
+					? {
+							text: box.innerText,
+							guard: box.dataset.guard,
+							site: box.dataset.site,
+							circuit: window.__pmTorCircuit?.circuit ?? null,
+						}
+					: null;
+			},
+			(value) => want.test(value?.text ?? ''),
+			10000,
+		);
+		await page.keyboard.press('Escape');
+		await page.keyboard.press('Escape');
+		return shown;
+	};
+	const landed = async (page, name) => {
+		const k = key(name);
+		await page.click('#home').catch(() => {});
+		await submitLanding(page, target(k));
+		const frame = await waitActive(
+			page,
+			() => document.title === 'landed',
+		).catch(() => null);
+		return !!frame && (await reached(k)) !== null;
+	};
+
+	const context = await browser.newContext();
+	const { page } = await torPage(context);
+	const first = await until(
+		page,
+		read,
+		(value) => value?.client?.state === 'ready',
+	);
+	const before = await store(page);
+	await page.reload();
+	const reloaded = await until(
+		page,
+		read,
+		(value) => value?.controller && value.client !== null,
+	);
+	await page.goto(`${PROXY}api/tor`);
+	await page.goto(`${PROXY}?tor=1`);
+	const back = await until(
+		page,
+		read,
+		(value) => value?.controller && value.client !== null,
+	);
+	const after = await store(page);
+	ok(
+		'the shared Tor client outlives a reload and a navigation (extendedLifetime): the same client, ready, no bootstrap again',
+		!!first?.client?.instance &&
+			reloaded?.client?.instance === first.client.instance &&
+			back?.client?.instance === first.client.instance &&
+			reloaded.client.state === 'ready' &&
+			back.client.state === 'ready' &&
+			before.started >= 1 &&
+			after.started === before.started,
+		JSON.stringify({
+			first: first?.client,
+			reloaded: reloaded?.client,
+			back: back?.client,
+			before,
+			after,
+		}),
+	);
+
+	const loaded = await landed(page, 'circuit');
+	const circuit = await circuitShown(page, /StandInGuard/);
+	ok(
+		"Tor circuit for this site: the guard of the site's circuits from arti's guard state, its nickname and fingerprint from the consensus, and the site's circuit in use",
+		loaded &&
+			circuit?.guard === GUARD_FINGERPRINT &&
+			/Circuit for 127\.0\.0\.1/.test(circuit.text) &&
+			/StandInGuard \$01020304 127\.0\.0\.1:\d+/.test(circuit.text) &&
+			/in use since .+, [1-9]\d* streams?/.test(circuit.text) &&
+			/not told by the Tor client/.test(circuit.text) &&
+			circuit.circuit?.guardFrom === 'state' &&
+			!!circuit.site,
+		JSON.stringify(circuit),
+	);
+
+	// the last Tor tab closes, and a new session's tab gets the same client
+	// (it outlived the page) but a circuit of its own for the same site
+	const since = circuit?.circuit?.since;
+	await page.close();
+	await sleep(500);
+	const { page: next } = await torPage(context);
+	const nextState = await until(
+		next,
+		read,
+		(value) => value?.client?.state === 'ready',
+	);
+	const again = (await landed(next, 'circuit-new-session'))
+		? await circuitShown(next, /in use since/)
+		: null;
+	ok(
+		'a new Tor session gets the client that outlived the last one, but none of its circuits',
+		nextState?.client?.instance === first?.client?.instance &&
+			!!since &&
+			!!again?.circuit?.since &&
+			again.circuit.since > since,
+		JSON.stringify({ since, again, instance: nextState?.client?.instance }),
+	);
+
+	// Forget Tor state: the store emptied, the client started again (a
+	// bootstrap of its own), and a page loads over it, its guard kept again
+	const kept = await store(next);
+	await next.click('#toolMenu');
+	await next.click('#menuForgetTorState');
+	const forgotten = await until(
+		next,
+		() => window.__pmTorForgottenState ?? null,
+		(value) => value !== null,
+		10000,
+	);
+	const restarted = await until(
+		next,
+		read,
+		(value) => value?.client?.state === 'ready',
+	);
+	const emptied = await store(next);
+	const relanded = await landed(next, 'after-forget');
+	const keptAgain = await store(next);
+	ok(
+		"Forget Tor state empties the client's store and starts it again with no guard",
+		kept.keys.includes('state:guards') &&
+			forgotten?.forgotten >= kept.keys.length &&
+			!emptied.keys.includes('state:guards') &&
+			!emptied.keys.some((name) => name.startsWith('dir:consensus:')) &&
+			emptied.started === 1 &&
+			restarted?.client?.instance === first?.client?.instance,
+		JSON.stringify({ kept, forgotten, emptied, client: restarted?.client }),
+	);
+	ok(
+		'after Forget Tor state a page loads over the new client, which keeps its guard again',
+		relanded && keptAgain.keys.includes('state:guards'),
+		JSON.stringify({ relanded, keptAgain }),
 	);
 	await context.close();
 }

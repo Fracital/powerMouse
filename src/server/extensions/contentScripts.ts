@@ -237,6 +237,7 @@ export async function documentShell(
 					world: entry.world,
 					js,
 					css,
+					...(entry.local && entry.allFrames ? { local: entry.local } : {}),
 				});
 				if (js) routes.push(entryRoute(doc.directory, loaded, entry));
 			}
@@ -320,7 +321,9 @@ export const isolatedSource = (source: string) =>
 /**
  * A route's script: a call of the runtime's `define` with the code as a
  * function of its world's `chrome` (none in the MAIN world), and of the
- * callback an injection's result goes to (`result`)
+ * callback an injection's result goes to (`result`). An injection's
+ * function is handed the realm's own indirect eval after it, which runs a
+ * file's code as global code and answers its completion value (fileBody)
  */
 export function definition(
 	id: string,
@@ -331,7 +334,7 @@ export function definition(
 ): string {
 	const parameters = [
 		...(world === 'MAIN' ? [] : ['chrome', 'browser']),
-		...(result ? ['$result'] : []),
+		...(result ? ['$result', '$eval'] : []),
 	].join(',');
 	return `self.${RUNTIME_GLOBAL}?.define(${JSON.stringify(id)},${JSON.stringify(key)},function(${parameters}){\n${body}\n});`;
 }
@@ -358,6 +361,15 @@ export const worldDefinition = (
  * where the inject's policy refuses eval: src/inject/dom/sandbox.ts)
  */
 export const SHARED = 'shared';
+
+/**
+ * An injected file's body (MAIN and USER_SCRIPT worlds): its code, already
+ * rewritten, run by the realm's eval as global code, as Chrome runs a file
+ * (its declarations are the page's globals), and its completion value is
+ * the injection's result (an isolated world's evaluates its code itself)
+ */
+export const fileBody = (rewritten: string) =>
+	`$result($eval(${JSON.stringify(rewritten)}));`;
 
 /** an injection's code as prepareExecution kept it, for its shared form */
 export const injectionSource = (route: string) => `${route}?source`;

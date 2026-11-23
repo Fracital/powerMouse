@@ -36,7 +36,7 @@ commit that fixed them and their regression suite.
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | IP: address, geo                                          | this machine's                                                                                                            | the wisp server's                                                                                               | no        | inherent: the egress is the wisp server                                                                                      |                                                                                              |
 | IP: Priority                                              | `u=0, i`                                                                                                                  | live: missing                                                                                                   | yes       | the HTTP/3 wrapper declared no field support, so the host dropped Priority with HTTP/3 on (live)                             | fixed, 25fe658, fields-unit                                                                  |
-| IP: IPv6 test                                             | `ERR_ADDRESS_UNREACHABLE`                                                                                                 | epoxy `InvalidDnsName`                                                                                          | yes, low  | epoxy cannot do https to an IPv6 literal                                                                                     | left (transport)                                                                             |
+| IP: IPv6 test                                             | `ERR_ADDRESS_UNREACHABLE`                                                                                                 | epoxy `InvalidDnsName`                                                                                          | yes, low  | epoxy cannot do https to an IPv6 literal                                                                                     | fixed in the epoxy build (epoxy-tls 0055), epoxy-ipv6                                        |
 | IP, TCP: hops, MTU, JA4T                                  | this machine's                                                                                                            | the wisp server's                                                                                               | no        | inherent (docs/fingerprint.md item 7)                                                                                        |                                                                                              |
 | JavaScript                                                | tab-separated table                                                                                                       | the "Rest of window.navigator" table ran together                                                               | yes       | fragment parsing in body context (below)                                                                                     | fixed, 2d892b1                                                                               |
 | JavaScript: outer size                                    | toolbar between outer and inner (real window)                                                                             | `outerHeight === innerHeight`, at 0,0                                                                           | yes       | Framing spoofed a toolbarless window                                                                                         | fixed, ce6610a, window-geometry                                                              |
@@ -52,7 +52,7 @@ commit that fixed them and their regression suite.
 | Features                                                  | ServiceWorker API true; console quiet                                                                                     | false; seven "Failed to construct 'URL': Invalid URL" errors                                                    | yes       | serviceWorker deleted; the CSS rewriter logged every url() it could not resolve                                              | console fixed, 944ae8f, css-invalid-urls; serviceWorker left                                 |
 | TLS: JA4, JA3n, Akamai                                    | as native                                                                                                                 | match                                                                                                           | no        | docs/fingerprint.md                                                                                                          |                                                                                              |
 | TLS: mixed content                                        | Active: Blocked; Passive: Upgraded to HTTPS                                                                               | "Mixed Content Loaded" for both                                                                                 | yes       | every proxied page is https or loopback in proxy URL space, so Chrome's own check never fires                                | fixed, abb4c26, mixed-content (below)                                                        |
-| TLS: ECH table                                            | tab-separated; ECH Success True, outer SNI tls-outer.browserleaks.com                                                     | cells ran together; ECH Success False, outer SNI tls.browserleaks.com                                           | yes       | tabs: fragment parsing (no CSS difference: the cells are `table-cell` in both). ECH: epoxy sends only a GREASE ECH extension | tabs fixed, 2d892b1; ECH left (transport)                                                    |
+| TLS: ECH table                                            | tab-separated; ECH Success True, outer SNI tls-outer.browserleaks.com                                                     | cells ran together; ECH Success False, outer SNI tls.browserleaks.com                                           | yes       | tabs: fragment parsing (no CSS difference: the cells are `table-cell` in both). ECH: epoxy sends only a GREASE ECH extension | tabs fixed, 2d892b1; ECH fixed where the host gives epoxy `ech_dns` (the demo does)          |
 | QUIC                                                      | QUIC connection, h3 SETTINGS `1:65536;6:262144;7:100;51:1;GREASE...`                                                      | local: no QUIC (HTTP/3 is off by default); live: SETTINGS `GREASE;6:262144;8:0;...`, a 1200-byte second Initial | yes       | stomp-h3's SETTINGS and frames; quinn's Initial padding (docs/fingerprint.md item 5); QUIC JA4 matches                       | left                                                                                         |
 | HTTP/2: frames                                            | tables with tabs                                                                                                          | ran together                                                                                                    | yes       | fragment parsing                                                                                                             | fixed, 2d892b1 (identical to native now)                                                     |
 | HTTP/2: `origin` of a CORS fetch                          | after `accept`                                                                                                            | right after `:path`                                                                                             | yes       | headerOrder put Origin first for every CORS GET (Blink's place for an element's load)                                        | fixed, ca1fc28, field-order                                                                  |
@@ -61,7 +61,7 @@ commit that fixed them and their regression suite.
 | DNS                                                       | resolver table                                                                                                            | ran together; the edge's resolvers                                                                              | table yes | fragment parsing; the resolvers are inherent                                                                                 | table fixed, 2d892b1                                                                         |
 | CSS                                                       | as native but the viewport                                                                                                | viewport only                                                                                                   | no        | inherent                                                                                                                     |                                                                                              |
 | Rects                                                     | `#inside` positioned and transformed                                                                                      | unstyled (x 8, width 905): other hashes                                                                         | yes       | the sandboxed frame (no allow-scripts) lost every inline style: the shell's placeholder script carried no nonce              | fixed, a352e15, sandbox-styles; the table's tabs, 2d892b1                                    |
-| Any page: WebSocket                                       | close codes as sent                                                                                                       | a failed connection never closed; `close()` read 1000; `close(code, reason)` never ended                        | yes       | the transport reports an error without a close, and epoxy answers no close but 1000 without a reason                         | fixed, 7f018a9, websocket-close; the server's own close code stays epoxy's (always 1000)     |
+| Any page: WebSocket                                       | close codes as sent                                                                                                       | a failed connection never closed; `close()` read 1000; `close(code, reason)` never ended                        | yes       | the transport reports an error without a close, and epoxy answers no close but 1000 without a reason                         | fixed, 7f018a9, websocket-close; the server's own code and reason since epoxy-tls 0054       |
 
 After the fixes (local demo, same-origin mode, the same probe): Canvas,
 HTTP/2 and Rects read exactly as natively; the TLS page says Active
@@ -132,7 +132,8 @@ membrane agent's).
    pages get emulated service workers by default (docs/service-workers.md),
    which closes the feature test; only a controller built with
    `serviceWorkers: false` (the demo's `?nosw`) still lacks it. FedCM is
-   still deleted.
+   emulated: its interfaces read as the browser's and a flow runs through
+   the proxy (`src/inject/dom/modules/Credentials.ts`, fedcm suite).
 2. **Client hints** were not honoured (Accept-CH, Critical-CH), so a site
    that asked for high-entropy hints got none. Fixed: the worker keeps each
    real origin's Accept-CH, makes a navigation again for Critical-CH, and
@@ -150,19 +151,22 @@ membrane agent's).
    native, a request reaches the browser only for a site that may have it,
    and the host asks the user when the browser's grant belongs to another
    site; the demo's frames carry an `allow` list (docs/permissions.md, which
-   has the trade-off, permissions suite). `storage-access` still reads
-   `prompt` where native reads `granted`.
+   has the trade-off, permissions suite). `storage-access` reads
+   `granted` in a proxied top, as natively.
 5. **Request fingerprint, live**: HTTP/3 SETTINGS and frame order are
-   stomp-h3's, its Accept-Encoding over HTTP/3 is `gzip, br`; ECH is never
-   used (epoxy sends GREASE ECH only); https to an IPv6 literal fails in
-   epoxy.
+   stomp-h3's, its Accept-Encoding over HTTP/3 is `gzip, br`. Fixed since:
+   ECH is real when the host gives epoxy `ech_dns` (the demo does; without
+   it epoxy sends GREASE ECH only), and https to an IPv6 literal loads
+   (epoxy-tls 0055, epoxy-ipv6 suite).
 6. **`document.hasFocus()`** was false after a navigation from the demo's
    address bar (natively the page gets focus). Fixed: the demo moves focus
    from its address bars into the tab's frame, and a RemoteFrame gives it
    back when its first proxied document commits in another process (focus
    suite).
-7. **WebSocket**: a close the server starts reads 1000 whatever its code
-   (epoxy never reads the frame).
+7. **WebSocket**: a close the server starts read 1000 whatever its code
+   (epoxy never read the frame). Fixed: the page reads the server's code
+   and reason, 1005 for a frame without a status and 1006 for no close
+   frame (epoxy-tls 0054).
 
 ## Owned elsewhere (noted, not fixed here)
 
@@ -172,11 +176,12 @@ membrane agent's).
   compare the type); a cross-origin worker script's error reads its
   message where native mutes it to NetworkError (`importScripts` of a
   script that throws); `navigator.storage.estimate().quota` counts the
-  host origin's usage; the storage-access permission answer above.
+  host origin's usage.
 - Window membrane: the window of an iframe whose navigation was blocked as
   mixed content throws SecurityError on `location.href` (natively it stays
   same-origin `about:blank`).
-- `cookieStore` is missing in both modes (being fixed by its own owner).
+- `cookieStore` was missing in both modes; it is there now
+  (`src/inject/cookieStoreMethods.ts`).
 - `style` attribute readback, the Location stand-in's names, constructor
   descriptors and the `Audio` constructor: no browserleaks page showed a
   difference from them.

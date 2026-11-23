@@ -609,6 +609,11 @@ export default class Client {
 		return new StompURL(memo.href, this.codec, memo.prefix);
 	}
 	/**
+	 * The blob: URL, as the page has it, of each inline document this realm
+	 * registered for a blob: document (ObjectURL), by its inline token
+	 */
+	inlineBlobs?: Map<string, string>;
+	/**
 	 * `location.toString()` without a copy: what every read of the page's
 	 * `location.href`, `location.pathname` and `document.URL` starts from
 	 */

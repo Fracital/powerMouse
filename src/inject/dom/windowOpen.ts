@@ -10,6 +10,7 @@
 // only).
 import { routeHTML } from '../../rewriteHTML';
 import StompURL from '../../StompURL';
+import { withStack } from '../nativeErrors';
 import { mayOpenPopup, popupOpened } from './activation';
 import type DocumentClient from './Client';
 import { deferred } from './deferred';
@@ -50,8 +51,21 @@ export function windowOpen(
 		// about:blank (or no URL) is a document the page writes itself:
 		// opened as is, injected by the IFrame module's hook
 		let destination: URL | null = null;
-		if (args[0] !== undefined && String(args[0]) !== '')
-			destination = client.encodingParse(String(args[0]), client.baseHref);
+		if (args[0] !== undefined && String(args[0]) !== '') {
+			const input = String(args[0]);
+			try {
+				destination = client.encodingParse(input, client.baseHref);
+			} catch (error) {
+				// a URL that does not parse opens nothing: the browser's
+				// SyntaxError, not URL's TypeError (url/failure.html)
+				throw withStack(
+					new realm.DOMException(
+						`Failed to execute 'open' on 'Window': Unable to open a window with invalid URL '${input}'.`,
+						'SyntaxError',
+					),
+				);
+			}
+		}
 		const routable =
 			destination !== null && /^https?:$/.test(destination.protocol);
 		// the proxied parent or top, named from a frame under the top:

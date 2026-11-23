@@ -26,7 +26,7 @@ export class RemoteService {
 		return remote;
 	}
 
-	constructor(port, { wisp, storageName, wasm }) {
+	constructor(port, { wisp, storageName, wasm, session }) {
 		this.#port = port;
 		let heard;
 		const answered = new Promise((resolve) => (heard = resolve));
@@ -38,7 +38,7 @@ export class RemoteService {
 			else if (data?.type === 'done') {
 				const call = this.#calls.get(data.id);
 				this.#calls.delete(data.id);
-				if (data.error === undefined) call?.resolve();
+				if (data.error === undefined) call?.resolve(data.value);
 				else call?.reject(new Error(data.error));
 			}
 		};
@@ -48,6 +48,7 @@ export class RemoteService {
 			wisp,
 			storageName,
 			...(typeof wasm === 'string' && { wasm }),
+			...(typeof session === 'string' && { session }),
 		});
 		let timer;
 		this.#settled = Promise.race([
@@ -103,6 +104,16 @@ export class RemoteService {
 		const own = await this.#settled;
 		if (own) own.newCircuitFor(url);
 		else this.#port.postMessage({ type: 'newCircuit', url });
+	}
+
+	async circuitFor(url) {
+		const own = await this.#settled;
+		return own ? own.circuitFor(url) : this.#call('circuit', { url });
+	}
+
+	async forgetState(token) {
+		const own = await this.#settled;
+		return own ? own.forgetState(token) : this.#call('forgetState', { token });
 	}
 
 	async connect(host, port, site) {

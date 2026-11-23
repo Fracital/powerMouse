@@ -18,6 +18,7 @@ import {
 import {
 	definition,
 	documentToken,
+	fileBody,
 	injectionSource,
 	isolatedSource,
 	worldDefinition,
@@ -486,7 +487,9 @@ async function prepareExecution(
 		source.world === 'MAIN' || source.world === 'USER_SCRIPT'
 			? source.world
 			: 'ISOLATED';
-	const key = `x${await digest(`${world}\n${code}`)}`;
+	// (a file's route evaluates its code: kept apart from what a route made
+	// before that kept)
+	const key = `x${await digest(`${world}\n${file ? 'file\n' : ''}${code}`)}`;
 	const route = `${channel}${CONTENT_SCRIPT_ROUTE}/${id}/x/${key}.js`;
 	const url = new URL(route, location.origin).href;
 	const cache = await caches.open(scriptCache(id));
@@ -495,16 +498,23 @@ async function prepareExecution(
 		// the code's completion value becomes the function's return (an
 		// isolated world's code is its world's: worldDefinition)
 		const at = extensionURL(id, file || 'injected.js');
-		const script =
-			world === 'ISOLATED'
-				? worldDefinition(id, key, code, at)
-				: definition(
-						id,
-						key,
-						world,
-						rewriteJS(world === 'MAIN' ? code : isolatedSource(code), at),
-						true,
-					);
+		let script: string;
+		if (world === 'ISOLATED') script = worldDefinition(id, key, code, at);
+		else {
+			const rewritten = rewriteJS(
+				world === 'MAIN' ? code : isolatedSource(code),
+				at,
+			);
+			// (a file's completion value is its result; a function's call
+			// hands its own)
+			script = definition(
+				id,
+				key,
+				world,
+				file ? fileBody(rewritten) : rewritten,
+				true,
+			);
+		}
 		await cache.put(
 			url,
 			new Response(script, {

@@ -393,6 +393,25 @@ each entry, and a `*` entry for the hosts with none, goes to the controller
 with `enabled: false`, the button and panel read down, and the panel's
 master switch is disabled. What each site has stored is persisted as it
 was, so the sites come back as they were left when Block ads is on again.
+
+Every frame of a tab is governed by the shields of the tab's top-level
+page, however deep the frame and whatever its site, as Brave keys a frame's
+shields by its main frame: a third-party frame has none of its own, so
+framing cannot get around a site's shields. The worker finds that top for
+each request (`shieldsHost`, src/server/rewrites.ts): a top-level
+navigation is the page itself; a frame's navigation names its top in its
+route (the nested mark, src/rewriteHTML.ts); a subresource's client is a
+nested document whose route names it, or a dialed document, written into a
+call page whose URL names no route, whose call the worker recorded by the
+client it made (docs/dialing.md); a partitioned worker, a blob: worker or an
+inline document names its top's site only, whose host then stands for the
+top. Else the request's document is a top-level one. The document builder
+keys Block scripts, the cosmetic filters and the fingerprint surfaces by the
+same top, and a WebSocket or WebTransport session is keyed by its client's
+top (by the document that opens it when the worker cannot place the
+client). The `shields-sites` suite checks a frame of another site two levels
+down under shields down and up, in classic and dialed tabs.
+
 What the worker enforces today:
 
 - `mode` (`aggressive` | `standard` | `allow`): the ad/tracker blocker.
@@ -418,18 +437,37 @@ What the worker enforces today:
   generic `/livestats.js` rule blocks, so the app never ran (the speedtest
   suite).
 - `httpsUpgrade` (`strict` | `upgrade` | `off`): `upgrade` and `strict` upgrade
-  the host's HTTP requests through the mixed-content machinery; `strict`'s
-  "block when HTTPS is unavailable" is not yet told apart from `upgrade`.
+  the site's http subresources and frame navigations through the
+  mixed-content machinery, as a document's upgrade-insecure-requests would.
+  `upgrade` leaves the top-level page as it was asked for, so a site with
+  no https still loads over http. `strict` (Brave's "require HTTPS") upgrades
+  the top-level page too (an IP address excepted, as Chromium's HTTPS-Only
+  Mode does), and when the upgraded load fails at the connection or at TLS
+  the tab shows a "Connection is not secure" interstitial
+  (`src/server/httpsOnly.ts`) instead of the http page: nothing goes to the
+  site over http until the user picks "Continue to site", which posts the
+  page's one-time token to the worker (no page can make one up) and loads
+  the http page. The worker then upgrades nothing of that site for the rest
+  of its life (Chromium keeps its HTTPS-Only exceptions for the session).
+  In a dialed tab the interstitial asks the host for the page and for "Go
+  back" over the call's port, as a dialed document does. A frame's upgraded
+  navigation that fails is a failed frame load under both, as under
+  upgrade-insecure-requests.
 - `cookies` (`all` | `third-party` | `allow`): `all` sends no cookies on the
   host's requests, `third-party` none on cross-site requests, `allow` leaves
   STomp's own jar and SameSite to decide.
 - `forget`: the demo clears the site's cookie jar when its last tab closes.
-
-`blockScripts` and `blockFingerprinting` are carried but not yet enforced:
-blocking the page's own scripts wants the CSP stage-2 machinery
-(`src/csp.ts`, the inject's `ContentSecurity`), and STomp's fingerprint
-emulation is core and always on, so a per-site off switch wants the inject's
-emulation gated on a per-document flag. The demo labels both honestly.
+- `blockScripts`: the worker gives the site's documents a policy of
+  `script-src 'none'` that the browser never sees (a header like it would
+  stop STomp's own shell), and the inject enforces it against the page's
+  own code (`src/csp.ts` stage 2, the inject's `ContentSecurity`); STomp's
+  scripts are exempt. Off unless an entry turns it on, and off with the
+  shields down.
+- `blockFingerprinting` is the master switch of the fingerprint
+  protection: off, or shields down, protects no surface; on, the entry's
+  `fingerprint` map picks the surfaces (a surface it does not name takes
+  its default: `performanceMemory` on, the rest off), and the shell hands
+  the inject the set as `config.fingerprintOn` (`src/server/shields.ts`).
 
 ## Measured
 

@@ -341,8 +341,19 @@ try {
 	// so after it picked them); a visit shorter than that keeps none
 	await sleep(Number(process.env.TOR_SMOKE_KEEP_MS ?? 90000));
 	const coldStreams = streams.length;
-	// the shared client ends with the last page of the origin
+	// the shared client outlives the origin's last page by up to five
+	// minutes (extendedLifetime): it is ended as DevTools' terminate ends it,
+	// so the next page's client is a new one, from the kept state
 	await page.goto('about:blank');
+	const cdp = await browser.newBrowserCDPSession();
+	const { targetInfos } = await cdp.send('Target.getTargets');
+	for (const info of targetInfos)
+		if (
+			info.type === 'shared_worker' &&
+			/\/tor-client\/shared\.mjs/.test(info.url)
+		)
+			await cdp.send('Target.closeTarget', { targetId: info.targetId });
+	await cdp.detach();
 	await sleep(3000);
 	const warmStart = Date.now();
 	await openHost();

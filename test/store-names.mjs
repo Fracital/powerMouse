@@ -55,6 +55,11 @@ const EXCEPTIONS = [
 	// the carrier host is a SharedWorker of the transport worker's script,
 	// whose URL names the profile (profileScriptURL)
 	['src/transport/carrierClient.ts', 'new SharedWorker(script'],
+	// a transport's SharedWorker (TransportDescriptor.sharedWorker) is Tor
+	// mode's client, named by its script, which only Tor mode's descriptor
+	// gives: it is outside the tor profile on purpose, as the client's
+	// state is (the Tor client's test below)
+	['src/transport/sharedWorker.ts', 'new SharedWorker(script'],
 	// a called frame's history, keyed by storeName in its constructor
 	['src/controller/justCallStomp.ts', 'Storage.getItem(this.#key)'],
 	['src/controller/justCallStomp.ts', 'Storage.setItem('],
@@ -101,6 +106,30 @@ test('the store helpers name their stores in the profile', () => {
 		store,
 		/export const scriptCache = \(id: string\) =>\s*storeName\(/,
 	);
+});
+
+// The Tor client's state (its guards and directory, docs/tor-over-wisp.md
+// "Guard persistence") is the one store kept outside the tor profile on
+// purpose: forgetting the profile leaves it, Forget Tor state forgets it
+test("the Tor client's state is a store of no profile, with its own Forget Tor state", () => {
+	const dir = join(root, 'demo/public/tor-client');
+	const names = new Set();
+	for (const name of readdirSync(dir)) {
+		const text = readFileSync(join(dir, name), 'utf8');
+		for (const match of text.matchAll(/storageName = '([^']+)'/g))
+			names.add(match[1]);
+		// tor-js's IndexedDBStorage under that name is the client's only store
+		assert.doesNotMatch(
+			text,
+			/indexedDB\.open\(|caches\.open\(|(?:local|session)Storage\./,
+			name,
+		);
+	}
+	assert.deepEqual([...names], ['stomp-tor-client']);
+	assert.equal(profileOfName('stomp-tor-client'), '');
+	const service = readFileSync(join(dir, 'service.mjs'), 'utf8');
+	assert.match(service, /async forgetState\(token = ''\) \{/);
+	assert.match(service, /new storage\.IndexedDBStorage\(this\.#storageName\)/);
 });
 
 test('the proxied contexts name native stores by the profile key', () => {

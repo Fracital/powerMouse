@@ -58,6 +58,16 @@ protects and what it does not, and how its profile is kept apart.
   sites never share a circuit. **New Tor circuit for this site** (the menu)
   gives the tab's site a new one, and **New Identity** starts a new Tor
   session: new circuits for everything and the Tor profile forgotten.
+  **Tor circuit for this site** shows the guard of the tab's site's
+  circuits (its nickname, fingerprint and address) and since when the
+  circuit is used; the client does not tell the middle and exit relays or
+  any country (docs/tor-over-wisp.md "Circuit display").
+- **Guards kept, until you forget them.** The client keeps its guards and
+  the directory across Tor sessions and New Identity, outside the Tor
+  profile, as Tor Browser does. **Forget Tor state** (the menu) deletes
+  them and connects to Tor again with new guards. The client also outlives
+  a reload or a navigation of the last Tor page by up to five minutes in
+  Chrome (a new Tor session in that time still gets new circuits).
 - **A profile of its own, for the session.** Tor mode has its own cookie
   jar, site storage, caches, permissions and extensions, apart from normal
   mode's on the same origin, and they are wiped when Tor mode is turned off
@@ -215,8 +225,13 @@ tor does.
   never reached; the page says why bootstrap failed or is blocked, a
   failure is followed by a working retry, a Tor tab stays in Tor mode when
   another turns it off, and a Tor tab's reload keeps its session's site
-  data while the normal tab beside it never sees it. It reaches no Tor
-  network.
+  data while the normal tab beside it never sees it. The client is the
+  same one after a reload and a navigation, a new Tor session uses none of
+  the last one's circuits, Tor circuit for this site shows the stand-in's
+  guard, and Forget Tor state empties the client's store and starts it
+  again. It reaches no Tor network.
+- `node --test test/store-names.mjs` also checks the Tor client's state is
+  one store of no profile, `stomp-tor-client`.
 - The `demo-tor-routes` suite: the demo behind a server that records every
   request the browser makes of it (path, query, Referer, body), with a page
   that loads images and stylesheets in about:blank and srcdoc frames, a

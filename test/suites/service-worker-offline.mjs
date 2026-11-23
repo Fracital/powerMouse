@@ -8,8 +8,11 @@
 // the site's server dropping every connection (step 3): the worker answers
 // the document from its cache, and the proxied page still runs with STomp's
 // inject (it reads its real URL, its stylesheet applies, its data comes out
-// of the cache). Natively and through the proxy, both demo modes; the logs
-// must match.
+// of the cache). The same app under /mod/ has a module worker whose file
+// list comes from the modules it imports, and every service worker is
+// stopped before the load offline: the worker starts again from what was
+// kept of it, its static imports included. Natively and through the proxy,
+// both demo modes; the logs must match.
 import {
 	done,
 	HOST,
@@ -25,8 +28,8 @@ import { startSite } from '../sw-site.mjs';
 
 const site = await startSite();
 const ROUTED = /\/stomp\/[\w-]+\/html\//;
-const url = (run, step) =>
-	`${site.origin}/app/offline.html?run=${run}&step=${step}`;
+const url = (dir, run, step) =>
+	`${site.origin}/${dir}/offline.html?run=${run}&step=${step}`;
 
 async function wait(find, step, tries = 160) {
 	let value = null;
@@ -40,61 +43,89 @@ async function wait(find, step, tries = 160) {
 	return value ?? { log: [] };
 }
 
-async function steps(run, go, find) {
+/** every service worker of `page`'s browser stopped (STomp's own among them) */
+async function stopWorkers(page) {
+	const cdp = await page.context().newCDPSession(page);
+	await cdp.send('ServiceWorker.enable');
+	await cdp.send('ServiceWorker.stopAllWorkers');
+	await cdp.detach();
+	await sleep(500);
+}
+
+async function steps(dir, run, go, find, stop) {
 	const log = [];
 	for (const step of [1, 2, 3]) {
-		if (step === 3) site.offline();
-		await go(url(run, step));
+		if (step === 3) {
+			if (stop) await stop();
+			site.offline();
+		}
+		await go(url(dir, run, step));
 		log.push(...(await wait(find, step)).log);
 	}
 	site.online();
 	return log;
 }
 
+// the classic worker as it is, the module worker started again offline
+const VARIANTS = [
+	['app', ''],
+	['mod', ' (a module worker, stopped first)'],
+];
+
 const nativeBrowser = await launch();
-const nativePage = await nativeBrowser.newPage();
-const native = await steps(
-	'native',
-	(target) => nativePage.goto(target).catch(() => {}),
-	() => nativePage.mainFrame(),
-);
+const native = {};
+for (const [dir, what] of VARIANTS) {
+	const nativePage = await nativeBrowser.newPage();
+	native[dir] = await steps(
+		dir,
+		'native',
+		(target) => nativePage.goto(target).catch(() => {}),
+		() => nativePage.mainFrame(),
+		dir === 'mod' ? () => stopWorkers(nativePage) : null,
+	);
+	await nativePage.close();
+	ok(
+		`natively, the offline app opens from its cache${what}`,
+		native[dir].length === 10 &&
+			native[dir].some((line) => line.startsWith('start 3 activated')) &&
+			!native[dir].some((line) => line.startsWith('fail')),
+		JSON.stringify(native[dir]),
+	);
+}
 await nativeBrowser.close();
-ok(
-	'natively, the offline app opens from its cache',
-	native.length === 10 &&
-		native.some((line) => line.startsWith('start 3 activated')) &&
-		!native.some((line) => line.startsWith('fail')),
-	JSON.stringify(native),
-);
 
 const browser = await launch();
 for (const [mode, base] of [
 	['same-origin', PROXY],
 	['isolated', HOST],
 ]) {
-	const page = await openDemo(browser, `${base}?sw`);
-	let opened = false;
-	const proxied = await steps(
-		mode,
-		async (target) => {
-			if (!opened) await submitLanding(page, target);
-			else await submitOmni(page, target);
-			opened = true;
-			await sleep(500);
-		},
-		() => page.frames().findLast((frame) => ROUTED.test(frame.url())),
-	);
-	ok(
-		`${mode}: controlled from the first script on a reload, and opened from the worker's cache offline, as natively`,
-		JSON.stringify(proxied) === JSON.stringify(native),
-		JSON.stringify({ proxied, native }),
-	);
-	ok(
-		`${mode}: no proxied page error`,
-		page.errors.length === 0,
-		JSON.stringify(page.errors),
-	);
-	await page.close();
+	for (const [dir, what] of VARIANTS) {
+		const page = await openDemo(browser, `${base}?sw`);
+		let opened = false;
+		const proxied = await steps(
+			dir,
+			mode,
+			async (target) => {
+				if (!opened) await submitLanding(page, target);
+				else await submitOmni(page, target);
+				opened = true;
+				await sleep(500);
+			},
+			() => page.frames().findLast((frame) => ROUTED.test(frame.url())),
+			dir === 'mod' ? () => stopWorkers(page) : null,
+		);
+		ok(
+			`${mode}: controlled from the first script on a reload, and opened from the worker's cache offline, as natively${what}`,
+			JSON.stringify(proxied) === JSON.stringify(native[dir]),
+			JSON.stringify({ proxied, native: native[dir] }),
+		);
+		ok(
+			`${mode}: no proxied page error${what}`,
+			page.errors.length === 0,
+			JSON.stringify(page.errors),
+		);
+		await page.close();
+	}
 }
 await site.close();
 await done(browser);

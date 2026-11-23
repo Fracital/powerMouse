@@ -11,9 +11,6 @@
 		"XMLHttpRequest: getAllResponseHeaders() 5": "FAIL: assert_unreached: unexpected error Reached unreachable code",
 		"XMLHttpRequest: getAllResponseHeaders() 6": "FAIL: assert_unreached: unexpected error Reached unreachable code"
 	},
-	"/xhr/getresponseheader-special-characters.htm": {
-		"XMLHttpRequest: getResponseHeader() funny characters": "FAIL: Failed to execute 'get' on 'Headers': Invalid name"
-	},
 	"/xhr/getresponseheader.any.html": {
 		"getResponseHeader('content-length') expects 0": "FAIL: assert_unreached: unexpected error Reached unreachable code",
 		"getResponseHeader('content-length') expects 0, 0": "FAIL: assert_unreached: unexpected error Reached unreachable code",

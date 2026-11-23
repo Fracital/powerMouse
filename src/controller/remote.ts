@@ -672,7 +672,10 @@ export class RemoteController extends EventTarget {
 					>;
 					// (the feed's own calls are this page's to make)
 					const feed =
-						op === 'changed' || op === 'navigated' || op === 'sameWindow';
+						op === 'changed' ||
+						op === 'navigated' ||
+						op === 'sameWindow' ||
+						op === 'opening';
 					const run = !feed && Object.hasOwn(tabs, op) ? tabs[op] : undefined;
 					if (typeof run !== 'function')
 						throw new Error(`${op} is not a tabs call`);
@@ -824,6 +827,8 @@ export class RemoteController extends EventTarget {
 						if (now - opened.at > OPENED_TTL_MS) this.#opened.delete(key);
 					this.#opened.set(url, { origin: event.origin, at: now });
 				}
+				// (the next tab is this one's: its openerTabId)
+				if (init.onOpen) this.#extensionTabs?.opening(frame, url);
 				init.onOpen?.(url, frame);
 				this.dispatchEvent(new CustomEvent('open', { detail: { url, frame } }));
 				return;

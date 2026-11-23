@@ -8,8 +8,14 @@
 // old goes redundant. The suite changes the bytes once more and navigates
 // (step 3): the update check after the navigation installs them, and the new
 // worker claims the page: the page asks the worker that controls it
-// which version it is. Natively and through the proxy, in both demo modes,
-// the logs must match.
+// which version it is. Then imports.html does the same with a worker that
+// imports a script (importScripts under /impc/, a static import under
+// /impm/) and a change to the imported script's bytes only: Chrome compares
+// every script the worker imported, and installs the new version. Before
+// that, a worker whose imported script redirects: Chrome refuses it (and
+// the proxy must never hand the redirect to the browser, which would load
+// the script unrewritten). Natively and through the proxy, in both demo
+// modes, the logs must match.
 import {
 	done,
 	HOST,
@@ -59,8 +65,44 @@ async function both(run, go, find) {
 	return [...first.log, ...second.log, ...third.log];
 }
 
+/** imports.html under `dir` through `go` and `find`: an update that changes an imported script only */
+async function imports(dir, run, go, find) {
+	const page = (step) =>
+		`${site.origin}/${dir}/imports.html?run=${run}&step=${step}`;
+	await go(page('moved'));
+	const moved = await wait(find, 'done', 'moved');
+	await go(page(1));
+	const first = await wait(find, 'done', 1);
+	await go(page(2));
+	await wait(find, 'readyForBump', 2);
+	site.bumpImport(dir, run);
+	await find()?.evaluate(() => (window.__sw.bumped = true));
+	const second = await wait(find, 'done', 2);
+	return [...moved.log, ...first.log, ...second.log];
+}
+const IMPORTS = [
+	['impc', 'importScripts'],
+	['impm', 'a static import'],
+];
+
 const nativeBrowser = await launch();
 const nativePage = await nativeBrowser.newPage();
+const nativeImports = {};
+for (const [dir, what] of IMPORTS) {
+	nativeImports[dir] = await imports(
+		dir,
+		'native',
+		(target) => nativePage.goto(target),
+		() => nativePage.mainFrame(),
+	);
+	ok(
+		`natively, a change to ${what}'s script only installs a new version`,
+		nativeImports[dir].length === 7 &&
+			nativeImports[dir].at(-1) === `imported ${dir} 1` &&
+			!nativeImports[dir].some((line) => line.startsWith('fail')),
+		JSON.stringify(nativeImports[dir]),
+	);
+}
 const native = await both(
 	'native',
 	(target) => nativePage.goto(target),
@@ -102,6 +144,20 @@ for (const [mode, base, query = ''] of [
 		JSON.stringify(proxied) === JSON.stringify(native),
 		JSON.stringify({ proxied, native }),
 	);
+	if (!query)
+		for (const [dir, what] of IMPORTS) {
+			const log = await imports(
+				dir,
+				mode,
+				(target) => submitOmni(page, target).then(() => sleep(500)),
+				() => page.frames().findLast((frame) => ROUTED.test(frame.url())),
+			);
+			ok(
+				`${mode}: a change to ${what}'s script only installs a new version, as natively`,
+				JSON.stringify(log) === JSON.stringify(nativeImports[dir]),
+				JSON.stringify({ proxied: log, native: nativeImports[dir] }),
+			);
+		}
 	ok(
 		`${mode}: no proxied page error`,
 		page.errors.length === 0,

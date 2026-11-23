@@ -7,6 +7,7 @@
 // controller's messages as message events. The worker's own origin is
 // opaque (a blob: worker), so it reads the page's as its own: `origin` in
 // its name.
+import { profileOfScript, profileStoreName } from '../../src/profile.ts';
 
 const KEY = '__pmOffline';
 const { origin, scope, query = '' } = JSON.parse(self.name);
@@ -99,10 +100,18 @@ self.skipWaiting = never;
 // A synchronous wait in a document can never be answered here (nothing
 // serves a document's synchronous request), as where a waiting page stops
 // the worker: the worker learns it from the store it reads it from at
-// start (src/server/createServer.ts syncFrozen, syncAnswers)
+// start (src/server/createServer.ts syncFrozen, syncAnswers). That store is
+// its profile's, as the worker names it from its script's query (Tor mode's
+// is `stompConfig|tor`): seeded in the default profile's alone, Tor mode's
+// worker never knew, its documents read their stores through the bridge,
+// and a streamed one's first read (primeStore) failed its markup, so the
+// tab said Loading for good
 const seeded = new Promise((resolve) => {
 	try {
-		const open = indexedDB.open('stompConfig', 1);
+		const open = indexedDB.open(
+			profileStoreName('stompConfig', profileOfScript(query)),
+			1,
+		);
 		open.onupgradeneeded = () => open.result.createObjectStore('consts');
 		open.onerror = () => resolve();
 		open.onsuccess = () => {

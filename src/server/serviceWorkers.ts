@@ -101,11 +101,12 @@ export interface WorkerHost {
 	stop(id: string): void;
 	/** the routed URL of a version's main script at this address */
 	scriptRoute(version: string, scriptURL: string): string;
-	/** a script fetched through the proxy as the browser fetches a worker's: the raw response */
+	/** a script fetched through the proxy as the browser fetches a worker's (`imported`: one it imports, without `Service-Worker: script`): the raw response */
 	fetchScript(
 		url: string,
 		clientId: string | undefined,
 		bypassCache: boolean,
+		imported?: boolean,
 	): Promise<Response>;
 	/** a document's routed URL at this address (WindowClient.navigate) */
 	routeDocument(url: string): string;
@@ -181,6 +182,8 @@ const JS_MIMES = new Set([
 	'text/javascript1.5',
 ]);
 
+/** what a worker whose script never ran says instead of its error (Chrome: "ServiceWorker cannot be started") */
+const UNSTARTED = 'unstarted';
 /** how long an instance with nothing to do lives, as a browser keeps an idle worker */
 const IDLE_MS = 30_000;
 /** what the timeouts are when the controller sets none (docs/service-workers.md) */
@@ -940,7 +943,14 @@ export class ServiceWorkers {
 		if (newest && newest.scriptURL === scriptURL && newest.type === type) {
 			const stored = (await db.get('scripts', newest.id)) as
 				ScriptRecord | undefined;
-			if (stored?.script === text) return { value: this.snapshot(record) };
+			// the same bytes are no update unless a script it imported changed
+			// (importScripts, a module's static imports): Chrome compares every
+			// script it keeps of the worker
+			if (
+				stored?.script === text &&
+				!(await this.#importsChanged(stored, host, clientId, record))
+			)
+				return { value: this.snapshot(record) };
 		}
 
 		const version: VersionRecord = {
@@ -965,7 +975,12 @@ export class ServiceWorkers {
 			instance = await this.#instance(record, version, host, true);
 		} catch (error) {
 			await db.delete('scripts', version.id);
-			return fail('TypeError', 'ServiceWorker script evaluation failed');
+			return fail(
+				'TypeError',
+				(error as Error).cause === UNSTARTED
+					? 'ServiceWorker cannot be started'
+					: 'ServiceWorker script evaluation failed',
+			);
 		} finally {
 			this.#evaluating.delete(version.id);
 		}
@@ -980,6 +995,41 @@ export class ServiceWorkers {
 		await this.#commit(record, changes);
 		const rest = this.#install(record, version, instance);
 		return { value: this.snapshot(record), rest };
+	}
+
+	/**
+	 * Whether a script the version imported reads otherwise now: fetched
+	 * again (past the HTTP cache only for `updateViaCache: 'none'`, as the
+	 * spec's Update fetches imported scripts), and one that cannot be had
+	 * as a 2xx response counts as changed (the new version's own import
+	 * then fails as it would)
+	 */
+	async #importsChanged(
+		stored: ScriptRecord,
+		host: WorkerHost,
+		clientId: string | undefined,
+		record: RegistrationRecord,
+	): Promise<boolean> {
+		const changed = await Promise.all(
+			Object.entries(stored.imports).map(async ([url, kept]) => {
+				try {
+					const response = await host.fetchScript(
+						url,
+						clientId,
+						record.updateViaCache === 'none',
+						true,
+					);
+					if (!response.ok) {
+						await response.body?.cancel();
+						return true;
+					}
+					return (await response.text()) !== kept;
+				} catch (error) {
+					return true;
+				}
+			}),
+		);
+		return changed.includes(true);
 	}
 
 	async #install(
@@ -1645,6 +1695,7 @@ export class ServiceWorkers {
 			if (!result.evaluated)
 				throw new Error(
 					`the worker's script failed${result.error ? `: ${result.error}` : ''}`,
+					{ cause: result.error },
 				);
 		})();
 		this.#instances.set(version.id, instance);
@@ -2039,6 +2090,13 @@ export class ServiceWorkers {
 		if (!clientId) return false;
 		const client = await self.clients.get(clientId);
 		return !!client && !!this.#env?.describe(client.url);
+	}
+
+	/** the instance `id` never ran (its controller said: its script or module graph did not load) */
+	unstarted(id: string) {
+		for (const instance of this.#instances.values())
+			if (instance.id === id)
+				instance.hello?.({ evaluated: false, error: UNSTARTED });
 	}
 
 	/** an emulated worker's client id, from the request for its script */

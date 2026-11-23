@@ -426,9 +426,14 @@ host, and the browser refuses it as natively (even under `form-action *`).
   ancestor a page knows of natively, and the proxy's own
   `frame-ancestors 'self' <host origins>` stays). The document that
   navigates the frame tells the worker the ancestors with the hint; without
-  one, the top the route names is the only ancestor. A refused document
-  gets `frame-ancestors 'none'` besides: the browser shows its error page
-  as natively (one load event, no document, no event anywhere).
+  one, the top the route names is the only ancestor. When no enforced
+  policy of the headers has frame-ancestors, X-Frame-Options is judged
+  against the same ancestors as Chrome reads it (`DENY`, `SAMEORIGIN`, a
+  list of several values), and either applies whatever the document's type
+  (`refusesAncestors` in `src/server/contentPolicies.ts`, x-frame-options
+  suite). A refused document gets `frame-ancestors 'none'` besides: the
+  browser shows its error page as natively (one load event, no document,
+  no event anywhere).
 - **upgrade-insecure-requests** is applied by the worker from an enforced
   header or a meta in the markup's head, and not from a report-only policy,
   as natively (mixed-content suite).
@@ -616,8 +621,6 @@ refuses fires a violation, natively either.
   a frame on its initial about:blank that a link or form of another
   document navigates tells the worker no ancestors (its top is the one
   judged).
-- frame-ancestors applies to HTML and XML documents only; X-Frame-Options
-  is still dropped.
 - A meta with upgrade-insecure-requests that a script inserts does not
   upgrade anything.
 - A policy a script inserts as a meta is applied by the browser, but its

@@ -487,6 +487,8 @@ const transports = {
 			{
 				wisp: wispURL(),
 				channel: TOR_CLIENT_CHANNEL,
+				// a new Tor session's first page (torSession)
+				...(torSession.token && { session: torSession.token }),
 				// (resolved here: the transport worker's base is its script's)
 				...(typeof TOR_FILES.wasm === 'string' && {
 					wasm: new URL(TOR_FILES.wasm, location.href).href,
@@ -3973,7 +3975,10 @@ const TOR_TAB_LOCK = 'pm-tor-tab:';
 const TOR_FORGET_LOCK = 'pm-tor-forget';
 const TOR_CHANNEL = 'pm-tor-tabs';
 const TOR_GRACE_MS = 10000;
-const torSession = { fresh: false, lock: '' };
+// `token`: a new session's, which the Tor client hears from this page's
+// transport (TorService.newSession): it outlives the last session's pages
+// (extendedLifetime), and uses none of their circuits in this one
+const torSession = { fresh: false, lock: '', token: '' };
 /** the Tor-mode pages open (their locks), but `except` */
 async function torTabsOpen(except = '') {
 	const { held = [] } = (await navigator.locks?.query()) ?? {};
@@ -4010,6 +4015,7 @@ async function beginTorSession() {
 	await navigator.locks.request(TOR_FORGET_LOCK, async () => {
 		torSession.fresh = !PMProfile.continuing && !(await torTabsOpen()).length;
 		if (torSession.fresh) {
+			torSession.token = crypto.randomUUID();
 			await StompController.forgetProfile('tor').catch(() => {});
 			// this tab's own session, written again after its keys went
 			sessionKept = '';
@@ -7662,9 +7668,169 @@ const torClientChannel = (() => {
 		return null;
 	}
 })();
+// Tor Browser's "Circuit for this site" (docs/tor-over-wisp.md "Circuit
+// display"), a submenu, and Forget Tor state (the client's guards and
+// directory, "Guard persistence"): what the client can tell of the active
+// tab's site's circuits, asked of its transport on the same channel
+const menuTorCircuit = element('button', 'pmMenuItem');
+const menuForgetTorState = element('button', 'pmMenuItem');
+for (const item of [menuTorCircuit, menuForgetTorState]) {
+	item.type = 'button';
+	item.tabIndex = -1;
+	item.hidden = true;
+	item.setAttribute('role', 'menuitem');
+}
+menuTorCircuit.id = 'menuTorCircuit';
+menuForgetTorState.id = 'menuForgetTorState';
+menuNewCircuit.after(menuTorCircuit, menuForgetTorState);
+/** the client's answers, by the id of what was asked */
+const torAsked = new Map();
+let torAskedNext = 1;
+/** the last circuit the client told, for its URL */
+let torCircuit = null;
+/** what the client says of the circuits of `url`'s site (TorService.circuitFor), or null */
+function askTorCircuit(url) {
+	if (!torClientChannel) return Promise.resolve(null);
+	const id = torAskedNext++;
+	return new Promise((resolve) => {
+		const timer = setTimeout(() => {
+			torAsked.delete(id);
+			resolve(null);
+		}, 5000);
+		torAsked.set(id, (data) => {
+			clearTimeout(timer);
+			resolve(data.circuit ?? null);
+		});
+		torClientChannel.postMessage({ type: 'circuit', id, url });
+	});
+}
+/** a relay as the circuit display names it */
+function torRelayName(relay) {
+	if (!relay) return '';
+	const id = relay.fingerprint ? `$${relay.fingerprint.slice(0, 8)}` : '';
+	return [relay.nickname, id, relay.address].filter(Boolean).join(' ');
+}
+/** the circuit display's rows for the active tab, from the last answer */
+function torCircuitRows() {
+	const url = activeTab?.url ?? '';
+	let host = '';
+	try {
+		host = new URL(url).hostname;
+	} catch {}
+	const shown = torCircuit?.url === url ? torCircuit.circuit : null;
+	const hop = (role, text, note = '') => {
+		const row = element('div', 'torCircuitHop');
+		row.append(element('span', 'torCircuitRole', role));
+		row.append(element('span', 'torCircuitRelay', text));
+		if (note) row.append(element('span', 'torCircuitNote', note));
+		return row;
+	};
+	const box = element('div', 'torCircuit');
+	box.setAttribute('role', 'presentation');
+	box.append(
+		element('div', 'torCircuitHead', host ? `Circuit for ${host}` : 'Circuit'),
+	);
+	if (!host) {
+		box.append(element('div', 'torCircuitNote', 'No site in this tab.'));
+		return [box];
+	}
+	const guard = shown?.guard;
+	box.append(
+		hop('This browser', ''),
+		hop(
+			'Guard',
+			guard
+				? torRelayName(guard)
+				: shown
+					? 'none known yet'
+					: 'asking the Tor client...',
+			shown?.guardFrom === 'link'
+				? 'the one relay a link is open to'
+				: guard && !guard.linked
+					? 'no link open to it now: the guard tried first'
+					: '',
+		),
+		hop('Relay', 'not told by the Tor client'),
+		hop('Exit', 'not told by the Tor client'),
+		hop(
+			host,
+			'',
+			shown?.since
+				? `in use since ${new Date(shown.since).toLocaleTimeString()}, ${shown.streams} stream${shown.streams === 1 ? '' : 's'}`
+				: shown
+					? 'no circuit yet: its first request builds one'
+					: '',
+		),
+	);
+	box.dataset.guard = guard?.fingerprint ?? '';
+	box.dataset.site = shown?.site ?? '';
+	return [box];
+}
+/** the circuit display filled with what the client says now */
+async function refreshTorCircuit() {
+	const url = activeTab?.url;
+	if (!url) return;
+	const circuit = await askTorCircuit(url);
+	torCircuit = { url, circuit };
+	window.__pmTorCircuit = torCircuit;
+	if (subMenuOwner === menuTorCircuit) refreshSubmenu();
+}
+if (torClientChannel) {
+	menuTorCircuit.hidden = false;
+	menuForgetTorState.hidden = false;
+	menuTorCircuit.innerHTML = `${shieldIcon('info')}<span>Tor circuit for this site</span>`;
+	menuForgetTorState.innerHTML = `${shieldIcon('fingerprint')}<span>Forget Tor state</span>`;
+	menuTorCircuit.title =
+		"The relays of this site's Tor circuit, as far as the Tor client tells them";
+	menuForgetTorState.title =
+		'Forget the Tor guards and directory this browser keeps across Tor sessions, and connect to Tor again with new guards';
+	submenuItem(menuTorCircuit, () => {
+		refreshTorCircuit();
+		return torCircuitRows();
+	});
+}
+// Forget Tor state: the guards and the directory the client keeps across
+// sessions and New Identity ("Guard persistence"), gone, and the client
+// started again with new guards. Tor Browser offers no such thing; here the
+// operator of the Wisp server sees the guard, so a user may want it changed.
+// Every Tor tab shares the client, so each one connects again.
+menuForgetTorState.addEventListener('click', () => {
+	menuPopover.close();
+	if (!torClientChannel) return;
+	// (its id: every transport of this page hears it, the client acts once)
+	torClientChannel.postMessage({
+		type: 'forgetState',
+		id: crypto.randomUUID(),
+	});
+	torCircuit = null;
+	badge(
+		'Tor',
+		'Forgetting Tor state: new guards from the next bootstrap',
+		'blue',
+	);
+});
+/** a message of the client's that is not its status: answers and Forget Tor state's end */
+function torClientHeard(data) {
+	if (data?.type === 'circuit') {
+		torAsked.get(data.id)?.(data);
+		torAsked.delete(data.id);
+		return true;
+	}
+	if (data?.type === 'forgotten') {
+		window.__pmTorForgottenState = { at: Date.now(), ...data };
+		badge(
+			'Tor',
+			`Tor state forgotten (${data.forgotten ?? 0} entries); connecting again`,
+			'blue',
+		);
+		return true;
+	}
+	return false;
+}
 if (torClientChannel) {
 	let last = '';
 	torClientChannel.onmessage = ({ data }) => {
+		if (torClientHeard(data)) return;
 		if (data?.type !== 'status') return;
 		torStatus =
 			data.state === 'ready'

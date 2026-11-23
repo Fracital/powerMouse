@@ -11,6 +11,7 @@ import {
 	HostToTransport,
 	postToPort,
 	SOCKET_PARTITION,
+	SOCKET_UPGRADE,
 	StreamMessage,
 	transferablesOf,
 	TRANSPORT_GONE,
@@ -121,6 +122,33 @@ function unversioned(transport: ProxyTransport, url: URL) {
 
 /** how long a decorate hook may take before the handshake goes out without it */
 const DECORATE_TIMEOUT_MS = 2000;
+
+/**
+ * The URL a socket connects to: the wss: one the decorate hook named
+ * (SOCKET_UPGRADE, HSTS), when it is the ws: `url` made secure (the same
+ * host, its port, or 443 for 80); else `url` as the page gave it
+ */
+function upgradedSocketURL(url: string, decorated: RawHeaders): string {
+	const named = decorated.find(
+		([name]) => name.toLowerCase() === SOCKET_UPGRADE,
+	)?.[1];
+	if (typeof named !== 'string') return url;
+	try {
+		const from = new URL(url);
+		const to = new URL(named);
+		const port = from.port === '80' ? '' : from.port;
+		return from.protocol === 'ws:' &&
+			to.protocol === 'wss:' &&
+			to.hostname === from.hostname &&
+			to.port === port &&
+			to.pathname === from.pathname &&
+			to.search === from.search
+			? to.href
+			: url;
+	} catch (error) {
+		return url;
+	}
+}
 
 /** what epoxy's connect_udp, connect_tcp and connect_tls answer */
 interface RawStream {
@@ -522,14 +550,17 @@ export default function serveTransport(
 			},
 			connect: async ({ url, protocols, requestHeaders, port: socket }) => {
 				const transport = await readyTransport();
-				const given = requestHeaders.filter(
-					([name]) => name.toLowerCase() !== 'cookie',
-				);
+				// (the URL HSTS makes of it is the hook's word alone)
+				const given = requestHeaders.filter(([name]) => {
+					const lower = name.toLowerCase();
+					return lower !== 'cookie' && lower !== SOCKET_UPGRADE;
+				});
 				// the inject's word for the hook, never the server's
 				const outgoing = (headers: RawHeaders) =>
 					headers.flatMap(([name, value]): RawHeaders => {
 						const lower = name.toLowerCase();
-						if (lower === SOCKET_PARTITION) return [];
+						if (lower === SOCKET_PARTITION || lower === SOCKET_UPGRADE)
+							return [];
 						return [[name, lower === 'cookie' ? cookieText(value) : value]];
 					});
 				requestHeaders = outgoing(given);
@@ -541,7 +572,10 @@ export default function serveTransport(
 								setTimeout(() => resolve(null), DECORATE_TIMEOUT_MS),
 							),
 						]);
-						if (decorated) requestHeaders = outgoing(decorated);
+						if (decorated) {
+							requestHeaders = outgoing(decorated);
+							url = upgradedSocketURL(url, decorated);
+						}
 					} catch (error) {
 						// an explicit refusal: the page's socket gets the failure a
 						// connection the browser refused to make gets (error, then

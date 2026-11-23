@@ -85,6 +85,12 @@ export interface ScriptEntry {
 	css: string[];
 	runAt: RunAt;
 	allFrames: boolean;
+	/**
+	 * the frames whose document is no URL of its own it runs in, as its
+	 * creator's (Chrome's match_about_blank: about:blank and about:srcdoc)
+	 * or its origin's (match_origin_as_fallback: blob: and data: too)
+	 */
+	local?: 'about' | 'origin';
 	world: World;
 	/** a scripting registration's id */
 	id?: string;
@@ -456,6 +462,11 @@ function manifestEntries(manifest: Manifest): ScriptEntry[] {
 		css: (entry.css ?? []).map(cleanPath),
 		runAt: entry.run_at ?? 'document_idle',
 		allFrames: !!entry.all_frames,
+		...(entry.match_origin_as_fallback
+			? { local: 'origin' as const }
+			: entry.match_about_blank
+				? { local: 'about' as const }
+				: {}),
 		world: entry.world === 'MAIN' ? 'MAIN' : 'ISOLATED',
 	}));
 }
@@ -481,6 +492,9 @@ export function registrationEntry(
 		css: ((script.css as string[]) ?? []).map(cleanPath),
 		runAt: (script.runAt as RunAt) ?? 'document_idle',
 		allFrames: !!script.allFrames,
+		...(script.matchOriginAsFallback === true
+			? { local: 'origin' as const }
+			: {}),
 		world: script.world === 'MAIN' ? 'MAIN' : 'ISOLATED',
 		persistAcrossSessions: script.persistAcrossSessions !== false,
 	};
@@ -547,6 +561,7 @@ function registrationOf(entry: ScriptEntry) {
 		css: entry.css,
 		runAt: entry.runAt,
 		allFrames: entry.allFrames,
+		...(entry.local === 'origin' ? { matchOriginAsFallback: true } : {}),
 		world: entry.world,
 		persistAcrossSessions: entry.persistAcrossSessions !== false,
 	};

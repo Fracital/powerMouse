@@ -26,6 +26,7 @@ const MESSAGES = {
 		`The provided value '${value}' is not a valid enum value of type XMLHttpRequestResponseType.`,
 	overrideMimeType: () =>
 		`${RUN('overrideMimeType')}MimeType cannot be overridden when the state is LOADING or DONE.`,
+	url: () => `${RUN('open')}Invalid URL`,
 	open: () =>
 		`${RUN('open')}Synchronous requests from a document must not set a response type or timeout.`,
 };

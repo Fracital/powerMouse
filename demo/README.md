@@ -79,8 +79,10 @@ circuits itself; `/wisp/` carries only TCP to Tor relays (the worker refuses
 a link to anything else), so the server never sees a destination. It does
 see that a visitor uses Tor and which Tor guard they use; bridges, which
 would hide that, are future work. The Tor toggle's tooltip shows the
-bootstrap's progress, and the menu has **New Identity** and **New Tor circuit for this
-site**. `node test/tor-client-smoke.mjs` checks it against the real Tor
+bootstrap's progress, and the menu has **New Identity**, **New Tor circuit for this
+site**, **Tor circuit for this site** (its guard, as far as tor-js tells) and
+**Forget Tor state** (the client's guards and directory, kept across
+sessions). `node test/tor-client-smoke.mjs` checks it against the real Tor
 network. The client is tor-js built from source with a stream API
 (deploy/tor-js/README.md), pinned in package.json as
 `github:Fracital/tor-js`, so Tor mode runs epoxy on Tor streams:

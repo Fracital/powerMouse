@@ -38,10 +38,18 @@ const CLOSE_ANSWER_MS = 500;
 
 /** a WebSocket stand-in's state (the class's one field) */
 export interface SocketState {
+	/** the page's realm, whose errors the stand-in throws */
+	global: typeof globalThis;
 	socket: BareCompatibleWebSocket;
 	opened: Promise<void>;
 	closeRequest?: { code: number; reason: string };
 	closeNow?: (code: number, reason: string) => void;
+	/**
+	 * a close() while connecting: the connection fails a task later, and
+	 * nothing of the transport's socket reaches the page from then on
+	 */
+	fail?: () => void;
+	failing?: boolean;
 	/** the close event fired: CLOSED, whatever the transport says */
 	closed: boolean;
 	binaryType: BinaryType;
@@ -58,16 +66,198 @@ export interface SocketState {
 /** each WebSocket stand-in's state, for the WebSocketStream stand-in's writes */
 const socketStates = new WeakMap<object, SocketState>();
 
+// --- the arguments, as Chrome's bindings convert them ---
+
+const CONSTRUCT = "construct 'WebSocket'";
+const SEND = "execute 'send' on 'WebSocket'";
+const CLOSE = "execute 'close' on 'WebSocket'";
+
+const isObject = (value: unknown): value is object =>
+	(typeof value === 'object' && value !== null) || typeof value === 'function';
+
+/**
+ * A conversion the bindings refuse, in their words: the message names the
+ * call (`context`), the stack's first line only what was refused (measured)
+ */
+function refusal(global: typeof globalThis, context: string, text: string) {
+	const error = withStack(new global.TypeError(text));
+	// (formatted now, from the refusal: a stack is formatted once)
+	void error.stack;
+	error.message = `Failed to ${context}: ${text}`;
+	return error;
+}
+
+/** a DOMException of the page's realm with the browser's name and message */
+const domError = (
+	global: typeof globalThis,
+	context: string,
+	text: string,
+	name: string,
+) => withStack(new global.DOMException(`Failed to ${context}: ${text}`, name));
+
+/**
+ * The page's value as a primitive, as ToPrimitive makes it with `hint`:
+ * what the page's own methods throw is thrown as it is, what the
+ * conversion itself refuses carries `context`
+ */
+function toPrimitive(
+	global: typeof globalThis,
+	value: unknown,
+	hint: 'string' | 'number',
+	context: string,
+): unknown {
+	if (!isObject(value)) return value;
+	const given = value as Record<PropertyKey, unknown>;
+	const exotic = given[Symbol.toPrimitive];
+	if (exotic !== undefined && exotic !== null) {
+		if (typeof exotic !== 'function') {
+			// (the engine's own words for a method that is none; nothing of
+			// the page's runs before it refuses)
+			let text = '';
+			try {
+				const raw: unknown = value;
+				void (hint === 'string' ? `${raw as string}` : +(raw as number));
+			} catch (error) {
+				text = (error as Error).message;
+			}
+			throw refusal(global, context, text);
+		}
+		const made: unknown = Reflect.apply(exotic, value, [hint]);
+		if (!isObject(made)) return made;
+	} else
+		for (const name of hint === 'string'
+			? ['toString', 'valueOf']
+			: ['valueOf', 'toString']) {
+			const method = given[name];
+			if (typeof method !== 'function') continue;
+			const made: unknown = Reflect.apply(method, value, []);
+			if (!isObject(made)) return made;
+		}
+	throw refusal(global, context, 'Cannot convert object to primitive value');
+}
+
+/** WebIDL's DOMString of the page's value */
+function domString(
+	global: typeof globalThis,
+	value: unknown,
+	context: string,
+): string {
+	const made = toPrimitive(global, value, 'string', context);
+	if (typeof made === 'symbol')
+		throw refusal(global, context, 'Cannot convert a Symbol value to a string');
+	return `${made as string}`;
+}
+
+/** WebIDL's USVString: a surrogate without its pair reads U+FFFD */
+const wellFormed = (text: string) =>
+	text.replace(
+		/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
+		'\uFFFD',
+	);
+
+/**
+ * WebIDL's `[Clamp] unsigned short` of the page's value, as Chrome makes
+ * it: NaN is 0, and a fraction is cut off, never rounded (measured: 999.5
+ * is 999, 4999.5 is 4999)
+ */
+function clampedShort(
+	global: typeof globalThis,
+	value: unknown,
+	context: string,
+): number {
+	const made = toPrimitive(global, value, 'number', context);
+	if (typeof made === 'symbol' || typeof made === 'bigint')
+		throw refusal(
+			global,
+			context,
+			`Cannot convert a ${typeof made === 'symbol' ? 'Symbol' : 'BigInt'} value to a number`,
+		);
+	const number = +(made as number);
+	if (!(number > 0)) return 0;
+	if (number >= 0xffff) return 0xffff;
+	return Math.trunc(number);
+}
+
+/** a subprotocol's characters: a token's (RFC 7230), no separator */
+const TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+/**
+ * A subprotocol as Chrome's message writes it: a character outside the
+ * printable ASCII as `\uXXXX`, a backslash doubled
+ */
+const subprotocolText = (protocol: string) =>
+	protocol.replace(/[^\x20-\x7e]|\\/g, (char) =>
+		char === '\\'
+			? '\\\\'
+			: `\\u${char.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}`,
+	);
+
+/**
+ * The constructor's `protocols`, as the bindings convert it: none
+ * (undefined) is no subprotocol, an object with an iterator a sequence of
+ * strings, anything else one string
+ */
+function subprotocols(global: typeof globalThis, value: unknown): string[] {
+	if (value === undefined) return [];
+	if (!isObject(value)) return [domString(global, value, CONSTRUCT)];
+	const method = (value as Record<PropertyKey, unknown>)[Symbol.iterator];
+	if (method === undefined || method === null)
+		return [domString(global, value, CONSTRUCT)];
+	if (typeof method !== 'function')
+		throw refusal(global, CONSTRUCT, '@@iterator must be a callable.');
+	const list: string[] = [];
+	const items = {
+		[Symbol.iterator]: () =>
+			Reflect.apply(method, value, []) as Iterator<unknown>,
+	};
+	for (const item of items) list.push(domString(global, item, CONSTRUCT));
+	return list;
+}
+
+/**
+ * Chrome's refusal of a list of subprotocols (a SyntaxError): every one
+ * is checked to be a token before any is checked to be the only one of
+ * its name
+ */
+function subprotocolError(
+	global: typeof globalThis,
+	protocols: string[],
+): Error | null {
+	for (const protocol of protocols)
+		if (!TOKEN.test(protocol))
+			return domError(
+				global,
+				CONSTRUCT,
+				`The subprotocol '${subprotocolText(protocol)}' is invalid.`,
+				'SyntaxError',
+			);
+	const seen = new Set<string>();
+	for (const protocol of protocols) {
+		if (seen.has(protocol))
+			return domError(
+				global,
+				CONSTRUCT,
+				`The subprotocol '${subprotocolText(protocol)}' is duplicated.`,
+				'SyntaxError',
+			);
+		seen.add(protocol);
+	}
+	return null;
+}
+
 const toTag = Object.prototype.toString;
 /**
  * What send() sends of `data`, as the browser converts its argument: a
  * Blob, a buffer or a view as it is (of any realm: a frame's page hands its
- * own), anything else as its string (null goes as "null")
+ * own), anything else as its USVString (null goes as "null", a lone
+ * surrogate as U+FFFD)
  */
 function sendable(
+	global: typeof globalThis,
 	data: unknown,
 ): string | ArrayBufferLike | Blob | ArrayBufferView {
-	if (typeof data === 'string' || ArrayBuffer.isView(data)) return data;
+	if (typeof data === 'string') return wellFormed(data);
+	if (ArrayBuffer.isView(data)) return data;
 	const tag = Reflect.apply(toTag, data, []) as string;
 	if (
 		tag === '[object ArrayBuffer]' ||
@@ -76,7 +266,7 @@ function sendable(
 		tag === '[object File]'
 	)
 		return data as ArrayBufferLike | Blob;
-	return String(data);
+	return wellFormed(domString(global, data, SEND));
 }
 
 /** the bytes send() puts on the wire for `data` (sendable's; a string goes as UTF-8) */
@@ -122,26 +312,29 @@ function open(
 	target: EventTarget,
 	args: [url: urlLike, protocol?: string | string[]],
 ): SocketState {
-	const [url, protocol] = args;
+	const global = client.global as typeof globalThis;
+	// the arguments as the bindings convert them, both before anything is
+	// checked: the URL a USVString, the subprotocols a string or a sequence
+	const url = wellFormed(domString(global, args[0], CONSTRUCT));
+	const protocols = subprotocols(global, args[1]);
 
-	// a URL the browser refuses (none, one that does not parse, another
-	// scheme, a fragment) gets the browser's own error from the native
+	// a URL the browser refuses (one that does not parse, another scheme,
+	// a fragment) gets the browser's own error from the native
 	// constructor, which throws before it connects anywhere
 	let parsed: URL | null = null;
-	if (args.length && !failsToParse(client, String(url)))
-		parsed = new URL(String(url), client.baseHref);
+	if (!failsToParse(client, url)) parsed = new URL(url, client.baseHref);
 	if (
 		!parsed ||
 		![...wsProtocols, 'http:', 'https:'].includes(parsed.protocol) ||
 		parsed.href.includes('#')
 	) {
 		// (never connects: the browser threw)
-		Reflect.construct(NativeWebSocket, args).close();
-		throw withStack(
-			new client.global.DOMException(
-				`Failed to construct 'WebSocket': The URL '${url}' is invalid.`,
-				'SyntaxError',
-			),
+		Reflect.construct(NativeWebSocket, [url]).close();
+		throw domError(
+			global,
+			CONSTRUCT,
+			`The URL '${url}' is invalid.`,
+			'SyntaxError',
 		);
 	}
 
@@ -150,19 +343,43 @@ function open(
 	else if (parsed.protocol === 'https:') parsed.protocol = 'wss:';
 
 	// mixed content: no worker sees a WebSocket, so the page's own
-	// URL decides here. Chrome refuses ws: from an https page before
-	// connecting, and upgrades it under upgrade-insecure-requests
+	// URL decides here. Chrome upgrades ws: from an https page under
+	// upgrade-insecure-requests first, and refuses it once the
+	// subprotocols are checked (below)
 	const mixed = mixedContent?.verdict(parsed, 'websocket');
-	if (mixed?.action === 'block') {
-		mixedContent!.report([{ kind: 'websocket', url: parsed.href }]);
-		throw withStack(
-			new client.global.DOMException(
-				"Failed to construct 'WebSocket': An insecure WebSocket connection may not be initiated from a page loaded over HTTPS.",
-				'SecurityError',
-			),
-		);
-	}
 	if (mixed?.action === 'upgrade') parsed = mixed.url;
+
+	// the page's connect-src (src/csp.ts): no worker sees a
+	// WebSocket, so a socket the page's policy refuses is opened to a
+	// URL the browser's copy of the policy refuses, and the browser
+	// fails it (error, then close 1006) and reports it as natively
+	const policed = client as {
+		socketRefusal?: (url: URL) => string | null;
+		connectVerdict?: (url: URL) => boolean;
+	};
+	const refused = policed.socketRefusal?.(parsed) ?? null;
+	// a worker's own policies (WorkerClient.connectVerdict): the
+	// browser applies none of them, so the worker reports the
+	// refusal itself and the socket only fails
+	const workerRefused =
+		refused === null && (policed.connectVerdict?.(parsed) ?? false);
+
+	// a socket a policy refuses fails before its subprotocols are looked
+	// at (measured); any other throws Chrome's SyntaxError for one that is
+	// no token or is there twice, then its SecurityError for mixed content
+	if (refused === null && !workerRefused) {
+		const invalid = subprotocolError(global, protocols);
+		if (invalid) throw invalid;
+		if (mixed?.action === 'block') {
+			mixedContent!.report([{ kind: 'websocket', url: parsed.href }]);
+			throw domError(
+				global,
+				CONSTRUCT,
+				'An insecure WebSocket connection may not be initiated from a page loaded over HTTPS.',
+				'SecurityError',
+			);
+		}
+	}
 
 	instances.add(target);
 
@@ -177,6 +394,7 @@ function open(
 	const OwnEvent = realm?.Event ?? Event;
 
 	const state = {
+		global,
 		closed: false,
 		binaryType: 'blob',
 		url: parsed.toString(),
@@ -196,19 +414,6 @@ function open(
 	if (partitionKey !== null)
 		requestHeaders.push([SOCKET_PARTITION, partitionKey]);
 
-	// the page's connect-src (src/csp.ts): no worker sees a
-	// WebSocket, so a socket the page's policy refuses is opened to a
-	// URL the browser's copy of the policy refuses, and the browser
-	// fails it (error, then close 1006) and reports it as natively
-	const policed = client as {
-		socketRefusal?: (url: URL) => string | null;
-		connectVerdict?: (url: URL) => boolean;
-	};
-	const refused = policed.socketRefusal?.(parsed) ?? null;
-	// a worker's own policies (WorkerClient.connectVerdict): the
-	// browser applies none of them, so the worker reports the
-	// refusal itself and the socket only fails
-	const workerRefused = policed.connectVerdict?.(parsed) ?? false;
 	// client.bare is created lazily; a failure there (no transport)
 	// surfaces as an error event like a refused connection would.
 	const socket = (state.socket =
@@ -218,7 +423,7 @@ function open(
 				]) as unknown as BareCompatibleWebSocket)
 			: workerRefused
 				? refusedSocket()
-				: client.bare.createWebSocket(parsed, protocol, requestHeaders));
+				: client.bare.createWebSocket(parsed, protocols, requestHeaders));
 
 	state.opened = new Promise<void>((resolve) => {
 		socket.addEventListener('open', () => resolve(), {
@@ -230,6 +435,8 @@ function open(
 	});
 
 	socket.addEventListener('open', () => {
+		// (a socket the page closed while it connected never opens)
+		if (state.failing) return;
 		target.dispatchEvent(new OwnEvent('open'));
 	});
 
@@ -281,11 +488,28 @@ function open(
 	};
 	state.closeNow = dispatchClose;
 
+	// a close() while connecting fails the connection, as Chrome fails it
+	// (measured): a task later an error and then a close with 1006, not
+	// clean, both reading CLOSED. The transport's socket is closed once it
+	// opens (close, below), and none of its events reaches the page. (A
+	// socket a policy refused fails on its own)
+	if (refused === null && !workerRefused)
+		state.fail = () => {
+			state.failing = true;
+			setTimeout(() => {
+				if (state.closed) return;
+				state.closed = true;
+				target.dispatchEvent(new OwnEvent('error'));
+				dispatchClose(1006, '');
+			});
+		};
+
 	// a connection that fails (refused, a TLS handshake that ends, one
 	// a content blocker refuses) gets an error and then a close with
 	// 1006 natively, one after the other in the same task and both
 	// reading CLOSED; the transport reports the error only
 	socket.addEventListener('error', () => {
+		if (state.failing || state.closed) return;
 		target.dispatchEvent(new OwnEvent('error'));
 		// a socket the policy refused fires no close (measured)
 		if (refused === null && !workerRefused) dispatchClose(1006, '');
@@ -293,6 +517,7 @@ function open(
 	});
 
 	socket.addEventListener('close', (event) => {
+		if (state.failing) return;
 		let { code, reason } = event as CloseEvent;
 
 		// transports don't relay the close handshake; when the page
@@ -317,15 +542,21 @@ function open(
 function send(
 	state: SocketState,
 	target: EventTarget,
-	data: string | ArrayBufferLike | Blob | ArrayBufferView,
+	given: unknown,
 ): Promise<boolean> | undefined {
-	if (state.socket.readyState === CONNECTING) {
-		throw withStack(
-			new DOMException(
-				`Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.`,
-			),
+	// (the argument is converted before the state is looked at)
+	const data = sendable(state.global, given);
+	if (
+		!state.closeRequest &&
+		!state.closed &&
+		state.socket.readyState === CONNECTING
+	)
+		throw domError(
+			state.global,
+			SEND,
+			'Still in CONNECTING state.',
+			'InvalidStateError',
 		);
-	}
 
 	// what the page sends counts in bufferedAmount until it has left: the
 	// transport's send settles once the frame was written within the wisp
@@ -335,7 +566,6 @@ function send(
 	// all (through the proxy they went out ahead of the close frame, which
 	// the transport is given a microtask later, and a server's answer to
 	// them reached the page)
-	data = sendable(data);
 	const size = sentBytes(data);
 	state.buffered += size;
 	if (state.closeRequest || state.closed) return;
@@ -380,30 +610,46 @@ function send(
 }
 
 /** the stand-in's close() */
-function close(state: SocketState, code?: number, reason?: string) {
-	if (typeof code !== 'undefined') {
-		if (typeof code !== 'number') {
-			code = 0;
-		}
+function close(state: SocketState, args: unknown[]) {
+	const { global } = state;
+	// the arguments the page gave, but those undefined at the end, as
+	// Chrome's bindings count them (close(undefined, reason) has a code
+	// of 0, measured): the code a [Clamp] unsigned short, the reason a
+	// USVString, both converted before either is checked
+	let count = args.length;
+	while (count && args[count - 1] === undefined) count--;
+	const code = count > 0 ? clampedShort(global, args[0], CLOSE) : undefined;
+	const reason = count > 1 ? wellFormed(domString(global, args[1], CLOSE)) : '';
+	if (code !== undefined && code !== 1000 && (code < 3000 || code > 4999))
+		throw domError(
+			global,
+			CLOSE,
+			`The close code must be either 1000, or between 3000 and 4999. ${code} is neither.`,
+			'InvalidAccessError',
+		);
+	if (new TextEncoder().encode(reason).length > 123)
+		throw domError(
+			global,
+			CLOSE,
+			'The close reason must not be greater than 123 UTF-8 bytes.',
+			'SyntaxError',
+		);
 
-		if (code !== 1000 && (code < 3000 || code > 4999)) {
-			throw withStack(
-				new DOMException(
-					`Failed to execute 'close' on 'WebSocket': The code must be either 1000, or between 3000 and 4999. ${code} is neither.`,
-				),
-			);
-		}
-	}
-
-	if (state.closeRequest) return;
+	// closing or closed: nothing more (a socket a policy refused is
+	// closed from the start)
+	if (state.closeRequest || state.closed || state.socket.readyState === CLOSED)
+		return;
 	// no code is a close frame without a status, which the server
 	// echoes and the page reads as 1005; the transport is given 1000,
 	// since it takes no empty close
-	state.closeRequest = { code: code ?? 1005, reason: reason ?? '' };
+	state.closeRequest = { code: code ?? 1005, reason };
+	if (state.socket.readyState === CONNECTING) state.fail?.();
 
 	// the transport connection may not exist yet
 	state.opened.then(() => {
 		if (state.socket.readyState !== OPEN) return;
+		// (one the page closed while it connected only goes)
+		if (state.failing) return void state.socket.close(1000, '');
 		const { code, reason } = state.closeRequest!;
 		state.socket.close(code === 1005 ? 1000 : code, reason);
 		// epoxy reports no close for a close that carries anything but

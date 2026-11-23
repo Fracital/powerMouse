@@ -3406,6 +3406,17 @@ export default class DocumentClient extends Client {
 	 */
 	injectChild?: (context: typeof globalThis) => void;
 	/**
+	 * @internal the extensions' runtime of this document, when its shell
+	 * loaded one: what a local document this one made (an about:blank,
+	 * about:srcdoc, blob: or data: frame) tells it, so the content scripts
+	 * that match the frame run there (IFrame sets it)
+	 */
+	localDocument?: (child: unknown, url: string, hidden: unknown) => void;
+	/** @internal the client of the document this local one is of (its parent's, else its opener's) */
+	creatorClient(): DocumentClient | null {
+		return this.#creatorClient();
+	}
+	/**
 	 * @internal inject this page's bundle into a window it navigated to an
 	 * about:blank of its own origin (navigatorOf; IFrame sets it), whatever
 	 * that window's parent is

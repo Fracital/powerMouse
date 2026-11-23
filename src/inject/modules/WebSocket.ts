@@ -50,9 +50,10 @@ export default class WebSocketModule extends Module<Client> {
 			get readyState() {
 				const state = this.#s;
 				if (state.closed) return CLOSED;
-				if (state.closeRequest && state.socket.readyState === OPEN)
-					return CLOSING;
-				return state.socket.readyState;
+				// (closing from the page's close() on, connecting or open)
+				const own = state.socket.readyState;
+				if (state.closeRequest && own !== CLOSED) return CLOSING;
+				return own;
 			}
 			get bufferedAmount() {
 				return this.#s.buffered;
@@ -68,9 +69,9 @@ export default class WebSocketModule extends Module<Client> {
 				const state = this.#s;
 				parts().send(state, this, data);
 			}
-			close(code?: number, reason?: string) {
+			close(...args: [code?: number, reason?: string]) {
 				const state = this.#s;
-				parts().close(state, code, reason);
+				parts().close(state, args);
 			}
 		}
 
@@ -121,7 +122,12 @@ export default class WebSocketModule extends Module<Client> {
 					return this.#s.closed;
 				}
 				close(options: { closeCode?: number; reason?: string } = {}) {
-					this.#s.socket.close(options.closeCode, options.reason);
+					const { closeCode, reason } = options;
+					const { socket } = this.#s;
+					// (a reason without a code closes with 1000)
+					if (closeCode !== undefined) socket.close(closeCode, reason);
+					else if (reason) socket.close(1000, reason);
+					else socket.close();
 				}
 			}
 			const streamProxy = proxyModule.standInClass(

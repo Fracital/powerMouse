@@ -1093,6 +1093,41 @@ Filled in commit by commit; see the CHANGELOG for each.
   WebSockets and raw streams have no pool to share. The HTTP cache and the
   renderer's memory cache were partitioned already (net-partitions checks
   the first too).
+- **HSTS** (hsts suite, not compared natively: Chrome takes HSTS only over
+  a certificate it trusts, which a fixture has not). The worker drops
+  `Strict-Transport-Security` before the browser sees it (it would pin the
+  proxy's host), so an `http:` URL of a site that sent it went out over
+  plain http, where Chrome upgrades it. The worker now keeps it
+  (`src/server/hsts.ts`): an answer over https of a host that is not an IP
+  literal sets or renews the host (max-age, capped at a year as Chrome
+  caps it; includeSubDomains; max-age=0 forgets it; a field Chrome would
+  not parse, such as max-age twice, is ignored), and an http URL of a kept
+  host, or of a subdomain under includeSubDomains, goes out over https
+  (port 80 becomes 443, any other port is kept). The step is in the
+  request path after mixed content, which judges the URL as written, and
+  before anything of the request is made: a navigation, and any request
+  that follows redirects, gets a 307 to the https route (Chrome's
+  internal redirect), so the document's, the fetch's or the worker's URL
+  is the https one; a request that does not follow redirects is changed in
+  place. A `ws:` socket is asked about by the controller's handshake hook
+  (a socket never passes the worker) and connects as `wss:`, with that
+  URL's cookies, its `url` unchanged. Unlike Chrome's one store for the
+  profile, each network partition keeps its own (the key of the
+  connections above, for the URL as it would be upgraded): one site's
+  pages cannot read which hosts another site's set, the HSTS
+  "supercookie". It is kept in IndexedDB (`stompHsts`, the site pool's
+  slots in the host origin's, as the permission states), and forgotten by
+  `clearCache()` (all of it, as Chrome's clearing of the whole cache
+  drops it), `forgetStorage(origin)` (the site's hosts and its partitions)
+  and a Clear-Site-Data "cache" of the host (its entry in every
+  partition; Chrome keeps HSTS through a site's own clearing, but the host
+  could send max-age=0 all the same). Left: no preload list is bundled, so
+  a host is upgraded only after an answer of its own in that partition;
+  a socket's partition is taken from its document's Origin, partition
+  field and client, which a handshake that names none (the host's own)
+  lacks; a decorate hook that does not answer in 2 s sends the handshake
+  as it was; a top-level form that posts to an http URL of a kept host
+  still gets the insecure-form interstitial from an https page.
 
 ## Visited links
 
@@ -1972,8 +2007,10 @@ suites' known lists with the same reason.
      another origin is another origin's for every element that names it
      (the worker's record and the timing mark are by URL), where Chrome
      judges each load.
-   - `nextHopProtocol` is the scheme's usual protocol (`h2` for https,
-     `http/1.1` for http): no transport reports what the origin spoke.
+   - `nextHopProtocol` is the protocol the transport says the origin's
+     answer came over (`h3`, `h2`, `http/1.1`); with a transport that does
+     not say, it is the scheme's usual one (`h2` for https, `http/1.1` for
+     http).
    - What the worker's HTTP cache keeps and asks the origin differs from
      Chrome's in one listed way (docs/http-cache.md), so those loads read
      as a network load where Chrome's entry says cache: an entry made with
@@ -1988,10 +2025,6 @@ suites' known lists with the same reason.
      through a page: a request without credentials shares the connections
      of those with (Connections, above), and so does every request of a
      transport other than our epoxy build; DNS answers are the wisp
-     server's resolver's, shared by every user of the relay; HSTS is not
-     kept at all (the worker drops `Strict-Transport-Security`, which
-     would pin the proxy's host), so an `http:` URL of a site that sent it
-     loads over http where Chrome upgrades it (not measured locally:
-     Chrome takes HSTS only over a certificate it trusts, which a test
-     fixture does not have; Chrome's own HSTS store is not keyed by
-     top-level site).
+     server's resolver's, shared by every user of the relay. HSTS is kept
+     per network partition, where Chrome keeps one store for the profile,
+     and without Chrome's preload list (HSTS, above).

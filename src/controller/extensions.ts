@@ -59,6 +59,15 @@ export interface HubTab {
 	active: boolean;
 	/** a document is loading in it (the feed saw it commit, not load) */
 	status?: 'loading';
+	/** the tab whose page opened it (window.open, a link's target) */
+	openerTabId?: number;
+}
+
+/** where a document is: its tab, its frame, and the frame's parent (-1 for a tab's top) */
+export interface HubPlace {
+	tabId: number;
+	frameId: number;
+	parentFrameId: number;
 }
 
 /** a tab's top document as the hub's feed told it */
@@ -84,8 +93,14 @@ interface HubTabState {
 /** what the hub asks of its controller about tabs */
 export interface HubTabs {
 	list(): Promise<HubTab[]>;
-	/** the tab (and frame: 0 for its top document) a service worker client is in */
-	ofClient(client: string): Promise<{ tabId: number; frameId: number } | null>;
+	/** the tab (and frame: 0 for its top document, and its parent) a service worker client is in */
+	ofClient(client: string): Promise<HubPlace | null>;
+	/**
+	 * the frame id of a document that is no client of its own (an
+	 * about:blank frame its creator's runtime speaks for), by the key the
+	 * runtime keeps for its frame
+	 */
+	localFrame(key: string): Promise<number>;
 	create(url: string, active: boolean): Promise<number | null>;
 	navigate(tabId: number, url: string): Promise<void>;
 	reload(tabId: number): Promise<void>;
@@ -136,7 +151,14 @@ export interface TabFrames<F extends TabFrame> {
  * tabs it opens, shows and closes, each top document's commit and load)
  */
 export type TabEvent =
-	| { e: 'created'; tabId: number; url: string; active: boolean }
+	| {
+			e: 'created';
+			tabId: number;
+			url: string;
+			active: boolean;
+			/** the tab whose page opened it */
+			openerTabId?: number;
+	  }
 	| { e: 'activated'; tabId: number }
 	| { e: 'removed'; tabId: number }
 	| {
@@ -191,6 +213,8 @@ export interface FramesAsTabs<F extends TabFrame> extends HubTabs {
 	 * the frame id of the last document reported from there
 	 */
 	sameWindow(source: object, client: string): void;
+	/** a frame's top document asked the host for a new tab (onOpen): the next tab is its */
+	opening(frame: F, url: string): void;
 }
 
 /**
@@ -235,8 +259,55 @@ export function framesAsTabs<F extends TabFrame>(
 	};
 	// (the worker's, kept here once asked; a counter of this hub's without it)
 	const frameIds = new Map<string, number>();
-	// the client each nested frame's window last reported
+	// the client each nested frame's window last reported, and the window
+	// each such client reported from (its parent is its frame's parent)
 	const windows = new WeakMap<object, string>();
+	const clientWindows = new Map<string, WeakRef<object>>();
+	// the tabs the frames' pages asked for, in order: a new frame is the
+	// oldest one's (Chrome's openerTabId)
+	const opening: { tabId: number; url: string; at: number }[] = [];
+	const openers = new WeakMap<F, number>();
+	const parentGet = Reflect.getOwnPropertyDescriptor(window, 'parent')?.get;
+	/** a nested document's frame id, as the worker keeps it (or a counter of this hub's) */
+	const nestedId = async (client: string): Promise<number> => {
+		let known = frameIds.get(client);
+		if (known === undefined) {
+			const asked = Number(await host.frameIdOf?.(client).catch(() => -1));
+			known = frameIds.get(client) ?? (asked > 0 ? asked : frameIds.size + 1);
+			frameIds.set(client, known);
+			if (frameIds.size > 4096) frameIds.delete(frameIds.keys().next().value!);
+		}
+		return known;
+	};
+	/**
+	 * The frame id of a nested document's parent: its window's parent is the
+	 * tab's frame (0), or the window another nested document reported from
+	 * (-1 where the feed knows neither: the hub then says the top)
+	 */
+	const parentId = async (frame: F, client: string): Promise<number> => {
+		const source = clientWindows.get(client)?.deref();
+		if (!source || !parentGet) return -1;
+		let parent: unknown;
+		try {
+			parent = Reflect.apply(parentGet, source, []);
+		} catch (error) {
+			return -1;
+		}
+		if (!parent || parent === source) return -1;
+		if (parent === frame.element.contentWindow) return 0;
+		// (the parent's own report may come a moment after its child's)
+		for (let tries = 0; tries < 20; tries++) {
+			let parentClient: string | undefined;
+			try {
+				parentClient = windows.get(parent as object);
+			} catch (error) {
+				return -1;
+			}
+			if (parentClient) return nestedId(parentClient);
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		}
+		return -1;
+	};
 	// what the feed last told of each tab
 	type Seen = {
 		tabId: number;
@@ -299,6 +370,11 @@ export function framesAsTabs<F extends TabFrame>(
 		for (const frame of now)
 			if (!seen.has(frame)) {
 				const tabId = host.tabIdOf(frame);
+				// a page asked for a tab lately: this is it
+				const now = Date.now();
+				while (opening.length && now - opening[0].at > 10000) opening.shift();
+				const asked = opening.shift();
+				if (asked && asked.tabId !== tabId) openers.set(frame, asked.tabId);
 				seen.set(frame, {
 					tabId,
 					client: null,
@@ -315,8 +391,9 @@ export function framesAsTabs<F extends TabFrame>(
 				send({
 					e: 'created',
 					tabId,
-					url: frame.url ?? '',
+					url: frame.url || (openers.has(frame) ? asked!.url : ''),
 					active: frame === host.active(),
+					...(openers.has(frame) ? { openerTabId: openers.get(frame) } : {}),
 				});
 			}
 		for (const [frame, state] of seen)
@@ -338,9 +415,25 @@ export function framesAsTabs<F extends TabFrame>(
 	};
 	return {
 		changed,
+		opening: (frame, url) => {
+			opening.push({ tabId: host.tabIdOf(frame), url, at: Date.now() });
+			if (opening.length > 16) opening.shift();
+		},
 		sameWindow: (source, client) => {
-			const previous = windows.get(source);
-			windows.set(source, client);
+			// (Firefox refuses another origin's window as a key or a weak
+			// reference, "Permission denied to access object": its frames
+			// are matched by client alone there)
+			let previous: string | undefined;
+			try {
+				previous = windows.get(source);
+				windows.set(source, client);
+				clientWindows.delete(client);
+				clientWindows.set(client, new WeakRef(source));
+			} catch (error) {
+				return;
+			}
+			if (clientWindows.size > 4096)
+				clientWindows.delete(clientWindows.keys().next().value!);
 			if (!previous || previous === client) return;
 			const id = frameIds.get(previous);
 			if (id !== undefined) frameIds.set(client, id);
@@ -445,28 +538,23 @@ export function framesAsTabs<F extends TabFrame>(
 					...(state && state.client && !state.complete
 						? { status: 'loading' as const }
 						: {}),
+					...(openers.has(frame) ? { openerTabId: openers.get(frame) } : {}),
 				};
 			});
 		},
 		ofClient: async (client) => {
 			const frame = host.frameOf(client);
 			if (!frame) return null;
-			let frameId = 0;
+			const tabId = host.tabIdOf(frame);
 			// (the feed hears a top document's report before its frame does
 			// under the site pool, which waits for the slot's agent)
-			if (!host.isTop(frame, client) && seen.get(frame)?.client !== client) {
-				let known = frameIds.get(client);
-				if (known === undefined) {
-					const asked = Number(await host.frameIdOf?.(client).catch(() => -1));
-					known = asked > 0 ? asked : frameIds.size + 1;
-					frameIds.set(client, known);
-					if (frameIds.size > 4096)
-						frameIds.delete(frameIds.keys().next().value!);
-				}
-				frameId = known;
-			}
-			return { tabId: host.tabIdOf(frame), frameId };
+			if (host.isTop(frame, client) || seen.get(frame)?.client === client)
+				return { tabId, frameId: 0, parentFrameId: -1 };
+			const frameId = await nestedId(client);
+			const parentFrameId = await parentId(frame, client);
+			return { tabId, frameId, parentFrameId: Math.max(0, parentFrameId) };
 		},
+		localFrame: (key) => nestedId(key),
 		create: async (url) => {
 			const opener = host.active() ?? shown()[0];
 			const before = new Set(host.frames());
@@ -628,6 +716,26 @@ const LISTED_AFTER = new Set<string>([
 	'update',
 	'reload',
 ]);
+
+/**
+ * Chrome's net error for a document request the proxy failed (webNavigation's
+ * onErrorOccurred `error`), from the request report's words: a name that
+ * does not resolve, a refused or reset connection, a timeout, the content
+ * blocker's refusal, else a failure of no kind Chrome names
+ */
+function netError(info: { error?: string; kind?: string }): string {
+	const words = `${info.kind ?? ''} ${info.error ?? ''}`;
+	if (
+		/name.?not.?resolved|dns|resolve|lookup|ENOTFOUND|getaddrinfo/i.test(words)
+	)
+		return 'net::ERR_NAME_NOT_RESOLVED';
+	if (/refused/i.test(words)) return 'net::ERR_CONNECTION_REFUSED';
+	if (/reset/i.test(words)) return 'net::ERR_CONNECTION_RESET';
+	if (/timed?.?out|timeout/i.test(words)) return 'net::ERR_TIMED_OUT';
+	if (/block/i.test(words)) return 'net::ERR_BLOCKED_BY_CLIENT';
+	if (/cert|tls|ssl/i.test(words)) return 'net::ERR_CERT_INVALID';
+	return 'net::ERR_FAILED';
+}
 
 /** how long a popup the host mounts has to say hello */
 const POPUP_WAIT_MS = 15_000;
@@ -994,6 +1102,7 @@ export class ExtensionHub {
 		{
 			tabId: number;
 			frameId: number;
+			parentFrameId: number;
 			url: string;
 			documentId: string;
 			ext: string;
@@ -1033,15 +1142,22 @@ export class ExtensionHub {
 		url: string,
 		documentId: string | null,
 		more: Record<string, unknown> = {},
+		parentFrameId = frameId === 0 ? -1 : 0,
 	): Record<string, unknown> {
-		const top = this.#tabState.get(tabId)?.documentId;
+		// the parent's document: the tab's top's, or a frame's the extensions reached
+		let parent: string | undefined;
+		if (parentFrameId === 0) parent = this.#tabState.get(tabId)?.documentId;
+		else if (parentFrameId > 0)
+			for (const frame of this.#subframes.values())
+				if (frame.tabId === tabId && frame.frameId === parentFrameId)
+					parent = frame.documentId;
 		return {
 			...(documentId ? { documentId } : {}),
 			documentLifecycle: 'active',
 			frameId,
 			frameType: frameId === 0 ? 'outermost_frame' : 'sub_frame',
-			...(frameId !== 0 && top ? { parentDocumentId: top } : {}),
-			parentFrameId: frameId === 0 ? -1 : 0,
+			...(frameId !== 0 && parent ? { parentDocumentId: parent } : {}),
+			parentFrameId,
 			processId: documentId ? tabId : -1,
 			tabId,
 			timeStamp: performance.timeOrigin + performance.now(),
@@ -1098,6 +1214,8 @@ export class ExtensionHub {
 				this.#entries.delete(event.tabId);
 				for (const [key, frame] of this.#subframes)
 					if (frame.tabId === event.tabId) this.#subframes.delete(key);
+				for (const [key, frame] of this.#failedFrames)
+					if (frame.tabId === event.tabId) this.#failedFrames.delete(key);
 			}
 			const tabId = event.tabId;
 			switch (event.e) {
@@ -1118,6 +1236,16 @@ export class ExtensionHub {
 							...(event.url ? { pendingUrl: event.url } : {}),
 						},
 					]);
+					// a tab a page opened (a link's target, window.open)
+					if (event.openerTabId !== undefined)
+						this.#webNavigation('onCreatedNavigationTarget', {
+							sourceFrameId: 0,
+							sourceProcessId: event.openerTabId,
+							sourceTabId: event.openerTabId,
+							tabId,
+							timeStamp: performance.timeOrigin + performance.now(),
+							url: event.url ?? '',
+						});
 					return;
 				}
 				case 'activated':
@@ -1167,6 +1295,8 @@ export class ExtensionHub {
 					);
 					for (const [key, frame] of this.#subframes)
 						if (frame.tabId === tabId) this.#subframes.delete(key);
+					for (const [key, frame] of this.#failedFrames)
+						if (frame.tabId === tabId) this.#failedFrames.delete(key);
 					await this.#updated(tabId, {
 						status: 'loading',
 						...(before?.url === event.url ? {} : { url: event.url }),
@@ -1288,7 +1418,7 @@ export class ExtensionHub {
 	#subframeHello(
 		ext: HubExtension,
 		from: string,
-		place: { tabId: number; frameId: number },
+		place: HubPlace,
 		url: string,
 		client: string,
 	) {
@@ -1296,21 +1426,33 @@ export class ExtensionHub {
 		this.#subframes.set(from, {
 			tabId: place.tabId,
 			frameId: place.frameId,
+			parentFrameId: place.parentFrameId,
 			url,
 			documentId,
 			ext: ext.info.id,
 		});
 		this.#webNavigation(
 			'onBeforeNavigate',
-			this.#navigation(place.tabId, place.frameId, url, null),
+			this.#navigation(
+				place.tabId,
+				place.frameId,
+				url,
+				null,
+				{},
+				place.parentFrameId,
+			),
 			ext,
 		);
 		this.#webNavigation(
 			'onCommitted',
-			this.#navigation(place.tabId, place.frameId, url, documentId, {
-				transitionQualifiers: [],
-				transitionType: 'auto_subframe',
-			}),
+			this.#navigation(
+				place.tabId,
+				place.frameId,
+				url,
+				documentId,
+				{ transitionQualifiers: [], transitionType: 'auto_subframe' },
+				place.parentFrameId,
+			),
 			ext,
 		);
 	}
@@ -1325,15 +1467,24 @@ export class ExtensionHub {
 			}),
 		];
 		const seen = new Set<number>([0]);
-		for (const frame of this.#subframes.values())
-			if (frame.tabId === tabId && !seen.has(frame.frameId)) {
-				seen.add(frame.frameId);
-				frames.push(
-					this.#navigation(tabId, frame.frameId, frame.url, frame.documentId, {
-						errorOccurred: false,
-					}),
-				);
-			}
+		for (const [list, errorOccurred] of [
+			[this.#subframes, false],
+			[this.#failedFrames, true],
+		] as const)
+			for (const frame of list.values())
+				if (frame.tabId === tabId && !seen.has(frame.frameId)) {
+					seen.add(frame.frameId);
+					frames.push(
+						this.#navigation(
+							tabId,
+							frame.frameId,
+							frame.url,
+							errorOccurred ? null : frame.documentId,
+							{ errorOccurred },
+							frame.parentFrameId,
+						),
+					);
+				}
 		for (const frame of frames) delete frame.timeStamp;
 		return frames;
 	}
@@ -1350,7 +1501,7 @@ export class ExtensionHub {
 			id: tab.id,
 			index,
 			windowId: 1,
-			openerTabId: undefined,
+			openerTabId: tab.openerTabId,
 			highlighted: tab.active,
 			active: tab.active,
 			pinned: false,
@@ -1400,6 +1551,8 @@ export class ExtensionHub {
 					top?: boolean;
 					name?: string;
 					tabId?: number;
+					/** a local document (about:blank, srcdoc, blob:, data:) its creator's runtime speaks for */
+					local?: { key?: string; tabId?: number; parentFrameId?: number };
 				};
 				if (hello.name === 'background' || hello.name === 'offscreen')
 					return { tabId: -1, frameId: -1, tab: null };
@@ -1426,7 +1579,19 @@ export class ExtensionHub {
 				}
 				// a document reports its client to the controller as it loads: a
 				// script at document_start may ask before it did
-				let place: { tabId: number; frameId: number } | null = null;
+				let place: HubPlace | null = null;
+				const local = hello.local;
+				if (
+					local &&
+					typeof local.key === 'string' &&
+					typeof local.tabId === 'number' &&
+					local.tabId >= 0
+				)
+					place = {
+						tabId: local.tabId,
+						frameId: await tabs.localFrame(local.key),
+						parentFrameId: Number(local.parentFrameId) || 0,
+					};
 				for (let tries = 0; tries < 40 && !place; tries++) {
 					place = hello.client ? await tabs.ofClient(hello.client) : null;
 					if (!place) await new Promise((resolve) => setTimeout(resolve, 50));
@@ -1461,6 +1626,8 @@ export class ExtensionHub {
 						frame.frameId,
 						frame.url,
 						frame.documentId,
+						{},
+						frame.parentFrameId,
 					),
 					ext,
 				);
@@ -2547,6 +2714,82 @@ export class ExtensionHub {
 	 * A tab's document is this client: the worker gives its requests that
 	 * tab (declarativeNetRequest's tabIds, badges and matched rules)
 	 */
+	/**
+	 * A frame's navigation failed (the request report of a document the
+	 * worker answered with its error page): webNavigation's
+	 * onBeforeNavigate and onErrorOccurred for the frame, with Chrome's net
+	 * error, and getAllFrames lists it with errorOccurred (Chrome commits an
+	 * error page there and tells no commit). The tab's top is told by its
+	 * error page's report as any document is
+	 */
+	async navigationFailed(info: {
+		client?: string;
+		url: string;
+		error?: string;
+		kind?: string;
+	}) {
+		if (!info.client || !this.#extensions.size) return;
+		if (
+			![...this.#extensions.values()].some((ext) =>
+				ext.info.permissions.includes('webNavigation'),
+			)
+		)
+			return;
+		// (the error page reports its client to the host once it is parsed)
+		let place: HubPlace | null = null;
+		for (let tries = 0; tries < 60 && !place; tries++) {
+			place = await this.#host.tabs.ofClient(info.client).catch(() => null);
+			if (!place) await new Promise((resolve) => setTimeout(resolve, 50));
+		}
+		if (!place || place.frameId <= 0) return;
+		const url = displayExtensionURL(info.url);
+		const documentId = ExtensionHub.documentId(info.client);
+		this.#failedFrames.set(info.client, {
+			tabId: place.tabId,
+			frameId: place.frameId,
+			parentFrameId: place.parentFrameId,
+			url,
+			documentId,
+			ext: '',
+		});
+		if (this.#failedFrames.size > 256)
+			this.#failedFrames.delete(this.#failedFrames.keys().next().value!);
+		this.#webNavigation(
+			'onBeforeNavigate',
+			this.#navigation(
+				place.tabId,
+				place.frameId,
+				url,
+				null,
+				{},
+				place.parentFrameId,
+			),
+		);
+		this.#webNavigation(
+			'onErrorOccurred',
+			this.#navigation(
+				place.tabId,
+				place.frameId,
+				url,
+				null,
+				{ error: netError(info) },
+				place.parentFrameId,
+			),
+		);
+	}
+	/** the frames whose navigation failed (navigationFailed), by their error page's client */
+	#failedFrames = new Map<
+		string,
+		{
+			tabId: number;
+			frameId: number;
+			parentFrameId: number;
+			url: string;
+			documentId: string;
+			ext: string;
+		}
+	>();
+
 	place(client: string, tabId: number) {
 		const started = this.#started;
 		this.ready.then(() => {

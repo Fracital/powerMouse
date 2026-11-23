@@ -153,6 +153,20 @@ controller.extensions  --RPC-->  ExtensionHub (with the controller)    Extension
   rewritten as page code and wrapped as a function of its `chrome`. Either
   is kept in Cache Storage under a route that names the extension's
   generation, so every later document's load of it is a cache read.
+- **Local frames.** An about:blank, about:srcdoc, blob: or data: frame has
+  no URL a pattern matches, so Chrome matches its creator's: with
+  `match_about_blank` an about:blank or about:srcdoc one, with
+  `match_origin_as_fallback` any of the four (both want `all_frames`). The
+  inject of such a document tells its creator's runtime once it runs there
+  (an about:blank one at once, one with a shell at its first open), and
+  the runtime runs the entries that matched the creator in it, in a world
+  made in the frame's realm; a MAIN or USER_SCRIPT file is fetched from
+  the creator's realm and run as an inline script, since an about:blank
+  document's own loads do not reach the worker. Such a frame says hello
+  as its creator's child, with a frame id from the worker, so
+  webNavigation, `getAllFrames`, executeScript and
+  `sender.frameId` see it. An extension with `scripting`, `tabs`,
+  `activeTab` or `webNavigation` gets a context there even with no entry.
 - **When they run.** The runtime wraps `document.open` and `document.write`
   with functions shaped as the natives (the inject hooks over them in
   turn). The inject opens the document right before it writes the page's
@@ -302,7 +316,12 @@ controller.extensions  --RPC-->  ExtensionHub (with the controller)    Extension
   traversal has `forward_back`. An extension's page under a site pool is
   shown from the hub's origin, never a slot's. A frame below a tab's top is told
   by the extension's content scripts in it: its commit when they say
-  hello, its DOMContentLoaded and load from there. Listeners' URL filters
+  hello, its DOMContentLoaded and load from there, with its parent's frame
+  id (the frame whose window holds it). A frame whose navigation the
+  worker answered with a network error tells onBeforeNavigate and
+  onErrorOccurred, and `getAllFrames` lists it with `errorOccurred`. A tab
+  the page opens (`window.open`, a `target=_blank` link) has the opening
+  tab as `openerTabId`, and onCreatedNavigationTarget tells it. Listeners' URL filters
   are applied as Chrome applies them. `webNavigation.getFrame` and
   `getAllFrames` answer the tab's top and the frames the extensions'
   content scripts reached.
@@ -749,19 +768,27 @@ they are now.
   ISOLATED scripts run in the page's realm with the extension's `chrome`, as
   before isolated worlds, and see the page's globals and prototypes.
 - No content scripts in documents STomp does not inject (image viewer
-  documents) or in about:blank frames (`match_about_blank`,
-  `match_origin_as_fallback`). A text document is served as UTF-8, so
+  documents), or in an about:blank frame the page never reaches into (its
+  inject runs when the page first touches its window or document). A
+  blob: document's `location` reads its creator's URL through the proxy,
+  so a content script there sees `http:`. A text document is served as UTF-8, so
   `document.characterSet` reads UTF-8 whatever the response's charset, and
   document_start runs after the first write, not with the body already
   there.
 - webNavigation sees a frame below a tab's top only where the extension's
-  content scripts run, gives such a frame `parentFrameId` 0 however deep
-  it is, and tells its top document's DOMContentLoaded at the frame's load.
+  content scripts run (or its context for scripting), and tells its top
+  document's DOMContentLoaded at the frame's load. A blob: frame is told
+  as any other, where Chrome tells only its commit and lists it in no
+  `getAllFrames`.
   A top document's `transitionType` is `typed` for a tab's first document
   and `link` for any other new entry, whatever made it (a form, a script,
   a redirect), and its qualifiers only `forward_back` and a reload's
-  `client_redirect`. A navigation that fails tells no `onErrorOccurred`.
-  `onCreated` gives no `openerTabId`.
+  `client_redirect`. `onErrorOccurred` is told for a frame below the top
+  only (a failed top navigation commits the worker's error page), its
+  `error` is `net::ERR_FAILED` unless the transport named the cause (a
+  host that does not resolve is `ERR_FAILED`, Chrome's
+  `ERR_NAME_NOT_RESOLVED`), and onCreatedNavigationTarget's source is
+  always the opener's top frame.
 - Under a site pool a slot's worker keeps no extensions (Content scripts
   on the slots): an extension's webRequest listeners and its
   declarativeNetRequest rules see no request of a document a slot shows,
@@ -780,8 +807,9 @@ they are now.
   reports, have a new frame id and the referring origin's latest document
   as parent. Once the document reports from the frame's window, it has
   the frame's id and parent.
-- `scripting.executeScript({ files })` runs the files but answers no
-  result (a `func` answers its return value, as in Chrome).
+- `scripting.executeScript({ files })` answers the last file's completion
+  value in each frame, as Chrome does, except a MAIN-world file in a
+  document whose policy forbids `eval`, which answers none.
 - Namespaces STomp does not implement answer what their kind would: an
   empty list for `getFontList`, `getAll` or `query`, Chrome's defaults for
   `privacy.*` and `proxy.settings` (which `set` changes for the context),
@@ -790,8 +818,9 @@ they are now.
   frame, read when the store's page calls (the icon's download comes
   after it). Approvals belong to that document, last two minutes, and are lost
   if the worker restarts. Reload the listing to try again. The listing flow
-  supports MV3 extensions, not themes, apps, or items the store flags for an
-  additional safety check. A change to the listing's manifest requires a new
+  supports MV3 extensions and themes (a theme installs with no dialog, see
+  [Themes](#themes)), not apps, or items the store flags for an additional
+  safety check. A change to the listing's manifest requires a new
   approval, even if Chrome would allow the change without one.
 - declarativeContent judges a rule's `pageUrl` only: its `css` and
   `isBookmarked` conditions never hold.

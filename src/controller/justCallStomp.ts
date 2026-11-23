@@ -64,7 +64,9 @@ import { assetName } from '../config';
 import { navigationAnswer } from '../navigationAnswer';
 import { storeName } from '../profile';
 import {
+	CALL_GONE_MS,
 	CALL_MESSAGE,
+	CALL_PING_MS,
 	CALL_WAIT_MS,
 	type CalledSession,
 } from '../transport/messages';
@@ -430,22 +432,58 @@ function pageLoad(element: HTMLIFrameElement): Promise<void> {
  * CALL_WAIT_MS). Null when the page never says it is ready (PAGE_WAIT_MS):
  * it is no call page (a slot's port that answers with something else, a
  * slot whose worker went), or it took another caller's message; no call
- * went then, so it may be made elsewhere. Anything else the port hears is
- * dropped.
+ * went then, so it may be made elsewhere. A page that goes (it says so,
+ * or stops answering the host's pings once its call is out) ends the call
+ * then: null before it said it was ready, a failure after. Anything else the port hears is dropped.
  */
 function dial(port: MessagePort, call: object): Promise<CallAnswer | null> {
 	return new Promise((resolve, reject) => {
 		let ready = false;
+		let settled = false;
 		const fail = (why: string) => {
+			settled = true;
+			clearInterval(beat);
 			clearTimeout(timer);
 			port.onmessage = null;
 			reject(new Error(why));
 		};
 		let timer = setTimeout(() => {
+			settled = true;
 			port.onmessage = null;
 			resolve(null);
 		}, PAGE_WAIT_MS);
+		// the call page gone: it says so (its document went), or, once its
+		// call is out, stops answering (its slot's process went); the call
+		// ends then, not at its wait. Before it said it was ready no call
+		// went; after, the call went and is not made again
+		// (unanswered since `asked`: a timer of a hidden tab, slowed to once a
+		// minute, waits on no ping it has not sent)
+		let pings = 0;
+		let asked = 0;
+		const beat = setInterval(() => {
+			if (settled) return clearInterval(beat);
+			if (!ready) return;
+			if (asked) {
+				if (Date.now() - asked > CALL_GONE_MS) gone();
+				return;
+			}
+			asked = Date.now();
+			port.postMessage({ ping: ++pings });
+		}, CALL_PING_MS);
+		const gone = () => {
+			if (settled) return;
+			if (ready) return fail('The call page went before it answered');
+			settled = true;
+			clearTimeout(timer);
+			port.onmessage = null;
+			resolve(null);
+		};
 		port.onmessage = ({ data }) => {
+			if (data?.gone === true) return gone();
+			if (Number.isInteger(data?.pong)) {
+				asked = 0;
+				return;
+			}
 			if (!ready) {
 				if (data?.ready !== true || Object.keys(data).length !== 1) return;
 				ready = true;
@@ -459,6 +497,8 @@ function dial(port: MessagePort, call: object): Promise<CallAnswer | null> {
 			}
 			const answer = callAnswerOf(data);
 			if (!answer) return;
+			settled = true;
+			clearInterval(beat);
 			clearTimeout(timer);
 			port.onmessage = null;
 			resolve(answer);

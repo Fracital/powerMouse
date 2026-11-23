@@ -19,7 +19,12 @@
 // it sends stays its own (the transport detached an ArrayBuffer, which then
 // read 0 bytes). A burst of messages of mixed sizes and kinds goes out
 // and comes back in the order the page sent it, with bufferedAmount above
-// 0 while the page's script runs (it read 0).
+// 0 while the page's script runs (it read 0). The constructor, close() and
+// send() refuse what Chrome refuses, in its words (subprotocols were never
+// checked, a bad close code threw a DOMException named Error, a send while
+// connecting too, a reason over 123 bytes went), and a close() while
+// connecting fails the connection at once (it read CONNECTING and waited
+// for the open).
 // Compared with the page loaded natively, in both modes, against a server
 // of the suite's own.
 import { createServer } from 'node:net';
@@ -124,6 +129,8 @@ for (const [mode, base] of [
 		'sendAfterClose',
 		'sendBuffer',
 		'sendOrder',
+		'argumentChecks',
+		'closeConnecting',
 	])
 		ok(
 			`${mode}: ${name} ends as natively`,

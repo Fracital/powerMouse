@@ -154,24 +154,25 @@ export function pageSide(
 /**
  * Make a world: its realm, its bundle, the world itself. `hidden` is the
  * inject's hiddenMutation, which keeps the frame's coming and going from
- * the page's observers once the page could have any. Null when the
+ * the page's observers once the page could have any; `document` is the
+ * page's (the runtime's own, or a local frame's). Null when the
  * document cannot make one (a sandbox with no scripts for its frames)
  */
 export function makeWorld(
 	page: PageSide,
 	config: WorldConfig,
 	hidden: (<T>(run: () => T) => T) | null,
+	document: Document = natives.document,
 ): World | null {
 	const make = () => {
-		const parent =
-			natives.documentElement(natives.document) ?? natives.document;
-		const host = call<Element>(natives.createElement, natives.document, 'div');
+		const parent = natives.documentElement(document) ?? document;
+		const host = call<Element>(natives.createElement, document, 'div');
 		const root = call<ShadowRoot>(natives.attachShadow, host, {
 			mode: 'closed',
 		});
 		const frame = call<HTMLIFrameElement>(
 			natives.createElement,
-			natives.document,
+			document,
 			'iframe',
 		);
 		call(natives.appendChild, root, frame);

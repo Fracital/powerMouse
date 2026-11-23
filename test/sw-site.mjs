@@ -90,7 +90,11 @@ const PAGES = {
 		const step = params.get('step');
 		push('start', step, String(c.controller && c.controller.state), location.pathname + location.search.replace(/run=[^&]*/, ''), document.title);
 		if (step === '1') {
-			await c.register('sw-offline.js?run=' + run);
+			// (under /mod/ a module worker whose app list is a module it
+			// imports, which imports another)
+			if (location.pathname.startsWith('/mod/'))
+				await c.register('sw-offline.mjs?run=' + run, { type: 'module' });
+			else await c.register('sw-offline.js?run=' + run);
 			await until(() => c.controller);
 			await until(() => c.controller.state === 'activated');
 			push('controlled', c.controller.state);
@@ -100,6 +104,64 @@ const PAGES = {
 		push('style', getComputedStyle(document.querySelector('p')).color);
 		const reg = await c.getRegistration();
 		push('registration', reg.active === c.controller, (await c.ready) === reg);
+	});
+</script>`),
+	// a worker that imports a script (importScripts under /impc/, a static
+	// import under /impm/): step 1 registers it, step 2 calls update() with
+	// nothing changed, then once the suite changed the imported script's
+	// bytes only, again: Chrome compares what the worker imported too
+	'/imports.html': html(`<title>SW IMPORTS</title>${LOG}<script>
+	finish(async () => {
+		const c = navigator.serviceWorker;
+		c.startMessages();
+		const module = location.pathname.startsWith('/impm/');
+		const step = params.get('step');
+		const ask = (worker) =>
+			new Promise((resolve) => {
+				c.addEventListener('message', (event) => resolve(event.data), { once: true });
+				worker.postMessage('lib');
+			});
+		if (step === 'moved') {
+			// a worker whose imported script redirects: Chrome refuses it
+			// (a classic worker's import throws, a module worker's graph
+			// does not load)
+			try {
+				await c.register((module ? 'sw-moved.mjs' : 'sw-moved.js') + '?run=' + run, {
+					scope: 'moved/',
+					...(module ? { type: 'module' } : {}),
+				});
+				push('moved registered');
+			} catch (error) {
+				push('moved', error.name, error.message.replace(/run=[^)']*/g, ''));
+			}
+			push('moved left', String(await c.getRegistration('moved/')));
+			return;
+		}
+		if (step === '1') {
+			const reg = await c.register(
+				(module ? 'sw-imports.mjs' : 'sw-imports.js') + '?run=' + run,
+				module ? { type: 'module' } : {},
+			);
+			await until(() => reg.active && reg.active.state === 'activated');
+			push('registered', module ? 'module' : 'classic', await ask(reg.active));
+			return;
+		}
+		const reg = await c.getRegistration();
+		const first = reg.active;
+		await reg.update();
+		push('same bytes', !!reg.installing, !!reg.waiting, reg.active === first);
+		window.__sw.readyForBump = true;
+		await until(() => window.__sw.bumped, 20000);
+		const states = [];
+		reg.addEventListener('updatefound', () => {
+			const next = reg.installing;
+			push('updatefound', next.state);
+			next.addEventListener('statechange', () => states.push(next.state));
+		});
+		await reg.update();
+		await until(() => states.includes('activated'));
+		push('import changed', states, reg.active !== first, first.state);
+		push('imported', await ask(reg.active));
 	});
 </script>`),
 	// site A of the isolation suite: a worker that takes the whole origin
@@ -259,6 +321,39 @@ self.addEventListener('fetch', (event) => {
 });
 `;
 
+/**
+ * sw-offline.mjs: sw-offline.js as a module worker, whose cache name and
+ * file list come from a module it imports (offline-lib.mjs), which imports
+ * the list (offline-files.mjs)
+ */
+const offlineModuleWorker = `import { CACHE, FILES } from './offline-lib.mjs';
+self.addEventListener('install', (event) =>
+	event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(FILES))),
+);
+self.addEventListener('activate', (event) => event.waitUntil(clients.claim()));
+self.addEventListener('fetch', (event) => {
+	const { request } = event;
+	if (request.mode === 'navigate') {
+		event.respondWith(
+			fetch(request).catch(() => caches.match(request, { ignoreSearch: true })),
+		);
+		return;
+	}
+	event.respondWith(caches.match(request).then((hit) => hit || fetch(request)));
+});
+`;
+
+/** sw-imports.js and .mjs: report what the script they import says; only its bytes change */
+const importsWorker = (module, run, lib = 'sw-lib') => `${
+	module
+		? `import { LIB } from './${lib}.mjs?run=${run}';`
+		: `importScripts('${lib}.js?run=${run}');`
+}
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (event) => event.waitUntil(clients.claim()));
+self.addEventListener('message', (event) => event.source.postMessage(${module ? 'LIB' : 'self.LIB'}));
+`;
+
 /** sw-update.js: skips waiting, claims; its bytes carry the run's version */
 const updateWorker = (version) => `// version ${version}
 self.addEventListener('install', () => self.skipWaiting());
@@ -268,6 +363,8 @@ self.addEventListener('message', (event) => event.source.postMessage({ version: 
 
 export async function startSite() {
 	const versions = new Map();
+	/** the version of what sw-imports imports, per directory and run */
+	const libs = new Map();
 	/** the requests for preload.html, per run */
 	const preloads = new Map();
 	let online = true;
@@ -310,11 +407,69 @@ export async function startSite() {
 			res.setHeader('content-type', 'text/javascript');
 			return res.end(offlineWorker);
 		}
-		if (url.pathname === '/app/offline.css') {
+		if (url.pathname === '/mod/sw-offline.mjs') {
+			res.setHeader('content-type', 'text/javascript');
+			return res.end(offlineModuleWorker);
+		}
+		if (url.pathname === '/mod/offline-lib.mjs') {
+			res.setHeader('content-type', 'text/javascript');
+			return res.end(
+				"export { FILES } from './offline-files.mjs';\nexport const CACHE = 'offline-module-v1';\n",
+			);
+		}
+		if (url.pathname === '/mod/offline-files.mjs') {
+			res.setHeader('content-type', 'text/javascript');
+			return res.end(
+				"export const FILES = ['offline.html', 'offline.css', 'offline-data.json'];\n",
+			);
+		}
+		if (/^\/imp[cm]\/sw-imports\.m?js$/.test(url.pathname)) {
+			res.setHeader('content-type', 'text/javascript');
+			return res.end(importsWorker(url.pathname.endsWith('.mjs'), run));
+		}
+		// (sw-moved imports a script whose URL redirects to sw-lib's)
+		if (/^\/imp[cm]\/sw-moved\.m?js$/.test(url.pathname)) {
+			res.setHeader('content-type', 'text/javascript');
+			return res.end(
+				importsWorker(url.pathname.endsWith('.mjs'), run, 'moved-lib'),
+			);
+		}
+		if (/^\/imp[cm]\/moved-lib\.m?js$/.test(url.pathname)) {
+			res.statusCode = 302;
+			res.setHeader(
+				'location',
+				url.pathname.replace('moved-lib', 'sw-lib') + url.search,
+			);
+			return res.end();
+		}
+		if (/^\/imp[cm]\/sw-lib\.m?js$/.test(url.pathname)) {
+			const dir = url.pathname.slice(1, 5);
+			const lib = `${dir} ${libs.get(`${dir} ${run}`) ?? 0}`;
+			res.setHeader('content-type', 'text/javascript');
+			return res.end(
+				url.pathname.endsWith('.mjs')
+					? `export const LIB = ${JSON.stringify(lib)};\n`
+					: `self.LIB = ${JSON.stringify(lib)};\n`,
+			);
+		}
+		if (/^\/imp[cm]\/imports\.html$/.test(url.pathname)) {
+			res.setHeader('content-type', 'text/html; charset=utf-8');
+			return res.end(PAGES['/imports.html']);
+		}
+		const app = /^\/mod\/(offline\.(html|css)|offline-data\.json)$/.test(
+			url.pathname,
+		)
+			? `/app/${url.pathname.slice(5)}`
+			: url.pathname;
+		if (app === '/app/offline.html') {
+			res.setHeader('content-type', 'text/html; charset=utf-8');
+			return res.end(PAGES[app]);
+		}
+		if (app === '/app/offline.css') {
 			res.setHeader('content-type', 'text/css');
 			return res.end('p { color: rgb(1, 2, 3); }');
 		}
-		if (url.pathname === '/app/offline-data.json') {
+		if (app === '/app/offline-data.json') {
 			res.setHeader('content-type', 'application/json');
 			return res.end(JSON.stringify({ from: 'the site' }));
 		}
@@ -334,6 +489,9 @@ export async function startSite() {
 	return {
 		origin,
 		bump: (run) => versions.set(run, (versions.get(run) ?? 0) + 1),
+		/** change the bytes of what sw-imports under `dir` imports, and nothing else */
+		bumpImport: (dir, run) =>
+			libs.set(`${dir} ${run}`, (libs.get(`${dir} ${run}`) ?? 0) + 1),
 		/** the requests preload.html got in `run`: its step and preload header */
 		preloadRequests: (run) => preloads.get(run) ?? [],
 		/** stop answering: every connection is dropped, as an unreachable site's */

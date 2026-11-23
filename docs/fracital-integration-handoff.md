@@ -210,17 +210,18 @@ first; each item has its suite and its CHANGELOG bullet.
   nothing above it (`parent`, `top`, `ancestorOrigins`, `frames[i]` of another
   proxied origin); standalone SVG and XHTML documents are proxied as what
   they are; a request the page aborts is dropped in the worker.
-- **Pending (branch, merge after its second review pass).** Several
-  controllers on one directory: `init.id` (1 to 32 characters of
-  `[A-Za-z0-9_-]`, random by default) names the controller's address
+- **Several controllers on one directory** (merged, 2339b5f8e). `init.id`
+  (1 to 32 characters of `[A-Za-z0-9_-]`) names the controller's address
   `/stomp/<id>/`, so two host tabs no longer replace each other in the
-  worker; `config.directory` becomes the address and `config.scope` the
-  directory the bundles are served from. The cookie jar, the HTTP cache and
-  the storage partitions are shared by every controller of a scope (a
-  controller is a tab, not a browser). A routed URL whose controller is gone
-  redirects to the newest live controller of the same codec, or gets the
-  error page with kind `controller`. A host that keeps tabs stores one id per
-  tab and passes it back, so the tab's history entries keep resolving.
+  worker; `config.directory` is the address and `config.scope` the
+  directory the bundles are served from. Without an id the controller keeps
+  one of its own from visit to visit (`src/controller/id.ts`). The cookie
+  jar, the HTTP cache and the storage partitions are shared by every
+  controller of a scope (a controller is a tab, not a browser). A routed URL
+  whose controller is gone redirects to the newest live controller of the
+  same codec, or gets the error page with kind `controller`. A host that
+  keeps tabs stores one id per tab and passes it back, so the tab's history
+  entries keep resolving.
 
 ## Config STomp will receive from Fracital (reference)
 

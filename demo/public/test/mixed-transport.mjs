@@ -32,6 +32,9 @@
 //   bare suffixes, trailing-dot names and addresses that the passkeys
 //   suites ask about as relying party ids are refused here, so no test asks
 //   the network (or a port of this machine) for them.
+// - the hsts suite's IP literal: 127.0.0.2 goes to 127.0.0.1, an https or
+//   wss URL in plain http or ws, so an https answer of an address reaches
+//   the worker (which must keep no HSTS for it).
 //
 // It also gives epoxy the certificate authorities of the WebRTC suites' TURN
 // server over TLS (test/turn.mjs, the certificate in turn-ca.pem here) and
@@ -45,6 +48,7 @@ const PRIVATE_SITE_HOST =
 const DISCORD_HOST = /^(?:[\w-]+\.)*discord\.com$/;
 const PLAIN = { 'https:': 'http:', 'wss:': 'ws:' };
 const PORT_HOST = /^(?:www\.)?v(\d+)\.test$/;
+const HSTS_ADDRESS = '127.0.0.2';
 const PASSKEY_HOST = /^(?:[\w-]+\.)*pk(\d+)-[ab]\.(?:co\.uk|github\.io)$/;
 // names the passkeys suites ask about that no server answers for (a public
 // suffix as a relying party id, a name with a trailing dot): never the
@@ -80,6 +84,7 @@ function fixtureURL(url) {
 	if (
 		PRIVATE_SITE_HOST.test(hostname) ||
 		PLAIN_MIXED_HOST.test(hostname) ||
+		hostname === HSTS_ADDRESS ||
 		DISCORD_HOST.test(hostname)
 	)
 		target.protocol = PLAIN[target.protocol] ?? target.protocol;

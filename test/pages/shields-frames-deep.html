@@ -1,0 +1,10 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>shields frames deep</title>
+<!-- shields-sites suite: a frame two levels below the top-level page of
+     another site. Its image's request headers are recorded, and its script
+     says it ran -->
+<img src="/echo-headers?k=__K__-img&amp;js" alt="" />
+<script>
+	navigator.sendBeacon('/echo-post?k=__K__&shape=ran', 'ran');
+</script>

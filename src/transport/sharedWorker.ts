@@ -15,7 +15,14 @@ export function startSharedWorker(script: string): MessagePort | null {
 		const worker = new SharedWorker(script, {
 			type: 'module',
 			name: sharedWorkerName(script),
-		});
+			// it outlives the page's reload or navigation by up to five minutes
+			// (Chrome 157), as the carrier host does (carrierClient.ts
+			// startCarrierHost): the Tor client in it keeps its circuits and
+			// its links to the guard, and a reload bootstraps nothing. A
+			// browser without the option ignores it; every page asks with it,
+			// or Chrome refuses the one that differs
+			extendedLifetime: true,
+		} as WorkerOptions);
 		worker.addEventListener('error', () => {});
 		return worker.port;
 	} catch {

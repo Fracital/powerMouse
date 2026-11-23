@@ -110,6 +110,7 @@ import {
 	RequestInfo,
 	ReviveMessage,
 	SOCKET_PARTITION,
+	SOCKET_UPGRADE,
 	STANDBY_DECLINED,
 	SW_KICK,
 	SW_PORT,
@@ -1991,6 +1992,8 @@ export class StompController extends EventTarget {
 			}
 			const url = openRequest(event.data);
 			if (url !== null) {
+				// (the next tab is this one's: its openerTabId)
+				if (init.onOpen) this.#tabFeed?.opening(frame, url);
 				init.onOpen?.(url, frame);
 				this.dispatchEvent(new CustomEvent('open', { detail: { url, frame } }));
 				return;
@@ -3051,7 +3054,17 @@ export class StompController extends EventTarget {
 					// a service worker's uncaught error is its own console's, never
 					// the host page's (one that throws at its top level fails its
 					// registration instead)
-					worker.addEventListener('error', (event) => event.preventDefault());
+					// (one whose script or module graph did not load fires a plain
+					// Event, and never runs: it goes, and the real worker hears so
+					// at once, not when its start times out)
+					worker.addEventListener('error', (event) => {
+						event.preventDefault();
+						if (event instanceof ErrorEvent) return;
+						worker.terminate();
+						if (this.#serviceWorkers.get(id) === worker)
+							this.#serviceWorkers.delete(id);
+						this.#call('serviceWorkerUnstarted', id).catch(() => {});
+					});
 					const transport = new MessageChannel();
 					if (this.#worker) this.#worker.servePort(transport.port1);
 					else
@@ -3244,6 +3257,13 @@ export class StompController extends EventTarget {
 			this.#init.agent.request(info);
 			return;
 		}
+		// a frame's document that failed: webNavigation's onErrorOccurred
+		if (
+			info.status === 0 &&
+			info.error &&
+			(info.destination === 'iframe' || info.destination === 'frame')
+		)
+			void this.#extensionHub.navigationFailed(info);
 		// a worker's request is its creator's frame's (info.owner)
 		const known = () => this.#clients.frame(info.client, info.owner);
 		let frame = known();
@@ -3493,11 +3513,35 @@ export class StompController extends EventTarget {
 						})
 						.catch(() => false)
 				: false;
+		// HSTS (src/server/hsts.ts): a ws: URL of a host the socket's
+		// partition knows to be https only goes out as wss:, with the cookies
+		// of that URL (Secure ones too), as Chrome upgrades the handshake. The
+		// page's socket keeps its URL; serveTransport connects to the one the
+		// field names. Asked only for a ws: URL of a name, and no answer
+		// leaves it as it is
+		let target = url;
+		if (
+			url.protocol === 'ws:' &&
+			!/^\[|^\d+\.\d+\.\d+\.\d+$/.test(url.hostname)
+		) {
+			const upgraded = await this.#rpc
+				.call('hsts', {
+					url: url.href,
+					...(origin ? { origin: origin[1] } : {}),
+					...(marked ? { partitionKey: marked[1] } : {}),
+					...(client ? { client } : {}),
+				})
+				.catch(() => null);
+			if (typeof upgraded === 'string') {
+				target = new URL(upgraded);
+				headers.push([SOCKET_UPGRADE, target.href]);
+			}
+		}
 		// no jar answer: a handshake without cookies
 		const cookie = this.#rpc
 			.call('cookies', {
 				op: 'get',
-				url: url.href,
+				url: target.href,
 				header: true,
 				...(origin ? { initiator: origin[1] } : {}),
 				...(marked ? { partitionKey: marked[1] } : {}),

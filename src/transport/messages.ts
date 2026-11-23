@@ -1143,6 +1143,15 @@ export const CALL_MOVED_HEADER = 'x-stomp-call-moved';
  */
 export const CALL_MESSAGE = '$stomp$call';
 /**
+ * Just call stomp: the type of the event a call page below the tab's frame
+ * fires on its frame element (composed, its detail the element). The host
+ * hears a call page's load where it listens (its document and every shadow
+ * root a script makes); a frame the parser puts in a shadow root of the
+ * markup loads where it does not, so the page says it is there, and the
+ * host hears it on its window (src/inject/dom/calledFrames.ts)
+ */
+export const CALL_HERE = '$stomp$here';
+/**
  * Just call stomp: the header of a call that carries its token. A token is
  * minted by the controller that opted in (StompController.callToken), given
  * to its worker for one route over the controller's own channel, and good
@@ -1152,6 +1161,14 @@ export const CALL_TOKEN_HEADER = 'x-stomp-call-token';
 export const CALL_TOKEN_DIGITS = 32;
 /** Just call stomp: how long a token, a call page's wait for its port's call and a host's wait for the answer last */
 export const CALL_WAIT_MS = 45_000;
+/**
+ * Just call stomp: how often a host asks a call page whose call is out
+ * whether it is still there (`{ ping }`, answered `{ pong }`), and how long
+ * it goes unanswered before the host takes the page for gone: a slot whose
+ * process went says nothing (a page that goes otherwise says `{ gone }`)
+ */
+export const CALL_PING_MS = 2_000;
+export const CALL_GONE_MS = 10_000;
 /** Just call stomp: what the call page leaves on its window for the document it writes, taken before any page script */
 export const CALLED_KEY = '$stomp$called';
 
@@ -1527,6 +1544,12 @@ export type SWbound = {
 	/** the host sends a frame to this routed URL again: a stop `early` of it is over */
 	navigationSent: [string];
 	/**
+	 * an emulated service worker the controller started (by its instance
+	 * id) never ran: its script or module graph did not load
+	 * (docs/service-workers.md)
+	 */
+	serviceWorkerUnstarted: [string];
+	/**
 	 * Just call stomp: let `token` make one call of the routed URL `routed`
 	 * (src/server/called.ts allowCallToken); refused unless the controller
 	 * opted in (Config.dialing)
@@ -1584,6 +1607,24 @@ export type SWbound = {
 	 * frame it kept for each (the request log's attribution)
 	 */
 	goneClients: [string[], string[]];
+	/**
+	 * the wss: URL a WebSocket to the ws: `url` goes to, when its host is
+	 * known to be https only in the socket's network partition (HSTS,
+	 * src/server/hsts.ts), else null: asked by the controller's handshake
+	 * hook, since a socket never passes the service worker. `origin` is the
+	 * Origin the handshake carries, `partitionKey` the top-level site of a
+	 * context in a partition (SOCKET_PARTITION), `client` the document's
+	 * service worker client
+	 */
+	hsts: [
+		{
+			url: string;
+			origin?: string;
+			partitionKey?: string;
+			client?: string;
+		},
+		string | null,
+	];
 	/**
 	 * the per-site shields (the demo's content-blocker UI): the whole
 	 * host-keyed allowlist, which the worker's server consults before each
@@ -2066,6 +2107,14 @@ export const HANDSHAKE_REFUSED = '$stomp$handshakeRefused';
  * and serveTransport removes it, so it never goes out
  */
 export const SOCKET_PARTITION = '$stomp$partition';
+
+/**
+ * The field the controller's decorate hook adds to a WebSocket handshake
+ * whose ws: URL HSTS makes wss: (src/server/hsts.ts), naming the URL it
+ * goes to: serveTransport connects there (only a wss: URL of the same host
+ * and port, or 443 for 80) and removes it, so it never goes out
+ */
+export const SOCKET_UPGRADE = '$stomp$upgrade';
 
 /** implemented by the controller, called by the transport worker */
 export type WorkerToController = {

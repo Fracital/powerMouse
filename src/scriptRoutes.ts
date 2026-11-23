@@ -58,6 +58,25 @@ export function isModuleType(type: ScriptType): boolean {
 	);
 }
 
+/** the route kind a static import of a module script takes while a rewrite asks for one (withImportKind) */
+let importKind: string | null = null;
+
+/**
+ * `rewrite` (a synchronous rewrite of a module) with every static import of
+ * a module script over http(s) routed as `kind`: an emulated service
+ * worker's modules go to its version's route, which keeps them with the
+ * version (docs/service-workers.md)
+ */
+export function withImportKind<T>(kind: string, rewrite: () => T): T {
+	const before = importKind;
+	importKind = kind;
+	try {
+		return rewrite();
+	} finally {
+		importKind = before;
+	}
+}
+
 /**
  * The route of a module an import loads, by its `with { type }`: a JSON
  * module is no script and goes as it is (its body is the module, and its
@@ -73,6 +92,8 @@ export function routeImport(
 ): string {
 	if (moduleType === 'json') return routeBinary(resource);
 	if (moduleType === 'css') return routeURL('css', resource);
+	if (importKind !== null && /^https?:$/.test(resource.url.protocol))
+		return routeURL(importKind, resource);
 	return routeJS(resource, base, config, type);
 }
 

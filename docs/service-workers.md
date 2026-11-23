@@ -135,9 +135,19 @@ browser's messages), then in the real worker:
 script`, past the HTTP cache unless `updateViaCache` is `all`; a redirect,
    a non-2xx status, a non-JavaScript MIME type, or a scope outside the
    maximum (the script's directory, or `Service-Worker-Allowed`) rejects with
-   the browser's error. Identical bytes to the newest version end the job.
+   the browser's error. Identical bytes to the newest version end the job,
+   unless a script the newest version imported (`importScripts`, a module's
+   static imports) reads otherwise now: each is fetched again, past the HTTP
+   cache only for `updateViaCache: 'none'`, and one that changed or cannot
+   be had makes the update a new version, as Chrome compares every script
+   it keeps of a worker.
 3. A new version (state `parsed`) is started; a script that throws at top
-   level rejects with `ServiceWorker script evaluation failed`.
+   level rejects with `ServiceWorker script evaluation failed`, and a module
+   worker whose graph does not load with `ServiceWorker cannot be started`
+   (the controller tells the real worker at once). An imported script that
+   redirects is a network error, as Chrome 159 fails it: the redirect never
+   reaches the browser, which would follow it to the target's binary route
+   and run it unrewritten.
 4. Install: `installing` is set, the worker goes `installing`, `register`
    resolves, `updatefound` fires, then the `install` event runs with its
    `waitUntil` promises. A rejection makes the version `redundant` (and a
@@ -162,7 +172,9 @@ Registrations, versions, scripts and imported scripts persist in IndexedDB,
 so a reload or a new tab finds them, and an installed version starts again
 without the network (its main script and the scripts it imported during
 install are served from storage, the way a browser keeps a worker's script
-resources).
+resources). A module worker's static imports, at any depth, are routed to
+`swimport:<version>:m/` while its script and each module are rewritten
+(`withImportKind` in `src/scriptRoutes.ts`), and kept the same way.
 
 ## Isolation
 
@@ -188,7 +200,9 @@ A proxied site's emulated worker sees only its own site's requests:
   `caches.match()` looks in the site's caches only, never in another site's
   or STomp's own HTTP cache); its IndexedDB is the site's as any worker's.
 - The `sw:` and `swimport:` routes answer the controller's Worker and the
-  emulated worker itself only; a proxied page that asks gets a 403.
+  emulated worker itself only (a module worker's graph, which the
+  controller's Worker may fetch for it, any client but a proxied page); a
+  proxied page that asks gets a 403.
 - Nothing real is registered: the page's `navigator.serviceWorker` is the
   emulated container, and the native container's `register`,
   `getRegistration` and `getRegistrations` reject for every object the page
@@ -197,7 +211,10 @@ A proxied site's emulated worker sees only its own site's requests:
 The window membrane is unaffected: no window crosses into the worker
 (`WindowClient` is a description, not a window), and the membrane's
 comparison by origin stays the page module's concern. Registrations are
-keyed by origin as well.
+keyed by storage key (src/partition.ts): scope and origin, and the
+top-level site when it is another, so a site framed by another has
+registrations of its own there, as Chrome partitions them (sop-partitions
+compares them natively).
 
 ## API surface and choices
 
@@ -345,13 +362,10 @@ Hosts should leave it on.
 - `about:srcdoc` and `about:blank` documents, blob: workers and data:
   documents are never controlled (their URL names no site the real worker
   can verify).
-- Registrations are keyed by origin, not by top-level site: a site framed by
-  another shares its registrations with its top-level visits.
-- Module service workers' static imports are not kept for offline starts
-  (classic `importScripts` are).
+- A module worker's JSON and CSS module imports are not kept for offline
+  starts or compared on update (its JavaScript modules are).
 - One instance per version across tabs while a controller hosts it; with no
   shared host the instances of two tabs can be two.
-- Only the main script is byte-compared on update, not its imported scripts.
 - `WindowClient.focused` of a proxied page follows the host page's focus
   (the browser sees an iframe), not the frame's own.
 - An instance's in-memory state goes when it idles for 30 s or the browser

@@ -382,11 +382,6 @@
 
 ### Known limitations
 
-- The site pool does not carry STomp's passkey provider to its slots
-  yet: with the pool on, a site's passkey registrations and sign-ins end
-  as the browser's own decline, before any authenticator, as they did
-  before the provider (docs/site-pool.md, "Open"; passkeys suite with the
-  pool on). Off by default, the pool changes nothing there.
 - With the site pool on, a site's service worker cannot show the
   notifications the site was granted: the browser keys a worker's
   permission by its own origin, a slot's, not the host's

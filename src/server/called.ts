@@ -56,6 +56,7 @@ import { assetName, type Config } from '../config';
 import { proxyOrigins } from '../routeURL';
 import {
 	CALL_HEADER,
+	CALL_HERE,
 	CALL_MESSAGE,
 	CALL_MOVED_HEADER,
 	CALL_POLICY_HEADER,
@@ -261,6 +262,8 @@ const callPageHTML = (
 		const close = () => {
 			release();
 			abort.abort();
+			// (the host hears no port close: it is told)
+			port.postMessage({ gone: true });
 			port.close();
 		};
 		const fail = () => {
@@ -275,6 +278,8 @@ const callPageHTML = (
 		let response = null;
 		port.onmessage = async ({ data: ask }) => {
 			if (!ask || typeof ask !== 'object' || Object.keys(ask).length !== 1) return;
+			// (the host asks, while its call is out, whether this page is here)
+			if (Number.isInteger(ask.ping)) return port.postMessage({ pong: ask.ping });
 			if (ask.call && !asked && !settled) {
 				asked = true;
 				const made = ${at === null ? 'navigator.serviceWorker && navigator.serviceWorker.controller' : 'true'} ? request(ask.call, token, abort.signal) : null;
@@ -381,6 +386,18 @@ const callPageHTML = (
 		port.postMessage({ ready: true });
 	};
 	addEventListener('message', listen);
+	// a frame below the tab's tells its host it is here: one the parser put
+	// in a shadow root of the markup loads where the host hears no load (a
+	// composed event, which leaves the root; its frame element is null where
+	// the host is of another origin, which only a moved call is, its frame
+	// known by then)
+	if (${at === null} && /^\\?\\d+$/.test(location.search)) {
+		let frame = null;
+		try {
+			frame = frameElement;
+		} catch (error) {}
+		if (frame) frame.dispatchEvent(new CustomEvent(${JSON.stringify(CALL_HERE)}, { bubbles: true, composed: true, detail: frame }));
+	}
 })()</script>`;
 
 /** whether this worker runs in a dedicated worker of its page (offline.html, demo/offline/worker.mjs), not as a service worker */

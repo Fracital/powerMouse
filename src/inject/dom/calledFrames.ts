@@ -40,10 +40,14 @@
 
 import { proxyOrigins } from '../../routeURL';
 import {
+	CALL_GONE_MS,
+	CALL_HERE,
 	CALL_MESSAGE,
+	CALL_PING_MS,
 	CALL_WAIT_MS,
 	type CalledSession,
 } from '../../transport/messages';
+import ProxyModule from '../modules/Proxy';
 import { scopePrefix } from '../modules/Unroute';
 import type DocumentClient from './Client';
 import { addDocumentOpenListener } from './Client';
@@ -421,6 +425,7 @@ export function calledFrames(
 	 */
 	const reach = (element: Element, kid: Kid): string | true => {
 		kid.calling = null;
+		listenIn(Reflect.apply(rootOf, element, []));
 		hold(kid, element);
 		const win = frameWindow(element);
 		if (!win || !kid.shown) {
@@ -536,8 +541,10 @@ export function calledFrames(
 	// the call page's load: the call, which the page does not see (on the
 	// document, capturing: a load never reaches the window; again after each
 	// open, which erases the document's listeners)
-	const loaded = (event: Event) => {
-		const element = Reflect.apply(targetOf, event, []) as Element;
+	const loaded = (event: Event) =>
+		caught(Reflect.apply(targetOf, event, []) as Element, event);
+	/** the frame `element` on its call page, from its load (`event`) or after it */
+	const caught = (element: Element, event: Event | null) => {
 		let kid = kids.get(element);
 		if (!kid) kid = placed(element);
 		if (!kid) return;
@@ -559,21 +566,96 @@ export function calledFrames(
 			release(kid);
 			return;
 		}
-		Reflect.apply(stop, event, []);
+		if (event) Reflect.apply(stop, event, []);
 		// (the frame of the markup, which the hooks saw as a copy, is held
 		// from its call page's load on: its load event comes before this
 		// document's own is decided)
 		hold(kid, element);
 		void call(element, kid, win);
 	};
-	const listen = () =>
-		Reflect.apply(
-			global.EventTarget.prototype.addEventListener,
-			global.document,
-			['load', loaded, true],
-		);
+	const addListener = global.EventTarget.prototype.addEventListener;
+	const listen = () => {
+		Reflect.apply(addListener, global.document, ['load', loaded, true]);
+		Reflect.apply(addListener, global, [CALL_HERE, here, true]);
+	};
+	// a frame in a shadow root: its load is not composed, so it ends at the
+	// root and never reaches the document; every root listens as the
+	// document does (Turnstile's challenge frame is in a closed one). A root
+	// a script makes is heard from attachShadow on; one of the markup
+	// (declarative) from the page's first read of it (shadowRoot, of its
+	// host or of its custom element's internals: before any listener of the
+	// page's), the first call of a frame already in it (`reach`), or else
+	// its call page's word that it is here (`here`)
+	const heard = new WeakSet<ShadowRoot>();
+	const listenIn = (root: unknown) => {
+		if (!(root instanceof global.ShadowRoot) || heard.has(root)) return;
+		heard.add(root);
+		Reflect.apply(addListener, root, ['load', loaded, true]);
+	};
+	const rootOf = global.Node.prototype.getRootNode;
+	const detailOf = Reflect.getOwnPropertyDescriptor(
+		global.CustomEvent.prototype,
+		'detail',
+	)!.get!;
+	// a call page below this document says it is here (server/called.ts,
+	// on its frame element, composed): the frame's root listens from then
+	// on, before the page's load, which a page already loaded missed, and
+	// is called at once. The event is none of the page's (the window's,
+	// capturing, hears it first)
+	const here = (event: Event) => {
+		Reflect.apply(stop, event, []);
+		let element: unknown;
+		try {
+			element = Reflect.apply(detailOf, event, []);
+		} catch (error) {
+			return;
+		}
+		if (!(element instanceof global.Element)) return;
+		const root = Reflect.apply(rootOf, element, []);
+		if (!(root instanceof global.ShadowRoot) || heard.has(root)) return;
+		listenIn(root);
+		let state = '';
+		try {
+			state = frameWindow(element)?.document.readyState ?? '';
+		} catch (error) {
+			// another origin's: it says it is here before its load
+		}
+		if (state === 'complete') caught(element, null);
+	};
 	listen();
 	addDocumentOpenListener(global, listen);
+	const proxyModule = client.getModule(ProxyModule)!;
+	for (const prototype of [
+		global.Element.prototype,
+		global.ElementInternals?.prototype,
+	]) {
+		const descriptor =
+			prototype && Reflect.getOwnPropertyDescriptor(prototype, 'shadowRoot');
+		if (!descriptor?.get) continue;
+		Reflect.defineProperty(prototype, 'shadowRoot', {
+			...descriptor,
+			get: proxyModule.wrapFunction(descriptor.get, (target, that, args) => {
+				const root = Reflect.apply(target, that, args);
+				listenIn(root);
+				return root;
+			}),
+		});
+	}
+	const attachShadow = global.Element.prototype.attachShadow;
+	if (attachShadow) {
+		const descriptor = Reflect.getOwnPropertyDescriptor(
+			global.Element.prototype,
+			'attachShadow',
+		)!;
+		Reflect.defineProperty(global.Element.prototype, 'attachShadow', {
+			...descriptor,
+			value: proxyModule.wrapFunction(attachShadow, (target, that, args) => {
+				const root = Reflect.apply(target, that, args);
+				listenIn(root);
+				return root;
+			}),
+		});
+	}
 
 	const call = async (element: Element, kid: Kid, win: Window) => {
 		const want = kid.want!;
@@ -591,13 +673,40 @@ export function calledFrames(
 		// answer comes; anything else it says is dropped
 		const answered = new Promise<ReturnType<typeof answerOf>>((resolve) => {
 			let ready = false;
-			let timer = setTimeout(() => resolve(null), READY_WAIT_MS);
+			let timer = setTimeout(() => end(null), READY_WAIT_MS);
+			// the call page gone: it says so (its document went), or, once its
+			// call is out, stops answering (its slot's process went); the call
+			// ends then, not at its wait (unanswered since `asked`: a timer of
+			// a hidden tab, slowed to once a minute, waits on no ping it has
+			// not sent)
+			let pings = 0;
+			let asked = 0;
+			const beat = setInterval(() => {
+				if (kid.calling !== port) return end(null);
+				if (!ready) return;
+				if (asked) {
+					if (Date.now() - asked > CALL_GONE_MS) end(null);
+					return;
+				}
+				asked = Date.now();
+				send(port, { ping: ++pings });
+			}, CALL_PING_MS);
+			const end = (answer: ReturnType<typeof answerOf>) => {
+				clearInterval(beat);
+				clearTimeout(timer);
+				resolve(answer);
+			};
 			port.onmessage = ({ data }) => {
+				if (data?.gone === true) return end(null);
+				if (Number.isInteger(data?.pong)) {
+					asked = 0;
+					return;
+				}
 				if (!ready) {
 					if (data?.ready !== true) return;
 					ready = true;
 					clearTimeout(timer);
-					timer = setTimeout(() => resolve(null), CALL_WAIT_MS);
+					timer = setTimeout(() => end(null), CALL_WAIT_MS);
 					send(port, {
 						call: {
 							routed: want.routed,
@@ -613,8 +722,7 @@ export function calledFrames(
 				}
 				const answer = answerOf(data);
 				if (!answer) return;
-				clearTimeout(timer);
-				resolve(answer);
+				end(answer);
 			};
 		});
 		Reflect.apply(windowPost, win, [

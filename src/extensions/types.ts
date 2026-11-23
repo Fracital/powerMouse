@@ -514,6 +514,12 @@ export interface ShippedEntry {
 	js: boolean;
 	/** its stylesheets, rewritten, joined */
 	css: string;
+	/**
+	 * an all_frames entry that runs in the frames whose document is no URL
+	 * of its own (registry.ts ScriptEntry `local`): its creator's runtime
+	 * runs it there
+	 */
+	local?: 'about' | 'origin';
 }
 
 /** what an extension context knows about its extension (the hook payload carries it) */

@@ -528,8 +528,8 @@ Skipped: each suite skips the other's pages, nothing else.
 
 Suites `wpt-encoding-api` (TextDecoder, TextEncoder, TextDecoderStream,
 TextEncoderStream in a window and a dedicated worker: 95 pages, about 23,900
-subtests) and `wpt-encoding-legacy` (documents whose own encoding matters: 27
-pages, 5,345 subtests).
+subtests) and `wpt-encoding-legacy` (documents whose own encoding matters: 45
+pages, 23,363 subtests).
 
 Handlers (`test/wpt-handlers/encoding.mjs`): `encoding/resources/
 {single-byte-raw,text-plain-charset,text-html-meta-charset,json-charset}.py`.
@@ -557,11 +557,10 @@ Skipped:
   timeout (41 s) and held a proxied worker for almost six minutes.
 - `wpt-encoding-legacy`: the API pages (the other suite); of each
   whole-index decode page, every variant but its first and last thousand
-  pointers; of each encode page, every variant but its last, short one. The
-  proxy serves every document as UTF-8 and so encodes a query as UTF-8 too,
-  so each subtest of the encode pages is one more entry from one cause
-  (41,332 entries when they all ran at `?1-1000`); they come back when the
-  document's encoding is carried through.
+  pointers; of each encode-form page, every variant but its first thousand
+  pointers and its last, short one (each variant submits its characters
+  through frames, chunk by chunk). The encode-href pages run whole since a
+  document keeps its encoding (e52230ffc).
 
 ### content-security-policy
 
@@ -854,9 +853,9 @@ that Chrome 157 run:
 | `wpt-webstorage`                 | 46        | 17           | 41             |
 | `wpt-indexeddb`                  | 199       | 1            | 5              |
 | `wpt-url`                        | 56        | 0            | 0              |
-| `wpt-url-elements`               | 19        | 8            | 394            |
+| `wpt-url-elements`               | 19        | 7            | 386            |
 | `wpt-encoding-api`               | 94        | 2            | 12             |
-| `wpt-encoding-legacy`            | 27        | 10           | 428            |
+| `wpt-encoding-legacy`            | 45        | 3            | 6              |
 | `wpt-csp`                        | 53        | 6            | 25             |
 | `wpt-cookies`                    | 29        | 0            | 0              |
 | `wpt-cookies-more`               | 24        | 2            | 10             |
@@ -871,6 +870,12 @@ that Chrome 157 run:
 | `wpt-event-handlers`             | 47        | 0            | 0              |
 | `wpt-base-urls`                  | 2         | 1            | 21             |
 | `wpt-dom-insertion`              | 83        | 2            | 3              |
+
+The `wpt-encoding-legacy` and `wpt-url-elements` rows are counted again
+from their lists after e52230ffc (a document keeps its encoding), which
+took 422 and 8 entries off them and added the encode-href variants and the
+first thousand pointers of each encode-form page to the pages
+`wpt-encoding-legacy` runs.
 
 The two Navigation API suites were measured on 2026-11-20 on d29168779, on
 Chrome 157, with the native verdicts of one full native run (`WPT_NATIVE`):

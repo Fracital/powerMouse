@@ -1009,6 +1009,16 @@ export function startFixture(port = 8084) {
 						`<base href="${base.replace(/[&"<]/g, (c) => `&#${c.charCodeAt(0)};`)}" />`,
 					),
 				);
+			// the shields-frames pages (shields-sites suite) name their run's
+			// key (`?k=`) and this fixture's port, which no static file can
+			if (ext === 'html' && file.startsWith('shields-frames-')) {
+				res.setHeader('cache-control', 'no-store');
+				return res.end(
+					readFileSync(`${pagesDir}${file}`, 'utf8')
+						.replaceAll('__K__', (query.get('k') ?? '').replace(/[^\w-]/g, ''))
+						.replaceAll('__PORT__', String(port)),
+				);
+			}
 			// `?delay=<ms>` (at most three seconds): the file arrives late, a
 			// preload still in flight when its element asks (sri suite)
 			const delay = Math.min(Number(query.get('delay')) || 0, 3000);

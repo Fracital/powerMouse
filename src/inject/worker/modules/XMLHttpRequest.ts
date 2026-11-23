@@ -559,6 +559,19 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 			) {
 				// a method the browser refuses changes nothing of the request
 				const checked = checkedMethod(that.client.global, method);
+				// the URL is parsed now, against the worker's own URL, and one
+				// that does not parse is the browser's SyntaxError
+				let parsed: URL;
+				try {
+					parsed = new URL(String(url), that.client.url.toString());
+				} catch (error) {
+					throw withStack(
+						new DOMException(
+							"Failed to execute 'open' on 'XMLHttpRequest': Invalid URL",
+							'SyntaxError',
+						),
+					);
+				}
 				// a request in flight is dropped without events, and everything of
 				// the last response is gone: status 0, no headers, no body
 				this.#generation++;
@@ -582,7 +595,7 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 				this.#responseText = '';
 				this.#method = checked;
 
-				this.#url = String(url);
+				this.#url = parsed.href;
 
 				if (async) {
 					this.#async = true;
@@ -693,7 +706,13 @@ export default class XMLHttpRequestModule extends Module<WorkerClient> {
 				);
 			}
 			getResponseHeader(header: string) {
-				return this.#responseHeaders.get(header);
+				const name = `${header}`;
+				// a name that is no header name is in no response: the browser
+				// answers null where Headers.get throws (a name beyond Latin-1
+				// still throws, as the browser's ByteString does)
+				if (!/^[\w!#$%&'*+.^`|~-]+$/.test(name) && !/[^\0-\xff]/.test(name))
+					return null;
+				return this.#responseHeaders.get(name);
 			}
 			getAllResponseHeaders() {
 				let result = '';

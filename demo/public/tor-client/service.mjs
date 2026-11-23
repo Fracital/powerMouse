@@ -47,11 +47,15 @@ class WispConnection {
 	#url;
 	#links;
 	#socket = null;
+	/** the socket opened last, open or opening */
+	#current = null;
 	#opening = null;
 	#streams = new Map();
 	#nextId = 1;
 	#initialCredit = 0;
 	#creditReady = null;
+	/** `ip:port`: how many links to it are open now (openLinks) */
+	#open = new Map();
 
 	constructor(url, links = {}) {
 		this.#url = url;
@@ -60,24 +64,26 @@ class WispConnection {
 
 	#connect() {
 		if (this.#opening) return this.#opening;
+		const socket = new WebSocket(this.#url);
+		this.#current = socket;
+		// a socket close() let go says nothing more: the next one is another's
+		const current = () => this.#current === socket;
 		this.#opening = new Promise((resolve, reject) => {
-			const socket = new WebSocket(this.#url);
 			socket.binaryType = 'arraybuffer';
 			let creditSeen;
 			this.#creditReady = new Promise((done) => (creditSeen = done));
 			socket.onopen = () => {
+				if (!current()) return reject(new Error('the Wisp connection closed'));
 				this.#socket = socket;
 				resolve(socket);
 			};
 			socket.onerror = () => reject(new Error(`Wisp ${this.#url} failed`));
 			socket.onclose = () => {
-				this.#socket = null;
-				this.#opening = null;
-				for (const stream of this.#streams.values())
-					stream.closed('the Wisp connection closed');
-				this.#streams.clear();
+				reject(new Error('the Wisp connection closed'));
+				if (current()) this.#drop();
 			};
 			socket.onmessage = ({ data }) => {
+				if (!current()) return;
 				if (!(data instanceof ArrayBuffer) || data.byteLength < 5) return;
 				const view = new DataView(data);
 				const type = view.getUint8(0);
@@ -108,6 +114,34 @@ class WispConnection {
 		return this.#opening;
 	}
 
+	/** the socket gone: its links end, and the next one opens another */
+	#drop() {
+		this.#current = null;
+		this.#socket = null;
+		this.#opening = null;
+		for (const stream of this.#streams.values())
+			stream.closed('the Wisp connection closed');
+		this.#streams.clear();
+	}
+
+	/**
+	 * The relays this connection has a link open to now (`ip:port`, as arti
+	 * named them): a circuit's first hop is one of them
+	 */
+	openLinks() {
+		return [...this.#open.keys()];
+	}
+
+	#linkOpened(target) {
+		this.#open.set(target, (this.#open.get(target) ?? 0) + 1);
+	}
+
+	#linkEnded(target) {
+		const left = (this.#open.get(target) ?? 1) - 1;
+		if (left > 0) this.#open.set(target, left);
+		else this.#open.delete(target);
+	}
+
 	async open(target) {
 		const match = /^\[?([^\]]+)\]?:(\d+)$/.exec(target);
 		if (!match) throw new Error(`not an address: ${target}`);
@@ -132,6 +166,7 @@ class WispConnection {
 		const finish = (ok, reason, code) => {
 			if (finished) return;
 			finished = true;
+			this.#linkEnded(target);
 			try {
 				if (ok) controller.close();
 				else controller.error(new Error(reason));
@@ -156,6 +191,7 @@ class WispConnection {
 			closed: (reason, code) => finish(false, reason, code),
 		};
 		this.#streams.set(id, stream);
+		this.#linkOpened(target);
 		const name = new TextEncoder().encode(host);
 		const head = new Uint8Array(3 + name.byteLength);
 		head[0] = TCP;
@@ -194,8 +230,11 @@ class WispConnection {
 		});
 	}
 
+	/** every link ends now, and the next one opens a socket of its own */
 	close() {
-		this.#socket?.close();
+		const socket = this.#current;
+		this.#drop();
+		socket?.close();
 	}
 }
 
@@ -205,28 +244,95 @@ const nonce = () =>
 		byte.toString(16).padStart(2, '0'),
 	).join('');
 
+/** a relay's identity as a consensus writes it (base64, unpadded) in hex, as Tor writes a fingerprint */
+function fingerprintOf(identity) {
+	try {
+		const bytes = atob(
+			identity.padEnd(Math.ceil(identity.length / 4) * 4, '='),
+		);
+		return Array.from(bytes, (c) =>
+			c.charCodeAt(0).toString(16).padStart(2, '0'),
+		)
+			.join('')
+			.toUpperCase();
+	} catch {
+		return '';
+	}
+}
+
 /**
  * The relays a consensus lists, as `ip:port` of their ORPorts (the microdesc
  * flavour's `r` lines, and `a` lines for IPv6), the way arti names a link's
- * address. A value kept as JSON has its newlines escaped.
+ * address, each with its nickname and fingerprint (the circuit display). A
+ * value kept as JSON has its newlines escaped.
  */
 function consensusRelays(text) {
-	const relays = new Set();
+	const relays = new Map();
 	const lines = (
 		text.includes('\n') ? text : text.replaceAll('\\n', '\n')
 	).split('\n');
+	let relay = null;
 	for (const line of lines) {
-		const r = /^r \S+ \S+ \S+ \S+ ((?:\d{1,3}\.){3}\d{1,3}) (\d+) \d+/.exec(
+		const r = /^r (\S+) (\S+) \S+ \S+ ((?:\d{1,3}\.){3}\d{1,3}) (\d+) \d+/.exec(
 			line,
 		);
-		if (r) relays.add(`${r[1]}:${r[2]}`);
+		if (r) {
+			relay = { nickname: r[1], fingerprint: fingerprintOf(r[2]) };
+			relays.set(`${r[3]}:${r[4]}`, relay);
+		}
 		const a = /^a (\[[0-9a-fA-F:]+\]:\d+)/.exec(line);
-		if (a) relays.add(a[1].toLowerCase());
+		if (a && relay) relays.set(a[1].toLowerCase(), relay);
 	}
 	return relays;
 }
 
+/**
+ * The client's guards as arti keeps them (tor-guardmgr's GuardSets, under
+ * a `state:` key of the storage: `default.guards`, each with its `id`, its
+ * `ed25519` and its `rsa` in hex, and its `orports`, and
+ * `default.confirmed`, the ids in the order arti prefers them), the
+ * confirmed first in that order; none where no kept value reads as one
+ */
+function guardsOf(entries) {
+	const rsa = (id) =>
+		typeof id?.rsa === 'string' ? id.rsa.replace(/^\$/, '').toUpperCase() : '';
+	for (const [, kept] of entries) {
+		let value = kept;
+		try {
+			// (a JSON string of the JSON, where a storage wraps it once more)
+			for (let i = 0; i < 2 && typeof value === 'string'; i++)
+				value = JSON.parse(value);
+		} catch {
+			continue;
+		}
+		const set = value?.default;
+		if (!Array.isArray(set?.guards)) continue;
+		const confirmed = Array.isArray(set.confirmed) ? set.confirmed : [];
+		const rank = (guard) => {
+			const at = confirmed.findIndex(
+				(id) =>
+					(rsa(id) !== '' && rsa(id) === rsa(guard.id)) ||
+					(typeof id?.ed25519 === 'string' && id.ed25519 === guard.id?.ed25519),
+			);
+			return at < 0 ? Infinity : at;
+		};
+		return set.guards
+			.filter((guard) => guard && typeof guard === 'object' && !guard.disabled)
+			.map((guard) => ({
+				fingerprint: rsa(guard.id),
+				orports: Array.isArray(guard.orports)
+					? guard.orports.map((address) => String(address).toLowerCase())
+					: [],
+				rank: rank(guard),
+			}))
+			.sort((a, b) => (a.rank === b.rank ? 0 : a.rank < b.rank ? -1 : 1));
+	}
+	return [];
+}
+
 const CONSENSUS_KEYS = 'dir:consensus:';
+// where tor-js keeps arti's state manager's values, the guards among them
+const STATE_KEYS = 'state:';
 // how long a Tor stream may take to open on one circuit before it is tried
 // on another (tor's stream attach timeouts are 10 and 15 s)
 const STREAM_OPEN_MS = 20000;
@@ -311,13 +417,27 @@ export class TorService {
 	#starting = null;
 	#session = nonce();
 	#siteNonces = new Map();
+	/** site: since when its circuits are used and how many streams went on them */
+	#siteUse = new Map();
+	/** the page's token of the Tor session it began (newSession) */
+	#sessionToken = '';
 	#storageName;
+	/** tor-js's IndexedDB store under the storage, for Forget Tor state */
+	#inner = null;
 	#storage = null;
 	#listeners = new Set();
 	#say;
+	/** the client made by each start; a start of an older one keeps out of the status */
+	#generation = 0;
+	/** ends the start under way, for Forget Tor state */
+	#supersede = null;
+	/** the asks of Forget Tor state done (forgetState's tokens) */
+	#forgetTokens = new Set();
 	// where the Wisp streams may go: the fallback directories arti has
 	// compiled in, and the relays of the newest consensus it kept
 	#relays = new Set(FALLBACK_ADDRESSES);
+	/** `ip:port`: the nickname and fingerprint the newest consensus gives it */
+	#relayInfo = new Map();
 	/**
 	 * What bootstrap took and what it is doing, for the page and the smoke:
 	 * `blocked` ({ kind, message }) says why it cannot go on, arti's own
@@ -483,7 +603,8 @@ export class TorService {
 		const relays = consensusRelays(value);
 		// a consensus lists thousands; anything less is not one
 		if (relays.size < 100) return;
-		this.#relays = new Set([...FALLBACK_ADDRESSES, ...relays]);
+		this.#relays = new Set([...FALLBACK_ADDRESSES, ...relays.keys()]);
+		this.#relayInfo = relays;
 	}
 
 	/**
@@ -514,13 +635,16 @@ export class TorService {
 		return this.#starting;
 	}
 
-	async #start() {
-		const wisp = this.#wisp;
-		const started = performance.now();
-		const kept = storage.addLocking(
-			new storage.IndexedDBStorage(this.#storageName),
-			this.#storageName,
-		);
+	/**
+	 * The client's state, its store (`storageName`, tor-js's IndexedDB) made
+	 * once for every start: a lock tor-js's wrapper took stays this one's,
+	 * so a start after a failure or Forget Tor state writes to the store, not
+	 * to the memory tor-js keeps for a wrapper that could not lock it
+	 */
+	#openStorage() {
+		if (this.#storage) return this.#storage;
+		this.#inner = new storage.IndexedDBStorage(this.#storageName);
+		const kept = storage.addLocking(this.#inner, this.#storageName);
 		// every consensus arti keeps names the relays it may dial next
 		this.#storage = {
 			...kept,
@@ -535,7 +659,22 @@ export class TorService {
 				return kept.set(key, value);
 			},
 		};
+		return this.#storage;
+	}
+
+	async #start() {
+		const wisp = this.#wisp;
+		const started = performance.now();
+		const generation = this.#generation;
+		const current = () => generation === this.#generation;
+		const superseded = new Promise((_, reject) => {
+			this.#supersede = () =>
+				reject(new Error('the Tor client started again (Forget Tor state)'));
+		});
+		superseded.catch(() => {});
+		this.#openStorage();
 		await this.#readConsensus();
+		if (!current()) throw new Error('the Tor client started again');
 		this.#links = { reached: 0, failed: 0, code: undefined };
 		this.#linkBlocked = null;
 		this.#artiBlocked = null;
@@ -552,18 +691,30 @@ export class TorService {
 			// the client's guards and its directory cache, kept across
 			// sessions and New Identity as Tor Browser keeps them
 			storage: this.#storage,
-			log: new Log({ rawLog: (_level, ...args) => this.#log(...args) }),
+			// (a client Forget Tor state closed says nothing more)
+			log: new Log({
+				rawLog: (_level, ...args) => current() && this.#log(...args),
+			}),
 			logLevel: 'info',
 		});
 		this.#client = client;
 		// arti's own progress and blocker, where this tor-js tells them
 		const events =
 			typeof client.bootstrapEvents === 'function'
-				? client.bootstrapEvents((event) => this.#bootstrapEvent(event))
+				? client.bootstrapEvents(
+						(event) => current() && this.#bootstrapEvent(event),
+					)
 				: null;
 		try {
-			await client.ready();
+			await Promise.race([client.ready(), superseded]);
 		} catch (error) {
+			// nothing of a failed client is used again (a retry makes another)
+			try {
+				client.close();
+			} catch {
+				// closed already
+			}
+			if (!current()) throw error;
 			// the blocker, where one is known, says more than arti's error
 			const blocked = this.#blocked();
 			this.#phase(
@@ -574,16 +725,11 @@ export class TorService {
 			);
 			this.#starting = null;
 			this.#client = null;
-			// nothing of a failed client is used again (a retry makes another)
-			try {
-				client.close();
-			} catch {
-				// closed already
-			}
 			throw error;
 		} finally {
 			if (typeof events === 'function') events();
 		}
+		if (!current()) throw new Error('the Tor client started again');
 		const bootstrapMs = Math.round(performance.now() - started);
 		this.#phase('ready', 100, 'Done', { bootstrapMs });
 		this.#say('info', `[tor] bootstrapped in ${bootstrapMs} ms`);
@@ -592,13 +738,17 @@ export class TorService {
 	/** circuits apart for each first-party site, and for each new identity */
 	#isolationKey(site) {
 		let siteNonce = this.#siteNonces.get(site);
-		if (!siteNonce) this.#siteNonces.set(site, (siteNonce = nonce()));
+		if (!siteNonce) {
+			this.#siteNonces.set(site, (siteNonce = nonce()));
+			this.#siteUse.set(site, { since: Date.now(), streams: 0 });
+		}
 		return `${this.#session} ${siteNonce} ${site}`;
 	}
 
 	/** New circuit for this site: its next request builds one */
 	newCircuit(site) {
 		this.#siteNonces.delete(site);
+		this.#siteUse.delete(site);
 	}
 
 	/**
@@ -614,11 +764,150 @@ export class TorService {
 	newIdentity() {
 		this.#session = nonce();
 		this.#siteNonces.clear();
+		this.#siteUse.clear();
+	}
+
+	/**
+	 * A page began a new Tor session (its profile forgotten, docs/tor.md
+	 * "Profiles"): no circuit of the last session is used in it, though the
+	 * client, which outlives its pages (extendedLifetime), is the same. Each
+	 * transport the page makes says so with the page's `token`, the first
+	 * one alone counts.
+	 */
+	newSession(token) {
+		if (typeof token !== 'string' || !token || token === this.#sessionToken)
+			return;
+		this.#sessionToken = token;
+		this.newIdentity();
+	}
+
+	/**
+	 * What the client can tell of the circuits of the site of `url` (the
+	 * tab's address), Tor Browser's "Circuit for this site": the site key
+	 * and since when its circuits are used, and the guard, the first hop of
+	 * every circuit. tor-js tells nothing of a circuit's middle and exit
+	 * relays (docs/tor-over-wisp.md "Circuit display"). The guard is the
+	 * first of arti's guards (its state's confirmed order) a link is open
+	 * to now, as arti's exit circuits go through its first usable primary
+	 * guard; where its state names none, the one relay a link is open to;
+	 * with no link open, the guard arti tries first (`linked` false).
+	 */
+	async circuitFor(url) {
+		let site = null;
+		for (const [key, use] of this.#siteUse)
+			if (
+				siteMatches(key, url) &&
+				(!site || use.since > this.#siteUse.get(site).since)
+			)
+				site = key;
+		const use = site ? this.#siteUse.get(site) : null;
+		const links = this.#wisp.openLinks();
+		const guards = this.#storage
+			? guardsOf(await this.#storage.getAll(STATE_KEYS).catch(() => []))
+			: [];
+		const relay = (address, fingerprint = '') => {
+			const known = this.#relayInfo.get(address);
+			return {
+				address,
+				nickname: known?.nickname ?? '',
+				fingerprint: fingerprint || known?.fingerprint || '',
+			};
+		};
+		let guard = null;
+		let from = '';
+		for (const kept of guards) {
+			const address = kept.orports.find((at) => links.includes(at));
+			if (!address) continue;
+			guard = { ...relay(address, kept.fingerprint), linked: true };
+			from = 'state';
+			break;
+		}
+		if (!guard && links.length === 1) {
+			guard = { ...relay(links[0]), linked: true };
+			from = 'link';
+		}
+		// no link open now (the connections went idle): the guard arti
+		// tries first for the next circuit
+		if (!guard && guards[0]?.orports.length) {
+			guard = {
+				...relay(guards[0].orports[0], guards[0].fingerprint),
+				linked: false,
+			};
+			from = 'state';
+		}
+		return {
+			state: this.status.state,
+			site,
+			since: use?.since ?? null,
+			streams: use?.streams ?? 0,
+			guard,
+			guardFrom: from,
+			guards: guards.length,
+			links: links.length,
+			// what tor-js does not tell
+			middle: null,
+			exit: null,
+		};
+	}
+
+	/**
+	 * Forget Tor state: the client's guards and directory gone from its
+	 * store, and the client started again, so it samples new guards and
+	 * downloads the directory anew (a new identity with it). Every tab of
+	 * the shared client hears its status start over. `token` names the
+	 * ask: one asked again (by another transport of the same page) does
+	 * nothing and gives null.
+	 */
+	async forgetState(token = '') {
+		if (token) {
+			if (this.#forgetTokens.has(token)) return null;
+			this.#forgetTokens.add(token);
+		}
+		this.#generation++;
+		this.#supersede?.();
+		this.#supersede = null;
+		const client = this.#client;
+		this.#client = null;
+		this.#starting = null;
+		try {
+			client?.close();
+		} catch {
+			// closed already
+		}
+		// its links to relays (the guard's among them) end with it
+		this.#wisp.close();
+		const kept = this.#openStorage();
+		const inner = this.#inner;
+		// the store itself, and what tor-js's wrapper keeps in memory when
+		// another holds the store's lock
+		const keys = new Set([
+			...(await inner.keys('').catch(() => [])),
+			...(await kept.keys('').catch(() => [])),
+		]);
+		for (const key of keys) {
+			await inner.delete(key).catch(() => {});
+			await kept.delete(key).catch(() => {});
+		}
+		this.#relays = new Set(FALLBACK_ADDRESSES);
+		this.#relayInfo = new Map();
+		this.newIdentity();
+		this.#links = { reached: 0, failed: 0, code: undefined };
+		this.#linkBlocked = null;
+		this.#artiBlocked = null;
+		this.#tell({ state: 'starting', progress: 0, summary: 'Starting' });
+		this.#say(
+			'info',
+			`[tor] forgot the client's state (${keys.size} entries): new guards from its next bootstrap`,
+		);
+		this.init().catch(() => {});
+		return { forgotten: keys.size };
 	}
 
 	/** a Tor stream on the site's circuit, given up when it does not open in time */
 	#connectOnce(host, port, site) {
-		const opening = this.#client.connect(host, port, {
+		const client = this.#client;
+		if (!client) throw new Error('the Tor client started again');
+		const opening = client.connect(host, port, {
 			isolationKey: this.#isolationKey(site),
 		});
 		let timer;
@@ -650,11 +939,15 @@ export class TorService {
 		if (!Number.isInteger(port) || port < 1 || port > 65535)
 			throw new RangeError(`port ${port}`);
 		await this.init();
+		let stream;
 		try {
-			return await this.#connectOnce(host, port, site);
+			stream = await this.#connectOnce(host, port, site);
 		} catch {
 			this.newCircuit(site);
-			return this.#connectOnce(host, port, site);
+			stream = await this.#connectOnce(host, port, site);
 		}
+		const use = this.#siteUse.get(site);
+		if (use) use.streams++;
+		return stream;
 	}
 }

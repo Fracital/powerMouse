@@ -58,11 +58,13 @@ export default class TorClientTransport {
 		channel,
 		sharedWorker,
 		wasm,
+		// the page's token of a new Tor session it began (TorService.newSession)
+		session,
 	} = {}) {
 		if (typeof wisp !== 'string') throw new TypeError('wisp: a URL');
 		this.#service =
 			typeof MessagePort === 'function' && sharedWorker instanceof MessagePort
-				? RemoteService.for(sharedWorker, { wisp, storageName, wasm })
+				? RemoteService.for(sharedWorker, { wisp, storageName, wasm, session })
 				: new TorService({ wisp, storageName, wasm });
 		// the host page's channel to this transport (its status, New Identity,
 		// New circuit for this site); none where the page is of another origin
@@ -70,7 +72,15 @@ export default class TorClientTransport {
 			this.#channel = new BroadcastChannel(channel);
 			this.#channel.onmessage = ({ data }) => this.#heard(data);
 		}
-		this.#service.onStatus(() => this.#tell());
+		this.#service.onStatus((status) => {
+			// the shared client started again (Forget Tor state in another
+			// tab): the connections of the old one are gone with it
+			if (status?.state === 'starting' && this.ready) {
+				this.ready = false;
+				for (const [site, entry] of [...this.#sites]) this.#forget(site, entry);
+			}
+			this.#tell();
+		});
 		// the shared client bootstraps at once, as Tor Browser does, not at
 		// the first request: a transport the page hosts (offline.html's) is
 		// asked nothing until a tab loads (a failure is the status's, and
@@ -89,6 +99,39 @@ export default class TorClientTransport {
 		else if (data?.type === 'newIdentity') this.newIdentity();
 		else if (data?.type === 'newCircuit' && typeof data.url === 'string')
 			this.newCircuitFor(data.url);
+		else if (data?.type === 'circuit' && typeof data.url === 'string')
+			this.#service.circuitFor(data.url).then(
+				(circuit) =>
+					this.#channel?.postMessage({
+						type: 'circuit',
+						id: data.id,
+						url: data.url,
+						circuit,
+					}),
+				(error) =>
+					this.#channel?.postMessage({
+						type: 'circuit',
+						id: data.id,
+						url: data.url,
+						error: String(error?.message ?? error),
+					}),
+			);
+		else if (data?.type === 'forgetState')
+			this.forgetState(String(data.id ?? '')).catch(() => {});
+	}
+
+	/**
+	 * Forget Tor state (TorService.forgetState): the client's guards and
+	 * directory forgotten and the client started again; no connection of
+	 * before is used again. `token` names the page's ask, which each
+	 * transport of the page hears: the client acts on it once.
+	 */
+	async forgetState(token = '') {
+		for (const [site, entry] of [...this.#sites]) this.#forget(site, entry);
+		this.ready = false;
+		const done = await this.#service.forgetState(token);
+		if (done) this.#channel?.postMessage({ type: 'forgotten', ...done });
+		return done;
 	}
 
 	#tell() {

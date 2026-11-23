@@ -94,6 +94,7 @@ export default class ObjectURLModule extends Module<Client> {
 	 */
 	#inline(
 		proxy: string,
+		href: string,
 		blob: Blob | string,
 		isolated: boolean,
 		cross: boolean,
@@ -109,6 +110,10 @@ export default class ObjectURLModule extends Module<Client> {
 		);
 		const token = routed && /\/inline:([\w-]{22})\//.exec(routed)?.[1];
 		if (token && typeof blob !== 'string') this.#handBytes(proxy, token, blob);
+		// (the document asks for the blob: URL it is at, which the routed URL
+		// does not carry: an extension's content scripts and webNavigation
+		// name it)
+		if (token) (client.inlineBlobs ??= new Map()).set(token, pageBlobURL(href));
 		return routed;
 	}
 	#answering = false;
@@ -219,6 +224,7 @@ export default class ObjectURLModule extends Module<Client> {
 					? null
 					: this.#inline(
 							proxy,
+							href,
 							blob ?? href,
 							// (a blob: document inherits its creator's embedder policy)
 							!!isolated && Reflect.apply(isolated, client.global, []) === true,

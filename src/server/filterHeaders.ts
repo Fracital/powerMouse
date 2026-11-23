@@ -20,8 +20,9 @@ const corsHeaders: string[] = [
 ];
 
 // headers that would bind the page to the proxy origin or reach past the
-// frame: HSTS pins the proxy host, Clear-Site-Data wipes every proxied
-// origin's state at once, COEP blocks the page's own subresources once CORP
+// frame: HSTS pins the proxy host (the worker keeps the site's for its
+// partition: hsts.ts), Clear-Site-Data wipes every proxied origin's state
+// at once, COEP blocks the page's own subresources once CORP
 // is gone (the worker applies the page's policy itself, and serves its own
 // where the host's page is isolated: src/isolation.ts), a
 // Document-Isolation-Policy would move the frame into an agent cluster of
