@@ -68,12 +68,9 @@ function views(bytes) {
 	// (as served, less its long base64 runs: random text there spells a
 	// short canary in some case now and then, and the runs are searched
 	// decoded below)
-	const out = [
-		[
-			'plain',
-			text(bytes).replace(/[a-z0-9+/]{64,}/g, (run) => ' '.repeat(run.length)),
-		],
-	];
+	const unbased = (body) =>
+		body.replace(/[a-z0-9+/]{64,}/g, (run) => ' '.repeat(run.length));
+	const out = [['plain', unbased(text(bytes))]];
 	if (bytes[0] === 0x1f && bytes[1] === 0x8b)
 		try {
 			out.push(
@@ -86,11 +83,14 @@ function views(bytes) {
 	if (/%[0-9a-f]{2}/i.test(raw))
 		out.push([
 			'url-encoded',
-			raw
-				.replace(/%([0-9a-f]{2})/gi, (_, hex) =>
-					String.fromCharCode(Number.parseInt(hex, 16)),
-				)
-				.toLowerCase(),
+			// (less the long base64 runs, as the plain view: the same noise)
+			unbased(
+				raw
+					.replace(/%([0-9a-f]{2})/gi, (_, hex) =>
+						String.fromCharCode(Number.parseInt(hex, 16)),
+					)
+					.toLowerCase(),
+			),
 		]);
 	const runs = [];
 	for (const [run] of raw.matchAll(/[A-Za-z0-9+/_-]{16,}={0,2}/g))

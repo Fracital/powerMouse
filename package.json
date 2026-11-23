@@ -83,7 +83,7 @@
 		"@mercuryworkshop/epoxy-transport": "github:Fracital/EpoxyTransport#2482c4861d2ab94f76a73908cf0f44ac47644f98",
 		"@mercuryworkshop/libcurl-transport": "^2.0.6",
 		"@simplewebauthn/server": "14.1.0",
-		"@sysce/estrogen": "0.5.4",
+		"@sysce/estrogen": "0.5.5",
 		"@types/crypto-js": "^4.2.2",
 		"@types/serviceworker": "^0.0.210",
 		"epoxy-transport-e2a70d6": "git+https://github.com/Fracital/EpoxyTransport.git#e2a70d6a2f0fe0f067da226433e9ff9f95544784",
