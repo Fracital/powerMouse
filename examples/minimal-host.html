@@ -92,12 +92,14 @@
 			// Step 1: register the service worker with the directory as its scope.
 			// register() revalidates the worker script on every check
 			// (updateViaCache: 'none'), so a deploy is picked up instead of a
-			// cached copy, and resolves once the worker is activated.
+			// cached copy, and resolves once the worker is activated. Its
+			// promise goes to the controller unawaited: the controller starts
+			// while a first visit's worker installs.
 			status('Registering service worker');
 			const { StompController } = await import(
 				`${config.directory}controller.mjs`
 			);
-			const registration = await StompController.register(config.directory);
+			const registration = StompController.register(config.directory);
 
 			// Step 2: describe the transport. The controller imports and
 			// constructs it in a dedicated worker, off this page's thread, so a

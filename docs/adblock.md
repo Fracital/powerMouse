@@ -109,8 +109,14 @@ load`); no list is asked for and the inject installs nothing for the
   takes longer, leaves the documents before the lists' engine unfiltered.
 - The lists are downloaded after the worker's first navigation has been
   answered (and 250 ms more, for the page's first subresources), or 2 s
-  after the start when no page is asked for; a refresh of a stored engine
-  waits the same way. The wisp server looks up the name of every
+  after the start when no page is asked for. When an engine with every rule
+  of the lists already serves (the snapshot, or a stored engine past its
+  `refresh`), the download waits for the pages' requests to the transport
+  to have been quiet for 10 s too, a minute after the first navigation at
+  the most: the downloads (6 MB over the page's own wisp connection) and
+  the build (250 to 450 ms on a rewrite worker) had landed in the middle of
+  a first visit's load, and cost a fresh profile 0.7 s of Chrome's CPU in
+  it. The wisp server looks up the name of every
   connection on a few threads (four on holyWisp), and the lists' hosts
   asked for at the same moment as the user's first page held them: the
   page's own lookup waited, up to 1.5 s in the bench with a cold DNS
@@ -127,18 +133,19 @@ A host that renames the files names them in `init.assets.blocker`,
 
 ### The snapshot
 
-`adblock-snapshot.dat.gz` is an engine of uBlock Origin's six lists
+`adblock-snapshot.dat.gz` is an engine of the eight default lists
 (`SNAPSHOT_LISTS`, `src/blocker/types.ts`), compiled and serialized by
 `blocker.wasm` as the service worker stores its own, and gzipped. A worker
 on by default with no engine stored fetches it from its own origin (never
 through the transport) with the resources, decompresses it
 (`DecompressionStream('gzip')`, in Chrome, Firefox and Safari alike), loads
-it, and serves it while it fetches the eight default lists; their engine
-replaces it once built, and is the one stored. The snapshot itself is never
+it, and serves it until the default lists, fetched again once the pages
+have gone quiet (above), are built; their engine replaces it, and is the
+one stored. The snapshot itself is never
 stored: a worker that starts again before the lists' engine was built loads
 it again, from the browser's HTTP cache.
 
-It is stored compressed so that it is 1.1 MB on the wire (2.5 MB
+It is stored compressed so that it is 3.6 MB on the wire (8.5 MB
 decompressed) however the host serves `dist/`: serve it as the file it is,
 `application/octet-stream` with no `Content-Encoding` (the demo server
 does). A host that answers it with `Content-Encoding: gzip` anyway still
@@ -157,16 +164,17 @@ and 297 to 492 ms (median 402) without it, then 261 to 493 ms (median 301)
 and 214 to 518 ms (median 276). Waiting for the lists' first build instead
 had taken 881 to 1092 ms.
 
-EasyList and EasyPrivacy are left out of it for size. uBlock Origin's lists
-carry its YouTube rules (`trusted-prevent-dom-bypass` and
-`trusted-replace-fetch-response` on `get_watch`, the `player` and `next`
-pruning) and the same 32 scriptlets for a watch page as the eight lists'
-engine; what the snapshot does not block until the lists' engine serves is
-the network rules of the two EasyLists (YouTube's `/pagead/` and
-`/api/stats/ads` beacons among them). Gzipped, the eight lists' engine was
-3.6 MB (8.6 MB raw); with brotli it was 2.84 MB, six uBlock Origin lists
-and EasyPrivacy 1.70 MB, six and EasyList 2.00 MB, uBlock Origin's filters
-and quick fixes alone 0.67 MB.
+It held uBlock Origin's six lists alone until 2026-11 (1.1 MB gzipped, 2.5
+MB raw), EasyList and EasyPrivacy left out for size. A fresh profile then
+downloaded and compiled the eight lists during its first page load, as
+soon as the first navigation had been answered: in the bench's article
+page that was 0.65 s more of Chrome's CPU per fresh profile (1,760 against
+1,110 ms) and 158 MB more memory on a blank tab (492 against 334 MB), and
+the EasyLists' network rules (YouTube's `/pagead/` and `/api/stats/ads`
+beacons among them) did not block until it was done. With brotli the eight
+lists' engine was 2.84 MB, six uBlock Origin lists and EasyPrivacy 1.70
+MB, six and EasyList 2.00 MB, uBlock Origin's filters and quick fixes alone
+0.67 MB.
 
 `node scripts/adblock-snapshot.mjs` fetches the lists as they are now and
 writes `assets/adblock-snapshot.dat.gz` and `assets/adblock-snapshot.UPSTREAM`

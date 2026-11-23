@@ -10,9 +10,10 @@ element.allow = CFG.frameAllow.join('; ');
 
 let frame;
 const ready = (async () => {
-	const registration = await StompController.register(CFG.controller.directory);
+	// register()'s promise, unawaited: the controller's transport and
+	// workers start while a first visit's service worker installs
 	const controller = new StompController({
-		serviceworker: registration,
+		serviceworker: StompController.register(CFG.controller.directory),
 		...CFG.controller,
 	});
 	window.controller = controller;

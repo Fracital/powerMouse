@@ -805,17 +805,20 @@ ok(
 );
 
 // no list to be had, the directory's snapshot served (assets/adblock-
-// snapshot.dat.gz, uBlock Origin's lists, gzipped): the worker reads it from
+// snapshot.dat.gz, every default list, gzipped): the worker reads it from
 // its own origin by its hash, as the bytes it is (no Content-Encoding), and
 // the host lets the browser keep it for good; the worker gunzips it, the
 // page waits for it alone, and the snapshot serves (nothing says the blocker
-// is off, as it would once the lists failed with no snapshot loaded)
+// is off, as it would once the lists failed with no snapshot loaded). The
+// snapshot has every rule of the default lists, so their refresh waits for
+// the pages to go quiet (src/server/blocker.ts listTurn): none is asked
+// within the visit
 const snapshotted = await visit(undefined, { page: site }, { mirror: {} });
 console.log('INFO snapshot:', JSON.stringify(snapshotted.reports.page));
 ok(
-	"default, no list to be had: the directory's gzipped snapshot is read from its own origin by its hash, as bytes, kept for good, and the page does not wait for the lists",
+	"default, no list to be had: the directory's gzipped snapshot is read from its own origin by its hash, as bytes, kept for good, and the lists wait for the pages to go quiet",
 	snapshotted.config.adblock === true &&
-		snapshotted.asked.includes(EASYLIST) &&
+		!snapshotted.asked.includes(EASYLIST) &&
 		snapshotted.reports.page?.ran?.includes('allowed') &&
 		snapshotted.ms.page < 4000 &&
 		snapshotAnswers.length >= 1 &&
@@ -828,7 +831,12 @@ ok(
 				type === 'application/octet-stream' &&
 				encoding === null,
 		),
-	JSON.stringify([snapshotted.ms, snapshotAnswers, snapshotted.reports]),
+	JSON.stringify([
+		snapshotted.asked,
+		snapshotted.ms,
+		snapshotAnswers,
+		snapshotted.reports,
+	]),
 );
 ok(
 	'default, no list to be had: the snapshot is gunzipped and serves, and nothing more says the blocker is off',

@@ -266,6 +266,106 @@ export function receiveBody(
 }
 
 /**
+ * A short body (by its Content-Length, INLINE_MAX at most) that the
+ * transport has whole within INLINE_WAIT_MS of its headers crosses with
+ * them, as one transferred buffer in the answer's own message: no port,
+ * no data, end and credit messages, no stream on either side. One that is
+ * not all there by then (a server that dribbles it, a connection that
+ * stalls) streams on a port as any other, from where the read stopped.
+ */
+export const INLINE_MAX = 64 * 1024;
+// (one turn of the transport's task queue: a body that is not all there by
+// then streams, and its headers waited no longer than that turn)
+const INLINE_WAIT_MS = 0;
+/** the answer's property that carries the inline body's count of the bytes it came as */
+export const INLINE_ENCODED = '$stompEncoded';
+
+/** whether the headers say a length short enough to try inline */
+export function shortLength(headers: [string, string][]): boolean {
+	for (const [name, value] of headers)
+		if (name.toLowerCase() === 'content-length')
+			return /^\d+$/.test(value.trim()) && Number(value) <= INLINE_MAX;
+	return false;
+}
+
+/**
+ * `body` read whole into one buffer when it ends within INLINE_WAIT_MS and
+ * INLINE_MAX bytes; else the body as a stream again, what was read first
+ * (a failure of the read reaches that stream's reader, as it would have)
+ */
+export async function readShort(
+	body: ReadableStream<Uint8Array>,
+): Promise<
+	| { whole: ArrayBuffer; rest?: undefined }
+	| { whole: null; rest: ReadableStream<Uint8Array> }
+> {
+	const reader = body.getReader();
+	const chunks: Uint8Array[] = [];
+	let size = 0;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const late = new Promise<null>(
+		(resolve) => (timer = setTimeout(() => resolve(null), INLINE_WAIT_MS)),
+	);
+	let pending: Promise<ReadableStreamReadResult<Uint8Array>> | null = null;
+	let failure: { error: unknown } | null = null;
+	try {
+		for (;;) {
+			pending = reader.read();
+			const got = await Promise.race([pending, late]);
+			if (got === null) break;
+			pending = null;
+			if (got.done) {
+				clearTimeout(timer);
+				if (chunks.length === 1 && ownsBuffer(chunks[0]))
+					return { whole: chunks[0].buffer as ArrayBuffer };
+				const bytes = new Uint8Array(size);
+				let offset = 0;
+				for (const chunk of chunks) {
+					bytes.set(chunk, offset);
+					offset += chunk.byteLength;
+				}
+				return { whole: bytes.buffer };
+			}
+			size += got.value.byteLength;
+			chunks.push(got.value);
+			if (size > INLINE_MAX) break;
+		}
+	} catch (error) {
+		pending = null;
+		failure = { error };
+	}
+	clearTimeout(timer);
+	const rest = new ReadableStream<Uint8Array>(
+		{
+			async pull(controller) {
+				const chunk = chunks.shift();
+				if (chunk) {
+					controller.enqueue(chunk);
+					return;
+				}
+				if (failure) {
+					controller.error(failure.error);
+					return;
+				}
+				try {
+					const got = await (pending ?? reader.read());
+					pending = null;
+					if (got.done) controller.close();
+					else controller.enqueue(got.value);
+				} catch (error) {
+					controller.error(error);
+				}
+			},
+			cancel(reason) {
+				return reader.cancel(reason);
+			},
+		},
+		{ highWaterMark: 0 },
+	);
+	return { whole: null, rest };
+}
+
+/**
  * a response's body that came on a port, and the sender's count of the
  * bytes it came as before decoding, read once it has ended (sendBody's
  * `encoded`; responseFacts.ts)

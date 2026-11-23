@@ -79,3 +79,21 @@ export async function syncFreezes(): Promise<boolean | null> {
 		URL.revokeObjectURL(url);
 	}
 }
+
+/**
+ * The answer measured ahead of the service worker's question: a worker that
+ * was just installed knows nothing and asks at its first handshake, and a
+ * proxied page's first document waits for the answer (learnSyncFrozen in
+ * src/server/syncFrozen.ts). Measured while the worker installs, it is ready
+ * by then. Taken once; a question after that measures again.
+ */
+let early: Promise<boolean | null> | undefined;
+export function measureSyncFreezesEarly() {
+	early ??= syncFreezes();
+}
+/** the early answer, or a new measurement */
+export function takeSyncFreezes(): Promise<boolean | null> {
+	const answer = early ?? syncFreezes();
+	early = undefined;
+	return answer;
+}

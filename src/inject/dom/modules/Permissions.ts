@@ -98,6 +98,15 @@ export default class PermissionsModule extends Module<DocumentClient> {
 	 * origin's), once the worker has answered
 	 */
 	declare documentPolicy?: (feature: string) => Promise<boolean>;
+	/**
+	 * Navigator's own mediaDevices getter, taken before `devices` hooks it:
+	 * the inject reads the document's MediaDevices with it, so the hook's
+	 * first read (which lists the devices and listens for devicechange) is
+	 * the page's. Read through the hook, every document listed its devices
+	 * as it started, which made Chrome start its audio and video capture
+	 * services (about 37 MB) and ask them again for every frame
+	 */
+	#mediaOf?: Function;
 	apply() {
 		const client = this.client;
 		const global = client.global;
@@ -763,6 +772,7 @@ export default class PermissionsModule extends Module<DocumentClient> {
 			global.Navigator.prototype,
 			'mediaDevices',
 		)?.get;
+		this.#mediaOf = mediaOf;
 		const hex = (bytes: Uint8Array) => {
 			let out = '';
 			for (let i = 0; i < bytes.length; i++)
@@ -1143,8 +1153,12 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		const prototype = global.MediaDevices?.prototype;
 		if (!prototype?.getUserMedia) return;
 		const proxyModule = this.client.getModule(ProxyModule)!;
-		// this document's own (absent outside a secure context)
-		const mediaDevices: unknown = global.navigator.mediaDevices;
+		// this document's own (absent outside a secure context), by the
+		// native getter: the hooked one watches it for the page (#mediaOf)
+		const mediaOf = this.#mediaOf;
+		const mediaDevices: unknown = mediaOf
+			? Reflect.apply(mediaOf, global.navigator, [])
+			: global.navigator.mediaDevices;
 		const enumerate = prototype.enumerateDevices;
 		const kindOf = Reflect.getOwnPropertyDescriptor(
 			global.MediaDeviceInfo?.prototype ?? {},

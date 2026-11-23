@@ -88,6 +88,7 @@ export class RewriteCache {
 	async match(key: string): Promise<Blob | null> {
 		try {
 			await this.#pending.get(key);
+			if (await this.#absent(this.#request(key).url)) return null;
 			const response = await (await this.#open()).match(this.#request(key));
 			return response ? await response.blob() : null;
 		} catch (error) {
@@ -123,6 +124,7 @@ export class RewriteCache {
 	async matchServed(url: string, key: string): Promise<Response | null> {
 		try {
 			await this.#pending.get(url);
+			if (await this.#absent(url)) return null;
 			const response = await (await this.#open()).match(url);
 			return response?.headers.get(DIGEST) === key ? response : null;
 		} catch (error) {
@@ -155,7 +157,9 @@ export class RewriteCache {
 			headers.set(SIZE, String(size));
 			try {
 				const store = await this.#open();
-				const old = await store.match(url);
+				const old = (await this.#absent(url))
+					? undefined
+					: await store.match(url);
 				const oldKey = old?.headers.get(DIGEST);
 				if (
 					old &&
@@ -206,6 +210,32 @@ export class RewriteCache {
 	 * listing every key on every put grew with the store
 	 */
 	#loading?: Promise<Map<string, number>>;
+	/** the index once it is read (#load), else undefined */
+	#index?: Map<string, number>;
+	/**
+	 * Whether the store surely has nothing under `url`: by the index of what
+	 * this instance put and found there, read once, so that a miss (every
+	 * script of a first visit) is not a round trip to the store, on the
+	 * load's path, before its rewrite. Until the index is read (its first
+	 * reading starts here) the store is asked. An entry another instance put
+	 * since is a miss here: rewritten again, the same output.
+	 */
+	async #absent(url: string): Promise<boolean> {
+		if (!this.#index) {
+			if (!this.#loading)
+				void this.#open()
+					.then((store) => this.#load(store))
+					.catch(() => {});
+			return false;
+		}
+		if (this.#index.has(url)) return false;
+		// (the index has the URL as the store's Request serialized it)
+		try {
+			return !this.#index.has(new URL(url).href);
+		} catch (error) {
+			return false;
+		}
+	}
 	#load(store: Cache): Promise<Map<string, number>> {
 		return (this.#loading ??= (async () => {
 			const entries = new Map<string, number>();
@@ -215,6 +245,7 @@ export class RewriteCache {
 			}
 			this.#total = 0;
 			for (const size of entries.values()) this.#total += size;
+			this.#index = entries;
 			return entries;
 		})());
 	}
@@ -288,6 +319,7 @@ export class RewriteCache {
 	async clear(): Promise<void> {
 		this.#store = undefined;
 		this.#loading = undefined;
+		this.#index = undefined;
 		this.#total = 0;
 		await caches.delete(storeName(STORE));
 	}

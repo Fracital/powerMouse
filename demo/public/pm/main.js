@@ -1694,10 +1694,12 @@ async function startController(name) {
 		// handshake, so it is made at once (not after
 		// StompController.register(), which resolves once the worker is
 		// activated): its transport, the transport worker, epoxy's module and
-		// the wisp carrier, comes up while a first visit's worker installs
+		// the wisp carrier, comes up while a first visit's worker installs.
+		// register()'s own promise goes to it unawaited, so that the
+		// controller's modules start while the script is fetched too
 		const registration = OFFLINE
 			? await OFFLINE.ready
-			: await navigator.serviceWorker.register(
+			: navigator.serviceWorker.register(
 					`${DIRECTORY}${assetName('serviceWorker')}${StompController.profileWorker(PROFILE)}`,
 					{ scope: DIRECTORY, updateViaCache: 'none' },
 				);

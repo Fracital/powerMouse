@@ -212,7 +212,7 @@ import {
 	type SiteHistoryCommand,
 } from './sites';
 import { suggestThrough, type SuggestOptions } from './suggest';
-import { syncFreezes } from './syncFreezes';
+import { measureSyncFreezesEarly, takeSyncFreezes } from './syncFreezes';
 import { debugTransportStored, printNote } from './transportConsole';
 
 export { default as SearchBuilder } from '../bootstrapper/SearchBuilder';
@@ -296,8 +296,16 @@ export interface ControllerInit {
 	 * The registered STomp service worker, or its registration (from
 	 * `StompController.register()` or `navigator.serviceWorker.register()`):
 	 * then the controller takes its worker and waits for it to activate.
+	 * Or the promise `StompController.register()` returns, unawaited: the
+	 * controller starts its transport, rewrite workers and modules while a
+	 * first visit's worker installs, and takes the registration when it
+	 * comes (`serviceworker` is unset until then; `wait()` rejects if it
+	 * does)
 	 */
-	serviceworker: ServiceWorker | ServiceWorkerRegistration;
+	serviceworker:
+		| ServiceWorker
+		| ServiceWorkerRegistration
+		| PromiseLike<ServiceWorkerRegistration>;
 	/**
 	 * The transport proxied traffic goes through. A TransportDescriptor
 	 * (`{ module, options }`) is imported and constructed in a dedicated
@@ -1053,6 +1061,14 @@ function bootWorker(url: URL): Worker | undefined {
 }
 /** begin what a controller's start in `scope` waits for (see earlyFetches) */
 function bootEarly(scope: URL, assets: Assets | undefined, profile = '') {
+	// a scope with no worker yet gets one that asks this page whether a
+	// waiting page stops it, at its first handshake: measured meanwhile
+	navigator.serviceWorker
+		.getRegistration(scope.href)
+		.then((registration) => {
+			if (!registration?.active) measureSyncFreezesEarly();
+		})
+		.catch(() => {});
 	const fetches = [
 		coreFile(assets),
 		assetFile(assets, 'blocker'),
@@ -1248,7 +1264,8 @@ export class StompController extends EventTarget {
 	id: string;
 	/** the build this controller bundle came from (STOMP_BUILD: version plus commit, or the package version); the worker's build is `config.build`, and `stale` says when the two differ */
 	readonly build: string = BUILD;
-	serviceworker: ServiceWorker;
+	/** the service worker; unset until a registration given as a promise comes (ControllerInit.serviceworker) */
+	serviceworker!: ServiceWorker;
 	/**
 	 * The transport the proxy uses. With a worker-hosted descriptor this is a
 	 * RemoteTransport over a port the worker serves (so a host can still probe
@@ -1508,20 +1525,36 @@ export class StompController extends EventTarget {
 		// and a hard reload is the worker's to carry out past its caches
 		tellHardReloads((url) => this.#call('hardReload', url));
 
-		if (init.serviceworker instanceof ServiceWorkerRegistration) {
-			this.#registration = init.serviceworker;
-			this.serviceworker = registrationWorker(init.serviceworker);
-		} else this.serviceworker = init.serviceworker;
-		// a worker of another profile would keep this one's pages in its
-		// stores (it refuses the handshake too)
-		if (
-			this.serviceworker?.scriptURL &&
-			profileOfScript(new URL(this.serviceworker.scriptURL).search) !==
-				this.profile
-		)
-			throw new Error(
-				`The service worker is not of profile ${JSON.stringify(this.profile)}: register serviceWorker.js${this.profile ? `?profile=${this.profile}` : ''}`,
-			);
+		const takeWorker = (given: ServiceWorker | ServiceWorkerRegistration) => {
+			if (given instanceof ServiceWorkerRegistration) {
+				this.#registration = given;
+				// a worker still installing asks at its first handshake (bootEarly)
+				if (!given.active) measureSyncFreezesEarly();
+				this.serviceworker = registrationWorker(given);
+			} else this.serviceworker = given;
+			// a worker of another profile would keep this one's pages in its
+			// stores (it refuses the handshake too)
+			if (
+				this.serviceworker?.scriptURL &&
+				profileOfScript(new URL(this.serviceworker.scriptURL).search) !==
+					this.profile
+			)
+				throw new Error(
+					`The service worker is not of profile ${JSON.stringify(this.profile)}: register serviceWorker.js${this.profile ? `?profile=${this.profile}` : ''}`,
+				);
+		};
+		// register()'s promise, unawaited: what follows starts while the
+		// worker installs, and the first handshake waits for it (#hostReady)
+		const givenWorker = init.serviceworker;
+		const registered: Promise<void> | null =
+			typeof (givenWorker as { then?: unknown }).then === 'function'
+				? Promise.resolve(
+						givenWorker as PromiseLike<ServiceWorkerRegistration>,
+					).then(takeWorker)
+				: null;
+		registered?.catch(() => {});
+		if (!registered)
+			takeWorker(givenWorker as ServiceWorker | ServiceWorkerRegistration);
 		const given = init.transport;
 		if (init.agent) {
 			// a slot's agent serves its transport through the hub's
@@ -1784,6 +1817,7 @@ export class StompController extends EventTarget {
 			idReady,
 			adblockReady,
 			rewriterReady,
+			registered,
 		]).then(() => {
 			if (this.transportHost === 'worker') this.config.workerTransport = true;
 			else delete this.config.workerTransport;
@@ -2114,24 +2148,31 @@ export class StompController extends EventTarget {
 		// once it is activated, or after REGISTER_WAIT_MS with whatever the
 		// registration has by then; anything else (a test double included)
 		// gets the handshake at once
-		if (
-			['installing', 'installed', 'activating'].includes(
-				this.serviceworker.state,
+		const speak = () => {
+			if (
+				['installing', 'installed', 'activating'].includes(
+					this.serviceworker.state,
+				)
 			)
-		)
-			Promise.race([
-				activated(this.serviceworker).catch(() => {}),
-				sleep(REGISTER_WAIT_MS),
-			]).then(() => {
-				const active = this.#registration?.active;
-				if (active && this.serviceworker.state !== 'activated')
-					this.serviceworker = active;
-				this.#handshake();
-			});
-		else this.#handshake();
-		// a worker that activates after this handshake (a deploy the browser
-		// installs while the page is open) is adopted without a reload
-		this.#watchRegistration();
+				Promise.race([
+					activated(this.serviceworker).catch(() => {}),
+					sleep(REGISTER_WAIT_MS),
+				]).then(() => {
+					const active = this.#registration?.active;
+					if (active && this.serviceworker.state !== 'activated')
+						this.serviceworker = active;
+					this.#handshake();
+				});
+			else this.#handshake();
+			// a worker that activates after this handshake (a deploy the
+			// browser installs while the page is open) is adopted without a
+			// reload
+			this.#watchRegistration();
+		};
+		// a registration still to come is spoken to when it comes (its
+		// failure is #hostReady's, which wait() reports)
+		if (registered) registered.then(speak, () => {});
+		else speak();
 		navigator.serviceWorker.addEventListener('controllerchange', () => {
 			const controller = navigator.serviceWorker.controller;
 			if (
@@ -2946,7 +2987,7 @@ export class StompController extends EventTarget {
 					setTimeout(() => URL.revokeObjectURL(url), 10000);
 					return [url, []];
 				},
-				syncFreezes: async () => [await syncFreezes(), []],
+				syncFreezes: async () => [await takeSyncFreezes(), []],
 				mediaVerdict: async (constraints) => [
 					await mediaVerdict(constraints),
 					[],

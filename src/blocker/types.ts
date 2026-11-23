@@ -308,15 +308,16 @@ export const DEFAULT_LISTS: AdblockList[] = [
 
 /**
  * the default lists compiled into the directory's engine snapshot
- * (assets/adblock-snapshot.dat.gz, scripts/adblock-snapshot.mjs): uBlock
- * Origin's own, which carry its YouTube rules. With no engine stored (a first
- * visit) the worker serves the snapshot within milliseconds and the default
- * lists, fetched in the background, replace it once built. EasyList and
- * EasyPrivacy are left out of it for size: the eight lists were 3.6 MB
- * gzipped (8.6 MB raw), these six 1.1 MB (2.5 MB raw)
+ * (assets/adblock-snapshot.dat.gz, scripts/adblock-snapshot.mjs): all eight.
+ * With no engine stored (a first visit) the worker serves the snapshot and
+ * every rule of the default lists is in force from the first request; the
+ * lists are fetched again (their updates since the snapshot) once the pages
+ * have gone quiet (src/server/blocker.ts listTurn). The snapshot is 3.6 MB
+ * gzipped (8.5 MB raw); of uBlock Origin's six lists alone it was 1.1 MB, and
+ * then a fresh profile downloaded and compiled the eight lists during its
+ * first page load (0.7 s of Chrome's CPU, 100 MB more memory until a GC)
  */
-export const SNAPSHOT_LISTS: AdblockList[] =
-	/* @__PURE__ */ DEFAULT_LISTS.filter((list) => list.trusted);
+export const SNAPSHOT_LISTS: AdblockList[] = DEFAULT_LISTS;
 
 /**
  * the file of the directory that holds uBlock Origin's scriptlets and

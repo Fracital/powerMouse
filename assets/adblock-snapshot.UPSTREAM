@@ -1,12 +1,14 @@
-list https://ublockorigin.github.io/uAssets/filters/filters.min.txt sha256 f52fc10b558ca0dbdab5f69fd817d4db8c8a7a9cc533b2a030d3660d53b9d1e4
-list https://ublockorigin.github.io/uAssets/filters/unbreak.min.txt sha256 6ba6d2f146afc25c46f0911567f3038ed94e03d03c9bd0a1805acc2c52bcdb2d
-list https://ublockorigin.github.io/uAssets/filters/badware.min.txt sha256 efdaff62b66704b7e7534c6aaf3debe37f0603770d16b2b88f73e5be9e0d6483
-list https://ublockorigin.github.io/uAssets/filters/privacy.min.txt sha256 ccad8855035133f4d6cfa73174684825e95062ae050bb0be46e313a120c8ef5f
-list https://ublockorigin.github.io/uAssets/filters/resource-abuse.txt sha256 ed8c1fe1a0c36c951365fb5bd94320de361d735a09515abf0178efb0a964a8d6
-list https://ublockorigin.github.io/uAssets/filters/quick-fixes.min.txt sha256 628deb436eb4d7d81bef9ddabce36e928deb802a2efc0c33cda906094777712c
+list https://easylist.to/easylist/easylist.txt sha256 7b7853beaacb9b6059f17689cfe1a4ef9025dc1f7c5ffda8c4ab0a1ea4ea61f9
+list https://easylist.to/easylist/easyprivacy.txt sha256 34e8392cd88882e3cdab046ce17e7e0d1ad3c83387ca59d6d2f42348643d3b26
+list https://ublockorigin.github.io/uAssets/filters/filters.min.txt sha256 25a7f2f2610701ac943bc4fa9a151c5440eec60bf82c0b26f1c136c12e1b1c68
+list https://ublockorigin.github.io/uAssets/filters/unbreak.min.txt sha256 807d80ceb515a76cd47741a8f87d8dfa40e46ead10f93c622de65f5fcd36bbf3
+list https://ublockorigin.github.io/uAssets/filters/badware.min.txt sha256 080857ead43c160c7012c52897211838f29a2188daaa2d95dbf841bfc3dbdb07
+list https://ublockorigin.github.io/uAssets/filters/privacy.min.txt sha256 f5cfd434150939124828a4e50fd89f0e8a03388d4b1de3feb9d8f60daec74a1d
+list https://ublockorigin.github.io/uAssets/filters/resource-abuse.txt sha256 0e019a26fb36f94a617f2c6e30e671b5092face67ecc9f575beae4c6cb9cfcb1
+list https://ublockorigin.github.io/uAssets/filters/quick-fixes.min.txt sha256 b2f9eafc888f5d8503e5b2f7509f6027a8265da088c97c5a07671f21c03bdebc
 blocker.wasm sha256 a6d65ffe059205378dc40b7d1f236a7f9ef871f23bc07a9b4e724e7cded5aaec
-bytes 2533701
-gzip 1101538
-sha256 f1db61101cbaef482d0f69c0ea0d3b0b488ba5a76a997d2172d2b5e57fb13dff
-fetched 2026-11-19
+bytes 8544269
+gzip 3629676
+sha256 a41f99c6311b89c69318db74de4a3508556d0873bf974e536f15790caa92afd3
+fetched 2026-11-23
 built by scripts/adblock-snapshot.mjs

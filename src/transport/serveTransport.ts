@@ -3,7 +3,7 @@ import type {
 	RawHeaders,
 } from '@mercuryworkshop/proxy-transports';
 import { pastASCII, utf8Text } from '../byteString';
-import { sendBody } from './bodyPort';
+import { INLINE_ENCODED, readShort, sendBody, shortLength } from './bodyPort';
 import { boundedBody } from './boundedBody';
 import { base64url, httpsQuery } from './http3/dnsHttps';
 import {
@@ -536,14 +536,35 @@ export default function serveTransport(
 				// connection that does not hold it back, is reset if its
 				// reader stops (boundedBody.ts)
 				if (plain.body instanceof ReadableStream) {
-					const pushed = sendBody(
-						boundedBody(
-							response,
-							resumableBody(transport, url, method, sent, response),
-						),
-						true,
-						encodedBytes,
+					let body = boundedBody(
+						response,
+						resumableBody(transport, url, method, sent, response),
 					);
+					// a short body that is all here at once crosses with the
+					// headers, in one message, instead of on a port of its own
+					if (shortLength(plain.headers)) {
+						const read = await readShort(body);
+						if (read.whole) {
+							let encoded: number | undefined;
+							try {
+								encoded = encodedBytes?.() ?? undefined;
+							} catch {
+								// no count
+							}
+							return [
+								{
+									...plain,
+									body: read.whole,
+									...(typeof encoded === 'number' && {
+										[INLINE_ENCODED]: encoded,
+									}),
+								},
+								[read.whole],
+							];
+						}
+						body = read.rest;
+					}
+					const pushed = sendBody(body, true, encodedBytes);
 					return [{ ...plain, body: pushed }, [pushed.$stompBodyPort]];
 				}
 				return [plain, transferablesOf(plain.body)];

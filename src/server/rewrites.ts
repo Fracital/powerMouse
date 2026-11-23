@@ -234,7 +234,11 @@ import {
 	knownTopSiteOf,
 	recordInlineOrigin,
 } from './blobOrigins';
-import { navigationUpstream, type BlockerLike } from './blocker';
+import {
+	navigationUpstream,
+	trafficUpstream,
+	type BlockerLike,
+} from './blocker';
 import { BodyBytes } from './bodyBytes';
 import {
 	askedRange,
@@ -3798,6 +3802,8 @@ function genericForward(
 			});
 			// a start's list downloads wait for the first navigation's answer
 			if (shape.navigation) navigationUpstream(upstream);
+			// and a refresh of lists that serve already for the pages to go quiet
+			trafficUpstream(upstream);
 			if (image) {
 				const answered = () => {
 					imageClients.delete(id);

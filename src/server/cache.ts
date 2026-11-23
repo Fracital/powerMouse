@@ -473,6 +473,44 @@ function listed(url: string, entry: Listed | null) {
 	}
 }
 
+/** how long a deferred write waits at most for the worker to be idle */
+const DEFER_MS = 2000;
+type PostTask = (
+	task: () => void,
+	options: { priority: 'background' },
+) => Promise<unknown>;
+const postTask = (globalThis as { scheduler?: { postTask?: PostTask } })
+	.scheduler?.postTask;
+/**
+ * run `task` once the worker has nothing more urgent (a background task,
+ * which the fetch events and messages of a load go before), or after
+ * DEFER_MS whatever it is doing
+ */
+function afterUrgent(task: () => void) {
+	if (typeof postTask !== 'function') {
+		setTimeout(task, 0);
+		return;
+	}
+	const timer = setTimeout(task, DEFER_MS);
+	postTask
+		.call(
+			(globalThis as { scheduler?: unknown }).scheduler,
+			() => {
+				clearTimeout(timer);
+				task();
+			},
+			{ priority: 'background' },
+		)
+		.catch(() => {});
+}
+/** a body of a known length short enough to be buffered whole (FINISHED_LENGTH) */
+function shortBody(headers: Headers): boolean {
+	const length = headers.get('content-length');
+	return (
+		length !== null && /^\d+$/.test(length) && Number(length) <= FINISHED_LENGTH
+	);
+}
+
 export class HttpCache {
 	private cache?: Promise<Cache>;
 	private open(): Promise<Cache> {
@@ -515,7 +553,7 @@ export class HttpCache {
 	): Promise<CacheHit | null> {
 		// the entry a previous request is still writing (its body streams in)
 		// counts as stored: a follow-up request must not race it upstream
-		await this.pending.get(url);
+		await this.settled(url);
 		if (listing.entries !== null && !listing.entries.has(url)) return null;
 		const cache = await this.open();
 		const stored = await cache.match(url);
@@ -601,13 +639,50 @@ export class HttpCache {
 		body: ReadableStream<Uint8Array> | Blob | null,
 		part?: Part,
 	): Promise<void> {
-		const write = this.write(url, requestHeaders, response, body, part)
+		// a whole body (a Blob, or a short one of a known length, which is
+		// buffered whole either way) is written once this worker has nothing
+		// more urgent to do: the store's write is this thread's time, which
+		// the load's other requests wait for. A request for the URL, a clear
+		// and every other step that awaits the write starts it at once
+		// (settled, flushDeferred), and none waits past DEFER_MS.
+		const whole =
+			body === null || body instanceof Blob || shortBody(response.headers);
+		// (a write for the URL not done yet lands first: this one is newer)
+		const previous = this.settled(url);
+		let start!: () => void;
+		const started = (
+			whole
+				? new Promise<void>((resolve) => (start = resolve))
+				: Promise.resolve()
+		).then(() => previous);
+		if (whole) {
+			this.deferred.set(url, start);
+			afterUrgent(start);
+		}
+		const write = started
+			.then(() => {
+				if (this.deferred.get(url) === start) this.deferred.delete(url);
+				return this.write(url, requestHeaders, response, body, part);
+			})
 			.catch(() => {})
 			.finally(() => {
 				if (this.pending.get(url) === write) this.pending.delete(url);
 			});
 		this.pending.set(url, write);
 		return write;
+	}
+	/** deferred writes not started yet, by URL: what starts each */
+	private deferred = new Map<string, () => void>();
+	/** the write in flight for `url`, started now if it was deferred */
+	private settled(url: string): Promise<void> | undefined {
+		this.deferred.get(url)?.();
+		return this.pending.get(url);
+	}
+	/** start every deferred write and wait for them (before a clear) */
+	private async flushDeferred(): Promise<void> {
+		const urls = [...this.deferred.keys()];
+		for (const start of [...this.deferred.values()]) start();
+		await Promise.all(urls.map((url) => this.pending.get(url)));
 	}
 	private async write(
 		url: string,
@@ -708,7 +783,7 @@ export class HttpCache {
 		bytes: Uint8Array,
 		part: Part,
 	): Promise<void> {
-		await this.pending.get(url);
+		await this.settled(url);
 		const cache = await this.open();
 		const stored = await cache.match(url).catch(() => undefined);
 		let { from, to } = part;
@@ -793,6 +868,8 @@ export class HttpCache {
 		});
 	}
 	async clear(): Promise<void> {
+		// (a deferred write would land in the new store after it)
+		await this.flushDeferred();
 		this.cache = undefined;
 		await caches.delete(storeName(STORE));
 		// (the store is gone, and with it every entry)
@@ -803,12 +880,14 @@ export class HttpCache {
 	}
 	/** drop the entry kept under `url` */
 	async drop(url: string): Promise<void> {
-		await this.pending.get(url);
+		await this.settled(url);
 		const cache = await this.open();
 		if (await cache.delete(url)) listed(url, null);
 	}
 	/** drop what is kept of `origin`'s responses, in every partition (Clear-Site-Data: "cache") */
 	async clearOrigin(origin: string): Promise<void> {
+		// (one not written yet is not among the keys, and would land after)
+		await this.flushDeferred();
 		const cache = await this.open();
 		for (const request of await cache.keys()) {
 			let kept: string;
@@ -823,7 +902,7 @@ export class HttpCache {
 				continue;
 			}
 			if (kept !== origin) continue;
-			await this.pending.get(request.url);
+			await this.settled(request.url);
 			if (await cache.delete(request)) listed(request.url, null);
 		}
 	}

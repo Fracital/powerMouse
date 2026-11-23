@@ -4,7 +4,7 @@ import type {
 	TransferrableResponse,
 	WebSocketDataType,
 } from '@mercuryworkshop/proxy-transports';
-import { isPortBody, receiveCounted } from './bodyPort';
+import { INLINE_ENCODED, isPortBody, receiveCounted } from './bodyPort';
 import {
 	HostToTransport,
 	postToPort,
@@ -130,11 +130,23 @@ export default class RemoteTransport implements ProxyTransport {
 			{ remote: remote.href, method, body, headers },
 			transferablesOf(body),
 		);
-		const { body: sent, ...rest } = response;
+		const {
+			body: sent,
+			[INLINE_ENCODED]: encoded,
+			...rest
+		} = response as typeof response & { [INLINE_ENCODED]?: number };
 		// (with the transport's count of the bytes it came as: responseFacts.ts)
-		return isPortBody(sent)
-			? { ...rest, ...receiveCounted(sent) }
-			: { ...rest, body: sent };
+		if (isPortBody(sent)) return { ...rest, ...receiveCounted(sent) };
+		// a short body that came whole with the headers (bodyPort.ts INLINE_MAX)
+		if (typeof encoded === 'number') {
+			const answer: TransferrableResponse & { encodedBytes?: () => number } = {
+				...rest,
+				body: sent,
+			};
+			answer.encodedBytes = () => encoded;
+			return answer;
+		}
+		return { ...rest, body: sent };
 	}
 	connect(
 		url: URL,

@@ -28,6 +28,7 @@ import {
 } from '../blocker/instance';
 import {
 	requestTypeOf,
+	SNAPSHOT_LISTS,
 	type AdblockInit,
 	type AdblockList,
 	type AdblockPage,
@@ -114,12 +115,77 @@ function listHost(url: string): string {
 	}
 }
 
-/** a start's list downloads may begin (navigationUpstream) */
-function listTurn(): Promise<void> {
-	return Promise.race([
+/** the pages' requests to the transport not yet answered (trafficUpstream) */
+let inFlight = 0;
+/** when one last went out or was answered */
+let lastTraffic = 0;
+
+/**
+ * A page's request went to the transport (src/server/rewrites.ts). A
+ * refresh of lists whose engine already serves (a stored one past
+ * `refresh`, or a snapshot of every list in force) waits for the pages'
+ * requests to go quiet (listTurn `quiet`): its downloads (6 MB for the
+ * default lists, over the transport and wisp connection the page's
+ * subresources take) and its build (250 to 450 ms on one of the rewrite
+ * workers) otherwise landed in the middle of the page's own load, and cost
+ * a fresh profile 0.7 s of Chrome's CPU in it.
+ */
+export function trafficUpstream(answer: Promise<unknown>) {
+	inFlight++;
+	lastTraffic = Date.now();
+	answer
+		.catch(() => {})
+		.then(() => {
+			inFlight--;
+			lastTraffic = Date.now();
+		});
+}
+
+/** how long the pages' requests must have been quiet for a refresh to begin */
+const LIST_QUIET_MS = 10_000;
+/** how long after the first navigation a refresh waits for quiet at the most */
+const LIST_QUIET_CAP_MS = 60_000;
+
+/**
+ * when a build's list downloads may begin: `now`; `navigation`, once the
+ * worker's first navigation has been answered (navigationUpstream), the
+ * lists' rules not all serving yet; `quiet`, after that once the pages'
+ * requests have gone quiet too (trafficUpstream), every rule of the lists
+ * serving already and only their updates to come
+ */
+type ListTurn = 'now' | 'navigation' | 'quiet';
+
+async function listTurn(turn: ListTurn): Promise<void> {
+	if (turn === 'now') return;
+	await Promise.race([
 		firstNavigation,
 		new Promise<void>((resolve) => setTimeout(resolve, LIST_WAIT_MS)),
 	]);
+	if (turn !== 'quiet') return;
+	const cap = Date.now() + LIST_QUIET_CAP_MS;
+	while (Date.now() < cap) {
+		const quietFor = Date.now() - lastTraffic;
+		if (!inFlight && quietFor >= LIST_QUIET_MS) return;
+		await new Promise((resolve) =>
+			setTimeout(
+				resolve,
+				Math.max(50, inFlight ? 250 : LIST_QUIET_MS - quietFor),
+			),
+		);
+	}
+}
+
+/** the directory's snapshot was compiled from every list of `lists` (it then serves all their rules, a few days old) */
+function snapshotCovers(lists: AdblockList[]): boolean {
+	return lists.every((list) =>
+		SNAPSHOT_LISTS.some(
+			(own) =>
+				own.url === list.url &&
+				!!own.trusted === !!list.trusted &&
+				(own.format ?? '') === (list.format ?? '') &&
+				list.filters === undefined,
+		),
+	);
 }
 /** a blocker that is on by default and cannot be had says so once a thread */
 let saidOff = false;
@@ -442,8 +508,9 @@ export class Blocker implements BlockerLike {
 			const stale = Date.now() - stored.at > this.#init.refreshMs;
 			if (loaded && !stale) return true;
 			if (loaded) {
-				// serve the stored engine while a fresh one is fetched
-				this.#refresh(true);
+				// serve the stored engine while a fresh one is fetched, once
+				// the pages have gone quiet: it has every rule of the lists
+				this.#refresh('quiet');
 				return true;
 			}
 		}
@@ -453,11 +520,14 @@ export class Blocker implements BlockerLike {
 		// it once built
 		if (await this.#snapshot()) {
 			this.#tried();
-			this.#refresh(true);
+			// a snapshot of some of the lists leaves the others' rules out
+			// until their engine is built: fetched as soon as the first
+			// navigation has gone; one of all of them only waits for quiet
+			this.#refresh(snapshotCovers(this.#init.lists) ? 'quiet' : 'navigation');
 			return true;
 		}
 		this.#tried();
-		await this.#refresh(!!this.#init.byDefault);
+		await this.#refresh(this.#init.byDefault ? 'navigation' : 'now');
 		return this.#ready;
 	}
 
@@ -608,19 +678,19 @@ export class Blocker implements BlockerLike {
 	 * blocker is on by default and no navigation waits for it) the downloads
 	 * wait for the worker's first navigation to go first (listTurn)
 	 */
-	#refresh(turn = false): Promise<void> {
+	#refresh(turn: ListTurn = 'now'): Promise<void> {
 		if (!this.#building)
 			this.#building = this.#build(turn).finally(() => {
 				this.#building = null;
 			});
 		return this.#building;
 	}
-	async #build(turn: boolean): Promise<void> {
+	async #build(turn: ListTurn): Promise<void> {
 		// the lists in force when this build began: if `reconfigure` changes them
 		// while this build is fetching, its engine is stale and must be discarded
 		// rather than loaded over the newer lists (see #generation)
 		const generation = this.#generation;
-		if (turn) await listTurn();
+		await listTurn(turn);
 		if (generation !== this.#generation) return;
 		// the resources (Brave's resources.json) are needed to load the engine,
 		// not to compile it, so fetch them alongside the lists (or the prebuilt
