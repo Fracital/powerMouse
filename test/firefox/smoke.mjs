@@ -324,6 +324,32 @@ async function waitActive(tab, fn, { timeout = 40000, args = [] } = {}) {
 }
 const TITLE = () => document.title;
 
+// ---- a blob: worker under a page's policy ----
+
+// (as Turnstile's challenge starts one: the worker is handed the page's
+// browser policies, and Firefox's workers have no SecurityPolicyViolationEvent)
+{
+	const from = firefox.logs.length;
+	await submitOmni(
+		main,
+		`${servers.fixture}pages/firefox-csp-blob-worker.html`,
+	);
+	const title = await waitActive(main, () =>
+		/^worker /.test(document.title) ? document.title : null,
+	);
+	ok(
+		"a blob: worker under the page's policy answers",
+		title === 'worker 42',
+		title,
+	);
+	const errors = errorsSince(from);
+	ok(
+		'no console errors as the blob: worker runs',
+		!errors.length,
+		short(errors, 2000),
+	);
+}
+
 // ---- real sites ----
 
 if (process.env.SKIP_NETWORK === '1')

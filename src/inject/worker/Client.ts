@@ -268,8 +268,11 @@ export default class WorkerClient extends Client {
 			Event.prototype,
 			'stopImmediatePropagation',
 		) as Event['stopImmediatePropagation'];
+		// (Firefox's workers have no SecurityPolicyViolationEvent: none of
+		// their violations is an event, and there is nothing to hide)
+		if (typeof NativeViolationEvent !== 'function') return;
 		const originalPolicy = Reflect.getOwnPropertyDescriptor(
-			SecurityPolicyViolationEvent.prototype,
+			NativeViolationEvent.prototype,
 			'originalPolicy',
 		)?.get;
 		if (!originalPolicy) return;

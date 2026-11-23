@@ -1,0 +1,19 @@
+<!doctype html>
+<title>csp blob worker</title>
+<!-- A page under a policy starts a blob: worker, as Turnstile does: the
+worker inherits the page's browser policies (src/csp.ts WorkerPolicies
+`browser`), which Firefox's workers have no SecurityPolicyViolationEvent
+to hide (test/firefox/smoke.mjs). -->
+<script>
+	const source = 'onmessage = (event) => postMessage(event.data * 2);';
+	const worker = new Worker(
+		URL.createObjectURL(new Blob([source], { type: 'text/javascript' })),
+	);
+	worker.onmessage = (event) => {
+		document.title = `worker ${event.data}`;
+	};
+	worker.onerror = (event) => {
+		document.title = `worker error ${event.message}`;
+	};
+	worker.postMessage(21);
+</script>
