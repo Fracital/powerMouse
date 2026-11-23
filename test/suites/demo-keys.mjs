@@ -1,8 +1,10 @@
 // The browser's keys in the demo, pressed as a person's are (CDP
 // Input.dispatchKeyEvent, which Chrome takes as it takes a keyboard's):
-//  - Ctrl+R and F5 reload the tab, never the demo's own page (its
-//    performance.timeOrigin stays), from the address bar and from inside
-//    the proxied page, in a text field too;
+//  - on the home screen (no tab shown) Ctrl+R and Ctrl+Shift+R are
+//    Chrome's own and reload the demo;
+//  - with a tab shown, Ctrl+R and F5 reload the tab, never the demo's own
+//    page (its performance.timeOrigin stays), from the address bar and from
+//    inside the proxied page, in a text field too;
 //  - in the proxied page the key reaches the page first, and a page that
 //    cancels it keeps it, as natively; the page reads defaultPrevented as
 //    its own calls left it;
@@ -171,6 +173,32 @@ await native.close();
 async function reloadKeys(base, mode) {
 	const page = await openDemo(browser, base);
 	const cdp = await page.context().newCDPSession(page);
+
+	// on the home screen (no tab) the reload keys are the browser's own:
+	// they reload the demo, as on any page (the hard reload first: the
+	// checks below want a demo loaded as usual)
+	for (const [name, key, modifiers] of [
+		['Ctrl+Shift+R', 'r', CTRL | SHIFT],
+		['Ctrl+R', 'r', CTRL],
+	]) {
+		const before = await timeOrigin(page);
+		await page.focus('body').catch(() => {});
+		await press(cdp, key, modifiers);
+		const after = await until(
+			page,
+			() =>
+				/^(Ready|Error)/.test(
+					document.getElementById('logMsg')?.textContent ?? '',
+				) && performance.timeOrigin,
+			(value) => typeof value === 'number' && value !== before,
+			15000,
+		);
+		ok(
+			`${mode}: ${name} on the home screen reloads the demo, as Chrome's own key`,
+			typeof after === 'number' && after !== before,
+		);
+	}
+
 	const host = await timeOrigin(page);
 	await submitLanding(page, KEYS_PAGE);
 	let frame = await tabFrame(page, () => window.__origin > 0);

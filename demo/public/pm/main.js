@@ -1201,6 +1201,9 @@ function browserKeyOf(event, mac) {
 	return event.ctrlKey || event.shiftKey ? 'hardReload' : 'reload';
 }
 
+/** whether a tab is shown (else the home screen, the new tab page) */
+const tabShown = () => !browser.classList.contains('hidden') && !!activeTab;
+
 /**
  * A browser key on this page (a press in a proxied page comes from KEY_HOOK
  * once its page had it). A held key's repeats do nothing more, as one press
@@ -1210,9 +1213,9 @@ function runBrowserKey(command, repeat = false) {
 	if (repeat) return;
 	// vibeOS's browser window on top has the key
 	if (vibeShown()) return vibe.runKey(command);
-	const inTab = !browser.classList.contains('hidden') && activeTab;
+	const inTab = tabShown();
 	if (command === 'reload' || command === 'hardReload') {
-		// (the home screen is the new tab page: nothing to reload)
+		// (the home screen's own reload keys are the browser's: onBrowserKey)
 		if (inTab) reloadActiveTab({ bypassCache: command === 'hardReload' });
 	} else if (command === 'newTab') openNewTab();
 	else if (command === 'restoreTab') restoreClosedTab();
@@ -1226,6 +1229,15 @@ function onBrowserKey(event) {
 	// a key on this page while vibeOS shows is the desktop's own (its
 	// browser's shortcuts); a frame's, before its first document, is run here
 	if (vibeShown() && event.currentTarget === window) return;
+	// a reload key on the home screen (no tab shown) is the browser's own:
+	// it reloads powerMouse, as on any page
+	if (
+		(command === 'reload' || command === 'hardReload') &&
+		event.currentTarget === window &&
+		!vibeShown() &&
+		!tabShown()
+	)
+		return;
 	event.preventDefault();
 	runBrowserKey(command, event.repeat);
 }
