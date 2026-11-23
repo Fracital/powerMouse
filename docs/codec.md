@@ -129,6 +129,42 @@ for the module), a document under a blocking list's `$csp=` policy
 (`Config.codecModule`, which may refuse the compile and would report it to
 the page), a bundle built without the module, an instance that trapped.
 
+## The siv codec
+
+`codec: 'siv'` seals a route so that a reader of it learns nothing of its
+URL, a reader who knows other routes and their URLs included: it is
+encryption. Tor mode uses it (docs/tor.md, "What our server sees"),
+because some of a page's requests reach the host's server at their route
+(a forced reload of a page at the top of a tab of its own, its favicon's
+Referer), and the server must read no site there.
+
+- **Wire.** The text's bytes (as above) padded to a multiple of 16 (`0x80`,
+  then zeros); the IV is the first 16 bytes of their HMAC-SHA-256 under the
+  first half of the key, and they are encrypted with AES-256 in CTR mode
+  from that IV (its last 32 bits counting blocks) under the second half.
+  The seal is the IV and the ciphertext in the URL-safe base64 alphabet
+  without padding. This is SIV (RFC 5297) with HMAC as its PRF:
+  deterministic, so a URL has one route (the browser's caches and history
+  see the same address every time), and authenticated, so a segment whose
+  IV does not match what it opens to is no seal.
+- **What a route shows.** Its length, to 16 bytes, and that it is the same
+  URL as another route of the same scope. Nothing else.
+- **Key.** 128 lower-case hex digits (64 random bytes), drawn in the service
+  worker and kept in its database per profile, as the xor key is.
+- **Cost.** About 30 microseconds a seal or an opening, against about 2.5
+  for xor (Node, the crypto-js code the bundles carry), and 16 bytes of IV
+  and up to 16 of padding on each route. It needs crypto-js, so a realm of
+  this codec loads the full inject bundles (`injectDocumentFull.js`,
+  `injectWorkerFull.js`), as aes and base64 do; the light ones carry a
+  stand-in class (`src/sivCodecStub.ts`) that throws if made.
+- **The worker.** A scope of this codec (`sealedFromHost`, src/config.ts)
+  sends nothing of a route to the network: where the worker would hand a
+  request at one of its routes to the host (no controller for it after
+  the revive window, a request its controller does not route), it answers
+  it itself, with an error, or for a document a page saying the tab is
+  gone, and a document's synchronous XMLHttpRequest is refused rather than
+  relayed through the host.
+
 ## Checks
 
 - `node rust/host/codec.mjs` compares the module and the JavaScript over
@@ -151,5 +187,9 @@ the page), a bundle built without the module, an instance that trapped.
   referrer, text directives, GET forms with and without an action), every
   event the page hears with its URLs and state, and that no address or
   request shows a fragment or a field.
+- The `codec` suite also checks the siv codec against Node's own
+  HMAC-SHA-256 and AES-256-CTR, its round trips, and that another key or a
+  changed seal opens to nothing; `demo-tor-routes` that a server recording
+  Tor mode's requests finds no site in them (docs/tor.md, "Tested").
 - `deploy/rust/test.sh -p codec` runs the crate's own tests (the same
   vectors, round trips of every length, pieces, refusals).

@@ -204,6 +204,13 @@ let ISOLATED = !JUST_CALL && REMOTE_ISOLATION;
 const TOR_KEY = PMProfile.TOR_KEY;
 const TOR_REQUESTED = PMProfile.tor;
 const PROFILE = PMProfile.id;
+// Tor mode's routes are encrypted (the siv codec, docs/codec.md): a request
+// no service worker answers (a forced reload, a document no worker
+// controls) reaches this page's server at its route, which must tell the
+// server nothing of the site (docs/tor.md). Normal mode keeps xor, and so
+// does offline.html, whose routes reach no server at all (its worker runs
+// in the page) and whose file carries only the light inject bundles.
+const CODEC = TOR_REQUESTED && !OFFLINE ? 'siv' : 'xor';
 // what the page keeps of its own (settings, bookmarks, history): in Tor
 // mode this page's, read through to the normal mode's (pm/profile.js)
 const UI_STORAGE = PMProfile.storage;
@@ -1649,7 +1656,7 @@ async function startController(name) {
 			...(PROFILE && { profile: PROFILE, freshProfile: torSession.fresh }),
 			assets: ASSETS,
 			transport: transportFor(name),
-			codec: 'xor',
+			codec: CODEC,
 			cache: CACHE,
 			serviceWorkers: SERVICE_WORKERS,
 			serviceWorkerTimeout: SERVICE_WORKER_TIMEOUT,
@@ -1679,7 +1686,7 @@ async function startController(name) {
 			directory: DIRECTORY,
 			...(PROFILE && { profile: PROFILE }),
 			assets: ASSETS,
-			codec: 'xor',
+			codec: CODEC,
 			// dialing's call page and calls exist for this
 			// controller only (justCallStomp)
 			...(JUST_CALL && { dialing: true }),

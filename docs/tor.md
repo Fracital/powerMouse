@@ -24,6 +24,28 @@ protects and what it does not, and how its profile is kept apart.
   keeps its guards from visit to visit (as Tor Browser does), so the guard is
   also a sign that two visits are the same browser. **Bridges**, which would
   hide Tor use and the guard from our server, are future work.
+- **Nor does it read a page's address from the page's requests.** A proxied
+  page's URLs are routes under Tor mode's directory
+  (`/stomp-tor/<id>/<kind>/<sealed URL>`), and its requests are the service
+  worker's to answer, but a few reach our server at their route all the
+  same: a forced reload (Ctrl+Shift+R) of a page open at the top of a tab of
+  its own goes past the worker, as browsers do, and so does that tab's
+  favicon request, whose Referer is the route. Tor mode's routes are sealed
+  with the **siv codec** (docs/codec.md): encrypted under a key the worker
+  draws and keeps in the browser, so a route tells the server nothing but
+  its length (to 16 bytes) and that the same URL was asked again. Normal
+  mode's xor codec is no encryption: a server that knows the address of
+  one page a visitor opened reads the others from their routes. And where a
+  worker could hand a request to the network (a page whose tab is gone,
+  once the worker has started again with no controller for it, a request
+  its controller does not route), Tor mode's worker answers it itself (an
+  error, or a page saying the tab is gone), so a page's posts, beacons and
+  images never reach the server with their bodies or their timing. The
+  server answers a Tor route with a fixed 404 and logs nothing of it.
+  What the worker cannot answer is a URL the rewriter missed that resolves
+  to an address on the host outside the routes: that is a bug of the
+  rewriter (it reaches the host as the page's own relative path, in either
+  mode), not a route.
 - **The worker reaches only Tor relays.** Before a Wisp stream is opened,
   the transport worker checks that its address is a fallback directory arti
   has compiled in or a relay in the consensus the client holds, and refuses
@@ -70,8 +92,11 @@ protects and what it does not, and how its profile is kept apart.
   anything but a relay is refused. Nothing falls back to a direct
   connection, in any tab or after a reload. A browser tab in Tor mode stays
   in it across its reloads even when another tab turned Tor off since; only
-  its own toggle takes it out. `GET /api/tor` says only whether the
-  server offers the client (`client`, or `off` with `STOMP_TOR_CLIENT=0`).
+  its own toggle takes it out. A request at a Tor route no worker answers
+  reaches the server sealed, and one its worker would have passed on it
+  answers itself ("What our server sees"). `GET /api/tor` says only whether
+  the server offers the client (`client`, or `off` with
+  `STOMP_TOR_CLIENT=0`).
 
 ## Profiles
 
@@ -192,5 +217,17 @@ tor does.
   another turns it off, and a Tor tab's reload keeps its session's site
   data while the normal tab beside it never sees it. It reaches no Tor
   network.
+- The `demo-tor-routes` suite: the demo behind a server that records every
+  request the browser makes of it (path, query, Referer, body), with a page
+  that loads images and stylesheets in about:blank and srcdoc frames, a
+  forced reload of Tor pages in tabs of their own, and a page whose tab is
+  gone after the worker restarted posting, beaconing and loading. No
+  request names the site in any form a server could read: as written,
+  percent-encoded, base64, hex, the generic codec's form, or opened by the
+  XOR of a route with another whose URL is known; the forced reloads reach
+  the server and come back, an orphan page's requests reach it not at all,
+  and a dialed Tor page's about:blank frame loads its image through the
+  worker. Normal mode keeps xor and its pages, and the same reading
+  recovers its site from two of its routes.
 - `node test/tor-client-smoke.mjs`: the real client against the real Tor
   network (docs/tor-over-wisp.md, "Prototype").

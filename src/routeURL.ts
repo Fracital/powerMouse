@@ -395,14 +395,18 @@ function assetBase(url: StompURL, config?: Config): string {
 }
 
 /**
- * Only the aes and base64 codecs read crypto-js, so only they load the full
- * inject bundle, which carries it (build.js, src/cryptoStub.ts); the xor and
- * generic codecs load the crypto-free injectDocument/injectWorker. A call
- * with no config takes the crypto-free bundle: the controller defaults to the
- * xor codec, and a document a shell makes always carries its config.
+ * Only the aes, base64 and siv codecs read crypto-js, so only they load the
+ * full inject bundle, which carries it (build.js, src/cryptoStub.ts); the
+ * xor and generic codecs load the crypto-free injectDocument/injectWorker. A
+ * call with no config takes the crypto-free bundle: the controller defaults
+ * to the xor codec, and a document a shell makes always carries its config.
  */
 function cryptoInject(config?: Config): boolean {
-	return config?.codec === 'aes' || config?.codec === 'base64';
+	return (
+		config?.codec === 'aes' ||
+		config?.codec === 'base64' ||
+		config?.codec === 'siv'
+	);
 }
 
 /** the document bundle this realm was loaded from: its file's name and its query (ownDocumentBundle) */

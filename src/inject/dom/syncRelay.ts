@@ -14,6 +14,7 @@
 // another origin is read only where its CORS headers allow it.
 import { acceptLanguage } from '../../acceptLanguage';
 import { encodeBase64 } from '../../base64';
+import { sealedFromHost } from '../../config';
 import { partitionSite } from '../../partition';
 import {
 	BrowserCookieArray,
@@ -63,6 +64,11 @@ export function syncRelay(
 	data: ProcessData,
 ): ProcessResult {
 	const failed = (message: string) => ({ error: { message } });
+	// the request would name its URL, its cookies and its body to the host's
+	// server, which must read nothing of such a controller's pages (Tor
+	// mode): it fails here, before anything is sent
+	if (sealedFromHost(client.config.codec))
+		return failed('The synchronous request cannot be relayed');
 	const real = unrouteURL(client, data.url);
 	if (real === null) return failed('Not found');
 	const target = new URL(real);

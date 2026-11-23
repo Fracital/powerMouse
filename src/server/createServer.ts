@@ -12,6 +12,7 @@ import {
 	ConfigCodec,
 	generateConfigCodecKey,
 	parseConfig,
+	sealedFromHost,
 	validConfigCodecKey,
 } from '../config';
 import type { IsolationEngine } from '../isolation';
@@ -313,7 +314,7 @@ keepCacheSecretWith(async (secret) =>
 	(await openConfigDB()).put('consts', secret, CACHE_SECRET_KEY),
 );
 
-const CODECS: ConfigCodec[] = ['generic', 'xor', 'aes', 'base64'];
+const CODECS: ConfigCodec[] = ['generic', 'xor', 'aes', 'base64', 'siv'];
 
 /** what the worker remembers about an address: `controller:<address>` rows */
 interface AddressRecord {
@@ -348,6 +349,23 @@ export async function addressCodec(
 /** a slot's config: the origin of its hub's controller (SitesConfig.home) */
 export function slotHome(config: Config): string | undefined {
 	return config.sites?.home ?? config.sites?.hub;
+}
+
+/**
+ * Whether a controller of a codec whose routes are kept from the host
+ * (sealedFromHost) was ever registered with this worker's database: its key
+ * is kept from the first one on, so a worker that starts again knows it
+ * before any controller is back
+ */
+export async function servedSealedCodec(): Promise<boolean> {
+	const db = await openConfigDB();
+	for (const codec of CODECS)
+		if (
+			sealedFromHost(codec) &&
+			(await db.get('consts', `codecKey:${codec}`)) !== undefined
+		)
+			return true;
+	return false;
 }
 
 /**

@@ -122,6 +122,70 @@ for (const [name, times] of [
 	);
 }
 
+// the siv codec (docs/codec.md, "The siv codec"): Node's HMAC-SHA-256 and
+// AES-256-CTR seal as it does, its seals open, and another key or a changed
+// seal opens to nothing
+{
+	const { createCipheriv, createHmac } = await import('node:crypto');
+	const out = `${OUT}codec-siv.mjs`;
+	await (
+		await import('esbuild')
+	).build({
+		entryPoints: [`${root}src/sivCodec.ts`],
+		bundle: true,
+		format: 'esm',
+		platform: 'node',
+		outfile: out,
+		logLevel: 'silent',
+	});
+	const { SIVCodec } = await import(`${out}?${Date.now()}`);
+	const key = SIVCodec.generateKey();
+	const codec = new SIVCodec(key);
+	/** the seal of the ASCII `text`, by Node's own crypto */
+	const sealed = (text) => {
+		const bytes = Buffer.alloc((text.length & ~15) + 16);
+		bytes.write(text, 'latin1');
+		bytes[text.length] = 0x80;
+		const iv = createHmac('sha256', Buffer.from(key.slice(0, 64), 'hex'))
+			.update(bytes)
+			.digest()
+			.subarray(0, 16);
+		const cipher = createCipheriv(
+			'aes-256-ctr',
+			Buffer.from(key.slice(64), 'hex'),
+			iv,
+		);
+		return Buffer.concat([iv, cipher.update(bytes), cipher.final()]).toString(
+			'base64url',
+		);
+	};
+	const texts = [
+		'',
+		'https://example.com/',
+		'https://example.com/a/b?c=d',
+		`https://example.com/${'x'.repeat(300)}`,
+	];
+	const wide = 'https://例え.テスト/パス?\uD800';
+	const other = new SIVCodec(SIVCodec.generateKey());
+	const seal = codec.encode(texts[2]);
+	const changed = `${seal.slice(0, 30)}${seal[30] === 'A' ? 'B' : 'A'}${seal.slice(31)}`;
+	ok(
+		"the siv codec seals as Node's HMAC-SHA-256 and AES-256-CTR do, its seals open, and another key or a changed seal opens to nothing",
+		SIVCodec.validKey(key) &&
+			texts.every(
+				(text) =>
+					codec.encode(text) === sealed(text) &&
+					codec.decode(codec.encode(text)) === text,
+			) &&
+			codec.decode(codec.encode(wide)) === wide &&
+			codec.encode(texts[1]) === codec.encode(texts[1]) &&
+			other.decode(seal) === '' &&
+			codec.decode(changed) === '' &&
+			codec.decode('not-a-seal') === '',
+		JSON.stringify({ seal, node: sealed(texts[2]) }),
+	);
+}
+
 const browser = await launch();
 const page = await openDemo(browser, PROXY);
 const recorder = await recordRequests(page.context());

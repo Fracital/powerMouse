@@ -4,6 +4,7 @@ import type { HelperNames } from './helperNames';
 import type { ResolvedHooks } from './hooks';
 import type { PasskeysConfig } from './passkeys/types';
 import type { JarCookie } from './server/Cookies';
+import { SIVCodec } from './sivCodec';
 import {
 	BLOCKER,
 	CONTROLLER_FRAME,
@@ -13,7 +14,7 @@ import {
 	TRANSPORT_WORKER,
 } from './version';
 
-export declare type ConfigCodec = 'generic' | 'xor' | 'aes' | 'base64';
+export declare type ConfigCodec = 'generic' | 'xor' | 'aes' | 'base64' | 'siv';
 
 /** what a document reads synchronously, served with it (Config syncSeed) */
 export interface SyncSeed {
@@ -350,6 +351,9 @@ export function parseConfig(config: Config, codecKey: string): ParsedConfig {
 		case 'base64':
 			codec = new Base64Codec(codecKey);
 			break;
+		case 'siv':
+			codec = new SIVCodec(codecKey);
+			break;
 		case 'generic':
 		default:
 			codec = new GenericCodec(codecKey);
@@ -370,6 +374,8 @@ export function generateConfigCodecKey(codec: ConfigCodec): string {
 			return XORCodec.generateKey();
 		case 'base64':
 			return Base64Codec.generateKey();
+		case 'siv':
+			return SIVCodec.generateKey();
 		case 'generic':
 		default:
 			return GenericCodec.generateKey();
@@ -383,7 +389,21 @@ export function generateConfigCodecKey(codec: ConfigCodec): string {
  */
 export function validConfigCodecKey(codec: ConfigCodec, key: unknown): boolean {
 	if (typeof key !== 'string') return false;
-	return codec === 'xor' ? XORCodec.validKey(key) : true;
+	if (codec === 'xor') return XORCodec.validKey(key);
+	if (codec === 'siv') return SIVCodec.validKey(key);
+	return true;
+}
+
+/**
+ * Whether the routes of `codec` are kept from the host's server: the siv
+ * codec encrypts them (docs/codec.md), and a controller of it is one whose
+ * pages' requests the host must never read (Tor mode, docs/tor.md). Its
+ * service worker answers every request at one of its routes itself and
+ * passes none to the network, and its documents send the host nothing that
+ * names a URL (no synchronous request relayed by the host's server).
+ */
+export function sealedFromHost(codec: ConfigCodec | undefined): boolean {
+	return codec === 'siv';
 }
 
 export function codecType(codec: GenericCodec): ConfigCodec {
@@ -393,6 +413,8 @@ export function codecType(codec: GenericCodec): ConfigCodec {
 		return 'xor';
 	} else if (codec instanceof Base64Codec) {
 		return 'base64';
+	} else if (codec instanceof SIVCodec) {
+		return 'siv';
 	} else {
 		return 'generic';
 	}

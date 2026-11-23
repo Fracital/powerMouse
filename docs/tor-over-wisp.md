@@ -597,14 +597,29 @@ asked for records no request. It also checks the reasons shown, the retry
 after a failure, a Tor tab kept in Tor mode when another turns it off, and
 a Tor tab's site data across its reload. It reaches no Tor network.
 
-What it does not cover: a proxied request the service worker does not
-answer (a request under an address no controller of the worker has after
-its revive window, a frame the worker does not control) goes to the host's
-server at its route, `/stomp-tor/<id>/<encoded URL>`. That is no
-connection to the site (the server answers with nothing of the site and
-relays nothing for Tor scopes), but the server can read the address from
-the route. Closing it means a Tor profile's worker answering such a
-request itself; not done.
+Nor does the host's server read a site's address from a route. Some
+proxied requests reach it at their route,
+`/stomp-tor/<id>/<kind>/<sealed URL>`: a forced reload of a page at the
+top of a tab of its own and that tab's favicon request (whose Referer is the route) go past the service
+worker; a page whose tab is gone found no controller once the worker had
+started again, and after the revive window the worker handed its
+requests (posts and beacons with bodies, images) to the network, as it did
+with a navigation to the route; and a dialed page's about:blank frame
+resolved its URLs against the call page, so its images went to the host
+as raw relative paths. The xor codec's routes are no protection there:
+its stream is the same for every URL under a key, so a server that knows
+the URL of one page opens the others. Tor mode's routes are sealed with
+the siv codec instead (docs/codec.md, deterministic authenticated
+encryption under a key the worker draws, which nothing sent to the host
+carries), its worker answers every request at its routes itself (an
+error, or a "Not available" page for a navigation) where it would have
+passed it on (`sealedFromHost`, src/server/serviceWorker.ts), and an
+about:blank document of a dialed page takes its creator's base. The demo's
+server answers a Tor route with a fixed 404 and logs nothing of it. What
+the server still sees of a route is its length (to 16 bytes) and that a
+URL was asked again. The `demo-tor-routes` suite records every request
+the server gets in Tor mode and finds the site in none, in any reading of
+it (tor.md, "Tested").
 
 ## Remaining work
 
@@ -653,7 +668,7 @@ isolationKey)` (deploy/tor-js `0001`); left: `resolve()`,
 11. **Remove the relay** (done): `demo/torWisp.js`, `/wisp-tor/`, the
     `STOMP_TOR_*` settings (now a warning at startup), docs/tor.md's relay
     sections.
-12. **Routes the worker does not answer** (S): a Tor profile's service
-    worker answers a routed request it has no controller for itself, so
-    the host's server never reads a site's address from a route ("It fails
-    closed").
+12. **Routes the worker does not answer** (done): Tor mode's routes are
+    sealed with the siv codec and its worker answers every request at its
+    routes itself, so the host's server never reads a site's address from
+    a route ("It fails closed").

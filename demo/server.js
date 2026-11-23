@@ -953,6 +953,17 @@ app.use(STOMP_SCOPES, (req, res, next) => {
 	}
 	next();
 });
+// Anything else under Tor mode's scopes is a request no service worker
+// answered at a route (docs/tor.md "What our server sees"). Its route is
+// encrypted with a key this server never has (the siv codec), so there is
+// nothing in it to read; it gets the same answer every time, never its own
+// path back (express's 404 page writes it), and this server logs no
+// request. Nothing of the site is relayed for it.
+app.use(['/stomp-tor/', DIAL.torDirectory], (_req, res) => {
+	res.status(404);
+	res.set('Cache-Control', 'no-store');
+	res.type('text/plain').end('Not found');
+});
 app.use(
 	'/examples/',
 	express.static(

@@ -3843,11 +3843,20 @@ export default class DocumentClient extends Client {
 			return new StompURL(named, this.codec, prefix);
 		}
 		if (ROUTE_PROTOCOLS.includes(this.baseURI.protocol)) {
-			return parseRoutedURL(
-				this.baseURI.href,
-				this.codec,
-				`${this.baseURI.origin}${this.directory}`,
-			).url;
+			const prefix = `${this.baseURI.origin}${this.directory}`;
+			// an about:blank document's base is its creator's address as the
+			// browser has it, which for a dialed document is its call page
+			// (docs/dialing.md), no route: the creator's base is the page's.
+			// Every URL the frame's hooks route threw on it, and the page's
+			// relative URLs went to the host's server as written
+			if (
+				this.global.location.protocol === 'about:' &&
+				!this.baseURI.href.startsWith(prefix)
+			) {
+				const creator = this.#creatorClient();
+				if (creator) return creator.baseURL;
+			}
+			return parseRoutedURL(this.baseURI.href, this.codec, prefix).url;
 		} else {
 			// a blob: document the page built: its shell named the page URL
 			const base = this.namedBase;

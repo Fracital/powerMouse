@@ -106,6 +106,7 @@ const SUITE_ENV = {
 	// breaks on purpose (test/offline-tor-stand-in.mjs)
 	'demo-tor-fail-closed': { STOMP_TOR_CLIENT: 'stand-in-arti' },
 	'demo-settings-menu': { STOMP_TOR_CLIENT: 'stand-in' },
+	'demo-tor-routes': { STOMP_TOR_CLIENT: 'stand-in' },
 	// epoxy plus the fixture hosts of test/mixed-servers.mjs
 	'mixed-content': { STOMP_TEST_TRANSPORT: '1' },
 	// an https page of the fixture's mixed.test, whose report-to the Reporting
@@ -209,6 +210,7 @@ const CLASSIC_SUITES = new Set([
 	'ext-tab-status',
 	'just-call-stomp-audit',
 	'wpt-navigation-api-dial',
+	'demo-tor-routes',
 ]);
 const DIAL_DEFAULT = process.env.DIAL_DEFAULT === '1';
 /** whether `name` runs on the demo's default, which dials */

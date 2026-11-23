@@ -1374,8 +1374,8 @@ async function writeLibrary(light, parts, passkeys, activation) {
  */
 // The default inject bundles (injectDocument, injectWorker) swap crypto-js
 // for a throwing stub (src/cryptoStub.ts), because crypto-js is read only by
-// the aes and base64 codecs (src/Codecs.ts, its four default imports) and the
-// common deployment runs the xor codec. Those two codecs load injectDocumentFull
+// the aes, base64 and siv codecs (src/Codecs.ts, its default imports) and the
+// common deployment runs the xor codec. Those codecs load injectDocumentFull
 // and injectWorkerFull instead, which carry crypto-js (src/routeURL.ts,
 // src/config.ts). So a proxied frame under xor or generic evaluates no crypto-js
 // (about 19 KB of the document bundle and 61 KB of the worker's, plus its
@@ -1387,6 +1387,21 @@ const stubCrypto = {
 	'crypto-js/enc-base64': cryptoStub,
 	'crypto-js/enc-utf8': cryptoStub,
 	'crypto-js/md5': cryptoStub,
+};
+/**
+ * The siv codec (src/sivCodec.ts) the same way: its class, crypto-js's
+ * HMAC-SHA-256 and core are in the full bundles only, the light ones take
+ * a class that refuses to be made (src/sivCodecStub.ts)
+ *
+ * @type {import('esbuild').Plugin}
+ */
+const stubSIV = {
+	name: 'stub-siv',
+	setup(pluginBuild) {
+		pluginBuild.onResolve({ filter: /^\.\/sivCodec$/ }, () => ({
+			path: resolve('src/sivCodecStub.ts'),
+		}));
+	},
 };
 
 /**
@@ -1828,7 +1843,7 @@ const builds = [
 		alias: stubCrypto,
 		inject: [snapshot, domSnapshot],
 		write: false,
-		plugins: [rewriterLib, deferredTable, pooledNames],
+		plugins: [stubSIV, rewriterLib, deferredTable, pooledNames],
 		define: documentDefine,
 	},
 	{
@@ -1845,7 +1860,7 @@ const builds = [
 		format: 'iife',
 		alias: stubCrypto,
 		inject: [snapshot],
-		plugins: [rewriterLib],
+		plugins: [stubSIV, rewriterLib],
 	},
 	{
 		entryPoints: { injectWorkerFull: 'src/inject/worker/entry.ts' },

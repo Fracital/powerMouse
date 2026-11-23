@@ -53,7 +53,11 @@
 //   about the margin it had. The clients' and modules' own members by
 //   short names (scripts/memberNames.mjs) took it from 465.0 to 451.3 KB,
 //   and the budget stayed: the bundle had come to 8 bytes over it, and the
-//   margin is for the fixes that come next. Raise the budget in the
+//   margin is for the fixes that come next. Tor mode's sealed routes (the
+//   siv codec's place in the config, a stand-in class here, and an
+//   about:blank document of a dialed page resolving against its creator's
+//   base, docs/tor.md "What our server sees") took it from 464.8 to 465.2
+//   KB, and the budget to 466 KB. Raise the budget in the
 //   same change as code that has to grow the bundle, and say why; first
 //   see whether it can be deferred.
 // - the JS heap one proxied frame adds (test/frame-memory.mjs, FRAMES frames
@@ -179,7 +183,7 @@ import { measureFrames } from '../frame-memory.mjs';
 import { done, FIXTURE, ok, SLOT_PORTS } from '../lib.mjs';
 
 const BUNDLE = new URL('../../dist/injectDocument.js', import.meta.url);
-const BUNDLE_BUDGET_KB = Number(process.env.INJECT_BUDGET_KB) || 465;
+const BUNDLE_BUDGET_KB = Number(process.env.INJECT_BUDGET_KB) || 466;
 const FRAMES = Number(process.env.FRAMES) || 20;
 const HEAP_LIMIT_KB = Number(process.env.FRAME_HEAP_LIMIT_KB) || 1106;
 const OTHER_LIMIT_KB = Number(process.env.FRAME_HEAP_OTHER_LIMIT_KB) || 1108;

@@ -2,7 +2,13 @@ import { BareCompatibleClient } from '@mercuryworkshop/proxy-transports';
 import type { SiteShields } from '../blocker/types';
 import { utf8Bytes } from '../byteString';
 import type GenericCodec from '../Codecs';
-import { assetName, Config, ConfigCodec, type BundleAsset } from '../config';
+import {
+	assetName,
+	Config,
+	ConfigCodec,
+	sealedFromHost,
+	type BundleAsset,
+} from '../config';
 import { switchesGroup, type OpenerFacts } from '../coop';
 import type { HopPolicy } from '../csp';
 import { extensionOfURL } from '../extensions/origin';
@@ -124,6 +130,7 @@ import createServer, {
 	addressHub,
 	openDatabasesEarly,
 	publicSuffix,
+	servedSealedCodec,
 	slotHome,
 	StompServer,
 } from './createServer';
@@ -784,6 +791,7 @@ function registerController(
 			serviceWorkers.setEventDelay(config.serviceWorkerEventDelay);
 	});
 	controllers.set(directory, ref);
+	if (sealedFromHost(config.codec)) sealedScope = true;
 	closed.delete(directory);
 	for (const wake of [...registrationWaiters]) wake();
 	// the controller's side of the port went away (it shook hands again over
@@ -2118,7 +2126,9 @@ async function serve(event: FetchEvent, ref: ControllerRef): Promise<Response> {
 				isReload: (event as FetchEvent & { isReload?: boolean }).isReload,
 				waitUntil: (promise) => event.waitUntil(promise),
 			})
-		: fetch(request);
+		: sealedFromHost(ref.config.codec)
+			? keptFromHost(request)
+			: fetch(request);
 	if (!ref.slots || request.mode !== 'navigate') return answer;
 	// (a link route's redirect goes on to its slot: onItsSlot)
 	const response = await linkOnItsSlot(ref, await answer);
@@ -2247,6 +2257,7 @@ async function unclaimed(
 		const hub = await addressHub(`${scope}${id}/`).catch(() => undefined);
 		if (hub && hub !== location.origin) return toHub(request, hub);
 	}
+	if (await sealedHere()) return keptFromHost(request);
 	return fetch(request);
 }
 
@@ -2443,6 +2454,51 @@ function originKeyed(response: Response): Response {
 	});
 }
 
+/**
+ * Whether this worker's routes are kept from the host's server
+ * (sealedFromHost: Tor mode's siv codec, docs/tor.md). Such a worker never
+ * hands a request at one of its routes to the network, where only the
+ * host's server would answer it: it reads nothing of the site there, but
+ * the request would still carry what the page sent (a POST's body, its
+ * fetch's URL as the rewriter missed it) and say that and when the page
+ * asked. A request that no controller answers (its tab is gone, the worker
+ * started again and no controller came back in the revive window, a route
+ * the router does not take) fails instead, a document with a page that
+ * says so. Set by the first controller of such a codec, and from the
+ * database when the worker starts (servedSealedCodec).
+ */
+let sealedScope = false;
+const sealedKnown = servedSealedCodec().then(
+	(served) => {
+		if (served) sealedScope = true;
+	},
+	() => {},
+);
+/** whether this worker's routes are kept from the host, once its database said */
+async function sealedHere(): Promise<boolean> {
+	await sealedKnown;
+	return sealedScope;
+}
+
+/**
+ * The answer to a request at a route no controller takes, in a worker whose
+ * routes the host must not read (sealedScope): a network error, as Tor
+ * mode's failures are, and for a document a page that says why
+ */
+function keptFromHost(request: Request): Response {
+	if (!DOCUMENT_DESTINATIONS.has(request.destination)) return Response.error();
+	return new Response(
+		'<!doctype html><meta charset="utf-8"><title>Not available</title><p>This page belonged to a tab that is gone. Open it again from a tab.</p>',
+		{
+			status: 404,
+			headers: {
+				'content-type': 'text/html; charset=utf-8',
+				'cache-control': 'no-store',
+			},
+		},
+	);
+}
+
 /** when this worker (re)started: its first moments are the revive window */
 const STARTED_AT = Date.now();
 /**
@@ -2578,7 +2634,8 @@ async function answerLink(event: FetchEvent, scope: string): Promise<Response> {
 			registrationWaiters.add(wake);
 		});
 	const live = scopeControllers(scope);
-	if (!live.length) return fetch(request);
+	if (!live.length)
+		return (await sealedHere()) ? keptFromHost(request) : fetch(request);
 	const state = takeVisitedHop(request.url);
 	const stated = state?.directory
 		? controllers.get(state.directory)
@@ -3096,6 +3153,9 @@ function dispatch(event: FetchEvent) {
 	// the site pool: a slot's navigation whose agent is gone
 	else if (event.request.mode === 'navigate' && addressShaped(pathname))
 		event.respondWith(unclaimed(event.request, pathname));
+	// a route no controller takes, which the host must not read
+	else if (sealedScope && addressShaped(pathname))
+		event.respondWith(keptFromHost(event.request));
 }
 
 /**
