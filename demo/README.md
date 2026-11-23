@@ -435,7 +435,10 @@ used until the user says so in this page, which no proxied page can click:
   one button per account that has a passkey for the site. A site that waits
   for a passkey in the background (conditional mediation) gets no sheet:
   the key button in the address bar (`#toolPasskey`) shows while its tab is
-  in front and opens the chooser.
+  in front and opens the chooser. A site that offers to save one in the
+  background (a conditional create) gets the same button, "Save a passkey",
+  which opens the Create sheet; untaken, the site's request ends at its
+  own timeout, as in Chrome.
 - **User verification.** A site is told the user was verified only when
   this page verified them with the platform's own authenticator (Windows
   Hello, Touch ID, the screen lock), which needs a secure context on a

@@ -134,6 +134,7 @@ const SUITE_ENV = {
 	'extension-manager': { STOMP_TEST_TRANSPORT: '1' },
 	// and the relying party's sites (test/passkeys-rp.mjs)
 	passkeys: { STOMP_TEST_TRANSPORT: '1' },
+	'passkeys-extensions': { STOMP_TEST_TRANSPORT: '1' },
 	'adversarial-passkeys': { STOMP_TEST_TRANSPORT: '1' },
 	// the same with the pool on: a slot's worker holds its site's keys
 	'site-pool-passkeys': { STOMP_TEST_TRANSPORT: '1', STOMP_SITE_POOL: '5' },

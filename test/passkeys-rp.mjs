@@ -200,30 +200,44 @@ export function parseAuthData(data) {
 	return out;
 }
 
-/** a COSE_Key (RFC 9052) as a Node public key: ES256 on P-256 only */
+/**
+ * A COSE_Key (RFC 9052) as a Node public key: ES256 on P-256 (kty EC2),
+ * EdDSA on Ed25519 (kty OKP, RFC 9053 7.2) or RS256 (kty RSA, RFC 8230),
+ * with its members in CTAP2's canonical order (shorter first, then
+ * bytewise). `jwk` is what the key's SubjectPublicKeyInfo must say too.
+ */
 function coseToKey(cose) {
 	if (!(cose instanceof Map)) throw new Error('the key is not a map');
-	const keys = [...cose.keys()];
-	// CTAP2 canonical CBOR: 1, 3, -1, -2, -3 (shorter first, then bytewise)
-	if (keys.join() !== '1,3,-1,-2,-3')
-		throw new Error(`COSE key members ${keys.join()}`);
-	if (cose.get(1) !== 2) throw new Error(`kty ${cose.get(1)}`);
-	if (cose.get(3) !== -7) throw new Error(`alg ${cose.get(3)}`);
-	if (cose.get(-1) !== 1) throw new Error(`crv ${cose.get(-1)}`);
-	const x = cose.get(-2);
-	const y = cose.get(-3);
-	if (!Buffer.isBuffer(x) || x.length !== 32 || !Buffer.isBuffer(y))
-		throw new Error('x or y is not 32 bytes');
-	if (y.length !== 32) throw new Error('y is not 32 bytes');
-	return {
-		alg: -7,
-		x,
-		y,
-		key: createPublicKey({
-			key: { kty: 'EC', crv: 'P-256', x: b64url(x), y: b64url(y) },
-			format: 'jwk',
-		}),
+	const keys = [...cose.keys()].join();
+	const alg = cose.get(3);
+	const bytesOf = (label, length) => {
+		const value = cose.get(label);
+		if (!Buffer.isBuffer(value) || (length && value.length !== length))
+			throw new Error(`COSE key member ${label} is not ${length} bytes`);
+		return value;
 	};
+	let jwk;
+	if (alg === -7) {
+		if (keys !== '1,3,-1,-2,-3') throw new Error(`COSE key members ${keys}`);
+		if (cose.get(1) !== 2) throw new Error(`kty ${cose.get(1)}`);
+		if (cose.get(-1) !== 1) throw new Error(`crv ${cose.get(-1)}`);
+		jwk = {
+			kty: 'EC',
+			crv: 'P-256',
+			x: b64url(bytesOf(-2, 32)),
+			y: b64url(bytesOf(-3, 32)),
+		};
+	} else if (alg === -8) {
+		if (keys !== '1,3,-1,-2') throw new Error(`COSE key members ${keys}`);
+		if (cose.get(1) !== 1) throw new Error(`kty ${cose.get(1)}`);
+		if (cose.get(-1) !== 6) throw new Error(`crv ${cose.get(-1)}`);
+		jwk = { kty: 'OKP', crv: 'Ed25519', x: b64url(bytesOf(-2, 32)) };
+	} else if (alg === -257) {
+		if (keys !== '1,3,-1,-2') throw new Error(`COSE key members ${keys}`);
+		if (cose.get(1) !== 3) throw new Error(`kty ${cose.get(1)}`);
+		jwk = { kty: 'RSA', n: b64url(bytesOf(-1, 256)), e: b64url(bytesOf(-2)) };
+	} else throw new Error(`alg ${alg}`);
+	return { alg, jwk, key: createPublicKey({ key: jwk, format: 'jwk' }) };
 }
 
 function clientData(json, type, expected) {
@@ -298,8 +312,9 @@ export function verifyRegistration(credential, expected) {
 		format: 'der',
 		type: 'spki',
 	}).export({ format: 'jwk' });
-	if (spki.x !== b64url(key.x) || spki.y !== b64url(key.y))
-		throw new Error('publicKey is not the attested key');
+	for (const member of ['kty', 'crv', 'x', 'y', 'n', 'e'])
+		if (spki[member] !== key.jwk[member])
+			throw new Error('publicKey is not the attested key');
 	if (
 		!Array.isArray(response.transports) ||
 		response.transports.some((transport) => typeof transport !== 'string')
@@ -325,6 +340,7 @@ export function verifyRegistration(credential, expected) {
 			aaguid: parsed.aaguid,
 			credentialIdLength: parsed.credentialId.length,
 			coseLength: parsed.coseBytes.length,
+			alg: key.alg,
 			extensions: parsed.extensions ? [...parsed.extensions.keys()] : null,
 			transports: response.transports,
 			attachment: credential.authenticatorAttachment ?? null,
@@ -353,8 +369,16 @@ export function verifyAssertion(credential, expected, stored) {
 		authData,
 		sha256(unb64url(response.clientDataJSON)),
 	]);
-	// ES256 signatures are ASN.1 DER (6.5.5), which is what Node verifies
-	if (!verify('sha256', signed, stored.key, signature))
+	// ES256 signatures are ASN.1 DER (6.5.5), which is what Node verifies;
+	// EdDSA's hash nothing first
+	if (
+		!verify(
+			stored.key.asymmetricKeyType === 'ed25519' ? null : 'sha256',
+			signed,
+			stored.key,
+			signature,
+		)
+	)
 		throw new Error('the signature does not verify under the kept key');
 	if (
 		(parsed.signCount !== 0 || stored.signCount !== 0) &&

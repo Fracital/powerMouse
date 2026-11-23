@@ -10,6 +10,9 @@
 //   __pk.order(kind)         the members Chrome reads of each dictionary
 //   __pk.register(params)    a whole registration against the server
 //   __pk.login(params)       a whole sign-in against the server
+//                            (`params.extensions` are added to the
+//                            server's, with `{ $bytes: base64url }` and
+//                            `{ $fill: [length, byte] }` made bytes)
 //   __pk.start(name, params) the same, not waited for: __pk.read(id) has it
 //   __pk.arm(name, params)   run it from the click of #go (user activation)
 //
@@ -641,6 +644,55 @@
 						extensions: { largeBlob: { read: true, write: new Uint8Array(4) } },
 					}),
 				),
+			largeBlobWriteNoAllow: () =>
+				get(
+					request({
+						timeout: 600,
+						extensions: { largeBlob: { write: new Uint8Array(4) } },
+					}),
+				),
+			largeBlobWriteTwoAllowed: () =>
+				get(
+					request({
+						timeout: 600,
+						allowCredentials: [
+							{ type: 'public-key', id: new Uint8Array(32) },
+							{ type: 'public-key', id: new Uint8Array(16) },
+						],
+						extensions: { largeBlob: { write: new Uint8Array(4) } },
+					}),
+				),
+			largeBlobWriteTooLarge: () =>
+				get(
+					request({
+						timeout: 600,
+						allowCredentials: [{ type: 'public-key', id: new Uint8Array(32) }],
+						extensions: { largeBlob: { write: new Uint8Array(2049) } },
+					}),
+				),
+			largeBlobWriteTooLargeNoAllow: () =>
+				get(
+					request({
+						timeout: 600,
+						extensions: { largeBlob: { write: new Uint8Array(2049) } },
+					}),
+				),
+			largeBlobReadWriteTooLarge: () =>
+				get(
+					request({
+						timeout: 600,
+						extensions: {
+							largeBlob: { read: true, write: new Uint8Array(2049) },
+						},
+					}),
+				),
+			largeBlobWriteTooLargeAborted: () =>
+				get(
+					request({
+						extensions: { largeBlob: { write: new Uint8Array(2049) } },
+					}),
+					{ signal: aborted() },
+				),
 			conditionalAllowAborted: () =>
 				get(request(), { mediation: 'conditional', signal: abortSoon(300) }),
 			conditionalAbortReason: () =>
@@ -945,6 +997,14 @@
 						userHandleTag: tag(response.userHandle),
 					}),
 			extensions: JSON.stringify(credential.getClientExtensionResults()),
+			// with each buffer's realm and length (a large blob, a credBlob)
+			extensionBytes: JSON.stringify(
+				credential.getClientExtensionResults(),
+				(key, value) =>
+					value instanceof ArrayBuffer
+						? `ArrayBuffer(${value.byteLength})`
+						: value,
+			),
 			extensionsTag: tag(credential.getClientExtensionResults()),
 			extensionsFresh:
 				credential.getClientExtensionResults() !==
@@ -995,6 +1055,23 @@
 		});
 		return response.json();
 	};
+	/** extensions as JSON carries them, with bytes made bytes */
+	const revive = (value) => {
+		if (value === null || typeof value !== 'object') return value;
+		if (typeof value.$bytes === 'string') return unb64url(value.$bytes);
+		if (Array.isArray(value.$fill))
+			return new Uint8Array(value.$fill[0]).fill(value.$fill[1]);
+		return Object.fromEntries(
+			Object.entries(value).map(([name, item]) => [name, revive(item)]),
+		);
+	};
+	const withExtensions = (publicKey, extensions) => {
+		if (extensions)
+			publicKey.extensions = {
+				...publicKey.extensions,
+				...revive(extensions),
+			};
+	};
 	let ceremony = 0;
 	const key = (label) =>
 		`${query.get('id') ?? 'page'}-${label}-${++ceremony}-${Date.now()}`;
@@ -1019,6 +1096,7 @@
 		});
 		const publicKey = PublicKeyCredential.parseCreationOptionsFromJSON(json);
 		if (params.patch) Object.assign(publicKey, params.patch);
+		withExtensions(publicKey, params.extensions);
 		const signal = params.abortAfter ? abortSoon(params.abortAfter) : undefined;
 		const outcome = await settle(
 			() =>
@@ -1060,6 +1138,7 @@
 		});
 		const publicKey = PublicKeyCredential.parseRequestOptionsFromJSON(json);
 		if (params.patch) Object.assign(publicKey, params.patch);
+		withExtensions(publicKey, params.extensions);
 		// ask by these ids (base64url), whatever the server lists
 		if (params.allowIds)
 			publicKey.allowCredentials = params.allowIds.map((id) => ({

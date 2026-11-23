@@ -1,11 +1,16 @@
 // CBOR as CTAP2 writes it (the "CTAP2 canonical CBOR encoding form"):
 // definite lengths, the shortest form of every integer, and a map's keys
 // sorted by their encoded length and then bytewise. Only what an
-// authenticator's output needs: integers, byte strings, text strings,
-// arrays and maps.
+// authenticator's output needs: integers, booleans, byte strings, text
+// strings, arrays and maps.
 
 export type CBORValue =
-	number | string | Uint8Array | CBORValue[] | Map<number | string, CBORValue>;
+	| number
+	| boolean
+	| string
+	| Uint8Array
+	| CBORValue[]
+	| Map<number | string, CBORValue>;
 
 function head(major: number, value: number): number[] {
 	const type = major << 5;
@@ -40,6 +45,8 @@ export function concat(parts: ArrayLike<number>[]): Uint8Array {
 }
 
 export function encodeCBOR(value: CBORValue): Uint8Array {
+	// the simple values true and false (major type 7)
+	if (typeof value === 'boolean') return new Uint8Array([value ? 0xf5 : 0xf4]);
 	if (typeof value === 'number')
 		return new Uint8Array(value < 0 ? head(1, -1 - value) : head(0, value));
 	if (typeof value === 'string') {

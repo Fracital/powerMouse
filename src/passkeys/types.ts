@@ -30,6 +30,15 @@ export interface PasskeyCreateOptions {
 	prf?: { eval?: PrfValues };
 	/** the appidExclude extension's AppID: checked against the origin, as Chrome checks it, and used for nothing */
 	appid?: string;
+	/** the largeBlob extension was asked for, with its `support` (`preferred` when it named none) */
+	largeBlob?: 'required' | 'preferred';
+	/** the credBlob extension's blob, to keep with the credential when it fits */
+	credBlob?: ArrayBuffer;
+	/**
+	 * `mediation: 'conditional'`: the site offers to save a passkey in the
+	 * background; it is never told no, and waits for the user to take it
+	 */
+	conditional?: boolean;
 }
 
 /** a page's `credentials.get({ publicKey })`, converted as Chrome converts it */
@@ -44,6 +53,10 @@ export interface PasskeyGetOptions {
 	prf?: { eval?: PrfValues; byCredential?: Record<string, PrfValues> };
 	/** the appid extension's AppID: checked against the origin, and used for nothing */
 	appid?: string;
+	/** the largeBlob extension: read the chosen credential's blob, or write this one in its place */
+	largeBlob?: { read: true } | { write: ArrayBuffer };
+	/** the getCredBlob extension: the chosen credential's credBlob */
+	getCredBlob?: boolean;
 }
 
 /** what a page asks of the signal API (PublicKeyCredential.signal*) */
@@ -108,6 +121,10 @@ export interface PasskeyAttestation {
 	/** whether the credential is discoverable (credProps.rk) */
 	discoverable: boolean;
 	prf?: { enabled: boolean; results?: PrfValues };
+	/** largeBlob: whether the credential can hold a large blob */
+	largeBlob?: boolean;
+	/** credBlob: whether the blob was kept */
+	credBlob?: boolean;
 }
 
 /** an assertion, as bytes */
@@ -118,6 +135,10 @@ export interface PasskeyAssertion {
 	signature: ArrayBuffer;
 	userHandle: ArrayBuffer | null;
 	prf?: { results?: PrfValues };
+	/** largeBlob: the blob read (none when the credential holds none), or whether one was written */
+	largeBlob?: { blob?: ArrayBuffer } | { written: boolean };
+	/** getCredBlob: the credential's credBlob, empty when it has none */
+	credBlob?: ArrayBuffer;
 }
 
 /** the answer on a ceremony's port */
@@ -170,9 +191,12 @@ export interface PasskeyRequest {
 	/** `get`: the held passkeys that may answer, newest use first; may be empty */
 	credentials?: PasskeyInfo[];
 	/**
-	 * `get`: the site waits in the background for the user to pick a passkey
-	 * (conditional mediation, the browser's autofill): show nothing modal.
-	 * Resolving null leaves the site waiting.
+	 * The site waits in the background (conditional mediation): show
+	 * nothing modal. For `get`, for the user to pick a passkey (the
+	 * browser's autofill); for `create`, for the user to save one (a site
+	 * offering a passkey after a sign-in with a password). Resolving null
+	 * leaves the site waiting, until its own timeout or signal ends it, and
+	 * it is never told that nobody took the offer.
 	 */
 	conditional?: boolean;
 	/** what the site asks of user verification */

@@ -16,17 +16,20 @@
 //
 // What it writes is WebAuthn Level 3's: authenticator data (6.1), a `none`
 // attestation object (6.5.5, 8.7), client data (5.8.1) serialized as Chrome
-// serializes it, and ES256 signatures in ASN.1 DER (RS256 when the site
-// prefers it). The signature counter is always 0 and the AAGUID all zeros,
-// as a software provider without a registered model has them; the
-// credentials are neither backup eligible nor backed up (BE and BS are 0),
-// which is true: they live in this browser's storage and nowhere else.
+// serializes it, and ES256 signatures in ASN.1 DER (EdDSA or RS256 when the
+// site lists one of them first), with the largeBlob and credBlob
+// extensions as CTAP 2.1 keeps them. The signature counter is always 0 and
+// the AAGUID all zeros, as a software provider without a registered model
+// has them; the credentials are neither backup eligible nor backed up (BE
+// and BS are 0), which is true: they live in this browser's storage and
+// nowhere else.
 import { closeOnDelete, storeName } from '../profile';
 import { PASSKEYS_DATABASE, PASSKEYS_STORE, type JarDB } from '../server/jarDB';
 import { concat, encodeCBOR, type CBORValue } from './cbor';
 import {
 	PASSKEY_CANCEL,
 	type PasskeyAnswer,
+	type PasskeyAssertion,
 	type PasskeyCeremony,
 	type PasskeyCommand,
 	type PasskeyCreateOptions,
@@ -40,11 +43,22 @@ import {
 	type Requirement,
 } from './types';
 
-/** COSE's names for ECDSA with SHA-256 on P-256 and RSASSA-PKCS1-v1_5 with SHA-256 */
+/**
+ * COSE's names for ECDSA with SHA-256 on P-256, EdDSA (on Ed25519, the one
+ * curve WebAuthn and Chrome's authenticators take it on) and
+ * RSASSA-PKCS1-v1_5 with SHA-256. Chrome's virtual authenticator (159)
+ * makes these three and no other (not the fully specified Ed25519, -19),
+ * the first of them the site lists, whatever the order.
+ */
 const ES256 = -7;
+const EDDSA = -8;
 const RS256 = -257;
-const ALGORITHMS: Record<number, RsaHashedKeyGenParams | EcKeyGenParams> = {
+const ALGORITHMS: Record<
+	number,
+	RsaHashedKeyGenParams | EcKeyGenParams | Algorithm
+> = {
 	[ES256]: { name: 'ECDSA', namedCurve: 'P-256' },
+	[EDDSA]: { name: 'Ed25519' },
 	[RS256]: {
 		name: 'RSASSA-PKCS1-v1_5',
 		modulusLength: 2048,
@@ -52,6 +66,31 @@ const ALGORITHMS: Record<number, RsaHashedKeyGenParams | EcKeyGenParams> = {
 		hash: 'SHA-256',
 	},
 };
+
+/**
+ * Whether this browser's WebCrypto makes keys of `algorithm`: Ed25519 is
+ * there in Chrome from 137, Firefox from 129 and Safari from 17; where it
+ * is not, a site that lists EdDSA first gets the next it lists, as from an
+ * authenticator without it
+ */
+let ed25519: Promise<boolean> | null = null;
+function makes(algorithm: number): Promise<boolean> {
+	if (algorithm !== EDDSA) return Promise.resolve(algorithm in ALGORITHMS);
+	ed25519 ??= crypto.subtle
+		.generateKey(ALGORITHMS[EDDSA], false, ['sign'])
+		.then(
+			() => true,
+			() => false,
+		);
+	return ed25519;
+}
+
+/**
+ * The most a credential's credBlob holds: CTAP 2.1's least
+ * maxCredBlobLength, which Chrome's virtual authenticator has (a longer one
+ * is not kept, and the site is told so)
+ */
+const MAX_CRED_BLOB = 32;
 
 // Chrome's words (measured against its virtual authenticator, 152 and 156)
 const NOT_ALLOWED =
@@ -84,6 +123,12 @@ interface Held {
 	publicKey: ArrayBuffer;
 	/** the PRF extension's keys, without and with user verification; not extractable */
 	prf?: [CryptoKey, CryptoKey];
+	/** made with the largeBlob extension: it may hold a large blob (CTAP 2.1's largeBlobKey) */
+	largeBlobSupported?: boolean;
+	/** its large blob, as the site last wrote it; none when it wrote an empty one */
+	largeBlob?: ArrayBuffer;
+	/** the credBlob extension's blob, kept as it was made */
+	credBlob?: ArrayBuffer;
 }
 
 const bytes = (value: ArrayBuffer | Uint8Array): Uint8Array =>
@@ -270,31 +315,47 @@ function clientData(
 const UP = 0x01;
 const UV = 0x04;
 const AT = 0x40;
+const ED = 0x80;
 
-/** authenticator data (6.1): the rp id's hash, the flags, a zero counter, and what follows */
+/**
+ * authenticator data (6.1): the rp id's hash, the flags, a zero counter,
+ * what is attested, and the authenticator's extension outputs (ED), a
+ * CBOR map, when there are any
+ */
 async function authenticatorData(
 	rpId: string,
 	flags: number,
 	attested?: Uint8Array,
+	extensions?: Map<string, CBORValue>,
 ): Promise<Uint8Array> {
+	const outputs = extensions?.size ? encodeCBOR(extensions) : null;
 	return concat([
 		await sha256(rpId),
-		[flags],
+		[flags | (outputs ? ED : 0)],
 		// the signature counter: always 0, as a credential that is not kept
 		// on one device alone has it (6.1.1: the site then skips the check)
 		[0, 0, 0, 0],
 		attested ?? [],
+		outputs ?? [],
 	]);
 }
 
 /**
- * The COSE_Key of a public key (RFC 9053 7.1.1, RFC 8230 4): for ES256 kty
- * EC2, alg, crv P-256, x, y; for RS256 kty RSA, alg, n, e
+ * The COSE_Key of a public key (RFC 9053 7.1.1 and 7.2, RFC 8230 4): for
+ * ES256 kty EC2, alg, crv P-256, x, y; for EdDSA kty OKP, alg, crv
+ * Ed25519, x; for RS256 kty RSA, alg, n, e
  */
 async function coseKey(
 	key: CryptoKey,
 	algorithm: number,
 ): Promise<Map<number, number | Uint8Array>> {
+	if (algorithm === EDDSA)
+		return new Map<number, number | Uint8Array>([
+			[1, 1],
+			[3, EDDSA],
+			[-1, 6],
+			[-2, new Uint8Array(await crypto.subtle.exportKey('raw', key))],
+		]);
 	if (algorithm === RS256) {
 		const jwk = await crypto.subtle.exportKey('jwk', key);
 		return new Map<number, number | Uint8Array>([
@@ -329,6 +390,31 @@ function derSignature(raw: Uint8Array): Uint8Array {
 		...integer(raw.subarray(half)),
 	];
 	return new Uint8Array([0x30, body.length, ...body]);
+}
+
+/**
+ * A signature over `signed` with a held key, as WebAuthn encodes each
+ * algorithm's (6.5.5): ECDSA's in ASN.1 DER, EdDSA's and RSA's as they are
+ */
+async function signWith(held: Held, signed: BufferSource): Promise<Uint8Array> {
+	const algorithm = held.algorithm ?? ES256;
+	if (algorithm === RS256)
+		return new Uint8Array(
+			await crypto.subtle.sign('RSASSA-PKCS1-v1_5', held.privateKey, signed),
+		);
+	if (algorithm === EDDSA)
+		return new Uint8Array(
+			await crypto.subtle.sign('Ed25519', held.privateKey, signed),
+		);
+	return derSignature(
+		new Uint8Array(
+			await crypto.subtle.sign(
+				{ name: 'ECDSA', hash: 'SHA-256' },
+				held.privateKey,
+				signed,
+			),
+		),
+	);
 }
 
 /** the PRF extension's output for one input (10.1.4: the salt is a hash of the input under a fixed prefix) */
@@ -466,27 +552,51 @@ export function runCeremony(
 		host.config.uv === true &&
 		answer.userVerified === true &&
 		asked !== 'discouraged';
+	// a refusal a conditional request never hears: it waits for the user,
+	// until the page's own timeout or signal ends it
+	const waits = (): Promise<PasskeyReply> =>
+		new Promise<PasskeyReply>(() => {});
 
 	const create = async (
 		options: PasskeyCreateOptions,
 	): Promise<PasskeyReply> => {
-		// Chrome asks no authenticator for a page that is not in front
-		if (!(await host.focused()))
+		// A conditional create (a site offering a passkey in the background,
+		// 5.1.3) is never refused where the site could tell: Chrome lets it
+		// wait, silently, until the page's timeout, unless the user takes it
+		const conditional = options.conditional === true;
+		const no = (): Promise<PasskeyReply> | PasskeyReply =>
+			conditional ? waits() : refused();
+		// Chrome asks no authenticator for a page that is not in front (a
+		// conditional request shows nothing that needs the focus)
+		if (!conditional && !(await host.focused()))
 			return { error: ['NotAllowedError', NOT_FOCUSED] };
 		// the first algorithm of the site's that this authenticator makes
-		const algorithm = options.algs.find((alg) => alg in ALGORITHMS);
-		// none, a security key asked for by name, or a verification this host
-		// cannot make: the browser would find no authenticator to offer
+		let algorithm: number | undefined;
+		for (const alg of options.algs)
+			if (await makes(alg)) {
+				algorithm = alg;
+				break;
+			}
+		// a platform authenticator makes every credential discoverable unless
+		// the site asked for one that is not
+		const discoverable = options.residentKey !== 'discouraged';
+		// none, a security key asked for by name, a verification this host
+		// cannot make, or a large blob required of a credential that cannot
+		// hold one (CTAP 2.1 keeps them for discoverable credentials only):
+		// the browser would find no authenticator to offer
 		if (
 			algorithm === undefined ||
 			options.attachment === 'cross-platform' ||
-			(options.userVerification === 'required' && host.config.uv !== true)
+			(options.userVerification === 'required' && host.config.uv !== true) ||
+			(options.largeBlob === 'required' && !discoverable)
 		)
-			return refused();
+			return no();
 		const held = await heldFor(ceremony.rpId);
 		const excluded = options.exclude.some((id) =>
 			held.some((credential) => credential.id === toBase64URL(id)),
 		);
+		// nothing to offer in the background: a passkey of the account is here
+		if (excluded && conditional) return waits();
 		const answer = await ask({
 			type: 'create',
 			user: {
@@ -494,13 +604,15 @@ export function runCeremony(
 				displayName: options.user.displayName,
 			},
 			...(excluded ? { excluded: true } : {}),
+			...(conditional ? { conditional: true } : {}),
 			userVerification: options.userVerification,
 		});
-		if (!answer || abort.signal.aborted) return refused();
+		if (abort.signal.aborted) return refused();
+		if (!answer) return no();
 		// said only now, to a user who agreed (6.3.2 step 3)
 		if (excluded) return { error: ['InvalidStateError', EXCLUDED] };
 		const verified = verifiedBy(answer, options.userVerification);
-		if (options.userVerification === 'required' && !verified) return refused();
+		if (options.userVerification === 'required' && !verified) return no();
 
 		const pair = (await crypto.subtle.generateKey(
 			ALGORITHMS[algorithm],
@@ -517,9 +629,11 @@ export function runCeremony(
 				false,
 				['sign'],
 			);
-		// a platform authenticator makes every credential discoverable unless
-		// the site asked for one that is not
-		const discoverable = options.residentKey !== 'discouraged';
+		const credBlob =
+			options.credBlob !== undefined &&
+			options.credBlob.byteLength <= MAX_CRED_BLOB
+				? options.credBlob
+				: undefined;
 		const credential: Held = {
 			id: toBase64URL(id),
 			rpId: ceremony.rpId,
@@ -533,6 +647,10 @@ export function runCeremony(
 			algorithm,
 			publicKey,
 			...(options.prf ? { prf: [await prfKey(), await prfKey()] } : {}),
+			...(options.largeBlob && discoverable
+				? { largeBlobSupported: true }
+				: {}),
+			...(credBlob ? { credBlob } : {}),
 		};
 		// one credential per user handle and relying party: a new one takes
 		// the place of the old (6.3.2 step 7.4 for a discoverable one)
@@ -556,6 +674,8 @@ export function runCeremony(
 				id,
 				cose,
 			]),
+			// the credBlob extension's output (CTAP 2.1, 12.2): said when kept
+			credBlob ? new Map([['credBlob', true]]) : undefined,
 		);
 		const attestationObject = encodeCBOR(
 			new Map<string, CBORValue>([
@@ -579,15 +699,16 @@ export function runCeremony(
 				...(options.prf
 					? { prf: { enabled: true, ...(results ? { results } : {}) } }
 					: {}),
+				...(options.largeBlob
+					? { largeBlob: credential.largeBlobSupported === true }
+					: {}),
+				...(options.credBlob !== undefined ? { credBlob: !!credBlob } : {}),
 			},
 		};
 	};
 
 	const get = async (options: PasskeyGetOptions): Promise<PasskeyReply> => {
 		const conditional = options.mediation === 'conditional';
-		// a refusal a conditional request never hears: it waits for the user
-		const waits = (): Promise<PasskeyReply> =>
-			new Promise<PasskeyReply>(() => {});
 		// (no focus check: Chrome makes one for create() only, at its start
 		// and its end, and a get() of a page that is not in front waits for
 		// the user like any other)
@@ -619,30 +740,41 @@ export function runCeremony(
 		const verified = verifiedBy(answer, options.userVerification);
 		if (options.userVerification === 'required' && !verified) return refused();
 
+		// the largeBlob extension: the credential's blob read, or a new one
+		// written in its place. A write needs the user verified where the
+		// authenticator can verify (CTAP 2.1's largeBlobWrite permission, as
+		// Chrome's virtual authenticator has it): not when the site
+		// discouraged a verification; a host that verifies nobody writes
+		// without one, as an authenticator that cannot verify does
+		let largeBlob: PasskeyAssertion['largeBlob'];
+		if (options.largeBlob && 'write' in options.largeBlob) {
+			const written =
+				chosen.largeBlobSupported === true &&
+				(host.config.uv !== true || verified);
+			if (written) {
+				if (options.largeBlob.write.byteLength)
+					chosen.largeBlob = options.largeBlob.write;
+				else delete chosen.largeBlob;
+			}
+			largeBlob = { written };
+		} else if (options.largeBlob)
+			largeBlob = chosen.largeBlob ? { blob: chosen.largeBlob } : {};
+		const credBlob = options.getCredBlob
+			? (chosen.credBlob ?? new ArrayBuffer(0))
+			: undefined;
+
 		const data = clientData('webauthn.get', options.challenge, ceremony);
 		const authData = await authenticatorData(
 			ceremony.rpId,
 			UP | (verified ? UV : 0),
+			undefined,
+			// getCredBlob's output (CTAP 2.1, 12.2): the blob, empty without one
+			credBlob ? new Map([['credBlob', new Uint8Array(credBlob)]]) : undefined,
 		);
-		const signed = concat([authData, await sha256(data)]) as BufferSource;
-		const signature =
-			(chosen.algorithm ?? ES256) === RS256
-				? new Uint8Array(
-						await crypto.subtle.sign(
-							'RSASSA-PKCS1-v1_5',
-							chosen.privateKey,
-							signed,
-						),
-					)
-				: derSignature(
-						new Uint8Array(
-							await crypto.subtle.sign(
-								{ name: 'ECDSA', hash: 'SHA-256' },
-								chosen.privateKey,
-								signed,
-							),
-						),
-					);
+		const signature = await signWith(
+			chosen,
+			concat([authData, await sha256(data)]) as BufferSource,
+		);
 		chosen.lastUsed = Date.now();
 		await keep(chosen);
 		const results = await prfResults(
@@ -659,6 +791,8 @@ export function runCeremony(
 				// a discoverable credential names its user (6.3.3 step 13)
 				userHandle: chosen.discoverable ? chosen.userHandle : null,
 				...(options.prf ? { prf: results ? { results } : {} } : {}),
+				...(largeBlob ? { largeBlob } : {}),
+				...(credBlob ? { credBlob } : {}),
 			},
 		};
 	};

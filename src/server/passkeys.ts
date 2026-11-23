@@ -42,6 +42,7 @@ const policyRefusal = (feature: string): PasskeyReply => ({
 
 // bounds on what a page may send on: a challenge, a user handle and a
 // credential id are short; a list of ids is as long as an account's passkeys
+// (and a large blob is at most 2 KiB, the inject's check, Chrome's)
 const MAX_BYTES = 4096;
 const MAX_TEXT = 1024;
 const MAX_LIST = 256;
@@ -111,9 +112,26 @@ function createOptions(value: unknown): PasskeyCreateOptions | null {
 	}
 	const appid = given.appid === undefined ? undefined : text(given.appid);
 	if (appid === null) return null;
+	const largeBlob =
+		given.largeBlob === undefined
+			? undefined
+			: given.largeBlob === 'required'
+				? 'required'
+				: 'preferred';
+	// a credBlob of any length is asked for; one too long is not kept
+	const credBlob =
+		given.credBlob === undefined
+			? undefined
+			: given.credBlob instanceof ArrayBuffer
+				? given.credBlob
+				: null;
+	if (credBlob === null) return null;
 	return {
 		...(appid !== undefined ? { appid } : {}),
 		...(rpId !== undefined ? { rpId } : {}),
+		...(largeBlob ? { largeBlob } : {}),
+		...(credBlob ? { credBlob } : {}),
+		...(given.conditional === true ? { conditional: true } : {}),
 		rpName,
 		user: { id, name, displayName },
 		challenge,
@@ -163,9 +181,22 @@ function getOptions(value: unknown): PasskeyGetOptions | null {
 	}
 	const appid = given.appid === undefined ? undefined : text(given.appid);
 	if (appid === null) return null;
+	let largeBlob: PasskeyGetOptions['largeBlob'];
+	if (given.largeBlob !== undefined) {
+		const asked = given.largeBlob as { read?: unknown; write?: unknown } | null;
+		if (asked === null || typeof asked !== 'object') return null;
+		if (asked.read === true) largeBlob = { read: true };
+		else {
+			const write = bytes(asked.write);
+			if (!write) return null;
+			largeBlob = { write };
+		}
+	}
 	return {
 		...(appid !== undefined ? { appid } : {}),
 		...(rpId !== undefined ? { rpId } : {}),
+		...(largeBlob ? { largeBlob } : {}),
+		...(given.getCredBlob === true ? { getCredBlob: true } : {}),
 		challenge,
 		allow,
 		userVerification: requirement(given.userVerification),

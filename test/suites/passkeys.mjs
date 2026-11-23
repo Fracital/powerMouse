@@ -62,6 +62,8 @@ const AUTHENTICATOR = {
 	hasUserVerification: true,
 	isUserVerified: true,
 	hasPrf: true,
+	// STomp's keeps large blobs (passkeys-extensions compares them)
+	hasLargeBlob: true,
 	automaticPresenceSimulation: true,
 };
 /** an authenticator that cannot verify the user: the oracle where the host verifies nobody */
@@ -828,8 +830,12 @@ for (const [mode, base, uv] of [
 			show(capable) ===
 				show(
 					[
+						'conditionalCreate',
 						'conditionalGet',
+						'extension:credBlob',
 						'extension:credProps',
+						'extension:getCredBlob',
+						'extension:largeBlob',
 						'extension:prf',
 						'passkeyPlatformAuthenticator',
 						'relatedOrigins',

@@ -2,7 +2,9 @@
 
 **Measured 2026-11-17 against Chrome 157, with Chrome's virtual authenticator
 (CDP WebAuthn) as the oracle** (the passkeys, passkeys-safety,
-adversarial-passkeys and webauthn-related-origins suites).
+adversarial-passkeys and webauthn-related-origins suites); EdDSA, the
+largeBlob and credBlob extensions and conditional create on 2026-11-22
+against Chrome 159 (passkeys-extensions).
 
 Short version: the browser's own WebAuthn cannot work through an
 origin-rewriting proxy, so STomp is the passkey provider for proxied sites
@@ -36,13 +38,22 @@ every proxied site on a secure origin:
   non-discoverable credentials (`residentKey`, `requireResidentKey`),
   `excludeCredentials` (the site is told `InvalidStateError` only after the
   user agrees, as WebAuthn 6.3.2 says), `pubKeyCredParams` in the site's order
-  (ES256, and RS256 when the site lists it first), attestation `none` whatever
-  the site asks, `credProps` and `prf`;
+  (the first the site lists of ES256, EdDSA on Ed25519 and RS256, as Chrome's
+  authenticator picks), attestation `none` whatever the site asks,
+  `credProps`, `prf`, `largeBlob` (`support`) and `credBlob`;
+- conditional create (`mediation: "conditional"`): the site waits without a
+  dialog, as it does natively, and the demo offers to save the passkey from
+  its key button while the tab's site waits; nobody taking the offer ends
+  the request at the page's own timeout or signal with Chrome's
+  `NotAllowedError`, and never says why (an account that has a passkey here
+  already, a requirement no credential here meets);
 - `navigator.credentials.get({ publicKey })`: by `allowCredentials` or a
   discoverable credential, `userVerification`, conditional mediation (the
   demo offers the passkey from a key button in its address bar while the
   tab's site waits, and never shows a sheet for it), `prf` (`eval`,
-  `evalByCredential`), the `appid` extension's origin check;
+  `evalByCredential`), `largeBlob` (`read`, and `write` of up to 2 KiB to
+  the one credential the site names), `getCredBlob`, the `appid`
+  extension's origin check;
 - timeouts and `AbortSignal`, one request at a time per document ("A request
   is already pending."), the user activation a frame of another origin needs
   to create, the focus check of `create()` (of the tab, as Chrome's: a frame
@@ -50,7 +61,11 @@ every proxied site on a secure origin:
   `get()`, and neither does STomp);
 - `PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable`,
   `isConditionalMediationAvailable`, `getClientCapabilities` (answered for
-  STomp's authenticator, in a later task as Chrome answers them),
+  STomp's authenticator, in a later task as Chrome answers them:
+  `conditionalCreate`, `conditionalGet`, `relatedOrigins`, the three
+  signals and the `credBlob`, `credProps`, `getCredBlob`, `largeBlob` and
+  `prf` extensions true, the two user-verifying ones only where the host
+  verifies, every other name Chrome lists false),
   `signalUnknownCredential`, `signalAllAcceptedCredentials`,
   `signalCurrentUserDetails` (they change what STomp holds, without a prompt),
   and the browser's own `parseCreationOptionsFromJSON`,
@@ -105,14 +120,15 @@ cancels), and its buttons ignore input for 500 ms after it shows so that a key
 or click meant for the page cannot confirm it. Nothing confirms by itself.
 
 **The authenticator** (`src/passkeys/authenticator.ts`, in the service
-worker). Keys are WebCrypto ECDSA P-256 (or RSA 2048 for RS256) pairs made
-with `extractable: false`, kept in the worker's own IndexedDB database
-`stompPasskeys`, keyed by credential id with an index on the relying party
-id, with the user handle, the account's name and display name, whether it is
-discoverable, and when it was made and last used. The inject suffixes every
-database name a proxied page opens with its storage key (`name@<storage
-key>`), so no hooked path reaches that name, as none reaches the cookie jar's
-`stompCookies`. Signing happens in the worker; a page receives only the
+worker). Keys are WebCrypto ECDSA P-256 (Ed25519 for EdDSA, RSA 2048 for
+RS256) pairs made with `extractable: false`, kept in the worker's own
+IndexedDB database `stompPasskeys`, keyed by credential id with an index on
+the relying party id, with the user handle, the account's name and display
+name, whether it is discoverable, when it was made and last used, and the
+extensions' data (whether it may hold a large blob, the blob, its
+credBlob). The inject suffixes every database name a proxied page opens
+with its storage key (`name@<storage key>`), so no hooked path reaches that
+name, as none reaches the cookie jar's `stompCookies`. Signing happens in the worker; a page receives only the
 response. What the worker writes:
 
 - `clientDataJSON`: `type`, `challenge`, `origin` (the emulated origin),
@@ -120,7 +136,23 @@ response. What the worker writes:
   and compact serialization, with Chrome's extra member one time in five;
 - authenticator data: `rpIdHash` = SHA-256 of the real relying party id;
   flags UP, UV only when the user was really verified (below), BE and BS 0
-  (the keys are not synced), AT on a registration; signature counter 0;
+  (the keys are not synced), AT on a registration, ED with the credBlob
+  extension's outputs (CTAP 2.1: `credBlob: true` when one was kept, the
+  blob on a `getCredBlob` sign-in, empty without one); signature counter 0;
+- signatures: ES256's in ASN.1 DER, EdDSA's (64 bytes) and RS256's as they
+  are; a browser whose WebCrypto makes no Ed25519 key (Chrome before 137)
+  gives a site that lists EdDSA first the next algorithm it lists;
+- the largeBlob extension, as Chrome's virtual authenticator (CTAP 2.1)
+  answers it: only a discoverable credential made with the extension holds
+  a blob (`support: "required"` of one that is not ends as no
+  authenticator; `supported: false` otherwise); a write needs the user
+  verified where the authenticator can verify (CTAP's `largeBlobWrite`
+  permission: a site that discourages a verification is told
+  `written: false` where the host verifies users, and a host that verifies
+  nobody writes without one, as an authenticator without verification
+  does); an empty blob removes it; Chrome refuses a blob over 2 KiB and a
+  write that names other than one credential before any authenticator,
+  and so does the inject;
 - attestation `none` (`fmt: "none"`, an empty `attStmt`) and an AAGUID of
   zeros, as Chrome gives for providers that do not attest.
 
@@ -260,11 +292,32 @@ origin, so related origins work as natively.
   site data is cleared, and not interchangeable with a passkey registered
   natively (a site sees a new authenticator).
 - No attestation: a site that requires certified attestation (some enterprise
-  relying parties) refuses STomp's `none`.
+  relying parties) refuses STomp's `none`, and STomp will not have one: a
+  certified attestation is signed by a key its maker's hardware holds and
+  its certification vouches for, which software in a page cannot be.
 - No security keys or phones (hybrid): `authenticatorAttachment:
-"cross-platform"` finds no authenticator, as on a machine with none.
-- No large blob, no `credBlob`, no conditional create (`mediation:
-"conditional"` on create is refused), no EdDSA.
+"cross-platform"` finds no authenticator, as on a machine with none, and
+  `getClientCapabilities().hybridTransport` is false, as Chrome's is with no
+  Bluetooth. A security key or a phone talks to the browser's own process
+  (USB HID, BLE, caBLE's tunnel), which no web page reaches, and would sign
+  the proxy's origin if it were asked through the browser's WebAuthn.
+- A conditional create succeeds only when the user takes the host's offer.
+  Chrome makes one by itself, without asking, right after its password
+  manager filled that account's password on the site; STomp has no password
+  manager, so it never makes one without the user.
+- No `credProtect` (`credentialProtectionPolicy`,
+  `enforceCredentialProtectionPolicy`), `hmacCreateSecret`, `minPinLength`,
+  `payment` or immediate mediation (`immediateGet`): getClientCapabilities
+  says false for each, where Chrome says true for all but `payment`.
+- Only the algorithms Chrome's virtual authenticator makes: ES256, EdDSA
+  (-8) and RS256, not the fully specified ones (Ed25519 as -19, ESP256 as
+  -9): the virtual authenticator refuses a site that lists only -19.
+- A large blob is each credential's own, up to the 2 KiB Chrome lets a page
+  write. Chrome's virtual authenticator keeps every credential's in one
+  array of 1024 bytes after compression and encryption, so a blob that does
+  not compress tells a site `written: false` there well under that (500
+  random bytes were written, 1000 were not); the passkeys-extensions suite
+  compares blobs both keep.
 - User verification only where the host can make a real one (above).
 - The containment limits above: an escape of the inject reaches the passkeys
   as it reaches the cookies and storage.
@@ -284,5 +337,17 @@ origin, so related origins work as natively.
   lists or asserts a credential on the shared proxy origin.
 - **adversarial-passkeys**: the containment cases above, in both modes, against
   native Chrome's answers.
+- **passkeys-extensions**: EdDSA (the site's order against ES256 and RS256,
+  the fully specified Ed25519 refused), largeBlob (support, read, write,
+  the empty blob, the 2 KiB limit, the verification a write needs), credBlob
+  and getCredBlob (32 bytes kept, 33 not), conditional create (the
+  timeout, the abort, an account already registered, the host's offer
+  taken) and what getClientCapabilities says of them, natively against
+  virtual authenticators with and without user verification and through
+  the demo in both modes, every registration and assertion verified by the
+  relying party and by @simplewebauthn/server. Chrome's virtual
+  authenticator writes `credProtect` into a discoverable credential's
+  authenticator data when it supports credBlob, an authenticator's choice
+  that is left out of what is compared.
 
 They need no device, GPU or network and run on the CI runner.

@@ -1044,59 +1044,71 @@ async function withVerification(request, answer) {
 	return request.userVerification === 'required' ? null : answer;
 }
 
+/** the sheet of a registration: Create, or OK for a passkey the site already has */
+async function createPasskey(request) {
+	const site = request.rpId;
+	const account = request.user.name || request.user.displayName;
+	const answer = await passkeyPrompt(
+		request.excluded
+			? {
+					title: `A passkey for ${site} is already saved here`,
+					detail: [
+						`For ${account}. The site will be told so.`,
+						framedOn(request),
+					],
+					choices: [['OK', {}, 'allow btn-blu']],
+					close: 'Cancel',
+					signal: request.signal,
+				}
+			: {
+					title: `Create a passkey for ${site}`,
+					detail: [
+						`For ${account}.`,
+						'It is saved in this browser, for STomp only, and is not synced.',
+						framedOn(request),
+					],
+					choices: [['Create', {}, 'allow btn-blu']],
+					close: 'Cancel',
+					signal: request.signal,
+				},
+	);
+	// an excluded credential is said to the site without a verification
+	return request.excluded ? answer : withVerification(request, answer);
+}
+
 /**
  * A proxied site makes a passkey or asks for a sign-in with one
  * (`passkeys.onRequest`): nothing is made or signed until the user says so
  * here, in this page, where no proxied page can click. A site that waits in
  * the background (conditional mediation) gets no sheet: the key button in
- * the address bar offers its passkeys while its tab is in front.
+ * the address bar offers its passkeys (or, for a conditional create, to
+ * save one) while its tab is in front.
  */
 async function askPasskey(request) {
-	const site = request.rpId;
-	if (request.type === 'create') {
-		const account = request.user.name || request.user.displayName;
-		const answer = await passkeyPrompt(
-			request.excluded
-				? {
-						title: `A passkey for ${site} is already saved here`,
-						detail: [
-							`For ${account}. The site will be told so.`,
-							framedOn(request),
-						],
-						choices: [['OK', {}, 'allow btn-blu']],
-						close: 'Cancel',
-						signal: request.signal,
-					}
-				: {
-						title: `Create a passkey for ${site}`,
-						detail: [
-							`For ${account}.`,
-							'It is saved in this browser, for STomp only, and is not synced.',
-							framedOn(request),
-						],
-						choices: [['Create', {}, 'allow btn-blu']],
-						close: 'Cancel',
-						signal: request.signal,
-					},
-		);
-		// an excluded credential is said to the site without a verification
-		return request.excluded ? answer : withVerification(request, answer);
-	}
 	if (!request.conditional)
-		return withVerification(request, await choosePasskey(request));
+		return request.type === 'create'
+			? createPasskey(request)
+			: withVerification(request, await choosePasskey(request));
 	// conditional: wait for the user to ask, for as long as the page waits
-	if (!request.credentials.length) return null;
+	if (request.type === 'get' && !request.credentials.length) return null;
 	const tab = tabs.find((t) => t.frame === request.frame) ?? activeTab;
 	if (!tab) return null;
 	return new Promise((resolve) => {
 		const offer = {
 			request,
 			take: async () => {
-				const answer = await choosePasskey(request);
+				const answer =
+					request.type === 'create'
+						? await createPasskey(request)
+						: await choosePasskey(request);
 				if (!answer) return; // closed: the site still waits
 				if (tab.passkeyOffer === offer) tab.passkeyOffer = null;
 				syncPasskeyButton();
-				resolve(await withVerification(request, answer));
+				resolve(
+					request.type === 'create'
+						? answer
+						: await withVerification(request, answer),
+				);
 			},
 		};
 		tab.passkeyOffer = offer;
@@ -1119,7 +1131,15 @@ let passkeysVerify = false;
 /** the address bar's passkey button: there while the tab's site waits for one */
 function syncPasskeyButton() {
 	const button = $('toolPasskey');
-	if (button) button.hidden = !activeTab?.passkeyOffer;
+	if (!button) return;
+	const offer = activeTab?.passkeyOffer;
+	button.hidden = !offer;
+	const label =
+		offer?.request.type === 'create'
+			? 'Save a passkey'
+			: 'Sign in with a passkey';
+	button.title = label;
+	button.setAttribute('aria-label', label);
 }
 
 // ---- the browser's keys ------------------------------------------------------

@@ -44,8 +44,12 @@ import type { PasskeysContext, PasskeysInstalled } from './passkeysLazy';
 // lists (PublicKeyCredential.getClientCapabilities); every other is false,
 // and the two that say a user-verifying authenticator is here are the host's
 const CAPABLE = [
+	'conditionalCreate',
 	'conditionalGet',
+	'extension:credBlob',
 	'extension:credProps',
+	'extension:getCredBlob',
+	'extension:largeBlob',
 	'extension:prf',
 	'relatedOrigins',
 	'signalAllAcceptedCredentials',
@@ -59,6 +63,8 @@ const VERIFYING = [
 
 const NOT_ALLOWED =
 	'The operation either timed out or was not allowed. See: https://www.w3.org/TR/webauthn-2/#sctn-privacy-considerations-client.';
+/** the most a page may write with the largeBlob extension (Chrome's check, before any authenticator) */
+const MAX_LARGE_BLOB = 2048;
 const policyRefusal = (feature: string) =>
 	`The '${feature}' feature is not enabled in this document. Permissions Policy may be used to delegate Web Authentication capabilities to cross-origin child frames.`;
 
@@ -626,8 +632,10 @@ export function passkeys(ctx: PasskeysContext): PasskeysInstalled {
 		extensions: ExtensionResults;
 	}
 	interface ExtensionResults {
+		credBlob?: boolean;
 		credProps?: { rk: boolean };
-		largeBlob?: { supported?: boolean; written?: boolean };
+		getCredBlob?: ArrayBuffer;
+		largeBlob?: { blob?: ArrayBuffer; supported?: boolean; written?: boolean };
 		prf?: { enabled?: boolean; results?: PrfValues };
 	}
 	const credentials = new WeakMap<object, CredentialData>();
@@ -675,17 +683,27 @@ export function passkeys(ctx: PasskeysContext): PasskeysInstalled {
 					: undefined,
 			],
 		]);
+	/** bytes as a page reads them: a buffer of its realm, or base64url in the JSON form */
+	const bytesOut = (value: ArrayBuffer | undefined, json: boolean) =>
+		value === undefined
+			? undefined
+			: json
+				? toBase64URL(value)
+				: pageBuffer(value);
 	/** getClientExtensionResults(), or its JSON form: a new object each time */
 	const extensionResults = (results: ExtensionResults, json: boolean) =>
 		pageObject([
+			['credBlob', results.credBlob],
 			[
 				'credProps',
 				results.credProps && pageObject([['rk', results.credProps.rk]]),
 			],
+			['getCredBlob', bytesOut(results.getCredBlob, json)],
 			[
 				'largeBlob',
 				results.largeBlob &&
 					pageObject([
+						['blob', bytesOut(results.largeBlob.blob, json)],
 						['supported', results.largeBlob.supported],
 						['written', results.largeBlob.written],
 					]),
@@ -1040,13 +1058,6 @@ export function passkeys(ctx: PasskeysContext): PasskeysInstalled {
 			await task();
 			if (busy)
 				throw domException('A request is already pending.', 'OperationError');
-			// a credential made without the user being asked is one this
-			// authenticator never makes; a large blob is one it cannot keep
-			if (
-				top.mediation === 'conditional' ||
-				extensions.largeBlob?.support === 'required'
-			)
-				throw domException(NOT_ALLOWED, 'NotAllowedError');
 			const selection = (publicKey.authenticatorSelection ?? {}) as Converted;
 			const exclude: ArrayBuffer[] = [];
 			for (const entry of (publicKey.excludeCredentials ?? []) as Converted[])
@@ -1083,6 +1094,21 @@ export function passkeys(ctx: PasskeysContext): PasskeysInstalled {
 				...(extensions.appidExclude !== undefined
 					? { appid: extensions.appidExclude }
 					: {}),
+				...(extensions.largeBlob
+					? {
+							largeBlob:
+								extensions.largeBlob.support === 'required'
+									? 'required'
+									: 'preferred',
+						}
+					: {}),
+				...(extensions.credBlob !== undefined
+					? { credBlob: extensions.credBlob }
+					: {}),
+				// a site offering a passkey in the background (5.1.3): the host
+				// offers it without a dialog, and the site waits until the user
+				// takes it or its own timeout ends the request
+				...(top.mediation === 'conditional' ? { conditional: true } : {}),
 			};
 			const reply = await exchange(
 				{ op: 'create', options, sameOriginWithAncestors: sameOrigin },
@@ -1092,10 +1118,15 @@ export function passkeys(ctx: PasskeysContext): PasskeysInstalled {
 			if (!('attestation' in reply)) return failure(reply);
 			const made = reply.attestation;
 			return attested(made, {
+				...(extensions.credBlob !== undefined
+					? { credBlob: made.credBlob === true }
+					: {}),
 				...(extensions.credProps
 					? { credProps: { rk: made.discoverable } }
 					: {}),
-				...(extensions.largeBlob ? { largeBlob: { supported: false } } : {}),
+				...(extensions.largeBlob
+					? { largeBlob: { supported: made.largeBlob === true } }
+					: {}),
 				...(made.prf ? { prf: made.prf } : {}),
 			});
 		} finally {
@@ -1111,6 +1142,14 @@ export function passkeys(ctx: PasskeysContext): PasskeysInstalled {
 		if (extensions.largeBlob?.support !== undefined)
 			throw domException(
 				"The 'largeBlob' extension's 'support' parameter is only valid when creating a credential",
+				'NotSupportedError',
+			);
+		// the renderer's own check, in the call's turn (a write's others are
+		// the browser process's, in a later task)
+		const blobWrite = extensions.largeBlob?.write as ArrayBuffer | undefined;
+		if (blobWrite !== undefined && blobWrite.byteLength > MAX_LARGE_BLOB)
+			throw domException(
+				"The 'largeBlob' extension's 'write' parameter exceeds the maximum allowed size (2kb)",
 				'NotSupportedError',
 			);
 		const allow: ArrayBuffer[] = [];
@@ -1158,6 +1197,12 @@ export function passkeys(ctx: PasskeysContext): PasskeysInstalled {
 					"Only one of the 'largeBlob' extension's 'read' and 'write' parameters is allowed at a time",
 					'NotSupportedError',
 				);
+			// a blob is written for the one credential the site names
+			if (blobWrite !== undefined && allow.length !== 1)
+				throw domException(
+					"The 'largeBlob' extension's 'write' parameter can only be used with a single credential present on 'allowCredentials'",
+					'NotSupportedError',
+				);
 			const options: PasskeyGetOptions = {
 				...(publicKey.rpId !== undefined ? { rpId: publicKey.rpId } : {}),
 				challenge: publicKey.challenge,
@@ -1173,6 +1218,14 @@ export function passkeys(ctx: PasskeysContext): PasskeysInstalled {
 						}
 					: {}),
 				...(extensions.appid !== undefined ? { appid: extensions.appid } : {}),
+				// (`read: false` and an empty largeBlob ask for nothing, and are
+				// told nothing)
+				...(blobWrite !== undefined
+					? { largeBlob: { write: blobWrite } }
+					: extensions.largeBlob?.read === true
+						? { largeBlob: { read: true as const } }
+						: {}),
+				...(extensions.getCredBlob === true ? { getCredBlob: true } : {}),
 			};
 			const reply = await exchange(
 				{
@@ -1189,13 +1242,14 @@ export function passkeys(ctx: PasskeysContext): PasskeysInstalled {
 			if (!('assertion' in reply)) return failure(reply);
 			const made = reply.assertion;
 			return asserted(made, {
-				// no large blob is kept: none read, none written
-				...(extensions.largeBlob
+				...(options.getCredBlob
+					? { getCredBlob: made.credBlob ?? new PageArrayBuffer(0) }
+					: {}),
+				...(options.largeBlob
 					? {
 							largeBlob:
-								extensions.largeBlob.write !== undefined
-									? { written: false }
-									: {},
+								made.largeBlob ??
+								('write' in options.largeBlob ? { written: false } : {}),
 						}
 					: {}),
 				...(made.prf ? { prf: made.prf } : {}),
