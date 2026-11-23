@@ -74,6 +74,8 @@ const cardBars = () =>
 			'#toolExtensions',
 		].map((sel) => {
 			const r = document.querySelector(sel).getBoundingClientRect();
+			// (a piece a phone's bar does not draw: none, on the card too)
+			if (!r.width && !r.height) return [0, 0, 0, 0];
 			return [r.left - c.left, r.top - c.top, r.width, r.height];
 		});
 		const cards = [...document.querySelectorAll('.cardLabel')].map((label) => {
@@ -87,6 +89,7 @@ const cardBars = () =>
 				bar.querySelector('.cardExtensions .extbtn'),
 			].map((el) => {
 				const r = el.getBoundingClientRect();
+				if (!r.width && !r.height) return [0, 0, 0, 0];
 				return [
 					(r.left - l.left) / k,
 					(r.top - l.top) / k,
@@ -454,8 +457,9 @@ for (const from of ['home', 'browser']) {
 	await sleep(400);
 }
 
-// a phone: the bar is cramped (the address box gives way), and the copy
-// still matches it piece by piece and lands on it
+// a phone: the bar is the address box and the menu (the rest is in the
+// menu, demo-phone-bar), and the copy still matches it piece by piece,
+// drawing none of what the live bar does not, and lands on it
 await page.setViewportSize({ width: 390, height: 844 });
 await sleep(500);
 const phoneRest = await boxes();

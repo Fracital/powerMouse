@@ -151,7 +151,10 @@ const noMenuCarrier = (page) =>
 		() =>
 			!document.getElementById('carrierTag') &&
 			!document.getElementById('menuCarrier') &&
-			!document.querySelector('#toolMenu span, #pmMenu > :not(button)'),
+			// (a phone's menu has its page row atop it: demo-phone-bar)
+			!document.querySelector(
+				'#toolMenu span, #pmMenu > :not(button, .pmMenuTools)',
+			),
 	);
 
 /** the console lines, for a failure's detail */
