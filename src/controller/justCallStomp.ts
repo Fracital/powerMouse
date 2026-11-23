@@ -921,7 +921,6 @@ export class CalledFrame {
 		let fresh!: HTMLIFrameElement;
 		let port!: MessagePort;
 		let answer!: CallAnswer;
-		let display!: string;
 		try {
 			if (controller.siteMode)
 				at =
@@ -974,8 +973,10 @@ export class CalledFrame {
 				for (const { name, value } of [...old.attributes])
 					if (name !== 'src' && name !== 'srcdoc')
 						fresh.setAttribute(name, value);
-				display = fresh.style.getPropertyValue('display');
-				fresh.style.setProperty('display', 'none');
+				// out of sight until it is swapped in, whatever the host's rules
+				// say about its frames (an !important display, as a tab manager
+				// that shows every tab has, drew it full size over the cards)
+				fresh.style.setProperty('display', 'none', 'important');
 				// (set before it is in the document: the frame's first navigation,
 				// which makes no history entry)
 				fresh.src = page;
@@ -1094,7 +1095,9 @@ export class CalledFrame {
 			throw error;
 		}
 		over();
-		if (load !== this.#loads) {
+		// (a frame the host took out of its document is a tab it closed: its
+		// page does not arrive later in a frame of its own)
+		if (load !== this.#loads || !old.isConnected) {
 			fresh.remove();
 			port.close();
 			return;
@@ -1142,7 +1145,7 @@ export class CalledFrame {
 					? got.routed
 					: on(at, await controller.route(shown));
 		}
-		if (load !== this.#loads) {
+		if (load !== this.#loads || !old.isConnected) {
 			fresh.remove();
 			port.close();
 			return;
@@ -1191,7 +1194,7 @@ export class CalledFrame {
 				},
 				SWAP_MS,
 			);
-			if (load !== this.#loads) {
+			if (load !== this.#loads || !old.isConnected) {
 				fresh.remove();
 				port.close();
 				return;
@@ -1211,10 +1214,15 @@ export class CalledFrame {
 		this.#scroll = [0, 0];
 		this.#keep();
 		const focused = old.ownerDocument.activeElement === old;
+		// it takes the element's place as the element is now: the host may
+		// have restyled it, or changed its classes, while the page loaded (a
+		// tab manager scaling it to a card, or bringing it back full size)
+		for (const { name } of [...fresh.attributes])
+			if (name !== 'src' && name !== 'srcdoc' && !old.hasAttribute(name))
+				fresh.removeAttribute(name);
+		for (const { name, value } of [...old.attributes])
+			if (name !== 'src' && name !== 'srcdoc') fresh.setAttribute(name, value);
 		old.remove();
-		if (display) fresh.style.setProperty('display', display);
-		else fresh.style.removeProperty('display');
-		if (!fresh.getAttribute('style')) fresh.removeAttribute('style');
 		frame.adopt(fresh);
 		frame.dispatchEvent(new CustomEvent('element', { detail: fresh }));
 		port.onmessage = ({ data }) => {
