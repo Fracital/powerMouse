@@ -46,6 +46,7 @@ import {
 	PAGE_ALIVE,
 	PAGE_GONE_MS,
 	RIDER_WINDOW,
+	WATCH,
 	type CarrierAsk,
 	type CarrierGiven,
 	type ClientBound,
@@ -194,6 +195,8 @@ interface Client {
 	left: boolean;
 	/** its realm is in the verbose mode (CarrierAsk.verbose): it hears the verbose lines */
 	verbose: boolean;
+	/** the port its page says LEFT on as it unloads for good (carrierClient.ts watchPage) */
+	watch: MessagePort | null;
 }
 
 /**
@@ -871,6 +874,7 @@ class Relay {
 	#gone(lost = false) {
 		if (this.dead) return;
 		this.dead = true;
+		this.#streamCredit.end();
 		clearTimeout(this.#idle);
 		clearTimeout(this.#retry);
 		this.#opening.clear();
@@ -921,6 +925,19 @@ export function serveCarriers(scope: SharedWorkerGlobalScope): void {
 			if (!note.verbose || client.verbose)
 				rpc.call('note', note).catch(() => {});
 	});
+	/**
+	 * a client whose page unloaded for good: its riders' streams close at the
+	 * relay now, and it is forgotten (its realm is going, and says nothing
+	 * more that it means)
+	 */
+	const forget = (rpc: RpcHelper<HostBound, ClientBound>, client: Client) => {
+		if (!clients.delete(rpc)) return;
+		for (const rider of [...client.riders]) rider.relay.drop(rider);
+		if (!client.left) leave(client, pool);
+		rpc.abort('the page is gone');
+		client.watch?.close();
+		client.port.close();
+	};
 	// every page hears the host is alive; a page that stopped saying it is
 	// has its riders let go
 	setInterval(() => {
@@ -934,6 +951,7 @@ export function serveCarriers(scope: SharedWorkerGlobalScope): void {
 			if (silent >= FORGET_MS) {
 				clients.delete(rpc);
 				rpc.abort('the page is gone');
+				client.watch?.close();
 				client.port.close();
 				continue;
 			}
@@ -955,6 +973,7 @@ export function serveCarriers(scope: SharedWorkerGlobalScope): void {
 			named: 0,
 			left: false,
 			verbose: false,
+			watch: null,
 		};
 		/** the pool's id of the request the client's worker named `id` */
 		const poolId = (id: string) => id && `${client.realm} ${id}`;
@@ -1069,6 +1088,16 @@ export function serveCarriers(scope: SharedWorkerGlobalScope): void {
 			(data, transfer) => port.postMessage(data, transfer),
 		);
 		port.addEventListener('message', (event) => {
+			const watch = (event.data as { [WATCH]?: unknown } | null)?.[WATCH];
+			if (watch instanceof MessagePort) {
+				client.watch?.close();
+				client.watch = watch;
+				watch.addEventListener('message', (said) => {
+					if (said.data === LEFT) forget(rpc, client);
+				});
+				watch.start();
+				return;
+			}
 			client.seen = performance.now();
 			if (event.data === LEFT) return leave(client, pool);
 			// one let go that speaks again (back from the back/forward cache) holds again

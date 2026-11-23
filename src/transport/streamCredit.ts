@@ -38,33 +38,72 @@ export function namesStreamCredit(packet: Uint8Array): boolean {
 }
 
 /**
- * Whether this realm's Wisp connection has stream credit, as the last INFOs
- * that went by said (each StreamCreditWatch's, the carrier host's rider's or
- * the realm's own carrier's): a body read here on a connection without it
- * is bounded by boundedBody.ts, since nothing else holds its stream back.
- * False until a connection's INFOs said otherwise (Wisp v1 has none).
+ * Whether this realm's Wisp connection has stream credit, as its INFOs said
+ * (each StreamCreditWatch's, the carrier host's rider's or the realm's own
+ * carrier's): a body read here on a connection without it is bounded by
+ * boundedBody.ts, since nothing else holds its stream back. False until a
+ * connection's INFOs said otherwise (Wisp v1 has none).
+ *
+ * It is the newest connection's whose opening is over, of those still
+ * open: a realm's transport can be replaced (the controller's
+ * setTransport, the same worker) or reconnect, and a connection to a relay
+ * without credit (Wisp v1 sends no INFO at all) took the credit the one
+ * before it had, and its paused bodies were all in epoxy's memory
+ * (paused-body-memory's `switch-v1-chunked`). A connection still opening
+ * decides nothing, so a body of the one before it read meanwhile is judged
+ * by its own.
  */
 export const relayCredit = { on: false };
 
-/** a Wisp connection's stream credit, from the INFOs that go by */
+/** this realm's open connections' watches */
+const watches = new Set<StreamCreditWatch>();
+/** the order in which the connections' openings ended */
+let settles = 0;
+function decide() {
+	let newest: StreamCreditWatch | null = null;
+	for (const watch of watches)
+		if (watch.settled && (!newest || watch.settled > newest.settled))
+			newest = watch;
+	relayCredit.on = newest?.on ?? false;
+}
+
+/** a Wisp connection's stream credit, from the INFOs of its opening */
 export class StreamCreditWatch {
 	#server = false;
 	#client = false;
+	/** the relay spoke first: its INFO (v2), or a CONTINUE (v1, no INFO) */
+	#heard = false;
+	/** when its opening ended, in `settles` order (0: not yet) */
+	settled = 0;
+	constructor() {
+		watches.add(this);
+	}
 	/** both INFOs named it */
 	get on(): boolean {
 		return this.#server && this.#client;
 	}
-	/** a packet of the relay's */
-	fromServer(packet: Uint8Array): void {
-		if (packet[0] !== INFO) return;
-		if (namesStreamCredit(packet)) this.#server = true;
-		relayCredit.on = this.on;
+	#settle() {
+		if (this.settled || !watches.has(this)) return;
+		this.settled = ++settles;
+		decide();
 	}
-	/** a packet of the client's (epoxy's) */
+	/** a packet of the relay's on stream 0 (its first is its INFO, or v1's CONTINUE) */
+	fromServer(packet: Uint8Array): void {
+		if (this.#heard || this.settled) return;
+		this.#heard = true;
+		if (packet[0] === INFO && namesStreamCredit(packet)) this.#server = true;
+		// the relay offers no credit (a v1 one sent no INFO at all)
+		else this.#settle();
+	}
+	/** a packet of the client's (epoxy's): its first is its INFO, if any */
 	fromClient(packet: Uint8Array): void {
-		if (packet[0] !== INFO) return;
-		if (namesStreamCredit(packet)) this.#client = true;
-		relayCredit.on = this.on;
+		if (this.settled || !this.#heard) return;
+		if (packet[0] === INFO && namesStreamCredit(packet)) this.#client = true;
+		this.#settle();
+	}
+	/** the connection ended: it decides nothing more */
+	end(): void {
+		if (watches.delete(this)) decide();
 	}
 }
 
@@ -90,6 +129,7 @@ export function watchCredit(
 				}
 				controller.enqueue(packet);
 			},
+			flush: () => watch.end(),
 		}),
 	);
 	const writer = write.getWriter();
@@ -103,8 +143,14 @@ export function watchCredit(
 				}
 				return writer.write(packet);
 			},
-			close: () => writer.close(),
-			abort: (reason) => writer.abort(reason),
+			close: () => {
+				watch.end();
+				return writer.close();
+			},
+			abort: (reason) => {
+				watch.end();
+				return writer.abort(reason);
+			},
 		}),
 	};
 }

@@ -45,7 +45,6 @@ const PACED_QUIET_MS = 250;
 const CONNECT = 0x01;
 const DATA = 0x02;
 const CLOSE = 0x04;
-const INFO = 0x05;
 /** a CONNECT's stream type: UDP */
 const UDP = 0x02;
 const streamOf = (bytes: Uint8Array) =>
@@ -118,7 +117,9 @@ export function paceRider(
 			for (const packet of packets) {
 				const bytes = new Uint8Array(packet, 0, Math.min(5, packet.byteLength));
 				const id = bytes.length === 5 ? streamOf(bytes) : 0;
-				if (!id && bytes[0] === INFO) credit.fromServer(new Uint8Array(packet));
+				// (its first on stream 0: the relay's INFO, or a v1 relay's CONTINUE)
+				if (!id && bytes.length === 5)
+					credit.fromServer(new Uint8Array(packet));
 				if (id && udp.has(id)) {
 					if (bytes[0] === CLOSE) udp.delete(id);
 					hand(packet);
@@ -136,6 +137,7 @@ export function paceRider(
 		end(handing) {
 			if (over) return;
 			over = true;
+			credit.end();
 			clearTimeout(quiet);
 			bodiesTaken.waiters.delete(pass);
 			const rest = held.splice(0);

@@ -123,8 +123,10 @@ export function boundedBody(
 	return new ReadableStream<Uint8Array>(
 		{
 			async pull(controller) {
-				while (!queue.length && !ended && !failure)
+				// (a cancel wakes a pull that waits, and it ends there)
+				while (!queue.length && !ended && !failure && !cancelled)
 					await new Promise<void>((resolve) => (wake = resolve));
+				if (cancelled) return;
 				const chunk = queue.shift();
 				if (chunk) {
 					queued -= chunk.byteLength;

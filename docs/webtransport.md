@@ -935,7 +935,18 @@ that is up already (<n> s, <n> transports on it)` (with its lanes and
   and still resets the largest stream of one that took nothing for 2 s
   with more than 64 MiB waiting: a relay that sent past its grants), and
   the `stream-credit` suite reads 128 MB at 8 MB/s beside a fast download
-  and a WebSocket's echoes over each carrier.
+  and a WebSocket's echoes over each carrier. Whether a connection has
+  credit is the realm's newest connection's whose opening is over (a
+  transport switched to a Wisp v1 relay, which sends no INFO, has none).
+  HTTP/2 and HTTP/3 bodies are held by their own windows on any relay
+  (the origin 10 to 14 MB ahead of a paused reader, measured). Without
+  credit, over the session, the reset stream's backlog in the relay goes
+  out ahead of the other streams after the reset (1 to 4.5 s of waiting
+  for them on loopback). A page that unloads for good tells the carrier
+  host on a port of its own (carrierClient.ts `watchPage`), since its
+  transport worker goes without a word: its riders' streams close at the
+  relay at once, where they were read for no one until the rider's queue
+  was full (4.3 s and 68 MB from the origin after a reload).
 
 It rests on epoxy-tls's `deploy/epoxy` patch 0075 (in the pinned build),
 which makes a function transport's writes never wait, as the WebSocket's

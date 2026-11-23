@@ -59,6 +59,12 @@ export const END = 'end';
 export const RIDER_WINDOW = 4 * 1024 * 1024;
 /** a page's message on the control port as it unloads: what it held of the host's pool goes */
 export const LEFT = 'left';
+/**
+ * the key of the page's message on a control port before it hands the port
+ * to its transport worker: the port the page says LEFT on as it unloads
+ * (startCarrierHost)
+ */
+export const WATCH = 'stomp-carrier-watch';
 
 /** what a transport asks the host for: a relay's wisp connection */
 export interface CarrierAsk {
@@ -329,9 +335,37 @@ export function startCarrierHost(script: URL): MessagePort | null {
 			extendedLifetime: true,
 		} as WorkerOptions);
 		worker.addEventListener('error', () => {});
+		watchPage(worker.port);
 		return worker.port;
 	} catch {
 		return null;
+	}
+}
+
+/**
+ * The page tells the host on a port of its own when it unloads for good,
+ * for the realm it hands `port` to: a transport worker goes with its page,
+ * says nothing as it goes, and a MessagePort fires no close (Chrome 159).
+ * Until the host stopped hearing its `alive` (GONE_MS) its riders' streams
+ * stayed open at the relay and the host read them for no one: a paused body
+ * of a page reloaded on a relay without stream credit took the origin
+ * 64 MB further (the rider's queue, RIDER_QUEUE_MAX) over 4 s before it was
+ * reset (paused-body-memory's reload round). A page that goes into the
+ * back/forward cache says nothing: it may come back, its worker with it.
+ */
+function watchPage(port: MessagePort) {
+	try {
+		const { port1, port2 } = new MessageChannel();
+		port.postMessage({ [WATCH]: port2 }, [port2]);
+		let said = false;
+		// (the listener holds port1: a port that is collected says nothing)
+		addEventListener('pagehide', (event) => {
+			if (said || (event as PageTransitionEvent).persisted) return;
+			said = true;
+			port1.postMessage(LEFT);
+		});
+	} catch {
+		// the host hears the realm go when its `alive` stops
 	}
 }
 

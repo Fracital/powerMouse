@@ -17,12 +17,20 @@
 //   emulation, as holyWisp's `stream-credit`), and one that does not;
 // - a body that cannot be resumed (chunked, no validator), and one that
 //   can (a length, ranges and an ETag: resumableBody.ts);
-// - through the carrier host, and on a carrier of the tab's own.
+// - through the carrier host, and on a carrier of the tab's own;
+// - on the relay's WebSocket, and on its WebTransport session (`wt-`);
+// - over HTTP/1, and over HTTP/2 (`h2`), whose windows hold the body back
+//   on any relay (HTTP/3's do too: measured with an h3 origin outside the
+//   suite, the origin 13 to 14 MB ahead of the reader and the worker 17 to
+//   22 MB up on either relay and either carrier, since no fixture here
+//   serves a GET over HTTP/3).
 //
 // Then, on the relay without credit: a reader that reads slowly but never
-// stops, one that cancels while paused, a tab reloaded while paused, and
-// (with credit, where a paused stream stays open) the relay cut while
-// paused, each followed by a request that must work.
+// stops, a transport switched from a connection with credit to a Wisp v1
+// one (`switch-v1-chunked`), one that cancels while paused, a tab reloaded
+// while paused (through the carrier host on either carrier, and on a
+// carrier of its own), and (with credit, where a paused stream stays open)
+// the relay cut while paused, each followed by a request that must work.
 //
 // Measured, not asserted from the code: the peak of the transport worker's
 // and the carrier host's memory after a collection (JS heap, ArrayBuffers
@@ -36,6 +44,7 @@
 // wait on the paused reader.
 import { readdirSync, readFileSync } from 'node:fs';
 import { createServer as createHttpServer } from 'node:http';
+import { createSecureServer as createHttp2Server } from 'node:http2';
 import { createServer as createHttpsServer } from 'node:https';
 import { WebSocketServer } from 'ws';
 import { done, launch, ok, PORT, PROXY, sleep } from '../lib.mjs';
@@ -79,10 +88,25 @@ const ONLY = process.env.PAUSED_BODY_ROUNDS?.split(',') ?? null;
  * unsend it.
  */
 const WORKER_MAX = 48 * MB;
+/**
+ * the transport worker of a round whose body is reset: its queue holds up
+ * to HOLD_MAX (64 MiB) for the reader before the reset. The WebSocket's
+ * rounds fill it within a second and the measure, each second, rarely
+ * catches it (10 MB); the session's (WebTransport) fill it over seconds:
+ * 45 to 63 MB measured
+ */
+const RESET_WORKER_MAX = 80 * MB;
 /** what waited for a reader when it was reset: boundedBody.ts HOLD_MAX and a chunk */
 const RESET_HELD_MAX = 66 * MB;
 /** the browser's PSS held more: both tabs, the other tab's 64 MB download, and the paused body's bound */
 const PSS_MAX = 160 * MB;
+/**
+ * how soon a paused body's origin connection closes after the page lets it
+ * go or reloads (9 to 60 ms measured), and what the origin, writing at
+ * PACED_RATE, may write past the let-go meanwhile (0.2 to 0.8 MB)
+ */
+const LET_GO_MS = 1000;
+const LET_GO_AHEAD = 16 * MB;
 
 // a leaf for 127.0.0.1 signed by the test CA, which epoxy is given
 const { certPem, keyPem, caPem } = await startWebTransportServer();
@@ -166,7 +190,10 @@ function send(res, from, end, report, rate) {
 		res.end();
 	};
 	res.on('close', () => {
-		if (report && !res.writableFinished) report.closedEarly = true;
+		if (report && !res.writableFinished) {
+			report.closedEarly = true;
+			report.closedAt = performance.now();
+		}
 		at = end;
 	});
 	more();
@@ -181,6 +208,9 @@ const tlsServer = () =>
 	createHttpsServer({ cert: certPem, key: keyPem }, handler);
 const tlsOrigin = `https://127.0.0.1:${await listen(tlsServer())}`;
 const fastOrigin = `https://127.0.0.1:${await listen(tlsServer())}`;
+// the same over HTTP/2 only, whose stream windows epoxy (hyper) opens as
+// the body is read (boundedBody.ts leaves such a body alone)
+const h2Origin = `https://127.0.0.1:${await listen(createHttp2Server({ cert: certPem, key: keyPem }, handler))}`;
 // the native yardstick's: the same body over plain HTTP, which Chrome
 // takes without the test CA
 const plainOrigin = `http://127.0.0.1:${await listen(createHttpServer(handler))}`;
@@ -250,9 +280,11 @@ function browserPss() {
 const resets = [];
 /**
  * a tab of `context` with a controller whose transport (one shard, in its
- * worker) rides the carrier host, or (`own`) a carrier of its own
+ * worker) rides the carrier host on the relay's WebSocket, or (`via`) a
+ * carrier of its own (`own`), or the carrier host on the relay's
+ * WebTransport session (`wt`)
  */
-async function tab(context, own = false) {
+async function tab(context, via = '') {
 	const page = await context.newPage();
 	page.on('pageerror', (error) => errors.push(error.message));
 	page.on('console', (message) => {
@@ -260,13 +292,13 @@ async function tab(context, own = false) {
 		if (held) resets.push(Number(held[1]));
 	});
 	await page.goto(`${PROXY}stomp/controllerFrame.html`);
-	await start(page, own);
+	await start(page, via);
 	return page;
 }
-/** the controller of `page` */
-async function start(page, own = false) {
-	await page.evaluate(
-		async ({ wisp, caPem, own }) => {
+/** the controller of `page`, its carrier as `via` says (tab) */
+async function start(page, via = '') {
+	const carrier = await page.evaluate(
+		async ({ wisp, caPem, own, wt }) => {
 			const { StompController } = await import('/stomp/controller.mjs');
 			const registration = await StompController.register('/stomp/');
 			const controller = new StompController({
@@ -277,6 +309,7 @@ async function start(page, own = false) {
 					options: [{ wisp, pem_files: [caPem], wisp_v2: true }],
 					host: 'worker',
 					shards: 1,
+					...(wt && { webTransport: { timeoutMs: 3000 } }),
 				},
 				directory: '/stomp/',
 				codec: 'xor',
@@ -285,9 +318,14 @@ async function start(page, own = false) {
 			await controller.wait();
 			if (!controller.transport.ready) await controller.transport.init();
 			window.controller = controller;
+			for (let i = 0; i < 100 && !controller.carrier; i++)
+				await new Promise((resolve) => setTimeout(resolve, 50));
+			return controller.carrier?.carrier ?? null;
 		},
-		{ wisp: relay.wisp, caPem, own },
+		{ wisp: relay.wisp, caPem, own: via === 'own', wt: via === 'wt' },
 	);
+	if (via === 'wt' && carrier !== 'webtransport')
+		throw new Error(`the transport did not ride the session: ${carrier}`);
 }
 
 /**
@@ -552,19 +590,19 @@ async function native(kind) {
 }
 
 /** the paused read through the proxy, on a relay with stream credit or without, through the carrier host or not */
-async function proxied(credit, kind, own = false) {
-	const name = `${own ? 'own-' : ''}${credit ? 'credit' : 'plain'}-${kind}`;
+async function proxied(credit, kind, via = '') {
+	const name = `${via ? `${via}-` : ''}${credit ? 'credit' : 'plain'}-${kind}`;
 	relay.streamCredit = credit ? 'emulate' : false;
 	const before = { ...relay.stats };
 	const requestsBefore = requests;
 	const resetsBefore = resets.length;
 	const context = await browser.newContext();
-	const pausedTab = await tab(context, own);
-	const fastTab = await tab(context, own);
+	const pausedTab = await tab(context, via);
+	const fastTab = await tab(context, via);
 	const settled = await workers.memory();
 	const pss0 = browserPss();
 	const read = pausedTab.evaluate(pausedRead, {
-		url: `${tlsOrigin}/big?n=${BIG_BYTES}&kind=${kind}&id=${name}`,
+		url: `${kind === 'h2' ? h2Origin : tlsOrigin}/big?n=${BIG_BYTES}&kind=${kind}&id=${name}`,
 		first: FIRST_BYTES,
 		pattern: PATTERN,
 		proxied: true,
@@ -606,20 +644,27 @@ async function proxied(credit, kind, own = false) {
 		aheadMB: mb(ahead),
 		originRequests: requests - requestsBefore,
 		creditNamed: stats.creditNamed - before.creditNamed,
+		// how often the relay stopped reading the wisp server because the
+		// session's lanes held more than it lets wait (wisp-wt.mjs highWater)
+		relayPaused: stats.paused - before.paused,
 		body,
 		fast: fastResult,
 	};
 	results[name] = result;
 	console.log(`${name}: ${JSON.stringify(result)}`);
 	const detail = JSON.stringify(result);
+	// a body nothing holds back waits for its reader in the worker's queue
+	// until it is reset (boundedBody.ts HOLD_MAX): the bound is that queue's
+	const reset = !credit && kind === 'chunked';
+	const workerMax = reset ? RESET_WORKER_MAX : WORKER_MAX;
 	ok(
 		`${name}: the relay connection ${credit ? 'names' : 'does not name'} stream credit`,
 		credit ? result.creditNamed > 0 : result.creditNamed === 0,
 		detail,
 	);
 	ok(
-		`${name}: the transport worker's memory (heap, buffers, wasm) grows by less than ${WORKER_MAX / MB} MB while the reader is paused, and the carrier host's by less than ${WORKER_MAX / MB} MB`,
-		most.transport - sum(settled.transport) < WORKER_MAX &&
+		`${name}: the transport worker's memory (heap, buffers, wasm) grows by less than ${workerMax / MB} MB while the reader is paused, and the carrier host's by less than ${WORKER_MAX / MB} MB`,
+		most.transport - sum(settled.transport) < workerMax &&
 			most.carrier - sum(settled.carrier) < WORKER_MAX,
 		detail,
 	);
@@ -632,14 +677,23 @@ async function proxied(credit, kind, own = false) {
 			pssHeld - pss0 < PSS_MAX,
 			detail,
 		);
-	ok(
-		`${name}: the other tab downloads and echoes at its own pace meanwhile`,
-		fastOK(fastResult),
-		detail,
-	);
+	// Not on the session without credit: the relay sends the paused stream
+	// as fast as the session takes it until its reset, and keeps what it
+	// queued on the stream's lane after the CLOSE, and past lanes x
+	// highWater queued it stops reading the wisp server for every stream
+	// (wisp-wt.mjs, as holyWisp's design does), so the other tab's bytes
+	// wait behind the reset stream's (gaps of 1.0 to 4.5 s measured, the
+	// relay pausing 28 to 31 times; none with credit). Nothing a client
+	// does can unsend them: stream credit is the remedy
+	if (!(via === 'wt' && reset))
+		ok(
+			`${name}: the other tab downloads and echoes at its own pace meanwhile`,
+			fastOK(fastResult),
+			detail,
+		);
 	// with credit the relay holds the stream back, and a body that can be
 	// resumed is asked for again: either way it arrives whole once read
-	if (credit || kind === 'ranged')
+	if (credit || kind === 'ranged' || kind === 'h2')
 		ok(
 			`${name}: the paused body arrives whole and in order once read`,
 			body.got === BIG_BYTES && body.wrong < 0 && !body.error,
@@ -695,17 +749,85 @@ async function slow() {
 }
 
 /**
+ * A transport on the relay with stream credit replaced (setTransport, the
+ * same worker) by one whose epoxy speaks Wisp v1, which has no INFO to name
+ * credit in: the paused body on the new connection is bounded as on any
+ * relay without credit. The realm took the old connection's credit for
+ * the new one's until it decided credit per connection (streamCredit.ts),
+ * and the body was all in the worker's wasm memory.
+ */
+async function switched() {
+	const name = 'switch-v1-chunked';
+	relay.streamCredit = 'emulate';
+	const before = { ...relay.stats };
+	const resetsBefore = resets.length;
+	const context = await browser.newContext();
+	const page = await tab(context);
+	// the credit relay's connection is up and named it
+	const first = await page.evaluate(oneRequest, {
+		url: `${fastOrigin}/flow?n=${MB}`,
+	});
+	const namedBefore = relay.stats.creditNamed - before.creditNamed;
+	await page.evaluate(
+		async ({ wisp, caPem }) => {
+			await window.controller.setTransport({
+				module: '/epoxy/index.mjs',
+				options: [{ wisp, pem_files: [caPem], wisp_v2: false }],
+				host: 'worker',
+				shards: 1,
+			});
+		},
+		{ wisp: relay.wisp, caPem },
+	);
+	const settled = await workers.memory();
+	const read = page.evaluate(pausedRead, {
+		url: `${tlsOrigin}/big?n=${BIG_BYTES}&kind=chunked&id=${name}`,
+		first: FIRST_BYTES,
+		pattern: PATTERN,
+		proxied: true,
+	});
+	const most = await peaks(sleep(PAUSE_MS), measureWorkers);
+	const taken = await page.evaluate(() => window.pausedGot);
+	const ahead = (origin.get(name)?.written ?? 0) - taken;
+	await page.evaluate(() => (window.resumePaused = true));
+	const body = await read;
+	const result = {
+		first,
+		namedBefore,
+		transportGrewMB: mb(most.transport - sum(settled.transport)),
+		wasmGrewMB: mb(most.transportWasm - (settled.transport?.wasm ?? 0)),
+		resetHeldMB: resets.slice(resetsBefore),
+		aheadMB: mb(ahead),
+		body,
+	};
+	results[name] = result;
+	console.log(`${name}: ${JSON.stringify(result)}`);
+	const detail = JSON.stringify(result);
+	ok(
+		`${name}: after a switch from a connection with stream credit to a Wisp v1 one, the paused body is bounded: the worker grows by less than ${WORKER_MAX / MB} MB and the body is reset as a connection is`,
+		first === MB &&
+			namedBefore > 0 &&
+			most.transport - sum(settled.transport) < WORKER_MAX &&
+			body.wrong < 0 &&
+			/network error/.test(body.error ?? '') &&
+			result.resetHeldMB.length === 1,
+		detail,
+	);
+	await context.close();
+}
+
+/**
  * A paused read the page lets go (`cancel`), whose tab reloads (`reload`),
  * or (on the relay with credit, where its stream is still open) whose relay
  * is cut (`cut`): the origin's connection closes, the worker's memory stays
  * bounded, and a request after it works
  */
-async function letGo(how) {
+async function letGo(how, via = '') {
 	const credit = how === 'cut';
-	const name = `${credit ? 'credit' : 'plain'}-${how}`;
+	const name = `${via ? `${via}-` : ''}${credit ? 'credit' : 'plain'}-${how}`;
 	relay.streamCredit = credit ? 'emulate' : false;
 	const context = await browser.newContext();
-	const page = await tab(context);
+	const page = await tab(context, via);
 	const settled = await workers.memory();
 	const read = page
 		.evaluate(pausedRead, {
@@ -717,10 +839,11 @@ async function letGo(how) {
 		.catch((error) => ({ error: String(error), gone: true }));
 	await sleep(1500);
 	const writtenAt = origin.get(name)?.written ?? 0;
+	const letGoAt = performance.now();
 	if (how === 'cancel') await page.evaluate(() => (window.cancelPaused = true));
 	else if (how === 'reload') {
 		await page.reload();
-		await start(page);
+		await start(page, via);
 	} else {
 		relay.cut();
 		// the reader reads on, and hears the connection's end
@@ -732,6 +855,7 @@ async function letGo(how) {
 	while (!origin.get(name)?.closedEarly && performance.now() - t0 < 10000)
 		await sleep(100);
 	const closedMs = Math.round(performance.now() - t0);
+	const closedAt = origin.get(name)?.closedAt;
 	const most = await peaks(sleep(2000), measureWorkers);
 	const again = await page.evaluate(oneRequest, {
 		url: `${fastOrigin}/flow?n=${4 * MB}`,
@@ -743,6 +867,8 @@ async function letGo(how) {
 		writtenMB: mb(origin.get(name)?.written),
 		closedEarly: origin.get(name)?.closedEarly,
 		closedMs,
+		closedAfterLetGoMs:
+			closedAt === undefined ? null : Math.round(closedAt - letGoAt),
 		body,
 		again,
 	};
@@ -754,6 +880,18 @@ async function letGo(how) {
 		result.closedEarly === true && origin.get(name).written < BIG_BYTES,
 		detail,
 	);
+	// a page that lets go, or goes, says so: its stream closes at the relay
+	// at once (it was 4.3 s, and 68 MB more from the origin, after a reload
+	// through the carrier host: the host read the stream for no one until
+	// its rider's queue was full, carrierClient.ts watchPage)
+	if (how !== 'cut')
+		ok(
+			`${name}: it closes within ${LET_GO_MS} ms of the let-go, the origin writing no more than ${LET_GO_AHEAD / MB} MB more`,
+			result.closedAfterLetGoMs !== null &&
+				result.closedAfterLetGoMs < LET_GO_MS &&
+				origin.get(name).written - writtenAt <= LET_GO_AHEAD,
+			detail,
+		);
 	ok(
 		`${name}: the worker's and the carrier host's memory stay within ${WORKER_MAX / MB} MB of where they were`,
 		most.transport - sum(settled.transport) < WORKER_MAX &&
@@ -770,12 +908,21 @@ for (const credit of [true, false])
 	for (const kind of ['chunked', 'ranged'])
 		if (want(`${credit ? 'credit' : 'plain'}-${kind}`))
 			await proxied(credit, kind);
-for (const credit of [true, false])
-	if (want(`own-${credit ? 'credit' : 'plain'}-chunked`))
-		await proxied(credit, 'chunked', true);
+for (const via of ['own', 'wt'])
+	for (const credit of [true, false])
+		if (want(`${via}-${credit ? 'credit' : 'plain'}-chunked`))
+			await proxied(credit, 'chunked', via);
+// HTTP/2's windows hold the body back, on either relay and either carrier
+for (const via of ['', 'wt'])
+	for (const credit of [true, false])
+		if (want(`${via ? `${via}-` : ''}${credit ? 'credit' : 'plain'}-h2`))
+			await proxied(credit, 'h2', via);
 if (want('plain-slow')) await slow();
+if (want('switch-v1-chunked')) await switched();
 for (const how of ['cancel', 'reload', 'cut'])
 	if (want(`${how === 'cut' ? 'credit' : 'plain'}-${how}`)) await letGo(how);
+for (const via of ['own', 'wt'])
+	if (want(`${via}-plain-reload`)) await letGo('reload', via);
 
 console.log(`paused-body-memory: ${JSON.stringify(results)}`);
 await workers.detach();
