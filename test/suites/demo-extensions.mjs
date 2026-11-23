@@ -36,9 +36,9 @@
 //    and such an address typed in the bar opens it; no shields there;
 //  - the content script runs in the tab's page;
 //  - the cards' copies of the bar carry the buttons as pictures;
-//  - at 390px the buttons give way to the puzzle piece and at 320px the
-//    piece to the menu's item: the address box keeps 120px, the list, a
-//    popup and the page fit the window;
+//  - at 390px and 320px the buttons and the puzzle piece give way to the
+//    menu's item: the address box keeps 120px, the list, a popup and the
+//    page fit the window;
 //  - back on the home page from the Extensions page (closed over it, or
 //    closed in a tab and then Home or Back), the search box keeps its
 //    width, its right edge and its gap to Go on every frame, the home
@@ -1796,6 +1796,9 @@ await page.close();
 }
 
 // ---- phone widths --------------------------------------------------------------
+// (a phone's bar is the address box and the menu: below this width the
+// puzzle piece is gone with the rest, demo-phone-bar)
+const PUZZLE_MIN = 600;
 for (const [width, height] of [
 	[390, 844],
 	[320, 640],
@@ -1817,30 +1820,33 @@ for (const [width, height] of [
 		menu: document.getElementById('toolMenu').getBoundingClientRect().right,
 	}));
 	ok(
-		`${width}px: the address box keeps 120px, the buttons give way${width < 360 ? ', and the puzzle piece' : ' to the puzzle piece'}`,
+		`${width}px: the address box keeps 120px, the buttons and the puzzle piece give way to the menu's item`,
 		fit.overflow <= 0 &&
 			fit.form >= 120 &&
 			fit.actions === 'none' &&
-			fit.puzzle === width >= 360 &&
+			fit.puzzle === width >= PUZZLE_MIN &&
 			fit.menu <= width,
 		JSON.stringify(fit),
 	);
 	// (with no room for the puzzle piece, the menu's Extensions lists them)
-	if (width >= 360) await phone.click('#toolExtensions');
+	if (width >= PUZZLE_MIN) await phone.click('#toolExtensions');
 	else {
 		await phone.click('#toolMenu');
 		await painted(phone);
 		await phone.click('#menuExtensions');
 	}
 	await painted(phone);
-	const panel = await box(phone, width >= 360 ? '#extPanel' : '.extSubmenu');
+	const panel = await box(
+		phone,
+		width >= PUZZLE_MIN ? '#extPanel' : '.extSubmenu',
+	);
 	const phoneRows = await subMenuState(phone);
 	ok(
-		`${width}px: the list fits the window${width < 360 ? ", the menu's Extensions listing the extension before Chrome's two rows" : ''}`,
+		`${width}px: the list fits the window${width < PUZZLE_MIN ? ", the menu's Extensions listing the extension before Chrome's two rows" : ''}`,
 		panel?.display !== 'none' &&
 			panel.left >= 0 &&
 			panel.right <= width &&
-			(width >= 360 ||
+			(width >= PUZZLE_MIN ||
 				JSON.stringify(phoneRows.entries) ===
 					JSON.stringify([
 						NAME,
@@ -1851,7 +1857,7 @@ for (const [width, height] of [
 		JSON.stringify({ panel, phoneRows }),
 	);
 	await phone.click(
-		width >= 360
+		width >= PUZZLE_MIN
 			? '#extPanel .extRowMain'
 			: '.extSubmenu [data-command="extension"]',
 	);

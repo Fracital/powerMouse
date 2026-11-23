@@ -545,10 +545,15 @@ function setStatus(text, error = false) {
 // the address box's text stops short of the status chip and the star over
 // its right end, whatever the status says; the cards' copies take the same
 // room (--omni-end), so a card's bar stays a picture of the live one
+// (none on a phone's bar, where only the token and passkey buttons stay
+// there; the bar's last width while the bar is not drawn)
 new ResizeObserver(() => {
-	const width = $('omniEnd').offsetWidth;
-	if (width)
-		document.documentElement.style.setProperty('--omni-end', `${width}px`);
+	const end = $('omniEnd');
+	if (end.offsetParent)
+		document.documentElement.style.setProperty(
+			'--omni-end',
+			`${end.offsetWidth}px`,
+		);
 }).observe($('omniEnd'));
 
 function preferredTransport() {
@@ -7432,7 +7437,8 @@ const shieldsPopover = popover(shieldsPanel, shieldsScrim);
 const closeShields = shieldsPopover.close;
 const shieldsOpen = shieldsPopover.isOpen;
 
-function openShields() {
+/** `anchor`: what the panel opens under (the menu's button on a phone's bar) */
+function openShields(anchor = shieldsButton) {
 	const host = activeHost();
 	if (!host) return;
 	if (!controller.shields.has(host))
@@ -7442,7 +7448,7 @@ function openShields() {
 	// animation, not a stale per-child one
 	shieldsPanel.classList.remove('shAnimFwd', 'shAnimBack');
 	buildShieldsPanel(host);
-	shieldsPopover.open(shieldsButton);
+	shieldsPopover.open(anchor);
 }
 
 shieldsButton.addEventListener('click', () => {
@@ -7760,7 +7766,7 @@ function lockBrowserKeys() {
 
 const menuItems = () =>
 	[...menuPanel.querySelectorAll('[role="menuitem"]')].filter(
-		(item) => !item.hidden,
+		(item) => !item.hidden && !item.disabled,
 	);
 
 // the menu is the tab's: its button is on the tab's bar, and the tab
@@ -7773,6 +7779,7 @@ function openMenu(anchor) {
 	syncFullscreenItem();
 	syncThemesItem();
 	syncVibeItem();
+	syncPhoneMenu(anchor);
 	menuAnchor = anchor;
 	menuPopover.open(anchor);
 	menuItems()[0]?.focus();
@@ -7817,6 +7824,104 @@ menuAbout.addEventListener('click', () => {
 	menuPopover.close();
 	openShieldsPage('about');
 });
+
+// A phone's bar is the address box and the menu alone (main.css): what the
+// rest of the bar does is in the menu's phone part, at its top. The page's
+// row (Back, Forward, Reload or Stop, the star), as Chrome's menu on
+// Android has it, then Saved pages and Shields. Each does what the bar's
+// own button does, and shows its state as it is when the menu opens.
+const PHONE_BAR = matchMedia('only screen and (max-width: 599px)');
+const phoneTools = element('div', 'pmMenuTools');
+phoneTools.setAttribute('role', 'group');
+phoneTools.setAttribute('aria-label', 'Page');
+/** the row's copy of the bar's button `id`, with its pictures */
+function phoneTool(id, label) {
+	const button = element('button', 'toolbtn');
+	button.type = 'button';
+	button.tabIndex = -1;
+	button.setAttribute('role', 'menuitem');
+	button.setAttribute('aria-label', label);
+	button.title = label;
+	button.dataset.tool = id;
+	for (const img of $(id).querySelectorAll('img'))
+		button.append(img.cloneNode());
+	button.addEventListener('click', () => {
+		menuPopover.close();
+		$(id).click();
+	});
+	return button;
+}
+const phoneStar = element('button', 'starbtn');
+phoneStar.type = 'button';
+phoneStar.tabIndex = -1;
+phoneStar.setAttribute('role', 'menuitem');
+phoneStar.addEventListener('click', () => {
+	menuPopover.close();
+	toggleBookmark(activeTab);
+});
+phoneTools.append(
+	phoneTool('toolBack', 'Back'),
+	phoneTool('toolForward', 'Forward'),
+	phoneTool('toolReload', 'Reload'),
+	phoneStar,
+);
+/** a menu item of the phone part: a picture and its label */
+function phoneItem(id, src, label) {
+	const item = element('button', 'pmMenuItem');
+	item.id = id;
+	item.type = 'button';
+	item.tabIndex = -1;
+	item.setAttribute('role', 'menuitem');
+	const picture = element('img', 'pmMenuLogo');
+	picture.src = src;
+	picture.alt = '';
+	picture.draggable = false;
+	const text = element('span');
+	text.textContent = label;
+	item.append(picture, text);
+	return item;
+}
+const menuSaved = phoneItem(
+	'menuSaved',
+	'/pm/icons/bookmarks.svg',
+	'Saved pages',
+);
+menuSaved.addEventListener('click', () => {
+	menuPopover.close();
+	openBookmarks(menuButton);
+});
+const menuShields = phoneItem('menuShields', '/pm/logo.png', 'Shields');
+menuShields.addEventListener('click', () => {
+	menuPopover.close();
+	openShields(menuButton);
+});
+menuPanel.prepend(phoneTools, menuSaved, menuShields);
+
+/** the phone part shows for the bar's menu on a phone, as the bar is then */
+function syncPhoneMenu(anchor) {
+	const shown = PHONE_BAR.matches && anchor === menuButton;
+	phoneTools.hidden = !shown;
+	// (each of the row's items too: the menu's keys and its readers list
+	// the items not hidden)
+	for (const tool of phoneTools.children) tool.hidden = !shown;
+	menuSaved.hidden = !shown;
+	menuShields.hidden = !shown || shieldsButton.hidden;
+	if (!shown) return;
+	for (const tool of phoneTools.querySelectorAll('[data-tool]')) {
+		const live = $(tool.dataset.tool);
+		tool.disabled = live.disabled;
+		tool.classList.toggle('stopping', live.classList.contains('stopping'));
+		const label = live.getAttribute('aria-label') || live.title;
+		tool.setAttribute('aria-label', label);
+		tool.title = label;
+	}
+	syncStar(phoneStar, activeTab);
+	phoneStar.setAttribute('aria-label', phoneStar.title);
+	// the blocked count the bar's badge has
+	menuShields.lastChild.textContent = shieldsBadge.hidden
+		? 'Shields'
+		: `Shields (${shieldsBadge.textContent} blocked)`;
+}
 
 // ---- vibeOS -------------------------------------------------------------------
 // vibeOS (Fracital/vibeOS, the submodule at vendor/vibeOS, built into

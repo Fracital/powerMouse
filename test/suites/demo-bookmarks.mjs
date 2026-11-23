@@ -718,7 +718,8 @@ async function run(mode, base) {
 	await loaded(page);
 
 	// the address box: the status chip right of the text, left of the star
-	for (const width of [1280, 390]) {
+	// (a phone's bar has neither: demo-phone-bar)
+	for (const width of [1280, 768]) {
 		await page.setViewportSize({ width, height: 800 });
 		await sleep(400);
 		const bar = await page.evaluate(() => {

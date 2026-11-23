@@ -3525,10 +3525,71 @@ input:focus-visible {
 .cardChrome .extAction {
 	box-sizing: border-box;
 }
+/* a phone's bar is the address box and the menu, nothing else: Back,
+   Forward, Reload, the bookmarks, the extensions, the service worker's
+   status, Shields and the star are in the menu's phone part (pm/main.js
+   phoneMenu). The cards' copies of the bar follow, so a card stays a picture
+   of the bar it opens onto */
 @media only screen and (max-width: 599px) {
-	.extActions {
-		display: none;
+	.extActions,
+	.chrome > .toolbtn:not(.menubtn),
+	#chromeStatus,
+	#toolShields,
+	#toolStar,
+	.cardChrome > .toolbtn,
+	.cardExtensions,
+	.cardChrome .omniEnd .status,
+	.cardChrome .omniEnd .shieldsbtn,
+	.cardChrome .omniEnd .starbtn {
+		display: none !important;
 	}
+}
+/* the menu's phone part: the page's own row (Back, Forward, Reload, the
+   star), as Chrome's menu on Android has it, then Saved pages and Shields.
+   Shown only on a phone's bar (pm/main.js phoneMenu) */
+.pmMenuTools {
+	display: flex;
+	justify-content: space-between;
+	gap: 4px;
+	padding: 2px 4px 6px;
+	margin-bottom: 4px;
+	border-bottom: 1px solid rgba(var(--pm-panel-fg-rgb), 0.12);
+}
+.pmMenuTools[hidden],
+.pmMenuTools > button[hidden] {
+	display: none;
+}
+.pmMenuTools > button {
+	display: grid;
+	place-items: center;
+	width: 40px;
+	height: 40px;
+	padding: 0;
+	border: none;
+	border-radius: 8px;
+	background-color: transparent;
+	cursor: pointer;
+}
+.pmMenuTools > .starbtn {
+	background-size: 24px 24px;
+}
+.pmMenuTools > button:hover:not(:disabled),
+.pmMenuTools > button:focus-visible {
+	background-color: rgba(var(--pm-panel-fg-rgb), 0.06);
+}
+.pmMenuTools > button:focus-visible {
+	outline-offset: -2px;
+}
+.pmMenuTools > button:disabled {
+	cursor: default;
+	opacity: 0.35;
+}
+.pmMenuTools > .toolbtn:disabled {
+	filter: grayscale(1);
+}
+.pmMenuItem .pmMenuLogo {
+	width: 20px;
+	height: 20px;
 }
 @media only screen and (max-width: 359px) {
 	.toolbtn.extbtn {
