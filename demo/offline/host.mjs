@@ -497,7 +497,7 @@ const CALL_PAGE = `<!doctype html><meta charset="utf-8"><script>(() => {
 // (each document's frame takes the color-scheme the tab's element gives this
 // container, as the demo's own frames take theirs: a page reads the pages'
 // mode, Settings > Page appearance, for prefers-color-scheme)
-const CONTAINER = `<!doctype html><html><head><style>html,body{margin:0;height:100%;overflow:hidden}iframe{border:0;width:100%;height:100%;display:block}@media (prefers-color-scheme:light){iframe{color-scheme:light}}@media (prefers-color-scheme:dark){iframe{color-scheme:dark}}</style></head><body></body></html>`;
+const CONTAINER = `<!doctype html><html><head><meta name="darkreader-lock"><style>html,body{margin:0;height:100%;overflow:hidden}iframe{border:0;width:100%;height:100%;display:block}@media (prefers-color-scheme:light){iframe{color-scheme:light}}@media (prefers-color-scheme:dark){iframe{color-scheme:dark}}</style></head><body></body></html>`;
 
 let documents = 0;
 const nextClient = () => `pm-doc-${++documents}-${Date.now().toString(36)}`;
