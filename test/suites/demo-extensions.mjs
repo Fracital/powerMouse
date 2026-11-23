@@ -808,15 +808,24 @@ ok(
 );
 
 // the menu's Extensions: Chrome 157's submenu (ExtensionsMenuModel),
-// Manage extensions and Visit Chrome Web Store, opened by the pointer and
-// by the keyboard
+// Manage extensions and Visit Chrome Web Store, opened by a click on its
+// item and by the keyboard; a second click closes it, and the pointer over
+// the menu's other rows leaves it as it is
 await page.click('#toolMenu');
 await painted(page);
 await page.hover('#menuExtensions');
 await painted(page);
+const hovered = await subMenuState(page);
+ok(
+	"the menu's Extensions does not open under the pointer alone",
+	!hovered.open && hovered.expanded === 'false',
+	JSON.stringify(hovered),
+);
+await page.click('#menuExtensions');
+await painted(page);
 const appExtensions = await subMenuState(page);
 ok(
-	"the menu's Extensions opens under the pointer: Chrome 157's submenu, beside it",
+	"the menu's Extensions opens on a click: Chrome 157's submenu, beside it",
 	appExtensions.open &&
 		JSON.stringify(appExtensions.entries) ===
 			JSON.stringify(['Manage extensions', 'Visit Chrome Web Store']) &&
@@ -826,11 +835,23 @@ ok(
 );
 await page.hover('#menuAbout');
 await painted(page);
-const afterAbout = await subMenuState(page);
+const overAbout = await subMenuState(page);
 ok(
-	'another item under the pointer closes it',
-	!afterAbout.open && afterAbout.expanded === 'false',
-	JSON.stringify(afterAbout),
+	'another item under the pointer leaves it open',
+	overAbout.open && overAbout.expanded === 'true',
+	JSON.stringify(overAbout),
+);
+await page.click('#menuExtensions');
+await painted(page);
+const afterAgain = await subMenuState(page);
+ok(
+	'a second click on its item closes it, the menu still open',
+	!afterAgain.open &&
+		afterAgain.expanded === 'false' &&
+		(await page.evaluate(
+			() => !document.getElementById('pmMenu').classList.contains('hidden'),
+		)),
+	JSON.stringify(afterAgain),
 );
 await page.focus('#menuExtensions');
 await page.keyboard.press('ArrowRight');
@@ -930,7 +951,7 @@ await page.evaluate(() => {
 });
 await page.click('#toolMenu');
 await painted(page);
-await page.hover('#menuThemes');
+await page.click('#menuThemes');
 await painted(page);
 const themesMenu = await subMenuState(page);
 ok(
@@ -957,7 +978,7 @@ const darkShown = await page.evaluate(() => ({
 }));
 await page.click('#toolMenu');
 await painted(page);
-await page.hover('#menuThemes');
+await page.click('#menuThemes');
 await painted(page);
 const afterDark = await subMenuState(page);
 // a change made elsewhere shows in the open submenu at once
@@ -1570,7 +1591,7 @@ if (process.env.EXT_SHOTS) {
 	// the menu's Extensions and Themes
 	await page.click('#toolMenu');
 	await painted(page);
-	await page.hover('#menuExtensions');
+	await page.click('#menuExtensions');
 	await painted(page);
 	await sleep(300);
 	await shot('stomp-app-menu-extensions', {
@@ -1579,7 +1600,7 @@ if (process.env.EXT_SHOTS) {
 		width: 560,
 		height: 260,
 	});
-	await page.hover('#menuThemes');
+	await page.click('#menuThemes');
 	await painted(page);
 	await sleep(300);
 	await shot('stomp-app-menu-themes', {

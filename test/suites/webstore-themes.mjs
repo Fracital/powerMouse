@@ -934,7 +934,7 @@ async function openPicker(page) {
 async function themeLists(page) {
 	await page.click('#toolMenu');
 	await sleep(300);
-	await page.hover('#menuThemes');
+	await page.click('#menuThemes');
 	await page.waitForSelector('.extSubmenu [data-theme]');
 	const menu = await page.$$eval('.extSubmenu [data-theme]', (rows) =>
 		rows.map((row) => [row.dataset.theme, row.getAttribute('aria-checked')]),
@@ -956,7 +956,7 @@ async function themeLists(page) {
 async function resetFromMenu(page) {
 	await page.click('#toolMenu');
 	await sleep(300);
-	await page.hover('#menuThemes');
+	await page.click('#menuThemes');
 	const reset = '.extSubmenu [data-command="resetTheme"]';
 	await page.waitForSelector(reset);
 	const disabled = await page.$eval(reset, (row) => row.disabled);

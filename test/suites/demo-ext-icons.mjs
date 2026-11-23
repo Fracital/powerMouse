@@ -350,7 +350,7 @@ await page.setViewportSize({ width: 320, height: 700 });
 await painted();
 await page.click('#toolMenu');
 await painted();
-await page.hover('#menuExtensions');
+await page.click('#menuExtensions');
 const menuShown = await until(pictures, (list) =>
 	list?.some((p) => p.in === 'menu'),
 );

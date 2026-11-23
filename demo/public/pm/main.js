@@ -7312,13 +7312,15 @@ function listenPopovers() {
 	});
 }
 
-// A menu item's submenu, as Chrome's menus have them (the menu's Extensions
-// and Themes, an extension's site access and its own items' children):
-// beside its item, over the menu. Its item opens it on a click, under the
-// pointer or with the right arrow; another item of that menu under the
-// pointer closes it, as do Escape and the left arrow (the focus back on its
-// item), and its menu's closing. Its keys come before the popovers'
-// (registered first), so Escape closes it alone.
+// A menu item's submenu (the menu's Proxy, Extensions and Themes, an
+// extension's site access and its own items' children): beside its item,
+// over the menu. A click on its item opens it and a second one closes it,
+// and the right arrow opens it; Escape and the left arrow close it (the
+// focus back on its item), as do another submenu's opening and its menu's
+// closing. The pointer passing over the menu's rows opens and closes
+// nothing, so the way from an item to its submenu may cross other rows.
+// Its keys come before the popovers' (registered first), so Escape closes
+// it alone.
 const subMenu = element('div', 'popover pmMenu extSubmenu hidden');
 subMenu.setAttribute('role', 'menu');
 subMenu.setAttribute('aria-hidden', 'true');
@@ -7346,7 +7348,10 @@ function submenuItem(owner, build) {
 		'beforeend',
 		shieldIcon('submenuArrow', 'shieldsIcon pmSubmenuArrow'),
 	);
-	owner.addEventListener('click', () => openSubmenu(owner));
+	owner.addEventListener('click', () => {
+		if (subMenuOwner === owner && subMenuOpen()) closeSubmenu();
+		else openSubmenu(owner);
+	});
 }
 
 function openSubmenu(owner) {
@@ -7467,18 +7472,6 @@ addEventListener(
 	},
 	true,
 );
-// a row under the pointer: a submenu's item opens it, another row of its
-// menu closes the one open
-addEventListener('mouseover', (event) => {
-	const row = event.target.closest?.('.pmMenuItem');
-	if (!row || subMenu.contains(row)) return;
-	if (submenuBuilders.has(row)) return openSubmenu(row);
-	if (
-		subMenuOpen() &&
-		row.closest('.popover') === subMenuOwner.closest('.popover')
-	)
-		closeSubmenu();
-});
 
 const shieldsPopover = popover(shieldsPanel, shieldsScrim);
 const closeShields = shieldsPopover.close;
