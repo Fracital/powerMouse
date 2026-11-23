@@ -2,35 +2,39 @@
 	"id": "scramjet",
 	"name": "Scramjet",
 	"repo": "https://github.com/MercuryWorkshop/scramjet",
-	"ref": "main (release \"latest\", Continuous Build)",
-	"sha": "517206bc39bc124473844c3cf3ddbb508e32fc20",
+	"ref": "main at bb5a8550 (2026-11-21, \"review/v3: the v3 regression review\"), from the \"Continuous Build\" release (tag \"latest\") as it stood on 2026-11-23",
+	"sha": "bb5a8550afc62e30871702468bf5f3a029b3020f",
 	"setupFrom": [
-		"packages/demo (index.html, src/index.tsx, pages/BrowserView.tsx, public/sw.js, vite config)",
-		"packages/create-proxy-app with packages/bootstrap (the deployable template)"
+		"packages/demo at bb5a8550 (index.html, src/index.tsx, pages/BrowserView.tsx, public/sw.js, vite.config.ts; the boot is unchanged from v2.1.0 and 517206bc)",
+		"packages/create-proxy-app with packages/bootstrap at bb5a8550 (the deployable template)"
 	],
 	"release": {
 		"tag": "latest",
 		"api": "https://api.github.com/repos/MercuryWorkshop/scramjet/releases/tags/latest",
 		"download": "https://github.com/MercuryWorkshop/scramjet/releases/download/latest/",
+		"builtBy": "CI run 45224274346 (workflow_dispatch on main at bb5a8550, 2026-11-23T17:08Z, success); assets uploaded 2026-11-23T17:19Z",
 		"tarballs": {
 			"@mercuryworkshop/scramjet": {
-				"file": "mercuryworkshop-scramjet-2.0.67-alpha.2.tgz",
-				"version": "2.0.67-alpha.2",
-				"sha256": "dbc8d172a1ff390e179a4c7d46a25e86aac47d197274f464f7d10f5380bf761c"
+				"file": "mercuryworkshop-scramjet-3.0.0-alpha.tgz",
+				"version": "3.0.0-alpha",
+				"sha256": "8310c4c3a445de1fc90d74a88a4f324e54c45d4678013cd17d169bc940872864"
 			},
 			"@mercuryworkshop/scramjet-controller": {
-				"file": "mercuryworkshop-scramjet-controller-0.0.14.tgz",
-				"version": "0.0.14",
-				"sha256": "67037972f6e516c94d1e6f32f36526f47e86ec30b54d760ee810a34697b8d864"
+				"file": "mercuryworkshop-scramjet-controller-0.0.15.tgz",
+				"version": "0.0.15",
+				"sha256": "2817ff1d33a055bff19a7550dc217441aa806b417eb33b1eab2d4be41ee797bf"
 			}
 		},
-		"note": "the release is rebuilt from every push to main under the same tag; setup refuses a tarball whose sha256 differs from the pin and warns when the release says it was built from another commit"
+		"cache": "<contenders>/.cache/scramjet/",
+		"note": "these are the tarballs the release tag \"latest\" held for bb5a8550 on 2026-11-23 (both bundles say build bb5a855); CI deletes and recreates that tag on every release build of main, so the files move or vanish. Setup takes a tarball from pkg/tarballs, then from the cache, then from the release, refuses any whose sha256 differs from the pin or whose bundle names another build, and keeps a copy of each in the cache, which survives removing <contenders>/scramjet",
+		"fallback": "once the tag has moved and the cache is empty, put the two files in the cache by hand: from a saved copy, or built from source at bb5a8550 as CI builds them (git clone, git checkout bb5a8550, pnpm install, rustup + wasm-bindgen + Binaryen's wasm-opt as .github/actions/setup-rewriter-toolchain installs them, then ./cv npm --yes, which packs both tarballs). A local build will not match the sha256 pins byte for byte (build date, toolchain); after checking it says build bb5a855, update the pins here and say so in the notes"
 	},
 	"npm": {
 		"@mercuryworkshop/epoxy-transport": "3.0.2",
-		"@mercuryworkshop/proxy-transports": "1.0.2"
+		"@mercuryworkshop/proxy-transports": "1.0.2",
+		"semver": "7.7.3"
 	},
-	"npmFrom": "pnpm-workspace.yaml catalog at 517206bc",
+	"npmFrom": "pnpm-workspace.yaml catalog at bb5a8550 (epoxy-transport, proxy-transports); semver at the version pnpm-lock.yaml resolves for packages/utils (scramjet-utils imports it; the controller tarball depends on ^7.7.3 too)",
 	"install": {
 		"dir": "<contenders>/scramjet/pkg",
 		"command": "npm install --no-save --ignore-scripts --no-audit --no-fund",
@@ -38,9 +42,11 @@
 	},
 	"utils": {
 		"package": "@mercuryworkshop/scramjet-utils",
-		"source": "packages/utils/src at sha (from the clone, else codeload.github.com)",
+		"version": "0.0.4",
+		"source": "packages/utils/src at sha (from a clone in <contenders>/scramjet if there is one, else codeload.github.com)",
 		"output": "pkg/build/scramjet-utils.js",
-		"bundler": "esbuild from the repo's node_modules, the shape of the repo's rspack IIFE build",
+		"bundler": "esbuild from the repo's node_modules, the shape of the repo's rspack scramjet-utils-iife build (self.$scramjetUtils; scramjet and the controller through their *-external.mjs stubs)",
+		"why": "0.0.4 is not on npm or in the release (npm latest is 0.0.3 from 2026-05-24, which asserts scramjet 2.0.67-alpha.1 and controller 0.0.13 exactly, and whose alwaysLastBubble predates the v3 event interception); CI builds it from bb5a8550 only as a run artifact (scramjet-utils-package, needs a GitHub login, expires 2027-02-21)",
 		"esbuild": {
 			"bundle": true,
 			"format": "iife",
@@ -77,19 +83,29 @@
 		"name": "epoxy",
 		"package": "@mercuryworkshop/epoxy-transport",
 		"module": "/epoxy/index.mjs",
-		"options": { "wisp": "<harness holyWisp>" },
+		"options": {
+			"wisp": "<harness holyWisp>"
+		},
 		"where": "the host page's main thread (new EpoxyTransport(options) handed to the Controller)",
 		"summary": "epoxy-transport 3.0.2 (npm, epoxy-tls inlined) in the host page's main thread, over the shared holyWisp"
 	},
-	"rows": [{ "row": "scramjet", "label": "Scramjet", "options": {} }],
+	"rows": [
+		{
+			"row": "scramjet",
+			"label": "Scramjet",
+			"options": {}
+		}
+	],
 	"notes": [
-		"service worker: the demo's sw.js at / (scope /) importing /controller/controller.sw.js; it only forwards requests to the controller",
+		"scramjet: main at bb5a8550 (3.0.0-alpha, controller 0.0.15), the release tag \"latest\" as CI rebuilt it from that commit on 2026-11-23; the last stable release is v2.1.0 (controller 0.1.0, 2b2adc6e), 62 commits behind: the v3 interceptor rewrite (client.Intercept, WebIDL machinery), event interception, referrer, CSP meta, Trusted Types and incumbency work",
+		"service worker: the demo's sw.js at / (scope /) importing /controller/controller.sw.js; it only forwards requests to the controller (the file is the same at 517206bc, v2.1.0 and bb5a8550)",
 		"one Controller in the host page (as the demo and bootstrap): fetch handling, HTML/JS/CSS rewriting and the transport all run on the host page's main thread, not in the service worker",
-		"scramjet config: the Controller's default (scramjet defaultConfig, what bootstrap/create-proxy-app use); the demo instead passes defaultConfigDev, which turns on debug flags (captureErrors, debugTrampolines, debugSourceURL) and allowInvalidJs off; those are dev aids and would slow it",
-		"flags in effect: sourcemaps on, destructureRewrites on, encapsulateWorkers on, allowInvalidJs on, syncxhr off, allowFailedIntercepts off (the controller sets it on, then merges defaultConfig over it)",
+		"scramjet config: the Controller's default (scramjet defaultConfig, what bootstrap/create-proxy-app use); the demo instead passes defaultConfigDev, which turns on debug flags (captureErrors, debugTrampolines, debugSourceURL, cleanErrors off) and allowInvalidJs off; those are dev aids and would slow it",
+		"flags in effect: sourcemaps on, destructureRewrites on, encapsulateWorkers on, allowInvalidJs on, cleanErrors on, syncxhr off, incumbency \"pst\" where the engine hands out script hashes on CallSites (V8 does), else \"lazystamp\"; v3 has no allowFailedIntercepts flag (2.x had it, and the 2.x controller set it on before merging defaultConfig over it); read from the Controller in Chrome 159 on 2026-11-23: incumbency \"pst\"",
+		"no per-frame flag overrides (createFrame's new flags option); site flags live in the controller and none are set",
 		"URL codec: the controller default (encodeURIComponent under /~/sj/<controller>/<frame>/)",
 		"HttpCachePlugin on (demo and template both install it): caches upstream responses in the Cache API per RFC 9111, rewriting still runs on hits; no 304 revalidation",
-		"scramjet-utils is not in the release and npm 0.0.3 asserts scramjet 2.0.67-alpha.1 / controller 0.0.13, so packages/utils/src at 517206bc is bundled with esbuild; the demo's UrlWatcherPlugin and CatchEscapedLinksPlugin are UI plugins and are not installed",
+		"scramjet-utils 0.0.4 is packages/utils/src at bb5a8550 bundled with esbuild (npm has only 0.0.3, which pins 2.0.67-alpha.1 / 0.0.13 and lacks the v3 event interception); the demo's UrlWatcherPlugin and CatchEscapedLinksPlugin are UI plugins and are not installed",
 		"transport: epoxy (the demo offers epoxy and libcurl, default libcurl; epoxy chosen so every wisp contender uses epoxy); npm epoxy-transport 3.0.2 has stock epoxy-tls 2.1.20-1: the 16 KiB HTTP/2 header list limit STomp's patched build lifts, no HTTP/3, no ECH DoH",
 		"transport initializes lazily on the first proxied request (demo behaviour), so the epoxy wasm compile is inside the first load after boot",
 		"no cross-origin isolation headers on the host (the demo's vite server sends none)",

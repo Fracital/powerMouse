@@ -1,6 +1,9 @@
-// Scramjet (MercuryWorkshop/scramjet main 517206bc), from the tarballs of its
-// "Continuous Build" GitHub release (tag `latest`): @mercuryworkshop/scramjet
-// and @mercuryworkshop/scramjet-controller. Set up the way its demo
+// Scramjet (MercuryWorkshop/scramjet main bb5a8550, 3.0.0-alpha), from the
+// tarballs its "Continuous Build" GitHub release (tag `latest`) held for that
+// commit on 2026-11-23: @mercuryworkshop/scramjet and
+// @mercuryworkshop/scramjet-controller. The tag is recreated on every release
+// build of main, so setup keeps a copy of both in <contenders>/.cache/scramjet
+// and takes them from there first. Set up the way its demo
 // (packages/demo) and its deployable template (packages/create-proxy-app with
 // packages/bootstrap) do: the demo's sw.js at / importing the controller's
 // service worker, scramjet.js and controller.api.js as classic scripts, one
@@ -11,12 +14,13 @@
 // the Controller's own default (the template's), not the demo's debug flags.
 // scramjet-utils (the cache plugin) is not in the release and its npm build
 // expects older scramjet versions, so setup bundles packages/utils/src at
-// 517206bc with esbuild the way the repo's rspack config does.
+// bb5a8550 with esbuild the way the repo's rspack config does.
 // The pins, downloads, esbuild options, transport options and notes come from
 // bench/configs/scramjet.json; host/sw.js is the demo's file, verbatim.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+	copyFileSync,
 	existsSync,
 	mkdirSync,
 	readFileSync,
@@ -47,10 +51,14 @@ const TARBALLS = Object.fromEntries(
 		file,
 	]),
 );
-// pnpm-workspace.yaml catalog at 517206bc
+// pnpm-workspace.yaml catalog at bb5a8550 (and semver from its lockfile)
 const NPM = CONFIG.npm;
 
 const pkgDir = (ctx) => join(ctx.dir, 'pkg');
+// outside <contenders>/scramjet, so the pinned tarballs outlive a clean setup
+// and the release tag moving on
+const cacheDir = (ctx) =>
+	join(ctx.contendersDir ?? dirname(ctx.dir), '.cache', id);
 const modules = (ctx) => join(pkgDir(ctx), 'node_modules/@mercuryworkshop');
 const utilsBuild = (ctx) => join(pkgDir(ctx), 'build/scramjet-utils.js');
 const stateFile = (ctx) => join(pkgDir(ctx), 'setup.json');
@@ -66,7 +74,8 @@ async function download(url, file) {
 	writeFileSync(file, Buffer.from(await response.arrayBuffer()));
 }
 
-/** the release's metadata: which commit it says it was built from, asset digests */
+/** the release's metadata: which commit it says it was built from (CI leaves
+ * the body empty when the build is started by hand), asset digests */
 async function releaseInfo() {
 	try {
 		const response = await fetch(CONFIG.release.api, {
@@ -97,6 +106,8 @@ async function utilsSource(ctx, target) {
 	mkdirSync(target, { recursive: true });
 	let archive;
 	try {
+		// only a clone of scramjet itself (git -C would find an enclosing repo)
+		if (!existsSync(join(ctx.dir, '.git'))) throw new Error('no clone');
 		execFileSync('git', ['-C', ctx.dir, 'cat-file', '-e', `${SHA}^{commit}`], {
 			stdio: 'ignore',
 		});
@@ -130,14 +141,59 @@ async function utilsSource(ctx, target) {
 	rmSync(archive);
 }
 
+/**
+ * The pinned tarball `file` at `path`: already there, else the cached copy,
+ * else downloaded from the release. Checked against its sha256 pin, and kept
+ * in the cache.
+ */
+async function tarball(ctx, name, file, path) {
+	const pinned = CONFIG.release.tarballs[name].sha256;
+	const cached = join(cacheDir(ctx), file);
+	const matches = (candidate) =>
+		existsSync(candidate) && sha256(candidate) === pinned;
+	let source = 'pkg/tarballs';
+	if (!matches(path)) {
+		rmSync(path, { force: true });
+		if (matches(cached)) {
+			copyFileSync(cached, path);
+			source = cached;
+		} else {
+			source = RELEASE + file;
+			try {
+				await download(source, path);
+			} catch (error) {
+				throw new Error(
+					`scramjet: ${file} is not in ${cached} and the release has no copy (${error.message}); the "latest" tag has probably moved on from ${SHA.slice(0, 8)}. ${CONFIG.release.fallback}`,
+					{ cause: error },
+				);
+			}
+		}
+	}
+	const digest = sha256(path);
+	if (digest !== pinned) {
+		rmSync(path, { force: true });
+		throw new Error(
+			`scramjet: ${file} from ${source} has sha256:${digest}, bench/configs/scramjet.json pins sha256:${pinned}; the "latest" tag has probably moved on from ${SHA.slice(0, 8)}. ${CONFIG.release.fallback}`,
+		);
+	}
+	if (!matches(cached)) {
+		mkdirSync(cacheDir(ctx), { recursive: true });
+		copyFileSync(path, cached);
+	}
+	return { source, cached };
+}
+
 export async function setup(ctx) {
 	const dir = pkgDir(ctx);
 	if (
 		existsSync(stateFile(ctx)) &&
+		readJSON(stateFile(ctx)).pinnedSha === SHA &&
 		existsSync(utilsBuild(ctx)) &&
 		existsSync(join(modules(ctx), 'scramjet/dist/scramjet.js'))
 	)
 		return;
+	// another pin's install: start over (the tarballs are in the cache)
+	rmSync(dir, { recursive: true, force: true });
 	mkdirSync(join(dir, 'tarballs'), { recursive: true });
 	// keep the clone's git status clean
 	if (existsSync(join(ctx.dir, '.git/info'))) {
@@ -151,23 +207,27 @@ export async function setup(ctx) {
 	const tarballs = {};
 	for (const [name, file] of Object.entries(TARBALLS)) {
 		const path = join(dir, 'tarballs', file);
-		if (!existsSync(path)) await download(RELEASE + file, path);
+		const { source, cached } = await tarball(ctx, name, file, path);
 		const digest = `sha256:${sha256(path)}`;
-		const pinned = CONFIG.release.tarballs[name].sha256;
-		if (digest !== `sha256:${pinned}`)
-			throw new Error(
-				`scramjet: ${file} has ${digest}, bench/configs/scramjet.json pins sha256:${pinned}`,
-			);
 		tarballs[name] = {
 			file,
 			url: RELEASE + file,
+			from: source,
+			cached,
 			sha256: digest.slice(7),
 			matchesRelease: release.digests ? release.digests[file] === digest : null,
 		};
 	}
 	if (release.sha && release.sha !== SHA)
 		console.warn(
-			`scramjet: the latest release is now built from ${release.sha}, not ${SHA}; using the downloaded tarballs`,
+			`scramjet: the latest release is now built from ${release.sha}, not ${SHA}; using the pinned tarballs`,
+		);
+	else if (
+		release.digests &&
+		Object.values(tarballs).some((entry) => !entry.matchesRelease)
+	)
+		console.warn(
+			`scramjet: the latest release no longer holds the pinned ${SHA.slice(0, 8)} tarballs; using the pinned copies`,
 		);
 
 	writeFileSync(
@@ -211,6 +271,12 @@ export async function setup(ctx) {
 		builds[name] = match
 			? { version: match[1], build: match[2], date: match[3] }
 			: null;
+		// the sha256 pins already fix the bytes; this catches pins and sha
+		// edited out of step
+		if (!builds[name] || !SHA.startsWith(builds[name].build))
+			throw new Error(
+				`scramjet: ${file} says build ${builds[name]?.build}, bench/configs/scramjet.json says ${SHA}`,
+			);
 	}
 
 	// scramjet-utils at the pinned commit: the rspack IIFE build's shape
@@ -287,10 +353,13 @@ export async function describe(ctx) {
 		ref: CONFIG.ref,
 		sha: SHA,
 		release: {
+			tag: CONFIG.release.tag,
+			pinned: CONFIG.release.builtBy,
 			builtFrom: releaseSha,
 			matchesPin: releaseSha ? releaseSha === SHA : null,
 			publishedAt: state.release.publishedAt,
 			tarballs: state.tarballs,
+			builds: state.builds,
 		},
 		packages,
 		transport: CONFIG.transport.summary,

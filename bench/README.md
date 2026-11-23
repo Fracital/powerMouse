@@ -54,13 +54,15 @@ and rebuild `RESULTS.md` from `results/full/results.md` plus the host and versio
   module. `stomp` (shown as STomp) is that setup with the content blocker on, its default; `stomp-noadblock` turns the
   blocker off (`adblock: false`), the like-for-like row. With the blocker on, every fresh context downloads its filter
   lists (EasyList, uBlock Origin) through the proxy at start, which is what a new visitor pays.
-- `scramjet` is MercuryWorkshop/scramjet `main` at 517206bc, from the tarballs its CI publishes as the "Continuous
-  Build" release (tag `latest`): `@mercuryworkshop/scramjet` 2.0.67-alpha.2 and `@mercuryworkshop/scramjet-controller`
-  0.0.14, checked by sha256. `scramjet-utils` (for the `HttpCachePlugin` both official setups install) is not in the
-  release and its npm build expects older packages, so setup builds `packages/utils` at the same commit with esbuild.
-  Transport: `@mercuryworkshop/epoxy-transport` 3.0.2 and `proxy-transports` 1.0.2, the versions the repository's pnpm
-  catalog pins. Host as `packages/demo`: its `sw.js`, a `Controller` in the page, `createFrame()` and `frame.go(url)`,
-  the controller's default (production) config.
+- `scramjet` is MercuryWorkshop/scramjet `main` at bb5a8550 (v3), from the tarballs its CI's "Continuous Build"
+  release (tag `latest`) held for that commit on 2026-11-23: `@mercuryworkshop/scramjet` 3.0.0-alpha and
+  `@mercuryworkshop/scramjet-controller` 0.0.15, checked by sha256. The tag is recreated on every release build of
+  `main`, so setup keeps a copy of both in `<contenders>/.cache/scramjet/` (`configs/scramjet.json` says how to rebuild
+  them from source once the tag has moved). `scramjet-utils` 0.0.4 (for the `HttpCachePlugin` both official setups
+  install) is not in the release and its npm build (0.0.3) expects older packages, so setup builds `packages/utils` at
+  the same commit with esbuild. Transport: `@mercuryworkshop/epoxy-transport` 3.0.2 and `proxy-transports` 1.0.2, the
+  versions the repository's pnpm catalog pins. Host as `packages/demo`: its `sw.js`, a `Controller` in the page,
+  `createFrame()` and `frame.go(url)`, the controller's default (production) config.
 - `ultraviolet` is `@titaniumnetwork-dev/ultraviolet` 3.2.10 (npm latest, GitHub release v3.2.10-headers), set up as
   the official [Ultraviolet-App](https://github.com/titaniumnetwork-dev/Ultraviolet-App) at a1762248: its `uv.config.js` values
   (generated from `configs/ultraviolet.json`; xor codec, prefix `/uv/service/`), `/uv/sw.js`, bare-mux 2.1.8 with its SharedWorker, epoxy-transport 2.1.28 (the
