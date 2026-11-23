@@ -28,7 +28,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import vm from 'node:vm';
 
 export const ROWS = [
-	'stomp-wasm',
+	'stomp',
 	'scramjet',
 	'ramjet',
 	'ultraviolet',
@@ -156,7 +156,7 @@ async function locate(row, { repoRoot, contendersDir, dirs }) {
 	const given = dirs?.[row];
 	const contender = (id) => (contendersDir ? join(contendersDir, id) : null);
 	switch (row) {
-		case 'stomp-wasm': {
+		case 'stomp': {
 			const dir = given ?? join(repoRoot, 'dist');
 			const need = [
 				'rewriteWorker.js',
@@ -538,7 +538,7 @@ async function loadPowermouse(dir) {
 }
 
 const LOADERS = {
-	'stomp-wasm': loadStomp,
+	stomp: loadStomp,
 	scramjet: loadScramjet,
 	ramjet: loadRamjet,
 	ultraviolet: loadUltraviolet,

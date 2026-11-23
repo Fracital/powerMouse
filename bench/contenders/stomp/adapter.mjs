@@ -7,8 +7,8 @@
 // and emulated service workers on, the epoxy build package.json pins as a
 // transport descriptor (run in the transport worker) with HTTP/3 on and
 // Cloudflare DoH for ECH, and the cross-origin isolation headers the demo
-// server sends by default. The rows differ only in the rewriter backend and
-// the content blocker, which is on by default.
+// server sends by default. The rows differ only in the content blocker, which
+// is on by default.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -36,7 +36,6 @@ const readJSON = (file) => JSON.parse(readFileSync(file, 'utf8'));
 
 /** the row's options as the controller sees them (defaults filled in) */
 const effective = (options = {}) => ({
-	rewriter: options.rewriter === 'wasm' ? 'wasm' : 'js',
 	adblock: options.adblock !== false,
 });
 
@@ -85,7 +84,10 @@ export async function assets(ctx, options = {}) {
 	const directory = CONFIG.controller.directory;
 	const list = [];
 	for (const name of readdirSync(dist).sort()) {
-		if (!['.js', '.mjs', '.wasm', '.html'].includes(extname(name))) continue;
+		if (
+			!['.js', '.mjs', '.wasm', '.html', '.json', '.gz'].includes(extname(name))
+		)
+			continue;
 		if (name in rules.exclude) continue;
 		const only = rules.only[name];
 		if (
@@ -165,7 +167,6 @@ export async function start(ctx, options = {}) {
 		'/bench-config.js',
 		configScript({
 			wisp: ctx.wispUrl,
-			rewriter: row.rewriter === 'wasm' ? 'wasm' : '',
 			adblock: row.adblock,
 			frameAllow: CONFIG.frameAllow,
 			// StompController's options but the service worker registration
@@ -179,7 +180,6 @@ export async function start(ctx, options = {}) {
 				codec: controller.codec,
 				cache: controller.cache,
 				serviceWorkers: controller.serviceWorkers,
-				...(row.rewriter === 'wasm' && { rewriter: 'wasm' }),
 				...(row.adblock ? {} : { adblock: false }),
 			},
 		}),

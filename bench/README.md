@@ -46,15 +46,14 @@ and rebuild `RESULTS.md` from `results/full/results.md` plus the host and versio
 
 ## The contenders
 
-- `stomp-js`, `stomp-wasm`, `stomp-noadblock` are this checkout (its `dist/`, from `npm ci && npm run build`), set up
-  as `demo/public/pm/main.js` sets it up when opened on 127.0.0.1: the same-origin `StompController`, the service
-  worker at `/stomp/`, the xor codec, its HTTP cache and emulated service workers on, epoxy from the build
-  `package.json` pins (Fracital/EpoxyTransport) as a transport descriptor run in the transport worker, HTTP/3 on,
-  Cloudflare DoH for ECH, and the demo server's cross-origin isolation headers. `stomp-js` is the default
-  JavaScript rewriter with the content blocker on (its default), `stomp-wasm` the Rust/wasm rewriter
-  (`rewriter: 'wasm'`), `stomp-noadblock` the JavaScript rewriter with `adblock: false`, the like-for-like row. With
-  the blocker on, every fresh context downloads its filter lists (EasyList, uBlock Origin) through the proxy at start,
-  which is what a new visitor pays.
+- `stomp` and `stomp-noadblock` are this checkout (its `dist/`, from `npm ci && npm run build`), set up as
+  `demo/public/pm/main.js` sets it up when opened on 127.0.0.1: the same-origin `StompController`, the service worker
+  at `/stomp/`, the xor codec, its HTTP cache and emulated service workers on, epoxy from the build `package.json`
+  pins (Fracital/EpoxyTransport) as a transport descriptor run in the transport worker, HTTP/3 on, Cloudflare DoH for
+  ECH, and the demo server's cross-origin isolation headers. The rewriter is STomp's only one, the Rust/wasm core
+  module. `stomp` (shown as STomp) is that setup with the content blocker on, its default; `stomp-noadblock` turns the
+  blocker off (`adblock: false`), the like-for-like row. With the blocker on, every fresh context downloads its filter
+  lists (EasyList, uBlock Origin) through the proxy at start, which is what a new visitor pays.
 - `scramjet` is MercuryWorkshop/scramjet `main` at 517206bc, from the tarballs its CI publishes as the "Continuous
   Build" release (tag `latest`): `@mercuryworkshop/scramjet` 2.0.67-alpha.2 and `@mercuryworkshop/scramjet-controller`
   0.0.14, checked by sha256. `scramjet-utils` (for the `HttpCachePlugin` both official setups install) is not in the
@@ -112,7 +111,7 @@ python3 -I bench/run.py --out /root/bench-proxies/results/full --contenders /roo
 
 On the desktop the defaults fit (`npm run bench`), but a machine that runs other work is no place for timings.
 
-Use `--only stomp-js,scramjet` to run some rows (native always runs), `--scenarios
+Use `--only stomp,scramjet` to run some rows (native always runs), `--scenarios
 size,fidelity,fixtures,first-visit,spa,memory,real,rewrite-offline,sites` to pick scenarios, `--sites wikipedia,mdn`
 to pick corpus sites, and `--merge` to keep the scenarios already in an `--out` directory and replace only the ones run
 again. `--repeats` (default 5) applies to every timing, `--parallel` (default 8) is how many corpus sites load at once,

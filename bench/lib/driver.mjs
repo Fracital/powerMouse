@@ -6,7 +6,7 @@
 // results.md to --out. bench/README.md has the method.
 //
 //   node bench/lib/driver.mjs --out bench/results/full [--headful] [--repeats 5]
-//        [--only stomp-js,scramjet] [--scenarios size,fixtures,...]
+//        [--only stomp,scramjet] [--scenarios size,fixtures,...]
 //        [--sites wikipedia,mdn] [--parallel 8] [--spacing 15000] [--merge]
 import { execFileSync } from 'node:child_process';
 import {

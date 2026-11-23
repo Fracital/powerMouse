@@ -5,7 +5,7 @@
 // vectors. Nothing here knows any contender: every row loads the same pages
 // the same way, and the expected value of a check is native's.
 //
-//   node bench/lib/fidelity.mjs [--only native,stomp-js] [--headful] [--out file.json]
+//   node bench/lib/fidelity.mjs [--only native,stomp] [--headful] [--out file.json]
 //                               [--repeats n] [--native-secure]
 //
 // Each page writes { done, checks: { id: value }, vectors: { id: 'fired' | ... } }

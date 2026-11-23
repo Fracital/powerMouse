@@ -2,7 +2,7 @@
 """
 bench/run.py - run the proxy benchmark.
 
-    python3 -I bench/run.py [--repeats 5] [--only stomp-js,scramjet] [--out bench/results/<name>]
+    python3 -I bench/run.py [--repeats 5] [--only stomp,scramjet] [--out bench/results/<name>]
                             [--scenarios size,fidelity,...] [--sites wikipedia,mdn] [--headless]
 
 Sets up every contender at its pinned version (bench/lib/setup.mjs, idempotent; --no-setup skips
@@ -39,7 +39,7 @@ def main():
     p = argparse.ArgumentParser(description="Run the proxy benchmark (see bench/README.md).")
     p.add_argument("--out", help="results directory (default bench/results/<date>)")
     p.add_argument("--repeats", type=int, default=5, help="repeats of every timing (default 5)")
-    p.add_argument("--only", help="rows to run besides native, e.g. stomp-js,scramjet (default all)")
+    p.add_argument("--only", help="rows to run besides native, e.g. stomp,scramjet (default all)")
     p.add_argument("--scenarios", default=SCENARIOS, help=f"default {SCENARIOS}")
     p.add_argument("--sites", help="corpus site ids for the site-support scenario (default all)")
     p.add_argument("--parallel", type=int, default=8, help="corpus sites loading at once (default 8)")

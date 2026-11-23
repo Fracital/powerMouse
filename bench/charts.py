@@ -30,18 +30,19 @@ import tempfile
 # ------------------------------------------------------------------------------ palette (dataviz)
 # holyWisp's palette and slot scheme (bench/charts.py there), so the two benchmarks read as siblings.
 # The home project takes s1 blue as holyWisp does; the rivals take the next strongest slots,
-# scramjet s2 orange and Ultraviolet s3 aqua; the STomp variants take s4 and s7 the way holyWisp's
+# scramjet s2 orange and Ultraviolet s3 aqua; STomp's no-adblock row takes s7 the way holyWisp's
 # variant row does; the two older proxies take s8 red and s6 green, the pair the validator passes
 # after aqua (s5 magenta next to aqua fails the dark CVD check). native is the muted grey reference.
-# Checked with the dataviz validator in the canonical row order:
+# Checked with the dataviz validator in the canonical row order, when a second STomp row held s4
+# between s1 and s7 (the rows now are that set less s4):
 #   light "#2a78d6,#eda100,#6250d6,#eb6834,#1baf7a,#e34948,#008300"
 #   dark  "#3987e5,#c98500,#9085e9,#d95926,#199e70,#e66767,#008300"
 # no hard FAIL in either mode; CVD sits in the 6 to 8 warn band for aqua against red, and yellow and
 # aqua are below 3:1 on the light surface. Bars are sorted best-first, so neighbours change from
 # group to group: every bar therefore carries its row name, and every chart has a table view.
-ROW_ORDER = ["native", "stomp-js", "stomp-wasm", "stomp-noadblock", "scramjet", "ultraviolet", "stompv1",
+ROW_ORDER = ["native", "stomp", "stomp-noadblock", "scramjet", "ultraviolet", "stompv1",
              "powermouse-v1"]
-ROW_SLOT = {"native": "muted", "stomp-js": "s1", "stomp-wasm": "s4", "stomp-noadblock": "s7", "scramjet": "s2",
+ROW_SLOT = {"native": "muted", "stomp": "s1", "stomp-noadblock": "s7", "scramjet": "s2",
             "ultraviolet": "s3", "stompv1": "s8", "powermouse-v1": "s6"}
 SPARE_SLOTS = ["s5"]  # rows outside the fixed list, then the muted grey
 LIGHT = {"s1": "#2a78d6", "s2": "#eb6834", "s3": "#1baf7a", "s4": "#eda100", "s5": "#e87ba4", "s6": "#008300",
