@@ -215,22 +215,28 @@ import { heldLoads, syncRelay } from './syncRelay.js';
 import { createUserAgents } from './userAgent.js';
 
 const require = createRequire(import.meta.url);
-// the protected site (STOMP_DEMO_SITE, scripts/build-demo-site.mjs) holds
-// a copy of every directory below that the page loads from, run through
-// estrogen; served in place of them, each where the checkout's is
-const demoSite = process.env.STOMP_DEMO_SITE
-	? resolve(process.env.STOMP_DEMO_SITE)
-	: null;
-const stompPath = demoSite
-	? join(demoSite, 'runtime')
-	: require('../lib/index.cjs').stompPath;
 
 // deployment settings live in an uncommitted .env next to package.json
+// (read before any of them is: STOMP_DEMO_SITE is read just below)
 try {
 	process.loadEnvFile(fileURLToPath(new URL('../.env', import.meta.url)));
 } catch {
 	// no .env: everything comes from the environment or the defaults below
 }
+
+// the protected site (STOMP_DEMO_SITE, scripts/build-demo-site.mjs) holds
+// a copy of every directory below that the page loads from, run through
+// estrogen; served in place of them, each where the checkout's is. A
+// relative path is the checkout's.
+const demoSite = process.env.STOMP_DEMO_SITE
+	? resolve(
+			fileURLToPath(new URL('..', import.meta.url)),
+			process.env.STOMP_DEMO_SITE,
+		)
+	: null;
+const stompPath = demoSite
+	? join(demoSite, 'runtime')
+	: require('../lib/index.cjs').stompPath;
 
 // The proxied sites' Chrome identities, current stable versions by default.
 const userAgents = createUserAgents({

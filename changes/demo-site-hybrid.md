@@ -4,7 +4,9 @@
   copy of the bookmark icons is served under a neutral name, and its 2048
   page's link is neutral. The public deploy builds it and serves it
   (`STOMP_DEMO_SITE=build/demo-site`); a build that fails the leak gate fails
-  the deploy.
+  the deploy. The server reads its `.env` before `STOMP_DEMO_SITE`, which
+  it had read first, so a site named there was never served; a relative
+  path is the checkout's.
 - The code that runs for every proxied page stays out of estrogen's VM:
   STomp's runtime, the transports, Tor's client and vibeOS's games take its
   literal pool and name passes instead, every string encrypted and every
