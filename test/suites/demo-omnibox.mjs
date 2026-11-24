@@ -177,7 +177,7 @@ for (const [mode, base] of [
 	ok(
 		`${mode}: one character shows the default row and the bookmark at once`,
 		state.expanded === 'true' &&
-			state.rows[0] === 'Search Brave for "r" :: Search' &&
+			state.rows[0] === 'Search DuckDuckGo for "r" :: Search' &&
 			state.rows.some((row) => row.startsWith('Reddit')),
 		JSON.stringify(state.rows),
 	);
@@ -192,7 +192,7 @@ for (const [mode, base] of [
 	ok(
 		`${mode}: the completions are asked 250 ms after the last keystroke, for two characters or more, of the demo's engine`,
 		last?.text === 'red' &&
-			last.engine === 'https://search.brave.com/search?q=%s' &&
+			last.engine === 'https://duckduckgo.com/?q=%s' &&
 			last.at - last.typedAt >= 245 &&
 			asked.every((call) => call.text.length >= 2),
 		JSON.stringify(asked),

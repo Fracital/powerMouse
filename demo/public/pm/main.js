@@ -8,7 +8,7 @@
 // the bundle is written here
 const ASSETS = { ...(globalThis.STOMP_ASSETS ?? {}) };
 const assetName = (key) => ASSETS[key] || StompController.DEFAULT_ASSETS[key];
-const SEARCH = new SearchBuilder('https://search.brave.com/search?q=%s');
+const SEARCH = new SearchBuilder('https://duckduckgo.com/?q=%s');
 const QUICK_LINKS = [
 	['Reddit', 'https://www.reddit.com/', 'orange'],
 	['Google', 'https://www.google.com/', 'green'],
