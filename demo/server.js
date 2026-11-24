@@ -210,6 +210,7 @@ import { holyWisp } from 'holywisp';
 import pkg from '../package.json' with { type: 'json' };
 import { keyOfOffline, offlineKey } from '../scripts/offline-key.mjs';
 import { createCommits, DEFAULT_REPO } from './commits.js';
+import { listenLocalhostDns } from './localhostDns.js';
 import { heldLoads, syncRelay } from './syncRelay.js';
 import { createUserAgents } from './userAgent.js';
 
@@ -286,7 +287,13 @@ if (!externalWisp) {
 	// loopback/private destinations are refused unless asked for (the test
 	// fixtures and `npm run dev` ask)
 	const local = !!process.env.WISP_ALLOW_LOOPBACK;
+	// the relay resolves names itself and never asks the system, so a name
+	// only getaddrinfo knows (any *.localhost, which Chrome treats as
+	// loopback) would not connect. It is pointed at a resolver that asks
+	// the system (demo/localhostDns.js)
+	const dns = await listenLocalhostDns();
 	wisp = new holyWisp({
+		dnsServers: [dns.address],
 		// any free port, on 127.0.0.1: route() below is the only way in, and
 		// test/run.mjs runs many demo servers at once
 		port: 0,
