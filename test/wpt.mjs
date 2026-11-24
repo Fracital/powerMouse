@@ -351,6 +351,14 @@ async function runProxied(
 						},
 						directory: window.controller.directory.pathname,
 						codec: 'xor',
+						// the demo's blocker, not the default lists: a controller
+						// that names none serves the directory's snapshot of
+						// those lists (their servers are refused here, so the
+						// snapshot never gives way), and its ping rules block
+						// a cross-site beacon
+						...(config.adblock !== undefined && {
+							adblock: config.adblock,
+						}),
 						// (just call stomp is the controller's to opt in to)
 						...(called && { dialing: true }),
 					});
