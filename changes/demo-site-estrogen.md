@@ -10,3 +10,4 @@
   build uses neutral asset and route names and a Browser manifest, while the
   checkout's demo and the package API keep their names. Its gate passes with
   every script in the VM, and the planted-leak self-check still fails closed.
+  The protected server answers with no repository commit history either.

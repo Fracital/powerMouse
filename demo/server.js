@@ -609,14 +609,27 @@ const COMMIT_AVATARS = (() => {
 		: directory;
 })();
 const checkout = fileURLToPath(new URL('..', import.meta.url));
-const commits = createCommits({
-	repo: commitsRepo,
-	token: process.env.GITHUB_TOKEN,
-	api: process.env.STOMP_GITHUB_API,
-	interval: Number(process.env.STOMP_GITHUB_POLL_MS) || 60000,
-	checkout: commitsRepo === DEFAULT_REPO ? checkout : null,
-	avatars: COMMIT_AVATARS,
-});
+// The protected site's home page is deliberately not the project's public
+// repository browser: its commit messages, author details and repository
+// name are not served. Do not start the poller or read the checkout's log
+// for it either. The unprotected demo keeps its existing commit display.
+const commits = demoSite
+	? {
+			list: (_req, res) => {
+				res.set('Cache-Control', 'no-store');
+				res.json({ repo: 'Browser', url: 'https://github.com/', commits: [] });
+			},
+			stream: (_req, res) => res.sendStatus(404),
+			avatar: (_req, res) => res.sendStatus(404),
+		}
+	: createCommits({
+			repo: commitsRepo,
+			token: process.env.GITHUB_TOKEN,
+			api: process.env.STOMP_GITHUB_API,
+			interval: Number(process.env.STOMP_GITHUB_POLL_MS) || 60000,
+			checkout: commitsRepo === DEFAULT_REPO ? checkout : null,
+			avatars: COMMIT_AVATARS,
+		});
 app.get('/api/commits', commits.list);
 app.get('/api/commits/stream', commits.stream);
 app.get(`${COMMIT_AVATARS}:name`, commits.avatar);
