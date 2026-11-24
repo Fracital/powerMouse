@@ -51,6 +51,8 @@ process.env.STOMP_DEFAULT_THEMES ??= '0';
 // commits (they list the checkout's git log, as their suites expect):
 // demo-bookmarks points one of its own at a fake GitHub instead
 process.env.STOMP_GITHUB_API ??= 'off';
+// Native-parity suites must see the host's own navigator and request fields.
+process.env.STOMP_LIVE_USER_AGENT ??= '0';
 
 const PARALLEL = Math.max(
 	1,
@@ -94,6 +96,11 @@ const SUITE_TIMEOUT_MINUTES = {
 };
 // what a suite's demo server needs beyond the defaults
 const SUITE_ENV = {
+	'user-agent': {
+		STOMP_LIVE_USER_AGENT: '1',
+		STOMP_USER_AGENT:
+			'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.1234.56 Safari/537.36',
+	},
 	// epoxy that takes the TURN fixture's certificate authority (TURN over
 	// TLS), and the wisp server's streams (WISP_LOG)
 	'webrtc-net': { STOMP_TEST_TRANSPORT: '1', WISP_LOG: '1' },

@@ -33,6 +33,12 @@ export interface SyncSeed {
 export interface Config {
 	codec: ConfigCodec;
 	/**
+	 * The Chrome user agent proxied sites see, independent of the host browser.
+	 * Android selects the Android identity; every other Chrome UA selects Linux.
+	 * Absent preserves the host browser's identity.
+	 */
+	userAgent?: string;
+	/**
 	 * pathname this controller's routes live under: the scope plus the
 	 * controller's id, e.g. `/stomp/k7qx2m/` (its address in the service
 	 * worker; every routed URL starts with it)

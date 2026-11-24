@@ -6,6 +6,7 @@ import FunctionModule from './modules/Function';
 import IndexedDBModule from './modules/IndexedDB';
 import LegacyFileSystemModule from './modules/LegacyFileSystem';
 import MixedContentModule from './modules/MixedContent';
+import NavigatorIdentityModule from './modules/NavigatorIdentity';
 import ObjectURLModule from './modules/ObjectURL';
 import OriginFromModule from './modules/OriginFrom';
 import PartitionModule from './modules/Partition';
@@ -24,6 +25,7 @@ import WorkerModule from './modules/Worker';
 
 export default function baseModules(client: Client) {
 	client.addModule(ProxyModule);
+	client.addModule(NavigatorIdentityModule);
 	client.addModule(TrustedTypesModule);
 	client.addModule(FetchModule);
 	client.addModule(ObjectURLModule);

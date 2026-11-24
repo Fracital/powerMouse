@@ -306,6 +306,7 @@ else if (window === window.parent) {
 						id: init.id,
 						...(init.profile ? { profile: init.profile } : {}),
 						codec: init.codec,
+						userAgent: init.userAgent,
 						frameAncestors: slots.length
 							? [hostOrigin, location.origin, ...slots]
 							: [hostOrigin],

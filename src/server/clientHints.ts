@@ -2,6 +2,7 @@ import type { IDBPDatabase } from 'idb';
 import { potentiallyTrustworthy } from '../mixedContent';
 import { openStoreDB } from '../storeDB';
 import type { ClientHintsReport } from '../transport/messages';
+import type { UserAgentIdentity } from '../userAgent';
 import {
 	ENABLED_FOR_ALL,
 	HINT_FEATURES,
@@ -937,17 +938,20 @@ export interface HintsContext {
 export async function applyClientHints(
 	headers: Headers,
 	context: HintsContext,
+	identity: UserAgentIdentity | null = null,
 ): Promise<Set<string>> {
 	// the browser's own user-agent hints: when the proxy origin is one it
 	// sends hints to and it sent none, it has them turned off (a DevTools
 	// user-agent override without metadata; the --user-agent switch keeps
 	// them, measured), and the site gets none either; when it sent them,
 	// they are the ones to send
-	const browserUA = headers.get('sec-ch-ua');
-	const browserMobile = headers.get('sec-ch-ua-mobile');
-	const browserPlatform = headers.get('sec-ch-ua-platform');
+	const browserUA = identity ? null : headers.get('sec-ch-ua');
+	const browserMobile = identity ? null : headers.get('sec-ch-ua-mobile');
+	const browserPlatform = identity ? null : headers.get('sec-ch-ua-platform');
 	const uaOff =
-		browserUA === null && potentiallyTrustworthy(new URL(location.href));
+		!identity &&
+		browserUA === null &&
+		potentiallyTrustworthy(new URL(location.href));
 	for (const name of [...headers.keys()]) {
 		if (!isHintName(name)) continue;
 		// a page may name a legacy hint (DPR, ECT) on a fetch of its own,
@@ -962,7 +966,21 @@ export async function applyClientHints(
 	if (!context.secure) return sent;
 	const origin = context.target.origin;
 	const { enabled, allows, viewport } = await requestHints(context, origin);
-	const ua = await userAgentValues();
+	const ua: UAValues | null = identity
+		? {
+				brands: identity.brands,
+				fullVersionList: identity.fullVersionList,
+				mobile: identity.mobile,
+				platform: identity.uaPlatform,
+				architecture: identity.architecture,
+				bitness: identity.bitness,
+				model: identity.model,
+				platformVersion: identity.platformVersion,
+				uaFullVersion: identity.fullVersion,
+				wow64: identity.wow64,
+				formFactors: identity.formFactors,
+			}
+		: await userAgentValues();
 	const connection = (
 		navigator as Navigator & {
 			connection?: {

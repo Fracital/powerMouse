@@ -253,6 +253,7 @@ const WELL_KNOWN_REDIRECTS = 10;
 async function wellKnown(
 	transport: ProxyTransport,
 	start: URL,
+	userAgent?: string,
 ): Promise<{ body: string } | 'type' | 'failed'> {
 	const abort = new AbortController();
 	const timer = setTimeout(() => abort.abort(), WELL_KNOWN_MS);
@@ -268,7 +269,7 @@ async function wellKnown(
 					['Sec-Fetch-Site', 'none'],
 					['Sec-Fetch-Mode', 'no-cors'],
 					['Sec-Fetch-Dest', 'empty'],
-					['User-Agent', navigator.userAgent],
+					['User-Agent', userAgent ?? navigator.userAgent],
 					['Accept-Encoding', CHROME_ACCEPT_ENCODING],
 					...(languages
 						? ([['Accept-Language', languages]] as [string, string][])
@@ -332,6 +333,7 @@ export async function passkeyCeremony(
 	doc: HintsDocument | null,
 	client: string,
 	transport: ProxyTransport,
+	userAgent?: string,
 ): Promise<PasskeyCeremony | PasskeyReply> {
 	let origin: URL;
 	try {
@@ -343,7 +345,7 @@ export async function passkeyCeremony(
 	const lookups = {
 		domainOf: (host: string) => getDomain(host, true),
 		suffixOf: (host: string) => getPublicSuffix(host, true),
-		wellKnown: (url: URL) => wellKnown(transport, url),
+		wellKnown: (url: URL) => wellKnown(transport, url, userAgent),
 	};
 	if (op.op === 'signal') {
 		const signal = signalOf(op.signal);

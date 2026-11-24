@@ -101,7 +101,7 @@ export function syncRelay(
 			? 'same-site'
 			: 'cross-site';
 	add('accept', '*/*');
-	add('user-agent', navigator.userAgent);
+	add('user-agent', client.userAgentIdentity?.userAgent ?? navigator.userAgent);
 	const languages = acceptLanguage(client.global.navigator.languages);
 	if (languages) add('accept-language', languages);
 	if (cross || (method !== 'GET' && method !== 'HEAD'))

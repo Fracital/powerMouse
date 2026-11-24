@@ -27,6 +27,13 @@
 //
 // Environment (also read from a .env file next to package.json):
 //   PORT                listen port (default 8080)
+//   STOMP_LIVE_USER_AGENT current Chrome Linux and Android identities for
+//                       proxied sites, selected by the page's pointer; 0 turns
+//                       the feature off (test runs default it to 0)
+//   STOMP_USER_AGENT    exact fixed Chrome UA override, full version required;
+//                       the other form factor uses the same version
+//   STOMP_CHROME_VERSION_API versionhistory platforms endpoint, for the suite's
+//                       local fake API (default versionhistory.googleapis.com)
 //   STOMP_WISP_URL      external wisp endpoint, e.g. wss://host/pipe/<key>/;
 //                       when set, the built-in /wisp/ is not served and
 //                       no holyWisp is started
@@ -204,6 +211,7 @@ import pkg from '../package.json' with { type: 'json' };
 import { keyOfOffline, offlineKey } from '../scripts/offline-key.mjs';
 import { createCommits, DEFAULT_REPO } from './commits.js';
 import { heldLoads, syncRelay } from './syncRelay.js';
+import { createUserAgents } from './userAgent.js';
 
 const require = createRequire(import.meta.url);
 // the protected site (STOMP_DEMO_SITE, scripts/build-demo-site.mjs) holds
@@ -222,6 +230,13 @@ try {
 } catch {
 	// no .env: everything comes from the environment or the defaults below
 }
+
+// The proxied sites' Chrome identities, current stable versions by default.
+const userAgents = createUserAgents({
+	enabled: process.env.STOMP_LIVE_USER_AGENT !== '0',
+	override: process.env.STOMP_USER_AGENT || '',
+	api: process.env.STOMP_CHROME_VERSION_API || undefined,
+});
 
 const externalWisp = process.env.STOMP_WISP_URL || '';
 const wispWebTransport = process.env.STOMP_WISP_WEBTRANSPORT || '1';
@@ -558,10 +573,11 @@ const vibeosConfig = () =>
 app.get('/config.js', (req, res) => {
 	const sitePool = slotPorts(req);
 	const contentSlots = slotPorts(req, contentPorts, publicContentPorts);
+	const userAgent = userAgents.current();
 	res.set('Cache-Control', 'no-store');
 	res.type('application/javascript');
 	res.send(
-		`window.${demoSite ? 'BROWSER_CONFIG' : 'STOMP_CONFIG'} = ${JSON.stringify({ ...pageConfig, ...vibeosConfig(), transports: transportPaths(), ...(sitePool.length && { sitePool }), ...(contentSlots.length && { contentSlots }) })};\n`,
+		`window.${demoSite ? 'BROWSER_CONFIG' : 'STOMP_CONFIG'} = ${JSON.stringify({ ...pageConfig, ...vibeosConfig(), ...(userAgent && { userAgent }), transports: transportPaths(), ...(sitePool.length && { sitePool }), ...(contentSlots.length && { contentSlots }) })};\n`,
 	);
 });
 

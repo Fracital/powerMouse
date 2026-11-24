@@ -58,6 +58,7 @@ import {
 	startPort,
 } from '../transport/ports';
 import { fragmentOf } from '../urlShape';
+import { userAgentIdentity, type UserAgentIdentity } from '../userAgent';
 import { BUILD } from '../version';
 import { LINK_SEGMENT } from '../visited';
 import { forbidCodecModule } from '../wasm/codec';
@@ -721,6 +722,8 @@ export default class Client {
 			);
 		}
 	}
+	/** the configured Chrome identity, shared with workers and WebSockets */
+	readonly userAgentIdentity: UserAgentIdentity | null;
 	/** the helper names this deployment uses (src/helperNames.ts) */
 	readonly names: HelperNames;
 	/** the host set its own helper names: pass them on to every shell this client writes */
@@ -993,6 +996,9 @@ export default class Client {
 		this.applied = false;
 		this.modules = new Map();
 		this.codec = init.codec;
+		this.userAgentIdentity = init.userAgent
+			? userAgentIdentity(init.userAgent)
+			: null;
 		this.directory = init.directory;
 		this.scope = init.scope || init.directory;
 		this.profile = init.profile ?? '';
@@ -1117,6 +1123,9 @@ export default class Client {
 			scope: this.scope,
 			...(this.profile ? { profile: this.profile } : {}),
 			codec: codecType(this.codec),
+			...(this.userAgentIdentity
+				? { userAgent: this.userAgentIdentity.userAgent }
+				: {}),
 			...(this.openTab ? { openTab: true } : {}),
 			...(this.workerTransport ? { workerTransport: true } : {}),
 			...(this.build ? { build: this.build } : {}),

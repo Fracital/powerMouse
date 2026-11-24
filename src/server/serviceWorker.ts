@@ -1709,6 +1709,7 @@ function handleMessage(event: ExtendableMessageEvent) {
 				hintsDocument(source.id, source.url),
 				source.id,
 				ref.transport,
+				ref.config.userAgent,
 			);
 			if ('error' in ceremony || !('type' in ceremony))
 				return reply.postMessage(ceremony);

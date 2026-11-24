@@ -216,6 +216,7 @@ import {
 	type ResponseFacts,
 } from '../transport/responseFacts';
 import { fragmentOf, queryOf, withQuery } from '../urlShape';
+import { userAgentIdentity, type UserAgentIdentity } from '../userAgent';
 import { BUILD, REWRITE_GENERATION } from '../version';
 import { contextText, isLinkRoute, LINK_SEGMENT, linkRoute } from '../visited';
 import { rewriteBytesInWasm } from '../wasm/rewriteBytes';
@@ -1242,6 +1243,7 @@ interface Rewriter {
 	directory: string;
 	bare: BareCompatibleClient;
 	config: Config;
+	identity: UserAgentIdentity | null;
 	/** the host's error page, worker-only (never in the page's config) */
 	errorPage?: string;
 	/** the deployment's helper names (the error page global among them) */
@@ -2115,7 +2117,10 @@ function genericForward(
 		const urlCredentials = serverRequest.headers.get(CREDENTIALS_HEADER);
 		requestHeaders.delete(CREDENTIALS_HEADER);
 
-		requestHeaders.set('user-agent', navigator.userAgent);
+		requestHeaders.set(
+			'user-agent',
+			rewriter.identity?.userAgent ?? navigator.userAgent,
+		);
 		// the browser's network stack adds it after this worker, so no request
 		// here carries it: from the user's languages, as Chrome writes it. One
 		// the worker sees is the page's own (headerOrder.ts places it)
@@ -2946,7 +2951,11 @@ function genericForward(
 				? { allow: hint.allow }
 				: {}),
 		};
-		let sentHints = await applyClientHints(requestHeaders, hintsContext);
+		let sentHints = await applyClientHints(
+			requestHeaders,
+			hintsContext,
+			rewriter.identity,
+		);
 
 		// The same-origin policy between the real origins (cors.ts). The mode
 		// is the request's own; an inject's copy of a page's load is that load
@@ -4440,7 +4449,11 @@ function genericForward(
 						)
 					) {
 						await upstream.body?.cancel().catch(() => {});
-						sentHints = await applyClientHints(requestHeaders, hintsContext);
+						sentHints = await applyClientHints(
+							requestHeaders,
+							hintsContext,
+							rewriter.identity,
+						);
 						upstream = await fetchUpstream(withValidators(requestHeaders));
 					}
 				}
@@ -7244,6 +7257,7 @@ export function registerRewrites(
 				// whose stores the pages' native ones are (src/profile.ts)
 				...(init.profile ? { profile: init.profile } : {}),
 				codec: codecType(this.codec),
+				...(init.userAgent ? { userAgent: init.userAgent } : {}),
 				frameAncestors: init.frameAncestors,
 				...(init.openTab ? { openTab: true } : {}),
 				// the host's page is cross-origin isolated: a document says whom
@@ -7333,6 +7347,7 @@ export function registerRewrites(
 			return isolationEngine;
 		},
 		codec: init.codec,
+		identity: init.userAgent ? userAgentIdentity(init.userAgent) : null,
 		directory: init.directory,
 		errorPage: init.errorPage,
 		names: init.names,

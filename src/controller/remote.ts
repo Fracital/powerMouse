@@ -37,6 +37,7 @@ import type {
 } from '../transport/messages';
 import { RpcHelper } from '../transport/rpc';
 import type { CarrierInfo } from '../transport/wispWebTransport';
+import { userAgentIdentity } from '../userAgent';
 import { BUILD, CONTROLLER_FRAME_SCRIPT } from '../version';
 import { drawAccountChooser } from './accountChooser';
 import { ClientFrames } from './clientFrames';
@@ -127,6 +128,12 @@ export interface RemoteControllerInit {
 	 */
 	transport: TransportDescriptor;
 	codec?: ConfigCodec;
+	/**
+	 * The Chrome user agent proxied sites see, including its full version. An
+	 * Android UA selects the Android identity; every other Chrome UA selects
+	 * Linux. Absent preserves the host browser's identity.
+	 */
+	userAgent?: string;
 	/**
 	 * sandbox flags for proxied frames. The default keeps scripts, forms,
 	 * popups, modals and downloads and deliberately omits top navigation so a
@@ -406,6 +413,7 @@ export class RemoteController extends EventTarget {
 	constructor(init: RemoteControllerInit) {
 		super();
 		validateNames(init.names, Object.getOwnPropertyNames(globalThis));
+		if (init.userAgent !== undefined) userAgentIdentity(init.userAgent);
 		validateHooks(init.hooks);
 		this.#init = init;
 		// before the id is claimed: this page's kept id is the profile's
@@ -848,6 +856,7 @@ export class RemoteController extends EventTarget {
 				this.#rpc.call('init', {
 					...(mode ? { hostReload: mode } : {}),
 					codec: init.codec,
+					userAgent: init.userAgent,
 					directory: this.directory,
 					id: this.id,
 					...(this.profile ? { profile: this.profile } : {}),

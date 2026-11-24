@@ -133,6 +133,7 @@ import {
 } from '../transport/transportLog';
 import TransportWorker from '../transport/TransportWorker';
 import { watchCarrier, type CarrierInfo } from '../transport/wispWebTransport';
+import { userAgentIdentity } from '../userAgent';
 import { ADBLOCK_SNAPSHOT, BUILD } from '../version';
 import { compileModule } from '../wasm/module';
 import { drawAccountChooser } from './accountChooser';
@@ -318,6 +319,13 @@ export interface ControllerInit {
 	 */
 	transport: ProxyTransport | TransportDescriptor;
 	codec?: ConfigCodec;
+	/**
+	 * The Chrome user agent proxied sites see, including its full version (for
+	 * example Chrome/158.0.0.0). Navigator, workers, requests and client hints
+	 * share the Linux identity, or Android when the UA contains Android. Absent
+	 * preserves the host browser's identity.
+	 */
+	userAgent?: string;
 	/**
 	 * URL of the directory `serviceworker` is scoped to and `dist/` is served
 	 * from. Defaults to the directory of the current script, or of the page
@@ -1517,6 +1525,7 @@ export class StompController extends EventTarget {
 		this.#fpSeed = fingerprintSeed();
 		// before anything async: a bad name is a programming error
 		validateNames(init.names, Object.getOwnPropertyNames(globalThis));
+		if (init.userAgent !== undefined) userAgentIdentity(init.userAgent);
 		validateHooks(init.hooks);
 		if (!('serviceWorker' in navigator)) throw noServiceWorkers();
 		// a step of a frame's history taken with location.replace is a
@@ -1667,6 +1676,7 @@ export class StompController extends EventTarget {
 
 		this.config = {
 			codec: init.codec ?? 'xor',
+			...(init.userAgent !== undefined ? { userAgent: init.userAgent } : {}),
 			// the address: the scope plus the id, so controllers of one scope
 			// are told apart in the worker; the assets stay at the scope
 			directory: this.id ? `${this.directory.pathname}${this.id}/` : '',
@@ -3993,7 +4003,7 @@ export class StompController extends EventTarget {
 	 */
 	async suggest(text: string, options: SuggestOptions = {}): Promise<string[]> {
 		await this.#transportUp;
-		return suggestThrough(this.transport, text, options);
+		return suggestThrough(this.transport, text, options, this.config.userAgent);
 	}
 	/** the proxied URL a frame should navigate to in order to load `url` */
 	async route(url: string): Promise<string> {
@@ -4257,6 +4267,9 @@ export class StompController extends EventTarget {
 		return {
 			id: this.id,
 			codec: config.codec,
+			...(config.userAgent !== undefined
+				? { userAgent: config.userAgent }
+				: {}),
 			...(config.cache === false ? { cache: false } : {}),
 			...(config.allowInvalidJs === false ? { allowInvalidJs: false } : {}),
 			...(config.membrane === false ? { membrane: false } : {}),

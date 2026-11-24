@@ -128,6 +128,14 @@ addEventListener('keydown', (event) => {
 // Deployment config comes from /config.js (demo/server.js renders it from the
 // environment); anything missing falls back to the local-development defaults.
 const CFG = window.STOMP_CONFIG || {};
+// The backend keeps both Chrome identities current. Device capability, never
+// the host's UA string, chooses the one every proxied realm and request shares.
+const USER_AGENT =
+	typeof CFG.userAgent === 'string'
+		? CFG.userAgent
+		: TOUCH_ONLY.matches
+			? CFG.userAgent?.mobile
+			: CFG.userAgent?.desktop;
 // the offline-html build (scripts/build-offline.mjs): no service worker, the
 // page serves the proxy itself (demo/offline/host.mjs)
 const OFFLINE = globalThis.STOMP_OFFLINE ?? null;
@@ -1691,6 +1699,7 @@ async function startController(name) {
 			assets: ASSETS,
 			transport: transportFor(name),
 			codec: CODEC,
+			...(USER_AGENT && { userAgent: USER_AGENT }),
 			cache: CACHE,
 			serviceWorkers: SERVICE_WORKERS,
 			serviceWorkerTimeout: SERVICE_WORKER_TIMEOUT,
@@ -1723,6 +1732,7 @@ async function startController(name) {
 			...(PROFILE && { profile: PROFILE }),
 			assets: ASSETS,
 			codec: CODEC,
+			...(USER_AGENT && { userAgent: USER_AGENT }),
 			// dialing's call page and calls exist for this
 			// controller only (justCallStomp)
 			...(JUST_CALL && { dialing: true }),

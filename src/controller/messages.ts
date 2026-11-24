@@ -108,6 +108,8 @@ export interface TransportDescriptor {
 
 export interface ControllerFrameInit {
 	codec?: ConfigCodec;
+	/** the proxied sites' Chrome user agent (RemoteControllerInit.userAgent) */
+	userAgent?: string;
 	/** the scope (RemoteControllerInit.directory); the controller's address is this plus `id` */
 	directory: string;
 	/** the controller's id, minted or checked by the host-side RemoteController */

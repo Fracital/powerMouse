@@ -135,6 +135,7 @@ export function suggestThrough(
 	transport: ProxyTransport,
 	text: string,
 	options: SuggestOptions = {},
+	userAgent?: string,
 ): Promise<string[]> {
 	const query = String(text).replace(/\s+/g, ' ').trim().slice(0, MAX_QUERY);
 	if (!query) return Promise.resolve([]);
@@ -144,7 +145,7 @@ export function suggestThrough(
 		['Sec-Fetch-Site', 'none'],
 		['Sec-Fetch-Mode', 'no-cors'],
 		['Sec-Fetch-Dest', 'empty'],
-		['User-Agent', navigator.userAgent],
+		['User-Agent', userAgent ?? navigator.userAgent],
 		// (src/server/headerOrder.ts CHROME_ACCEPT_ENCODING; a transport that
 		// decodes less sends what it decodes, fitHeaders)
 		['Accept-Encoding', 'gzip, deflate, br, zstd'],

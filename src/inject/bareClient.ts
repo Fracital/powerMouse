@@ -404,9 +404,27 @@ function open(
 
 	// no Cookie here: the controller adds the jar's (HttpOnly included)
 	// to the handshake, so the page never holds it
+	const identity = client.userAgentIdentity;
+	const sfString = (value: string) =>
+		`"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 	const requestHeaders: RawHeaders = [
 		['Origin', origin],
-		['User-Agent', navigator.userAgent],
+		['User-Agent', identity?.userAgent ?? navigator.userAgent],
+		...(identity
+			? ([
+					[
+						'Sec-CH-UA',
+						identity.brands
+							.map(
+								({ brand, version }) =>
+									`${sfString(brand)};v=${sfString(version)}`,
+							)
+							.join(', '),
+					],
+					['Sec-CH-UA-Mobile', identity.mobile ? '?1' : '?0'],
+					['Sec-CH-UA-Platform', sfString(identity.uaPlatform)],
+				] as RawHeaders)
+			: []),
 	];
 	// a context in a partition: the controller reads it for the jar
 	// (its Partitioned cookies, and SameSite as another site's)
