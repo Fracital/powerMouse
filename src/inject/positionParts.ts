@@ -22,12 +22,53 @@ export const positionParts: {
  * The maps of code the inject rewrote (an inline script, a handler, eval, a
  * string timer), which carries none, as its rewrite handed each over
  * (src/wasm/rewriter.ts takeApart), with the script V8 runs: held, the
- * newest 4096, until a frame of no file is first placed, when the reader
- * files them by the hash V8 names a frame's script by (./positionMaps.ts
- * placeCode)
+ * newest 4096 and no more than HELD_UNITS of output, until a frame of no
+ * file is first placed, when the reader files them by the hash V8 names a
+ * frame's script by (./positionMaps.ts placeCode)
  */
 export const heldCodes = new LazyMap<number, CodeMap>();
 let kept = 0;
+/**
+ * The most output the held codes keep, in UTF-16 units (64 MB). Each keeps
+ * its whole script until it is hashed, and a page that runs one large script
+ * again and again (Cloudflare Turnstile retrying its challenge) would hold
+ * 4096 copies of it
+ */
+const HELD_UNITS = 32 * 1024 * 1024;
+let heldUnits = 0;
+
+/**
+ * Whether this engine names a stack frame's script by its hash (V8's
+ * CallSite getScriptHash), the one thing a held code is found by. Asked
+ * once, as the bundle loads, before any script of the page's runs:
+ * SpiderMonkey and JavaScriptCore never call Error.prepareStackTrace, so
+ * there a held code could never be read, and none is kept
+ */
+const namesScripts = (() => {
+	const ErrorCtor = Error as ErrorConstructor & { prepareStackTrace?: unknown };
+	const had = Reflect.getOwnPropertyDescriptor(ErrorCtor, 'prepareStackTrace');
+	let found = false;
+	try {
+		Reflect.defineProperty(ErrorCtor, 'prepareStackTrace', {
+			configurable: true,
+			writable: true,
+			value: (error: unknown, sites: unknown) => {
+				const site = Array.isArray(sites) ? sites[0] : undefined;
+				found =
+					typeof (site as { getScriptHash?: unknown } | undefined)
+						?.getScriptHash === 'function';
+				return '';
+			},
+		});
+		void new ErrorCtor().stack;
+	} catch (error) {
+		// (a realm that refuses the property: no V8 here to read it)
+	} finally {
+		if (had) Reflect.defineProperty(ErrorCtor, 'prepareStackTrace', had);
+		else Reflect.deleteProperty(ErrorCtor, 'prepareStackTrace');
+	}
+	return found;
+})();
 /** a code's map, what the script V8 runs has around the output and where it stands, the output until hashed, then the reader's */
 export type CodeMap = [
 	map: string,
@@ -51,10 +92,27 @@ export function keepCode(
 	source: ScriptSource = MAPPED,
 	output: string,
 ) {
-	if (!map) return;
+	if (!map || !namesScripts) return;
 	const code: CodeMap = [map, source, output, undefined, undefined];
 	heldCodes.set(++kept, code);
-	heldCodes.delete(kept - 4096);
+	heldUnits += output.length;
+	const dropped = heldCodes.get(kept - 4096);
+	if (dropped) {
+		heldUnits -= dropped[2]?.length ?? 0;
+		heldCodes.delete(kept - 4096);
+	}
+	if (heldUnits > HELD_UNITS) {
+		// (an output hashed since it was held keeps no text: count afresh)
+		let units = 0;
+		for (const held of [...heldCodes.values()]) units += held[2]?.length ?? 0;
+		// the oldest go first, the newest staying even past the limit
+		for (const [key, held] of [...heldCodes.entries()]) {
+			if (units <= HELD_UNITS || key === kept) break;
+			units -= held[2]?.length ?? 0;
+			heldCodes.delete(key);
+		}
+		heldUnits = units;
+	}
 	return code;
 }
 
