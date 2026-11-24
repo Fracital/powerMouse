@@ -580,10 +580,20 @@ impl H3Connection {
 			});
 		}
 
-		let response = rx
-			.recv_response()
-			.await
-			.map_err(|e| js_error(format!("h3 response: {e}")))?;
+		let response = loop {
+			let response = rx
+				.recv_response()
+				.await
+				.map_err(|e| js_error(format!("h3 response: {e}")))?;
+			// An informational response is not the answer: 103 Early Hints
+			// carries preload fields while the final head is still to come.
+			// Returning it made the service worker construct a Response with
+			// status 103 (claude.ai/login), which the platform rejects.
+			if response.status().is_informational() {
+				continue;
+			}
+			break response;
+		};
 		let status = response.status().as_u16();
 
 		let out_headers = Array::new();

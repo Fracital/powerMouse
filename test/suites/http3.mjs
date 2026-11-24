@@ -246,6 +246,7 @@ const sites = [
 	{ origin: 'https://quic.nginx.org', path: '/test' },
 	{ origin: 'https://cloudflare-quic.com', path: '/cdn-cgi/trace', learn: '/' },
 	{ origin: 'https://www.google.com', path: '/' },
+	{ origin: 'https://claude.ai', path: '/login' },
 ];
 {
 	const { p, close } = await page();
@@ -309,6 +310,14 @@ const sites = [
 			at(google, 1).length > 50000 &&
 			/<\/html>\s*$/i.test(at(google, 1).tail),
 		JSON.stringify(at(google, 1)),
+	);
+	const claude = sites[3].origin + sites[3].path;
+	ok(
+		'claude.ai/login over h3: 103 Early Hints is interim and the final response arrives',
+		at(claude, 1).via === 'h3' &&
+			[200, 403].includes(at(claude, 1).status) &&
+			at(claude, 1).length > 1000,
+		JSON.stringify([at(claude, 0), at(claude, 1)]),
 	);
 	const yt = results.filter((r) => r.url === 'https://www.youtube.com/');
 	ok(
