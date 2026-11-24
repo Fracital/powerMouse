@@ -1,4 +1,4 @@
-import Client from './Client';
+import Client, { type ModuleCtor } from './Client';
 import AccessModule from './modules/Access';
 import ConsoleModule from './modules/Console';
 import FetchModule from './modules/Fetch';
@@ -6,7 +6,6 @@ import FunctionModule from './modules/Function';
 import IndexedDBModule from './modules/IndexedDB';
 import LegacyFileSystemModule from './modules/LegacyFileSystem';
 import MixedContentModule from './modules/MixedContent';
-import NavigatorIdentityModule from './modules/NavigatorIdentity';
 import ObjectURLModule from './modules/ObjectURL';
 import OriginFromModule from './modules/OriginFrom';
 import PartitionModule from './modules/Partition';
@@ -23,9 +22,12 @@ import WebSocketModule from './modules/WebSocket';
 import WebTransportModule from './modules/WebTransport';
 import WorkerModule from './modules/Worker';
 
-export default function baseModules(client: Client) {
+export default function baseModules(client: Client, identity?: ModuleCtor) {
 	client.addModule(ProxyModule);
-	client.addModule(NavigatorIdentityModule);
+	// the document's is a stand-in for the deferred part; a worker's is the
+	// module itself. Neither is added when no identity was configured, so a
+	// default frame installs nothing of it
+	if (identity && client.configuredUserAgent) client.addModule(identity);
 	client.addModule(TrustedTypesModule);
 	client.addModule(FetchModule);
 	client.addModule(ObjectURLModule);

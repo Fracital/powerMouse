@@ -58,7 +58,7 @@ import {
 	startPort,
 } from '../transport/ports';
 import { fragmentOf } from '../urlShape';
-import { userAgentIdentity, type UserAgentIdentity } from '../userAgent';
+import type { UserAgentIdentity } from '../userAgent';
 import { BUILD } from '../version';
 import { LINK_SEGMENT } from '../visited';
 import { forbidCodecModule } from '../wasm/codec';
@@ -722,8 +722,15 @@ export default class Client {
 			);
 		}
 	}
-	/** the configured Chrome identity, shared with workers and WebSockets */
-	readonly userAgentIdentity: UserAgentIdentity | null;
+	/**
+	 * The configured user agent, as given. NavigatorIdentity parses it
+	 * into userAgentIdentity before any page script: a deferred part of a
+	 * document, the worker bundle's own module, so the tables stay out of
+	 * a frame that has no identity.
+	 */
+	readonly configuredUserAgent: string | null;
+	/** the parsed identity, set by NavigatorIdentity before any page script */
+	userAgentIdentity: UserAgentIdentity | null = null;
 	/** the helper names this deployment uses (src/helperNames.ts) */
 	readonly names: HelperNames;
 	/** the host set its own helper names: pass them on to every shell this client writes */
@@ -996,9 +1003,7 @@ export default class Client {
 		this.applied = false;
 		this.modules = new Map();
 		this.codec = init.codec;
-		this.userAgentIdentity = init.userAgent
-			? userAgentIdentity(init.userAgent)
-			: null;
+		this.configuredUserAgent = init.userAgent ?? null;
 		this.directory = init.directory;
 		this.scope = init.scope || init.directory;
 		this.profile = init.profile ?? '';
@@ -1123,8 +1128,8 @@ export default class Client {
 			scope: this.scope,
 			...(this.profile ? { profile: this.profile } : {}),
 			codec: codecType(this.codec),
-			...(this.userAgentIdentity
-				? { userAgent: this.userAgentIdentity.userAgent }
+			...(this.configuredUserAgent
+				? { userAgent: this.configuredUserAgent }
 				: {}),
 			...(this.openTab ? { openTab: true } : {}),
 			...(this.workerTransport ? { workerTransport: true } : {}),

@@ -125,6 +125,15 @@ class FingerprintStandIn extends Module<DocumentClient> {
 	}
 }
 
+// the configured user-agent identity, only when one was set: the module is a
+// deferred part, so a frame with none carries none of it
+class NavigatorIdentityStandIn extends Module<DocumentClient> {
+	apply() {
+		const Identity = deferred('NavigatorIdentityModule');
+		new Identity(this.client).apply();
+	}
+}
+
 // the surfaces the FingerprintModule handles (every surface but performanceMemory,
 // which is the Memory module): the module is added only when one of these is on
 const FINGERPRINT_SURFACES: FpSurface[] = [
@@ -143,7 +152,7 @@ export function addClientModules(client: DocumentClient) {
 	// first: it takes the natives the blocker's cosmetic rules use before
 	// any other module hooks them (and nothing at all with the blocker off)
 	client.addModule(AdblockModule);
-	baseModules(client);
+	baseModules(client, NavigatorIdentityStandIn);
 	// before History and Location: it takes the native history calls
 	client.addModule(FragmentModule);
 	client.addModule(HistoryModule);

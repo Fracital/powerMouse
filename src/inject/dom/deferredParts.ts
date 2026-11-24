@@ -149,6 +149,7 @@ import {
 	dropLegacyFileSystem,
 	partitionLegacyFileSystem,
 } from '../legacyFileSystem';
+import NavigatorIdentityModule from '../modules/NavigatorIdentity';
 import { originFrom } from '../originFrom';
 import {
 	gateCall,
@@ -176,6 +177,7 @@ import {
 	relyingPartyGuard,
 } from './credentialFlows';
 import { ownStoreRefusal } from './credentialStore';
+import { installDeviceIds } from './deviceIds';
 import { saveDownload } from './downloadSave';
 import { fetchLater } from './fetchLater';
 import { hookHandlerName } from './handlerGetters';
@@ -337,6 +339,12 @@ export const parts = {
 	checkedHeader,
 	notOpened,
 	FingerprintModule,
+	// the configured user-agent identity's hooks, at a document whose
+	// controller set one (../modules/NavigatorIdentity.ts; modules.ts)
+	NavigatorIdentityModule,
+	// a document's device ids and the hooks that show them, when its
+	// permission hooks are installed (./deviceIds.ts; modules/Permissions.ts)
+	installDeviceIds,
 	userMediaCall,
 	deviceConstraints,
 	positionCall,

@@ -1,6 +1,6 @@
 // A script is decoded as Chrome decodes it: a byte order mark first (UTF-8
-// only, for a module), then the Content-Type charset (for a module only
-// windows-1252: one served as windows-1250 reads as UTF-8), then UTF-8. The worker rewrites a script as text, so
+// only, for a module), then the Content-Type charset (a module takes none,
+// windows-1252 included: Chrome 159 reads it as UTF-8), then UTF-8. The worker rewrites a script as text, so
 // it decodes the bytes itself; it read every script as UTF-8, so a script
 // served as windows-1252 or as UTF-16 with a byte order mark ran with other
 // characters than natively (or not at all: UTF-16 read as UTF-8 is a syntax

@@ -11,6 +11,10 @@
 // the page reads them through fetch, XMLHttpRequest, document.cookie,
 // cookieStore, a redirected frame's location and a download's name, natively
 // and through the proxy in both demo modes, and the two are compared.
+// Chrome reports a non-ASCII download name as "download" when its locale is
+// not UTF-8 (LANG=C, measured on 159), so the two cannot be told apart; the
+// browser is started in a UTF-8 locale when the machine has one.
+import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:net';
 import {
 	done,
@@ -22,6 +26,23 @@ import {
 	sleep,
 	submitLanding,
 } from '../lib.mjs';
+
+/** a UTF-8 locale Chrome can name a non-ASCII download in, or null */
+function utf8Locale() {
+	try {
+		const names = execFileSync('locale', ['-a'], { encoding: 'utf8' });
+		const have = names.split('\n').map((name) => name.trim());
+		return (
+			have.find((name) => name === 'C.utf8' || name === 'C.UTF-8') ??
+			have.find((name) => /utf-?8/i.test(name)) ??
+			null
+		);
+	} catch {
+		return null;
+	}
+}
+
+const DOWNLOAD_LOCALE = utf8Locale();
 
 /** case -> the raw bytes of its value, as a latin1 string */
 const VALUES = {
@@ -297,7 +318,11 @@ const DOWNLOADS = ['d', 'a'].flatMap((kind) =>
 );
 const server = await startServer();
 const origin = `http://127.0.0.1:${server.address().port}`;
-const browser = await launch();
+const browser = await launch([], {
+	env: DOWNLOAD_LOCALE
+		? { LANG: DOWNLOAD_LOCALE, LC_ALL: DOWNLOAD_LOCALE }
+		: null,
+});
 
 const nativeContext = await browser.newContext({ acceptDownloads: true });
 const nativePage = await nativeContext.newPage();

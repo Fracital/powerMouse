@@ -1,4 +1,8 @@
-import type { UserAgentBrand, UserAgentIdentity } from '../../userAgent';
+import {
+	userAgentIdentity,
+	type UserAgentBrand,
+	type UserAgentIdentity,
+} from '../../userAgent';
 import type Client from '../Client';
 import Module from '../Module';
 import ProxyModule from './Proxy';
@@ -34,8 +38,10 @@ function identifyValues(
 /** The configured identity on Navigator or WorkerNavigator and NavigatorUAData. */
 export default class NavigatorIdentityModule extends Module<Client> {
 	apply() {
-		const identity = this.client.userAgentIdentity;
-		if (!identity) return;
+		const configured = this.client.configuredUserAgent;
+		if (!configured) return;
+		const identity = userAgentIdentity(configured);
+		this.client.userAgentIdentity = identity;
 		const global = this.client.global;
 		const proxy = this.client.getModule(ProxyModule)!;
 		const prototype = (global.Navigator ?? global.WorkerNavigator)

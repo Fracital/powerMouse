@@ -163,16 +163,17 @@ export function encodeShell(
 }
 
 /**
- * The encoding Chrome decodes a script's response with: a byte order mark,
+ * The encoding Chrome decodes a script's response with: a byte order mark
  * (UTF-8 only, for a module), then the Content-Type charset (a label
- * TextDecoder does not know is ignored; for a module only one that names
- * windows-1252, which latin1, iso-8859-1 and us-ascii do too: Chrome 152
- * and 157 read a module served as windows-1250 or shift_jis as UTF-8),
- * else UTF-8 (measured for classic and module scripts of an element and a
- * dedicated worker's script, script-charset suite). A classic script of a
- * document with neither takes the document's encoding (`environment`,
- * src/server/documentEncodings.ts; its element's charset attribute, which
- * would come first, is not known here).
+ * TextDecoder does not know is ignored; a module takes none: Chrome 159
+ * reads one served as windows-1252 as UTF-8, where 152 and 157 honored
+ * windows-1252 and the labels that name it, and every one of those reads
+ * windows-1250 or shift_jis as UTF-8), else UTF-8 (measured for classic
+ * and module scripts of an element and a dedicated worker's script,
+ * script-charset suite). A classic script of a document with neither takes
+ * the document's encoding (`environment`, src/server/documentEncodings.ts;
+ * its element's charset attribute, which would come first, is not known
+ * here).
  */
 export function scriptEncoding(
 	bytes: Uint8Array,
@@ -197,7 +198,7 @@ export function scriptEncoding(
 	if (label)
 		try {
 			const encoding = new TextDecoder(label).encoding;
-			if (!module || encoding === 'windows-1252') return encoding;
+			if (!module) return encoding;
 		} catch {
 			// not an encoding: as if none were named
 		}
