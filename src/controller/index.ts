@@ -1535,6 +1535,16 @@ export class StompController extends EventTarget {
 		tellHardReloads((url) => this.#call('hardReload', url));
 
 		const takeWorker = (given: ServiceWorker | ServiceWorkerRegistration) => {
+			// Playwright's serviceWorkers: "block" makes register() resolve
+			// undefined rather than reject. That is not a worker: wait()
+			// reports it, and speak() is not called with nothing to read.
+			if (
+				!(given instanceof ServiceWorker) &&
+				!(given instanceof ServiceWorkerRegistration)
+			)
+				throw new TypeError(
+					'StompController.register() resolved without a service worker registration',
+				);
 			if (given instanceof ServiceWorkerRegistration) {
 				this.#registration = given;
 				// a worker still installing asks at its first handshake (bootEarly)
@@ -2159,6 +2169,9 @@ export class StompController extends EventTarget {
 		// registration has by then; anything else (a test double included)
 		// gets the handshake at once
 		const speak = () => {
+			// an empty resolution never gets here (takeWorker rejects it);
+			// a missing worker still must not throw on a later turn
+			if (!this.serviceworker) return;
 			if (
 				['installing', 'installed', 'activating'].includes(
 					this.serviceworker.state,

@@ -68,6 +68,37 @@ ok(
 	JSON.stringify(allowed),
 );
 
+// register() that resolves empty (Playwright serviceWorkers: "block")
+// is wait()'s failure, not an unhandled read of .state on a later turn
+{
+	const page = await browser.newPage();
+	page.on('pageerror', (error) => errors.push(error.message));
+	await page.goto(PROXY);
+	await page.addScriptTag({ url: '/stomp/Controller.js' });
+	const result = await page.evaluate(async () => {
+		try {
+			const controller = new window.StompController({
+				serviceworker: Promise.resolve(undefined),
+				transport: { module: '/x.mjs' },
+				directory: '/stomp/',
+				codec: 'xor',
+			});
+			await controller.wait();
+			return { resolved: true };
+		} catch (error) {
+			return { message: String(error.message) };
+		}
+	});
+	await page.waitForTimeout(500);
+	ok(
+		'register() resolving empty: wait() says there is no registration, and the page does not throw',
+		/without a service worker registration/.test(result.message ?? '') &&
+			!errors.some((message) => /state/.test(message)),
+		JSON.stringify({ result, errors }),
+	);
+	await page.close();
+}
+
 // a page that is not a secure context: a host name of its own over http,
 // answered by the test (it resolves nowhere)
 {
