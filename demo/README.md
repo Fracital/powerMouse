@@ -161,6 +161,19 @@ server on the same port:
 Nothing else is proxied by the server. All page traffic goes through the
 transport, which tunnels through `/wisp/`.
 
+### Protected served site
+
+`npm run build:demo-site` after `npm run build` writes `build/demo-site` and
+runs estrogen and the leak gate over every served file. Serve it with
+`STOMP_DEMO_SITE=build/demo-site npm run demo`. Its neutral aliases are
+`/runtime/` and `/runtime-tor/` for the bundles, `/transport/` and `/fallback/`
+for the transports, and `/tor-client/tor/` for Tor's client. The protected
+page's configuration globals are `BROWSER_CONFIG`, `BROWSER_ASSETS` and
+`BROWSER_OFFLINE`, its transport keys are `primary` and `secondary`, and its
+manifest is named Browser with the `web+browser` protocol. Without
+`STOMP_DEMO_SITE`, the routes and configuration names documented above are
+unchanged.
+
 The wisp server is [holyWisp](https://github.com/Fracital/holyWisp), the C
 server behind `wss://holywisp.fracit.al/`, so a local run relays the way
 stomp.fracit.al does. The `holywisp` package runs its prebuilt binary

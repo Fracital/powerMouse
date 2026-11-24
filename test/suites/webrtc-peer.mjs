@@ -409,7 +409,7 @@ async function page(browser, label, base) {
 		opened = await openDemo(browser, base);
 		await submitLanding(opened, target);
 		frame = () =>
-			opened.frames().findLast((f) => /\/stomp\/[\w-]+\/html\//.test(f.url()));
+			opened.frames().findLast((f) => /\/[\w-]+\/[\w-]+\/html\//.test(f.url()));
 	} else {
 		opened = await (await browser.newContext()).newPage();
 		opened.errors = [];

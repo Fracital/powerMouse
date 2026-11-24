@@ -1,0 +1,30 @@
+[proxy]
+scope = "build"
+names = ["stomp", "epoxy", "libcurl", "wisp", "tor-js", "tor_js", "__pm"]
+vendor = ["transport/**/*.wasm"]
+keep = ["wisp-v2", "/wisp/", "stomp-demo:", "stomp:debug-transport"]
+wasm_names = ["wisp"]
+store_names = [
+	"stompCookies",
+	"stompStorage",
+	"stompConfig",
+	"stompServiceWorkers",
+	"stompClientOrigins",
+	"stompClientHints",
+	"stompMediaLoads",
+	"stompDeviceIds",
+	"stompPermissions",
+	"stompDeviceGrants",
+	"stompPasskeys",
+	"stomp-wisp-carrier",
+	"stomp-http-cache",
+	"stomp-rewrite-cache",
+	"stomp-adblock",
+	"stomp-document-bundles",
+	"stomp-demo-themes",
+	"stomp-ech",
+]
+
+[proxy.store_tokens]
+stomp = "gdosx"
+wisp = "qhzv"

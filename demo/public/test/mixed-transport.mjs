@@ -98,11 +98,21 @@ function fixtureURL(url) {
 // turns: servers are reached as the real ones are, through epoxy's TLS
 const TURN_CA = new URL('./turn-ca.pem', import.meta.url);
 const WEBTRANSPORT_CA = new URL('./webtransport-ca.pem', import.meta.url);
+async function certificate(url) {
+	const text = await (await fetch(url)).text();
+	const mark = 'masked0\n';
+	if (!text.startsWith(mark)) return text;
+	const bytes = Uint8Array.from(atob(text.slice(mark.length)), (char) =>
+		char.charCodeAt(0),
+	);
+	for (let i = 0; i < bytes.length; i++) bytes[i] ^= 0xa5;
+	return new TextDecoder().decode(bytes);
+}
 
 export default class MixedTestTransport extends EpoxyTransport {
 	async init() {
 		this.opts.pem_files ??= await Promise.all(
-			[TURN_CA, WEBTRANSPORT_CA].map(async (url) => (await fetch(url)).text()),
+			[TURN_CA, WEBTRANSPORT_CA].map(certificate),
 		);
 		return super.init();
 	}

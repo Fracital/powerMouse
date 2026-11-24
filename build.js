@@ -573,7 +573,9 @@ const rewriterLibrary = {
 	entryPoints: { rewriterLib: 'stomp:library-entry' },
 	format: 'iife',
 	inject: [resolve('src/libGlobals.ts')],
-	banner: { js: `${LIGHT_FACTORY}=function(__stompRealm,__stompLibApi){` },
+	banner: {
+		js: `globalThis.${LIGHT_FACTORY}=function(__stompRealm,__stompLibApi){`,
+	},
 	footer: { js: 'return __stompLibApi;};' },
 	plugins: [
 		libraryEntry('src/rewriterLightDocument.ts'),
@@ -1143,7 +1145,7 @@ async function partGroups() {
  * line it starts at.
  */
 function partsStatement(groups, outputs = groups.map((group) => group.output)) {
-	let text = `${DEFERRED_FACTORY}=function(__stompShared,__stompPart){"use strict";var __stompParts={};switch(__stompPart){\n`;
+	let text = `globalThis.${DEFERRED_FACTORY}=function(__stompShared,__stompPart){"use strict";var __stompParts={};switch(__stompPart){\n`;
 	const sections = [];
 	groups.forEach((group, index) => {
 		const output = outputs[index];
@@ -1174,7 +1176,7 @@ const passkeysPart = {
 	...partBuild,
 	entryPoints: { passkeysPart: 'src/inject/dom/passkeysPart.ts' },
 	banner: {
-		js: `${PASSKEYS_FACTORY}=function(__stompShared){"use strict";var __stompParts={};`,
+		js: `globalThis.${PASSKEYS_FACTORY}=function(__stompShared){"use strict";var __stompParts={};`,
 	},
 	footer: { js: 'return __stompParts.made;};' },
 };
@@ -1193,7 +1195,7 @@ const activationPart = {
 	...partBuild,
 	entryPoints: { activationPart: 'src/inject/dom/activationPart.ts' },
 	banner: {
-		js: `${ACTIVATION_FACTORY}=function(__stompShared){"use strict";var __stompParts={};`,
+		js: `globalThis.${ACTIVATION_FACTORY}=function(__stompShared){"use strict";var __stompParts={};`,
 	},
 	footer: { js: 'return __stompParts.made;};' },
 };
@@ -1332,7 +1334,7 @@ function outputOf(result) {
 async function writeLibrary(light, parts, passkeys, activation) {
 	for (const name of [DEFERRED_FACTORY, PASSKEYS_FACTORY, ACTIVATION_FACTORY])
 		for (const statement of [light, parts, passkeys, activation])
-			if (statement.text.includes(`\n${name}=`))
+			if (statement.text.includes(`\nglobalThis.${name}=`))
 				throw new Error(
 					`rewriterLib: a line of the file starts with the name ${name}`,
 				);
@@ -1915,13 +1917,17 @@ const builds = [
 	{
 		// what a document's WebRTC classes do (src/inject/dom/rtcStack.ts),
 		// which the inject's WebRTC module evaluates the first time a document
-		// uses them: the file is one function's body, which hands the library
-		// out in `__stompRtcOut`, an object that function is given; its globals
-		// are the bundle's (src/inject/dom/rtcStackGlobals.ts), and what its
-		// syntax iterates is handed to the bundle's ownIterable, the library
-		// running after the page's scripts
+		// uses them: the file declares one function, called with the object it
+		// hands the library out in (`__stompRtcOut`) and the bundle's globals
+		// (src/inject/dom/rtcStackGlobals.ts); what its syntax iterates is
+		// handed to the bundle's ownIterable, the library running after the
+		// page's scripts
 		entryPoints: { rtcStack: 'src/inject/dom/rtcStackEntry.ts' },
 		format: 'iife',
+		banner: {
+			js: 'const __stompRtcLibrary=function(__stompRtcSnap,__stompRtcOut){',
+		},
+		footer: { js: 'return __stompRtcOut;};' },
 		inject: [rtcStackGlobals],
 		plugins: [
 			withOwnIterable,

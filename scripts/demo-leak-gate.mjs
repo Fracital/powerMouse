@@ -131,7 +131,15 @@ function scan(name, bytes) {
 // estrogen's own check, with the same list
 const check = spawnSync(
 	join(root, 'node_modules/.bin/estrogen'),
-	['--check', '-v', '--canary', canaryFile, site],
+	[
+		'--check',
+		'-v',
+		'--canary',
+		canaryFile,
+		'--config',
+		join(root, 'demo/estrogen.toml'),
+		site,
+	],
 	{ cwd: root, encoding: 'utf8', maxBuffer: 1 << 28 },
 );
 const checkReport = `${check.stdout}${check.stderr}`;

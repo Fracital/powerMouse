@@ -6,5 +6,7 @@
   a leak gate: every served file is searched for the names that say what the
   site is (derived from the source, scripts/demo-canaries.mjs) as written,
   base64- and percent-encoded and gzipped, and every script must run in
-  estrogen's VM. `STOMP_DEMO_SITE=build/demo-site` serves it. The gate fails
-  today: names it cannot hide yet are listed in its report.
+  estrogen's VM. `STOMP_DEMO_SITE=build/demo-site` serves it. The protected
+  build uses neutral asset and route names and a Browser manifest, while the
+  checkout's demo and the package API keep their names. Its gate passes with
+  every script in the VM, and the planted-leak self-check still fails closed.

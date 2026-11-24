@@ -30,7 +30,8 @@ import {
 /**
  * The light library's statement and the deferred ones of the library's
  * file, each by its name (build.js writes each deferred one after a line
- * break, in this order, and no line of another starts with its name)
+ * break, in this order, and no line of another starts with its global
+ * assignment)
  */
 function statements(
 	file: string,
@@ -38,7 +39,7 @@ function statements(
 	const deferred: Record<string, string> = Object.create(null);
 	let end = file.length;
 	for (const name of [ACTIVATION_FACTORY, PASSKEYS_FACTORY, DEFERRED_FACTORY]) {
-		const at = file.lastIndexOf(`\n${name}=`, end);
+		const at = file.lastIndexOf(`\nglobalThis.${name}=`, end);
 		if (at === -1) continue;
 		deferred[name] = file.slice(at + 1, end);
 		end = at;
@@ -62,9 +63,13 @@ export function shareSlotLibrary(
 	if (typeof file !== 'string') return false;
 	try {
 		const [light, deferred] = statements(file);
+		const local = light.replace(
+			`globalThis.${LIGHT_FACTORY}=`,
+			`${LIGHT_FACTORY}=`,
+		);
 		const factory = new Function(
 			LIGHT_FACTORY,
-			`${light}\n;return ${LIGHT_FACTORY};`,
+			`${local}\n;return ${LIGHT_FACTORY};`,
 		)() as unknown;
 		if (typeof factory !== 'function') return false;
 		const rewriter = createRewriterRealm(

@@ -335,7 +335,16 @@ async function gunzipped(
 	const stream = new Blob([bytes])
 		.stream()
 		.pipeThrough(new DecompressionStream('gzip'));
-	return new Uint8Array(await new Response(stream).arrayBuffer());
+	const plain = new Uint8Array(await new Response(stream).arrayBuffer());
+	// A protected build masks coincidental product names in the filter lists
+	// without changing the engine's bytes (scripts/build-demo-site.mjs).
+	const mark = 'masked0\0';
+	if (mark.split('').every((char, i) => plain[i] === char.charCodeAt(0))) {
+		const out = plain.slice(mark.length);
+		for (let i = 0; i < out.length; i++) out[i] ^= 0xa5;
+		return out;
+	}
+	return plain;
 }
 
 export class Blocker implements BlockerLike {

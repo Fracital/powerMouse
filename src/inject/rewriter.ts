@@ -147,13 +147,13 @@ const DEFERRED_STATEMENTS = [
 /**
  * The file's statements: the light library's, then the document bundle's
  * deferred ones in DEFERRED_STATEMENTS' order (build.js writes each after a
- * line break, and no line of another starts with its name), null for one
- * the file does not have
+ * line break, and no line of another starts with its global assignment), null
+ * for one the file does not have
  */
 function fileStatements(): (string | null)[] {
 	const file = (fetched ??= fetchLibrary().source);
 	const starts = DEFERRED_STATEMENTS.map((name) =>
-		file.lastIndexOf(`\n${name}=`),
+		file.lastIndexOf(`\nglobalThis.${name}=`),
 	);
 	const statements: (string | null)[] = [];
 	let end = file.length;
@@ -200,7 +200,8 @@ export function lightFactory(): Factory {
 function evaluated(statement: string, name: string, sourceURL = ''): unknown {
 	try {
 		if (sharing.evaluates?.() === false) throw new Error('no eval');
-		const body = `${statement}\n;return ${name};${sourceURL}`;
+		const local = statement.replace(`globalThis.${name}=`, `${name}=`);
+		const body = `${local}\n;return ${name};${sourceURL}`;
 		// (eval of a trusted value where Trusted Types are in use: trusted.ts)
 		return (
 			(trustedFunction(globalThis, [name], body) ??

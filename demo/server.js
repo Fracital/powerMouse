@@ -63,8 +63,8 @@
 //   STOMP_OFFLINE_FILE  where /offline.html is served from and built into
 //                       (default build/offline.html)
 //   STOMP_DEMO_SITE     a protected site (npm run build:demo-site writes
-//                       build/demo-site): its public/, stomp/, epoxy/,
-//                       libcurl/, tor-js/ and examples/ are served in place
+//                       build/demo-site): its public/, runtime/, transport/,
+//                       fallback/, tor/ and examples/ are served in place
 //                       of demo/public, dist and the packages'
 //   STOMP_ECH_DNS       the DNS-over-HTTPS endpoint epoxy asks for HTTPS
 //                       records, to offer real Encrypted Client Hello where a
@@ -213,7 +213,7 @@ const demoSite = process.env.STOMP_DEMO_SITE
 	? resolve(process.env.STOMP_DEMO_SITE)
 	: null;
 const stompPath = demoSite
-	? join(demoSite, 'stomp')
+	? join(demoSite, 'runtime')
 	: require('../lib/index.cjs').stompPath;
 
 // deployment settings live in an uncommitted .env next to package.json
@@ -255,7 +255,7 @@ const DIAL = (() => {
 // the transports only export their dist entry; serve its directory
 const transportDir = (name) =>
 	demoSite
-		? join(demoSite, name.replace(/-transport$/, ''))
+		? join(demoSite, name === 'epoxy-transport' ? 'transport' : 'fallback')
 		: dirname(fileURLToPath(import.meta.resolve(`@mercuryworkshop/${name}`)));
 
 // The built-in /wisp/ is holyWisp, the server behind wss://holywisp.fracit.al/,
@@ -435,7 +435,7 @@ if (process.env.STOMP_ISOLATION !== 'off')
 // what the page needs to know about this deployment; keys are only present
 // when set so the page can keep its local-development defaults otherwise
 const pageConfig = {
-	...(externalWisp && { wisp: externalWisp }),
+	...(externalWisp && { [demoSite ? 'relay' : 'wisp']: externalWisp }),
 	...(process.env.STOMP_PROXY_ORIGIN !== undefined && { proxyOrigin }),
 	// the in-browser Tor client, Tor mode's transport (docs/tor-over-wisp.md)
 	...(torClient && { torClient: true }),
@@ -443,7 +443,11 @@ const pageConfig = {
 	// (named as a host that serves the files itself names them: the
 	// stand-in checks it was given a wasm, and loads none)
 	...(torArtiStandIn && {
-		torClient: { wasm: '/tor-client/tor-js/tor_js_bg.wasm' },
+		torClient: {
+			wasm: demoSite
+				? '/tor-client/tor/client_bg.wasm'
+				: '/tor-client/tor-js/tor_js_bg.wasm',
+		},
 	}),
 	// on unless turned off; a wisp server without UDP costs it nothing (the
 	// transport stays on HTTP/2, docs/http3.md)
@@ -557,7 +561,7 @@ app.get('/config.js', (req, res) => {
 	res.set('Cache-Control', 'no-store');
 	res.type('application/javascript');
 	res.send(
-		`window.STOMP_CONFIG = ${JSON.stringify({ ...pageConfig, ...vibeosConfig(), transports: transportPaths(), ...(sitePool.length && { sitePool }), ...(contentSlots.length && { contentSlots }) })};\n`,
+		`window.${demoSite ? 'BROWSER_CONFIG' : 'STOMP_CONFIG'} = ${JSON.stringify({ ...pageConfig, ...vibeosConfig(), transports: transportPaths(), ...(sitePool.length && { sitePool }), ...(contentSlots.length && { contentSlots }) })};\n`,
 	);
 });
 
@@ -666,10 +670,10 @@ const askedByHash = (res, path) => {
 // no-store: it is made for each request.)
 function stampedPage() {
 	return readFileSync(join(publicDir, 'index.html'), 'utf8').replace(
-		/\b(src|href)="\/(stomp|pm)\/([\w./-]+)"/g,
+		/\b(src|href)="\/(stomp|runtime|pm)\/([\w./-]+)"/g,
 		(whole, attribute, root, file) => {
 			const hash = hashOf(
-				root === 'stomp' ? join(stompPath, file) : join(publicDir, 'pm', file),
+				root === 'pm' ? join(publicDir, 'pm', file) : join(stompPath, file),
 			);
 			return hash ? `${attribute}="/${root}/${file}?${hash}"` : whole;
 		},
@@ -876,6 +880,8 @@ const stompFiles = {
 const STOMP_SCOPES = [
 	'/stomp/',
 	'/stomp-tor/',
+	'/runtime/',
+	'/runtime-tor/',
 	DIAL.directory,
 	DIAL.torDirectory,
 ];
@@ -884,7 +890,7 @@ const STOMP_SCOPES = [
 // here over the same Wisp relay the transports use
 if (process.env.STOMP_SYNC_RELAY !== '0') {
 	app.post(
-		['/stomp/sync-relay', `${DIAL.directory}sync-relay`],
+		['/stomp/sync-relay', '/runtime/sync-relay', `${DIAL.directory}sync-relay`],
 		...syncRelay(() => externalWisp || `ws://127.0.0.1:${wisp.port}/wisp/`),
 	);
 	// and the loads of the scripts such a page writes into a frame the
@@ -892,6 +898,7 @@ if (process.env.STOMP_SYNC_RELAY !== '0') {
 	app.all(
 		[
 			'/stomp/sync-relay/held/:token',
+			'/runtime/sync-relay/held/:token',
 			`${DIAL.directory}sync-relay/held/:token`,
 		],
 		...heldLoads(),
@@ -900,7 +907,11 @@ if (process.env.STOMP_SYNC_RELAY !== '0') {
 	// them itself, past Tor (the browser's Tor client is in the page's
 	// transport worker, which a frozen page cannot reach)
 	app.post(
-		['/stomp-tor/sync-relay', `${DIAL.torDirectory}sync-relay`],
+		[
+			'/stomp-tor/sync-relay',
+			'/runtime-tor/sync-relay',
+			`${DIAL.torDirectory}sync-relay`,
+		],
 		(_req, res) => {
 			res.set('Cache-Control', 'no-store');
 			res.status(503).json({ error: 'Tor mode has no server relay' });
@@ -911,6 +922,7 @@ if (process.env.STOMP_SYNC_RELAY !== '0') {
 	app.all(
 		[
 			'/stomp-tor/sync-relay/held/:token',
+			'/runtime-tor/sync-relay/held/:token',
 			`${DIAL.torDirectory}sync-relay/held/:token`,
 		],
 		...heldLoads(),
@@ -975,7 +987,7 @@ app.use(STOMP_SCOPES, (req, res, next) => {
 // nothing in it to read; it gets the same answer every time, never its own
 // path back (express's 404 page writes it), and this server logs no
 // request. Nothing of the site is relayed for it.
-app.use(['/stomp-tor/', DIAL.torDirectory], (_req, res) => {
+app.use(['/stomp-tor/', '/runtime-tor/', DIAL.torDirectory], (_req, res) => {
 	res.status(404);
 	res.set('Cache-Control', 'no-store');
 	res.type('text/plain').end('Not found');
@@ -1036,38 +1048,50 @@ function transportFiles(name) {
 const transportPaths = () =>
 	dev
 		? {}
-		: {
-				epoxy: `/epoxy/${filesHash(transportDir('epoxy-transport'))}/`,
-				libcurl: `/libcurl/${filesHash(transportDir('libcurl-transport'))}/`,
-			};
+		: demoSite
+			? {
+					primary: `/transport/${filesHash(transportDir('epoxy-transport'))}/`,
+					secondary: `/fallback/${filesHash(transportDir('libcurl-transport'))}/`,
+				}
+			: {
+					epoxy: `/epoxy/${filesHash(transportDir('epoxy-transport'))}/`,
+					libcurl: `/libcurl/${filesHash(transportDir('libcurl-transport'))}/`,
+				};
 app.use('/epoxy/', transportFiles('epoxy-transport'));
 app.use('/libcurl/', transportFiles('libcurl-transport'));
+app.use('/transport/', transportFiles('epoxy-transport'));
+app.use('/fallback/', transportFiles('libcurl-transport'));
 // The in-browser Tor client (docs/tor-over-wisp.md): tor-js's module and
 // arti's wasm, which demo/public/tor-client/service.mjs loads. The package
 // is the Fracital build pinned in package.json (deploy/tor-js: the release
 // plus a stream API, so Tor mode runs epoxy on Tor streams)
 if (torArtiStandIn)
-	app.get('/tor-client/tor-js/entryPoints/wasm-file/index.js', (_req, res) => {
-		res.set('Cache-Control', 'no-store');
-		res.type('text/javascript');
-		res.sendFile(
-			fileURLToPath(
-				new URL('../test/offline-tor-stand-in.mjs', import.meta.url),
-			),
-			// (a checkout under a dot directory, as a git worktree can be)
-			{ dotfiles: 'allow' },
-		);
-	});
-try {
-	app.use(
-		'/tor-client/tor-js/',
-		express.static(
-			demoSite
-				? join(demoSite, 'tor-js')
-				: join(dirname(fileURLToPath(import.meta.resolve('tor-js'))), '../..'),
-			fresh,
-		),
+	app.get(
+		[
+			'/tor-client/tor-js/entryPoints/wasm-file/index.js',
+			'/tor-client/tor/entryPoints/wasm-file/index.js',
+		],
+		(_req, res) => {
+			res.set('Cache-Control', 'no-store');
+			res.type('text/javascript');
+			res.sendFile(
+				fileURLToPath(
+					new URL('../test/offline-tor-stand-in.mjs', import.meta.url),
+				),
+				// (a checkout under a dot directory, as a git worktree can be)
+				{ dotfiles: 'allow' },
+			);
+		},
 	);
+try {
+	const torFiles = express.static(
+		demoSite
+			? join(demoSite, 'tor')
+			: join(dirname(fileURLToPath(import.meta.resolve('tor-js'))), '../..'),
+		fresh,
+	);
+	app.use('/tor-client/tor-js/', torFiles);
+	app.use('/tor-client/tor/', torFiles);
 } catch {
 	// not installed: the opt-in fails to load, nothing else changes
 }

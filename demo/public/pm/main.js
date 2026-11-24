@@ -426,13 +426,13 @@ const proxyBase = () => (ISOLATED ? PROXY_ORIGIN : '');
 const transportPath = (name) => CFG.transports?.[name] || `/${name}/`;
 // STOMP_WISP_URL points the transports at an external wisp server (in
 // production, the edge relay); otherwise the demo server's own /wisp/
-const directWispURL = () =>
+const directRelayURL = () =>
 	CFG.wisp ||
 	`${(ISOLATED ? PROXY_ORIGIN : location.origin).replace(/^http/, 'ws')}/wisp/`;
-const wispURL = () => {
+const relayURL = () => {
 	// in Tor mode, the client's own Wisp connection, to Tor relays only
 	if (TOR_REQUESTED && !TOR_CLIENT) throw new Error(TOR_UNAVAILABLE);
-	return directWispURL();
+	return directRelayURL();
 };
 
 // transports are described, not constructed: the controller imports and
@@ -452,7 +452,7 @@ const transports = {
 		// INFO to agree on it in
 		options: [
 			{
-				wisp: wispURL(),
+				wisp: relayURL(),
 				wisp_v2: true,
 				...(ECH_DNS && { ech_dns: ECH_DNS }),
 			},
@@ -472,7 +472,7 @@ const transports = {
 		module: `${proxyBase()}${transportPath('libcurl')}index.mjs`,
 		// libcurl.js 0.7's default pool (50 total, 6 per host) deadlocks once a
 		// page fans out more requests than that; see CHANGELOG known limitations
-		options: [{ wisp: wispURL(), connections: [500, 400, 200] }],
+		options: [{ wisp: relayURL(), connections: [500, 400, 200] }],
 		...(OFFLINE && { host: OFFLINE.transportHost }),
 	}),
 	// Tor mode's transport with the in-browser client, whichever of the
@@ -485,7 +485,7 @@ const transports = {
 			: (TOR_FILES.module ?? `${proxyBase()}/tor-client/transport.mjs`),
 		options: [
 			{
-				wisp: wispURL(),
+				wisp: relayURL(),
 				channel: TOR_CLIENT_CHANNEL,
 				// a new Tor session's first page (torSession)
 				...(torSession.token && { session: torSession.token }),
@@ -7505,7 +7505,7 @@ shieldsButton.addEventListener('click', () => {
 // another origin's (stomp.fracit.al's answers any origin), or a name of
 // DIRECTORY's as the service worker's is. The wisp server the file was built
 // with is JSON in one element at the top of its head, and this page's
-// direct one (directWispURL()) takes its place there; nothing else of this
+// direct one (directRelayURL()) takes its place there; nothing else of this
 // page or its profile goes in. The file has Tor mode of its own (its
 // client runs in a worker of the file's page), over that wisp server too.
 const OFFLINE_FILE = ASSETS.offline
@@ -7518,13 +7518,13 @@ const OFFLINE_WISP = new RegExp(
 );
 
 /** offline.html as this deployment serves it, with this page's wisp server */
-async function offlineWithWisp() {
+async function offlineWithRelay() {
 	const response = await fetch(OFFLINE_FILE, { cache: 'no-cache' });
 	if (!response.ok) throw new Error(`${OFFLINE_FILE}: ${response.status}`);
 	const text = await response.text();
 	if (!OFFLINE_WISP.test(text))
 		throw new Error(`${OFFLINE_FILE} names no wisp server to change`);
-	const wisp = new URL(directWispURL(), location.href).href;
+	const wisp = new URL(directRelayURL(), location.href).href;
 	return text.replace(
 		OFFLINE_WISP,
 		(whole, open, close) =>
@@ -7555,7 +7555,7 @@ async function offlineWithWisp() {
 		saving = true;
 		link.setAttribute('aria-busy', 'true');
 		try {
-			const blob = new Blob([await offlineWithWisp()], { type: 'text/html' });
+			const blob = new Blob([await offlineWithRelay()], { type: 'text/html' });
 			const url = URL.createObjectURL(blob);
 			const saved = document.createElement('a');
 			saved.href = url;
@@ -7912,7 +7912,7 @@ menuNewIdentity.addEventListener('click', async () => {
 /** the transport the bar's select chose, for the Transport fact */
 let transportName = '';
 const transportFact = (name) =>
-	`${name} over ${wispURL()}${TOR_REQUESTED ? ', Tor TCP route' : HTTP3 && name === 'epoxy' ? ', HTTP/3 on' : ''}`;
+	`${name} over ${relayURL()}${TOR_REQUESTED ? ', Tor TCP route' : HTTP3 && name === 'epoxy' ? ', HTTP/3 on' : ''}`;
 
 function showCarrier(info) {
 	const udp = info.carrier === 'webtransport';
@@ -8264,7 +8264,7 @@ const vibeHost = {
 	// the guest network of vibeOS's emulator: the proxy's own relay, and
 	// none in Tor mode, whose traffic goes to Tor relays only
 	get relay() {
-		return TOR_REQUESTED ? null : directWispURL();
+		return TOR_REQUESTED ? null : directRelayURL();
 	},
 	// an installed web app's window: a frame of the proxy's that is no tab
 	mountWebview: async (element, url) => {

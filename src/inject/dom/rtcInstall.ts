@@ -47,7 +47,7 @@ function loadLibrary(
 	// the file's own text, which names nothing of the page's: its globals
 	// are this bundle's (rtcStackGlobals.ts)
 	const make = Reflect.apply(loading.realmEval, undefined, [
-		`(function (__stompRtcSnap, __stompRtcOut) {\n${text}\nreturn __stompRtcOut.api;\n})`,
+		`(function (__stompRtcSnap, __stompRtcOut) {\n${text}\nreturn __stompRtcLibrary(__stompRtcSnap, __stompRtcOut).api;\n})`,
 	]) as (globals: RtcLoading['snapshot'], out: object) => StackApi;
 	const made = make(loading.snapshot, {});
 	if (!made || made.build !== BUILD)
