@@ -25,6 +25,7 @@
 // --plant writes <text> into a served file after estrogen ran, to show the
 // gate fails the build on a leak.
 import { spawnSync } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
 import {
 	cpSync,
 	existsSync,
@@ -152,6 +153,90 @@ function neutralPaths(dir) {
 	}
 }
 neutralPaths(native);
+
+// The runtime's bundles name each other by the hash of their bytes
+// (`injectDocument.js?<hash>`, build.js), and the server keeps a file asked
+// for by its own hash for a year. The protected copies would be asked for
+// under the plain files' hashes: a browser that had the plain site keeps
+// those URLs, and ran the plain inject in the protected page (a call page
+// that never loaded, `Outside directory`). Each hash and the build id are
+// given a name of this build's instead (estrogen's names differ from one
+// build to the next, so no two builds may share one), and kept.json, which
+// the server reads and does not serve, says which file each names.
+const renamedHashes = new Map();
+const buildNonce = randomBytes(16).toString('hex');
+const freshName = (old, length) =>
+	createHash('sha256')
+		.update(`${buildNonce}\0${old}`)
+		.digest('hex')
+		.slice(0, length);
+const runtimeDir = join(native, 'runtime');
+const hashedFiles = [];
+for (const entry of readdirSync(runtimeDir, { withFileTypes: true })) {
+	if (!entry.isFile()) continue;
+	// (the hash build.js named it by is of dist's file, before neutralPaths
+	// changed its text above)
+	const original = join(dist, entry.name);
+	const plainHash = createHash('sha256')
+		.update(
+			readFileSync(
+				existsSync(original) ? original : join(runtimeDir, entry.name),
+			),
+		)
+		.digest('hex')
+		.slice(0, 16);
+	renamedHashes.set(plainHash, freshName(plainHash, 16));
+	hashedFiles.push([entry.name, renamedHashes.get(plainHash)]);
+}
+const buildInfo = JSON.parse(
+	readFileSync(join(runtimeDir, 'build.json'), 'utf8'),
+);
+const plainBuild = String(buildInfo.build ?? '');
+const buildId = /\+([0-9a-f]{8,})$/.exec(plainBuild);
+if (buildId)
+	renamedHashes.set(
+		plainBuild,
+		`${plainBuild.slice(0, buildId.index)}+${freshName(buildId[1], buildId[1].length)}`,
+	);
+(function renameHashes(dir) {
+	for (const entry of readdirSync(dir, { withFileTypes: true })) {
+		const path = join(dir, entry.name);
+		if (entry.isDirectory()) {
+			renameHashes(path);
+			continue;
+		}
+		if (!/\.(?:js|mjs|html|json)$/.test(entry.name)) continue;
+		const text = readFileSync(path, 'utf8');
+		let renamed = text;
+		for (const [from, to] of renamedHashes)
+			renamed = renamed.replaceAll(from, to);
+		if (renamed !== text) writeFileSync(path, renamed);
+	}
+})(native);
+// (and none is left: a file of the runtime named by the plain hash would be
+// the plain site's copy, wherever a browser kept it)
+for (const name of readdirSync(dist)) {
+	if (!/\.(?:js|mjs|wasm|json|html|gz)$/.test(name)) continue;
+	const plainHash = createHash('sha256')
+		.update(readFileSync(join(dist, name)))
+		.digest('hex')
+		.slice(0, 16);
+	(function find(dir) {
+		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+			const path = join(dir, entry.name);
+			if (entry.isDirectory()) find(path);
+			else if (
+				/\.(?:js|mjs|html|json)$/.test(entry.name) &&
+				readFileSync(path, 'utf8').includes(plainHash)
+			) {
+				console.error(
+					`build-demo-site: ${relative(native, path)} still names dist/${name} by its plain hash ${plainHash}`,
+				);
+				process.exit(1);
+			}
+		}
+	})(native);
+}
 // The HTML shell cannot encrypt a link or the manifest's JSON. Keep their
 // protected forms neutral; scripts and runtime URLs take estrogen's VM.
 const index = join(native, 'public/index.html');
@@ -346,6 +431,29 @@ if (built.status === 0)
 	);
 for (let index = 0; index < LIBRARY_STATEMENTS.length; index++)
 	rmSync(statementFile(index), { force: true });
+// which hash each runtime file is asked for under, and the hash of its
+// protected bytes: the server keeps it for good only while it is that file
+writeFileSync(
+	join(out, 'kept.json'),
+	`${JSON.stringify(
+		Object.fromEntries(
+			hashedFiles
+				.filter(([name]) => existsSync(join(out, 'runtime', name)))
+				.map(([name, asked]) => [
+					name,
+					{
+						asked,
+						file: createHash('sha256')
+							.update(readFileSync(join(out, 'runtime', name)))
+							.digest('hex')
+							.slice(0, 16),
+					},
+				]),
+		),
+		null,
+		'\t',
+	)}\n`,
+);
 // (estrogen fails closed: a file that would leak is left as it was. The
 // gate still runs, to list every leak at once, and the build fails either way)
 if (built.status !== 0) {

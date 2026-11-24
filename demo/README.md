@@ -188,6 +188,17 @@ those statements one at a time. The public deploy
 (`deploy/terp-deploy-gate.sh`) builds this site and fails when its gate
 fails.
 
+The protected site shows the same commits and repository links. Each answer
+of `/api/commits` is its JSON XORed with a key of its own, sent beside it
+(`{ k, v }`, both base64), which the page decodes, so no answer names the
+project as written. Every build names its bundles by hashes of its own
+(`kept.json` lists them), so a browser that keeps an earlier build's bundle
+under its hash as `immutable` asks for this build's under another URL.
+estrogen renames the messages between the page and STomp's service worker
+in every build, so a worker of an earlier build cannot answer the page: the
+page asks for the worker's update as it registers it, and the controller
+binds to the new worker as it activates.
+
 The wisp server is [holyWisp](https://github.com/Fracital/holyWisp), the C
 server behind `wss://holywisp.fracit.al/`, so a local run relays the way
 stomp.fracit.al does. The `holywisp` package runs its prebuilt binary

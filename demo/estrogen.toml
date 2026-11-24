@@ -16,6 +16,7 @@ store_names = [
 	"stompPermissions",
 	"stompDeviceGrants",
 	"stompPasskeys",
+	"stompHsts",
 	"stomp-wisp-carrier",
 	"stomp-http-cache",
 	"stomp-rewrite-cache",

@@ -188,7 +188,7 @@
 //                       files to the page, which reloads what changed; see
 //                       demo/public/pm/dev.js
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import {
 	existsSync,
 	readdirSync,
@@ -638,27 +638,29 @@ const COMMIT_AVATARS = (() => {
 		: directory;
 })();
 const checkout = fileURLToPath(new URL('..', import.meta.url));
-// The protected site's home page is deliberately not the project's public
-// repository browser: its commit messages, author details and repository
-// name are not served. Do not start the poller or read the checkout's log
-// for it either. The unprotected demo keeps its existing commit display.
-const commits = demoSite
-	? {
-			list: (_req, res) => {
-				res.set('Cache-Control', 'no-store');
-				res.json({ repo: 'Browser', url: 'https://github.com/', commits: [] });
-			},
-			stream: (_req, res) => res.sendStatus(404),
-			avatar: (_req, res) => res.sendStatus(404),
-		}
-	: createCommits({
-			repo: commitsRepo,
-			token: process.env.GITHUB_TOKEN,
-			api: process.env.STOMP_GITHUB_API,
-			interval: Number(process.env.STOMP_GITHUB_POLL_MS) || 60000,
-			checkout: commitsRepo === DEFAULT_REPO ? checkout : null,
-			avatars: COMMIT_AVATARS,
-		});
+// The protected site shows the same commits and repository links, but no
+// answer names the project as written: each is its JSON XORed with a key of
+// its own, sent beside it, both in base64 (`{ k, v }`), and the page decodes
+// it (pm/main.js commitsData) before it draws the list and the links. The key
+// travels with the answer, so an answer a browser or a worker kept from an
+// earlier start of this server still reads.
+const commits = createCommits({
+	repo: commitsRepo,
+	token: process.env.GITHUB_TOKEN,
+	api: process.env.STOMP_GITHUB_API,
+	interval: Number(process.env.STOMP_GITHUB_POLL_MS) || 60000,
+	checkout: commitsRepo === DEFAULT_REPO ? checkout : null,
+	avatars: COMMIT_AVATARS,
+	encode: demoSite
+		? (text) => {
+				const key = randomBytes(32);
+				const bytes = Buffer.from(text, 'utf8');
+				for (let at = 0; at < bytes.length; at++)
+					bytes[at] ^= key[at % key.length];
+				return { k: key.toString('base64'), v: bytes.toString('base64') };
+			}
+		: null,
+});
 app.get('/api/commits', commits.list);
 app.get('/api/commits/stream', commits.stream);
 app.get(`${COMMIT_AVATARS}:name`, commits.avatar);
@@ -702,8 +704,30 @@ app.use(
 // (`?<hash>`, or a first parameter of its own: `controllerFrame.html?<hash>&script=`)
 const askedByHash = (res, path) => {
 	const asked = /\?([0-9a-f]{16})(?:&|$)/.exec(res.req.originalUrl);
-	return !dev && !!asked && asked[1] === hashOf(path);
+	if (dev || !asked) return false;
+	if (asked[1] === hashOf(path)) return true;
+	// the protected site's runtime asks for each file under a name of its
+	// build (scripts/build-demo-site.mjs kept.json), kept while the file is
+	// that build's
+	const kept = demoKept()[basename(path)];
+	return kept?.asked === asked[1] && kept.file === hashOf(path);
 };
+let demoKeptRead = { at: -1, names: {} };
+function demoKept() {
+	if (!demoSite) return {};
+	const file = join(demoSite, 'kept.json');
+	try {
+		const { mtimeMs } = statSync(file);
+		if (demoKeptRead.at !== mtimeMs)
+			demoKeptRead = {
+				at: mtimeMs,
+				names: JSON.parse(readFileSync(file, 'utf8')),
+			};
+	} catch {
+		demoKeptRead = { at: -1, names: {} };
+	}
+	return demoKeptRead.names;
+}
 // The page names the scripts, the stylesheet and the images it loads from
 // /stomp/ and /pm/ by the hash of each file (`/stomp/Controller.js?<hash>`),
 // so a reload revalidates the page and none of them. The page itself stays
@@ -711,13 +735,18 @@ const askedByHash = (res, path) => {
 // go on naming the last build's files after a deploy. (/config.js is
 // no-store: it is made for each request.)
 function stampedPage() {
+	// (quoted as written, or bare as the protected site's minified page has it)
 	return readFileSync(join(publicDir, 'index.html'), 'utf8').replace(
-		/\b(src|href)="\/(stomp|runtime|pm)\/([\w./-]+)"/g,
-		(whole, attribute, root, file) => {
+		/\b(src|href)=(?:(")\/(stomp|runtime|pm)\/([\w./-]+)"|()\/(stomp|runtime|pm)\/([\w./-]+)(?=[\s>]))/g,
+		(whole, attribute, q1, r1, f1, q2, r2, f2) => {
+			const [quote, root, file] =
+				q1 === undefined ? [q2, r2, f2] : [q1, r1, f1];
 			const hash = hashOf(
 				root === 'pm' ? join(publicDir, 'pm', file) : join(stompPath, file),
 			);
-			return hash ? `${attribute}="/${root}/${file}?${hash}"` : whole;
+			return hash
+				? `${attribute}=${quote}/${root}/${file}?${hash}${quote}`
+				: whole;
 		},
 	);
 }

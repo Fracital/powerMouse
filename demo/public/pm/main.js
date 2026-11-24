@@ -1717,13 +1717,25 @@ async function startController(name) {
 		// activated): its transport, the transport worker, epoxy's module and
 		// the wisp carrier, comes up while a first visit's worker installs.
 		// register()'s own promise goes to it unawaited, so that the
-		// controller's modules start while the script is fetched too
+		// controller's modules start while the script is fetched too.
+		// register() with the script URL a registration already has checks
+		// for no update: a worker of an earlier deploy would stay in charge
+		// until the browser's own check. One of the protected build speaks
+		// none of this page's messages (estrogen renames them every build)
+		// and never answers its handshake, so the update is asked for now,
+		// and the controller binds to the new worker as it activates
 		const registration = OFFLINE
 			? await OFFLINE.ready
-			: navigator.serviceWorker.register(
-					`${DIRECTORY}${assetName('serviceWorker')}${StompController.profileWorker(PROFILE)}`,
-					{ scope: DIRECTORY, updateViaCache: 'none' },
-				);
+			: navigator.serviceWorker
+					.register(
+						`${DIRECTORY}${assetName('serviceWorker')}${StompController.profileWorker(PROFILE)}`,
+						{ scope: DIRECTORY, updateViaCache: 'none' },
+					)
+					.then((made) => {
+						if (made.active && !made.installing && !made.waiting)
+							made.update().catch(() => {});
+						return made;
+					});
 		setStatus(`Loading ${name} transport…`);
 		controller = new StompController({
 			serviceworker: registration,
@@ -4289,15 +4301,43 @@ function markDeployed(item, commit) {
 	if (pending) link.title = 'Pushed, not deployed yet';
 	else link.removeAttribute('title');
 }
+/**
+ * An answer of /api/commits as the server sent it: the protected site's
+ * comes as `{ k, v }`, its JSON XORed with the key `k`, both in base64
+ * (demo/server.js); any other is the answer itself
+ */
+function commitsData(data) {
+	if (typeof data?.v !== 'string' || typeof data.k !== 'string') return data;
+	const key = Uint8Array.from(atob(data.k), (c) => c.charCodeAt(0));
+	const bytes = Uint8Array.from(
+		atob(data.v),
+		(c, at) => c.charCodeAt(0) ^ key[at % key.length],
+	);
+	return JSON.parse(new TextDecoder().decode(bytes));
+}
+/** the repository's links (the commits' heading and Fork us on GitHub) as `data` names it */
+function repoLinks(data) {
+	if (
+		typeof data?.url !== 'string' ||
+		!/^https:\/\/github\.com\//.test(data.url)
+	)
+		return;
+	const repoLink = $('commitsRepo');
+	if (typeof data.repo === 'string' && repoLink.textContent !== data.repo)
+		repoLink.textContent = data.repo;
+	if (repoLink.getAttribute('href') !== data.url) repoLink.href = data.url;
+	for (const fork of document.querySelectorAll('.gitFork')) {
+		const link = fork.closest('a');
+		if (link && link.getAttribute('href') !== data.url) link.href = data.url;
+	}
+}
 /** the list as `data` has it, newest first: rows already shown stay the
  * same elements (their avatar loaded, their hover kept), new ones go in
  * where they belong (a push: at the top), and the room is fitted again in
  * the same task, so no frame shows the list unfitted */
 function renderCommits(data) {
 	const list = $('commitList');
-	const repoLink = $('commitsRepo');
-	if (repoLink.textContent !== data.repo) repoLink.textContent = data.repo;
-	if (repoLink.getAttribute('href') !== data.url) repoLink.href = data.url;
+	repoLinks(data);
 	const shown = new Map(
 		[...list.children].map((item) => [item.dataset.sha, item]),
 	);
@@ -4328,9 +4368,11 @@ function renderCommits(data) {
 async function showCommits() {
 	try {
 		const response = await fetch('/api/commits');
-		const data = await response.json();
-		if (!response.ok)
+		const data = commitsData(await response.json());
+		if (!response.ok) {
+			repoLinks(data);
 			throw new Error(data.error || `status ${response.status}`);
+		}
 		renderCommits(data);
 		// a server that pushes changes says where (demo/server.js); a host
 		// that answers /api/commits itself (offline.html, SystemYA) does
@@ -4384,7 +4426,7 @@ function openCommitsStream() {
 		clearTimeout(commitsLive.pollTimer);
 		commitsLive.pollTimer = 0;
 		try {
-			renderCommits(JSON.parse(event.data));
+			renderCommits(commitsData(JSON.parse(event.data)));
 		} catch {
 			// a bad event leaves the list as it was
 		}
@@ -4409,7 +4451,7 @@ function pollCommits() {
 		try {
 			const response = await fetch('/api/commits', { cache: 'no-cache' });
 			if (response.ok && !commitsLive.source?.readyState)
-				renderCommits(await response.json());
+				renderCommits(commitsData(await response.json()));
 		} catch {
 			// the server is away: the list stays, and the next poll tries again
 		}

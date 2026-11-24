@@ -81,6 +81,10 @@ export function createCommits({
 	interval,
 	checkout,
 	avatars: avatarDirectory = '/api/commits/avatars/',
+	// (the protected site's: each answer's JSON as what encode(json) gives,
+	// `{ k, v }`, which its page decodes, so no answer names the project as
+	// written)
+	encode = null,
 }) {
 	const polling = api !== 'off';
 	const apiBase = (api || DEFAULT_API).replace(/\/+$/, '');
@@ -298,8 +302,10 @@ export function createCommits({
 		answerText = text;
 		if (answer) for (const res of streams) send(res);
 	}
+	/** what is sent for `text`, the JSON of an answer */
+	const sent = (text) => (encode ? JSON.stringify(encode(text)) : text);
 	function send(res) {
-		res.write(`event: commits\ndata: ${answerText}\n\n`);
+		res.write(`event: commits\ndata: ${sent(answerText)}\n\n`);
 	}
 
 	// ---- the poller ----------------------------------------------------
@@ -451,9 +457,21 @@ export function createCommits({
 		if (!answer)
 			return res
 				.status(502)
-				.json({ error: github.error || 'no answer from GitHub yet' });
+				.type('json')
+				.send(
+					sent(
+						JSON.stringify({
+							error: github.error || 'no answer from GitHub yet',
+							...(encode && {
+								repo,
+								url: `https://github.com/${repo}`,
+							}),
+						}),
+					),
+				);
 		res.set('Cache-Control', 'public, max-age=60');
-		res.json(answer);
+		if (encode) res.type('json').send(sent(answerText));
+		else res.json(answer);
 	}
 	/** GET /api/commits/stream: Server-Sent Events, one `commits` event
 	 * with the current list on connect and one at every change, and a
