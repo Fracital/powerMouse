@@ -446,43 +446,41 @@ in use. It is live at https://stomp.fracit.al, deployed from `master` by
 
 ## Benchmarks
 
-`bench/` runs STomp against four other web proxies, powerMouseV1, stompV1,
-[Scramjet](https://github.com/MercuryWorkshop/scramjet) and
-[Ultraviolet](https://github.com/titaniumnetwork-dev/Ultraviolet), and against native
-Chrome, on one host, through the same holyWisp relay and the same real sites and
+`bench/` runs STomp against five other web proxies, powerMouseV1, stompV1,
+[Scramjet](https://github.com/MercuryWorkshop/scramjet),
+[Ultraviolet](https://github.com/titaniumnetwork-dev/Ultraviolet) and
+[Ramjet](https://gitlab.com/hackz00/ramjet), and against native Chrome, on one host,
+through the same holyWisp relay where the proxy can use it, and the same real sites and
 fixtures. Full tables are in [bench/RESULTS.md](bench/RESULTS.md); the method, every
 contender's pinned version and how to rerun it (`npm run bench`) are in
-[bench/README.md](bench/README.md). These are the medians of five runs on a 16-vCPU
-Xeon Gold 6348 VM that ran nothing else, the best proxy in each row in bold. Native
-Chrome is the reference and never the winner.
+[bench/README.md](bench/README.md). These are the medians of five runs on 2026-11-24 on
+devbox, a shared Ryzen 9 7950X (nproc 28, 48 GB) that was not idle, so the milliseconds
+are this host's. Compare rows within a line. The best proxy in each row is in bold.
+Native Chrome is the reference and never the winner.
 
-|                                           | native | STomp (js) | STomp (wasm) | STomp (no adblock) | Scramjet | Ultraviolet | stompV1 | powerMouseV1 |
-| ----------------------------------------- | ------ | ---------- | ------------ | ------------------ | -------- | ----------- | ------- | ------------ |
-| site support score (0-100)                | 99     | **89**     | 87           | 89                 | 88       | 79          | 58      | 54           |
-| sites passed (of 85)                      | 70     | **56**     | 55           | 55                 | **56**   | 48          | 25      | 19           |
-| fidelity checks equal to native (of 169)  | 169    | **154**    | **154**      | **154**            | 101      | 90          | 61      | 36           |
-| escape vectors leaked (of 80, lower best) | 0      | **0**      | **0**        | **0**              | 5        | 10          | 12      | 35           |
-| real-site load, x native (geomean, lower) | 1.00x  | 3.81x      | 3.56x        | 2.79x              | 2.90x    | 2.70x       | 1.56x   | **1.30x**    |
-| in-browser rewrite (MB/s, higher best)    | 25.5   | 2.8        | 4.8          | 2.8                | 8.8      | 3.5         | 4.3     | **12.4**     |
-| download bundle (brotli KB, lower best)   | -      | 2,691      | 2,901        | 2,399              | 828      | 702         | 385     | **1**        |
+|                                           | native | STomp | STomp (no adblock) | Scramjet | Ultraviolet | stompV1 | powerMouseV1 | Ramjet |
+| ----------------------------------------- | ------ | ----- | ------------------ | -------- | ----------- | ------- | ------------ | ------ |
+| site support score (0-100)                | 99     | 94    | **96**             | 90       | 76          | 51      | 47           | 88     |
+| sites passed                              | 75     | 67    | **70**             | 65       | 48          | 27      | 17           | 62     |
+| fidelity checks equal to native (of 169)  | 169    | **159** | **159**          | 120      | 90          | 63      | 36           | 100    |
+| escape vectors leaked (of 80, lower best) | 0      | **0** | **0**              | 2        | 10          | 12      | 37           | 5      |
+| real-site load, x native (geomean, lower) | 1.00x  | 2.72x | 2.17x              | 3.24x    | 2.96x       | 1.82x   | **1.43x**    | 2.94x  |
+| in-browser rewrite (MB/s, higher best)    | 59.6   | 22.1  | 22.2               | 19.3     | 8.3         | 9.6     | **34.6**     | 19.3   |
+| download bundle (brotli KB, lower best)   | -      | 6,610 | 2,712              | 861      | 702         | 385     | **1**        | 840    |
 
-STomp reproduces the real browser most faithfully, by a wide margin: it matches native
-on 154 of 169 fidelity checks, where the next proxy matches 101, and it is the only one
-that leaks none of the 80 address and identity escape vectors (the others leak 5 to 35).
-It supports the most sites, passing 56 of 85 and scoring 89. That fidelity has a price,
-and it is the slowest proxy: a real site loads 2.8 to 3.8 times slower than native, its
-in-browser rewriter runs at a third to a half of the fastest contender's, and its
-download is about three times the next-heaviest. Much of the load gap is the content
-blocker fetching its filter lists on each fresh context (the `no adblock` column is the
-like-for-like row against the blocker-less proxies). The download total is dominated by
-the transport, not the proxying code: about three quarters of it is the epoxy transport,
-which STomp patches to lift the 16 KiB HTTP/2 header limit (about 470 KB over stock) and
-ships with an HTTP/3-over-wisp stack (about 760 KB) the lighter proxies do not carry.
-STomp's own code, the service worker, the rewriter library, the injects and the two wasm
-modules, is about 580 KB brotli, in line with the others, and the WebRTC stack is a lazy
-load on the first `RTCPeerConnection`, not in the figure. The size is the price of a more
-capable transport; closing the speed gap, without giving up the fidelity, is the ongoing
-work.
+STomp reproduces the real browser most faithfully: it matches native on 159 of 169 fidelity
+checks, where the next proxy matches 120, and it is the only one that leaks none of the 80
+address and identity escape vectors (the others leak 2 to 37). With the blocker off it
+supports the most sites, passing 70 of the 75 native loaded cleanly and scoring 96 (94 and
+67 with the blocker on). Native passed 75 of all 85; the other 10 were a challenge or a
+failure and are not in a proxy's score. A real site loads 2.17 to 2.72 times slower than native, which is
+slower than powerMouseV1 and stompV1 and faster than Scramjet, Ultraviolet and Ramjet. The
+in-browser rewrite runs at 22 MB/s. The download is the price: 6,610 KB brotli with the
+blocker, of which the adblock snapshot is 3,526 KB, and 2,712 KB with the blocker off,
+still about three times Scramjet. The transport is 1,704 KB of that (epoxy wasm and the
+HTTP/3 module). STomp's own code is about 1,007 KB brotli. The WebRTC stack is a lazy load
+on the first `RTCPeerConnection`, 590 KB brotli, not in the figure. The `no adblock` column
+is the closer speed comparison against the proxies that ship no blocker.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="bench/charts/fidelity-dark.png">

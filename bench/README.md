@@ -2,8 +2,8 @@
 
 This directory compares STomp with the other web proxies a person might run in its place:
 [Scramjet](https://github.com/MercuryWorkshop/scramjet), [Ultraviolet](https://github.com/titaniumnetwork-dev/Ultraviolet),
-and the two proxies STomp grew out of, [stompV1](https://github.com/Fracital/stompV1) and
-[powerMouseV1](https://github.com/Fracital/powerMouseV1). Every contender is set up the way its own README or demo
+[Ramjet](https://gitlab.com/hackz00/ramjet), and the two proxies STomp grew out of,
+[stompV1](https://github.com/Fracital/stompV1) and [powerMouseV1](https://github.com/Fracital/powerMouseV1). Every contender is set up the way its own README or demo
 recommends, runs in the same Chrome on the same host, and, where it can, reaches the network through the same
 [holyWisp](https://github.com/Fracital/holyWisp) server with the same transport (epoxy over wisp); native Chrome with no
 proxy is the reference row everywhere. The harness loads 85 real sites natively and through every proxy and scores each
@@ -98,20 +98,24 @@ Chrome 156 under `~/.cache/stomp-chrome/156/`), a holyWisp binary (`--holywisp` 
 site-support scenario a display: it runs headful Chrome and starts `Xvfb` itself when `DISPLAY` is unset (Debian:
 `apt-get install xvfb`); `--headless` runs it headless instead.
 
-The published run comes from `wispdev`, a 16-vCPU KVM guest (Xeon Gold 6348, Debian 13) that ran nothing else, with
-everything under `/root/bench-proxies/`: Node 24 from the nodejs.org tarball in `opt/node24`, Chrome 156.0.8078.79
-unpacked from Google's `.deb` (`ar x`, then `tar -xf data.tar.xz`) in `opt/chrome156`, holyWisp built from a clone in
-`src/holyWisp`, and `xvfb` from apt:
+The published run is the 2026-11-24 full run on `devbox` (the hostname in `results.json`): an AMD Ryzen 9 7950X, nproc
+28, 48 GB, Debian 13, kernel 7.0.14-30-pve. It was not an idle machine. The load average at the start was 1.87, 6.23,
+8.16, and the driver was started at nice 15. Absolute times are this host's. Rows within a scenario were still
+rotated, so compare them to each other, not to the 2026-11-12 wispdev tables this file used to publish. Chrome was
+Playwright's Chromium 159.0.8154.6 (`chromium-1255`), Node was v24.22.3, holyWisp was 0.5.3, and the tree was
+powerMouse `97879b009`:
 
 ```sh
-cd /root/bench-proxies/stomp && export PATH=/root/bench-proxies/opt/node24/bin:$PATH
-npm ci && npm run build
-python3 -I bench/run.py --out /root/bench-proxies/results/full --contenders /root/bench-proxies/contenders \
-  --chrome /root/bench-proxies/opt/chrome156/root/opt/google/chrome/chrome \
-  --holywisp /root/bench-proxies/src/holyWisp/build/release/holywisp
+cd /home/dev/src/powermouse
+python3 -I bench/run.py --out bench/results/full --repeats 5 \
+  --scenarios size,fidelity,fixtures,first-visit,spa,memory,real,rewrite-offline,sites \
+  --parallel 8 --spacing 15000 \
+  --chrome "$HOME/.cache/ms-playwright/chromium-1255/chrome-linux64/chrome" \
+  --holywisp node_modules/holywisp/bin/linux-x64/holywisp
 ```
 
-On the desktop the defaults fit (`npm run bench`), but a machine that runs other work is no place for timings.
+On the desktop the defaults fit (`npm run bench`). A run whose absolute times need to be compared with another date
+wants a machine that is not doing other work. The numbers in `RESULTS.md` are this shared-host run.
 
 Use `--only stomp,scramjet` to run some rows (native always runs), `--scenarios
 size,fidelity,fixtures,first-visit,spa,memory,real,rewrite-offline,sites` to pick scenarios, `--sites wikipedia,mdn`
