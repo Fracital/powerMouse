@@ -195,6 +195,34 @@ const SERVER_STREAM_PROTOCOL = 'wisp-v2-server-stream';
 
 const CONNECT = 0x01;
 const DATA = 0x02;
+/**
+ * A name under the localhost TLD. Chrome resolves it to loopback without
+ * asking DNS (RFC 6761); the relay's resolver is musl's, which reads the
+ * hosts file (`localhost` is there) and then DNS, and DNS answers NXDOMAIN
+ * for every other name under it. A CONNECT to such a name asks for
+ * 127.0.0.1 instead. The request's Host is the name: it rides the stream after the
+ * CONNECT. A relay that refuses loopback still refuses the address, as it
+ * refuses `localhost`.
+ */
+const LOCALHOST_NAME = /^.+\.localhost\.?$/i;
+
+/** `packet`, or a CONNECT to a localhost name retargeted at 127.0.0.1 */
+function loopbackConnect(packet: Uint8Array): Uint8Array {
+	// type, stream id, stream type, port, then the host: nothing shorter is one
+	if (packet[0] !== CONNECT || packet.length < 9) return packet;
+	let host: string;
+	try {
+		host = new TextDecoder('utf-8', { fatal: true }).decode(packet.subarray(8));
+	} catch {
+		return packet;
+	}
+	if (!LOCALHOST_NAME.test(host)) return packet;
+	const address = new TextEncoder().encode('127.0.0.1');
+	const out = new Uint8Array(8 + address.length);
+	out.set(packet.subarray(0, 8));
+	out.set(address, 8);
+	return out;
+}
 const CONTINUE = 0x03;
 const CLOSE = 0x04;
 const INFO = 0x05;
@@ -1308,6 +1336,7 @@ function pipeOf(
 	const datagramWriter = session.datagrams.writable.getWriter();
 	const write = new WritableStream<Uint8Array>({
 		async write(packet) {
+			packet = loopbackConnect(packet);
 			stats.sent++;
 			const type = packet[0];
 			let lane = lanes[0];
@@ -1501,7 +1530,8 @@ function socketCarrier(
 					read,
 					write: new WritableStream<Uint8Array>({
 						write(packet) {
-							if (socket.readyState === WebSocket.OPEN) socket.send(packet);
+							if (socket.readyState === WebSocket.OPEN)
+								socket.send(loopbackConnect(packet));
 						},
 						close,
 						abort: close,
