@@ -177,6 +177,17 @@ manifest is named Browser with the `web+browser` protocol. Without
 `STOMP_DEMO_SITE`, the routes and configuration names documented above are
 unchanged.
 
+The demo's own page and its scripts run in estrogen's VM. What runs for every
+proxied page (`/runtime/`, the transports, Tor's client, and vibeOS's games)
+takes estrogen's literal pool and name passes instead: the VM made a proxied
+page 7 to 12 times slower. The leak gate fails a script that is not
+protected, and one outside those paths that is not in the VM. The rewriter
+library's file is protected one statement at a time, one per line, each
+with its strings' pool inside its function, because the runtime evaluates
+those statements one at a time. The public deploy
+(`deploy/terp-deploy-gate.sh`) builds this site and fails when its gate
+fails.
+
 The wisp server is [holyWisp](https://github.com/Fracital/holyWisp), the C
 server behind `wss://holywisp.fracit.al/`, so a local run relays the way
 stomp.fracit.al does. The `holywisp` package runs its prebuilt binary

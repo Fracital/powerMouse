@@ -15,13 +15,15 @@
 // - every .js/.mjs file against its copy before estrogen (<site>.native):
 //   protected, and compiled to the VM, not left to the literal-pool fallback
 //   (the counts @sysce/estrogen's verify-proxy-assets.mjs makes, with its
-//   --require-full-vm).
+//   --require-full-vm). A file under an --outside-vm glob (the build keeps
+//   the hot runtime out of the VM) must be protected all the same, by the VM
+//   or the literal pool.
 //
 // Usage: node scripts/demo-leak-gate.mjs <site> <canaries.json>
-//        [--origin <url>] [--json <report.json>]
+//        [--origin <url>] [--json <report.json>] [--outside-vm <glob>]...
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, matchesGlob, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 
@@ -176,7 +178,17 @@ if (check.status !== 0) {
 
 // VM coverage: each script against its copy before estrogen
 const native = `${site}.native`;
-const coverage = { files: 0, vm: 0, fallback: 0, unprotected: 0, list: [] };
+const outsideVM = rest.flatMap((arg, at) =>
+	rest[at - 1] === '--outside-vm' ? [arg] : [],
+);
+const coverage = {
+	files: 0,
+	vm: 0,
+	fallback: 0,
+	unprotected: 0,
+	outsideVM: 0,
+	list: [],
+};
 if (existsSync(native))
 	for (const path of walk(native)) {
 		if (!/\.(js|mjs|cjs)$/.test(path)) continue;
@@ -189,13 +201,15 @@ if (existsSync(native))
 			: code.includes('JSON.parse(')
 				? 'vm'
 				: 'fallback';
+		const allowed = outsideVM.some((glob) => matchesGlob(name, glob));
 		coverage.files++;
 		coverage[kind]++;
-		if (kind !== 'vm') coverage.list.push({ file: name, kind });
+		if (allowed) coverage.outsideVM++;
+		if (kind === 'unprotected' || (kind === 'fallback' && !allowed))
+			coverage.list.push({ file: name, kind });
 	}
 else failures.push({ check: 'vm', error: `no ${native} to hold it against` });
-if (coverage.files && coverage.vm !== coverage.files)
-	failures.push({ check: 'vm', ...coverage });
+if (coverage.list.length) failures.push({ check: 'vm', ...coverage });
 
 // the server's own answers
 const served = [
@@ -235,7 +249,7 @@ const report = {
 const jsonOut = option('--json');
 if (jsonOut) writeFileSync(jsonOut, `${JSON.stringify(report, null, '\t')}\n`);
 console.log(
-	`demo-leak-gate: ${files.length} file(s), ${clean.size} clean; ${coverage.vm}/${coverage.files} script(s) in the VM, ${coverage.fallback} fallback, ${coverage.unprotected} unprotected; ${canaries.length} canaries (${needles.length} searched)`,
+	`demo-leak-gate: ${files.length} file(s), ${clean.size} clean; ${coverage.vm}/${coverage.files} script(s) in the VM, ${coverage.fallback} fallback (${coverage.outsideVM} kept outside the VM), ${coverage.unprotected} unprotected; ${canaries.length} canaries (${needles.length} searched)`,
 );
 for (const failure of failures) {
 	if (failure.check === 'canary')

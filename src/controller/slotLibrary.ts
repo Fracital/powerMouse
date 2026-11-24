@@ -31,7 +31,8 @@ import {
  * The light library's statement and the deferred ones of the library's
  * file, each by its name (build.js writes each deferred one after a line
  * break, in this order, and no line of another starts with its global
- * assignment)
+ * assignment; the protected demo site's file assigns each bare, on a line
+ * of its own: src/inject/rewriter.ts fileStatements)
  */
 function statements(
 	file: string,
@@ -39,7 +40,8 @@ function statements(
 	const deferred: Record<string, string> = Object.create(null);
 	let end = file.length;
 	for (const name of [ACTIVATION_FACTORY, PASSKEYS_FACTORY, DEFERRED_FACTORY]) {
-		const at = file.lastIndexOf(`\nglobalThis.${name}=`, end);
+		let at = file.lastIndexOf(`\nglobalThis.${name}=`, end);
+		if (at === -1) at = file.lastIndexOf(`\n${name}=`, end);
 		if (at === -1) continue;
 		deferred[name] = file.slice(at + 1, end);
 		end = at;

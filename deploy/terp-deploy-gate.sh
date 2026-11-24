@@ -79,10 +79,24 @@ build_and_sync() {
 	git -C "$STAGE" clean -qfdx -e node_modules
 	checkout_submodules
 	(cd "$STAGE" && npm ci --no-audit --no-fund --loglevel=error --ignore-scripts && npm run build) >&2
+	# The public site is the protected build (scripts/build-demo-site.mjs: estrogen, then the leak
+	# gate), served when .env sets STOMP_DEMO_SITE=build/demo-site. A build that fails its gate
+	# fails the deploy, so a leak never goes live. A rollback to a commit whose protected build does
+	# not pass keeps the protected site it had.
+	local site=1
+	if ! (cd "$STAGE" && npm run build:demo-site) >&2; then
+		[[ ${2:-} == rollback ]] || { log "refusing $sha: the protected demo site did not build"; exit 1; }
+		log "the protected demo site of $sha did not build; keeping the one live"
+		site=
+	fi
 	git -C "$REPO" fetch -q "$STAGE" "$sha"
 	git -C "$REPO" reset -q --keep "$sha"
 	rsync -a --delete "$STAGE/node_modules/" "$REPO/node_modules/"
 	rsync -a --delete "$STAGE/dist/" "$REPO/dist/"
+	if [[ -n $site ]]; then
+		mkdir -p "$REPO/build"
+		rsync -a --delete "$STAGE/build/demo-site/" "$REPO/build/demo-site/"
+	fi
 }
 
 deploy_app() {
@@ -108,7 +122,7 @@ deploy_app() {
 	build_and_sync "$sha"
 	if ! restart_app; then
 		log "rolling back to $live"
-		build_and_sync "$live"
+		build_and_sync "$live" rollback
 		restart_app || log "rollback to $live is unhealthy too"
 		exit 1
 	fi

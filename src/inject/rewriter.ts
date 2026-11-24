@@ -148,13 +148,17 @@ const DEFERRED_STATEMENTS = [
  * The file's statements: the light library's, then the document bundle's
  * deferred ones in DEFERRED_STATEMENTS' order (build.js writes each after a
  * line break, and no line of another starts with its global assignment), null
- * for one the file does not have
+ * for one the file does not have. The protected demo site's file
+ * (scripts/build-demo-site.mjs) has each statement on a line of its own that
+ * assigns the name bare (`<name>=function...;`), its strings' pool inside
+ * the function
  */
 function fileStatements(): (string | null)[] {
 	const file = (fetched ??= fetchLibrary().source);
-	const starts = DEFERRED_STATEMENTS.map((name) =>
-		file.lastIndexOf(`\nglobalThis.${name}=`),
-	);
+	const starts = DEFERRED_STATEMENTS.map((name) => {
+		const at = file.lastIndexOf(`\nglobalThis.${name}=`);
+		return at === -1 ? file.lastIndexOf(`\n${name}=`) : at;
+	});
 	const statements: (string | null)[] = [];
 	let end = file.length;
 	for (let index = starts.length - 1; index >= 0; index--) {
