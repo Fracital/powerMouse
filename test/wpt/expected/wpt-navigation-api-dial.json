@@ -7,40 +7,15 @@
 		"NavigationCurrentEntryChangeEvent's properties": "FAIL: assert_true: expected true got false"
 	},
 	"/navigation-api/focus-reset/autofocus.html?delayed-checkpoint": {
-		"(harness)": "ERROR: Error: assert_equals: Non-navigation API autofocus was processed expected Element node <button autofocus=\"\" id=\"initialAutofocusTarget\">Initial ... but got Element node <body><button autofocus=\"\" id=\"",
-		"An element with autofocus, present before navigation, gets focused": "NOTRUN: ",
-		"Two elements with autofocus, present before navigation; the first gets focused": "NOTRUN: ",
 		"An element with autofocus, present before navigation but disabled before finished, does not get focused": "NOTRUN: ",
-		"An element with autofocus, present before navigation but with its autofocus attribute removed before finished, does not get focused": "NOTRUN: ",
-		"Two elements with autofocus, present before navigation, but the first gets disabled; the second gets focused": "NOTRUN: ",
-		"An element with autofocus, introduced between committed and finished, gets focused": "NOTRUN: ",
-		"An element with autofocus, introduced after finished, does not get focused": "NOTRUN: "
+		"Two elements with autofocus, present before navigation, but the first gets disabled; the second gets focused": "NOTRUN: "
 	},
 	"/navigation-api/focus-reset/autofocus.html?same-checkpoint": {
 		"(harness)": "ERROR: Error: assert_equals: Non-navigation API autofocus was processed expected Element node <button autofocus=\"\" id=\"initialAutofocusTarget\">Initial ... but got Element node <body><button autofocus=\"\" id=\"",
-		"An element with autofocus, present before navigation, gets focused": "NOTRUN: ",
-		"Two elements with autofocus, present before navigation; the first gets focused": "NOTRUN: ",
-		"An element with autofocus, present before navigation but disabled before finished, does not get focused": "NOTRUN: ",
-		"An element with autofocus, present before navigation but with its autofocus attribute removed before finished, does not get focused": "NOTRUN: ",
-		"Two elements with autofocus, present before navigation, but the first gets disabled; the second gets focused": "NOTRUN: ",
-		"An element with autofocus, introduced between committed and finished, gets focused": "NOTRUN: ",
-		"An element with autofocus, introduced after finished, does not get focused": "NOTRUN: "
+		"An element with autofocus, introduced between committed and finished, gets focused": "NOTRUN: "
 	},
 	"/navigation-api/focus-reset/change-focus-again-in-blur-during-intercept.html": {
 		"change-focus-again-in-blur-during-intercept": "FAIL: assert_true: Document has focus expected true got false"
-	},
-	"/navigation-api/focus-reset/change-focus-back-to-origial-during-intercept.html": {
-		"change-focus-back-to-origial-during-intercept": "FAIL: assert_equals: focus() worked expected Element node <button></button> but got Element node <body> <script> promise_test(async t => { let intercept..."
-	},
-	"/navigation-api/focus-reset/change-focus-during-intercept.html": {
-		"change-focus-during-intercept": "FAIL: assert_equals: focus() worked expected Element node <button></button> but got Element node <body> <script> promise_test(async t => { let intercept..."
-	},
-	"/navigation-api/focus-reset/change-focus-then-remove-during-intercept.html": {
-		"change-focus-then-remove-during-intercept": "FAIL: assert_equals: focus() worked expected Element node <button></button> but got Element node <body> <script> promise_test(async t => { let intercept..."
-	},
-	"/navigation-api/focus-reset/focus-reset-timing.html": {
-		"Focus should be reset before navigatesuccess": "FAIL: assert_equals: focus() worked expected Element node <button></button> but got Element node <body> <script> promise_test(async t => { navigation.ad...",
-		"Focus should be reset before navigateerror": "FAIL: assert_equals: focus() worked expected Element node <button></button> but got Element node <body> <script> promise_test(async t => { navigation.ad..."
 	},
 	"/navigation-api/navigate-event/cross-origin-traversal-does-not-fire-navigate.html": {
 		"A cross-origin traversal does not fire the navigate event": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
@@ -51,9 +26,6 @@
 	},
 	"/navigation-api/navigate-event/cross-window/click-crossdocument-crossorigin.html": {
 		"clicking on an <a> element that navigates cross-document targeting a cross-origin window": "FAIL: assert_equals: expected (string) \"DONE\" but got (object) object \"[object Object]\""
-	},
-	"/navigation-api/navigate-event/cross-window/click-samedocument-crosssite.html": {
-		"clicking on an <a> element that navigates same-document targeting a cross-site window": "FAIL: assert_equals: sourceElement expected (object) null but got (string) \"a\""
 	},
 	"/navigation-api/navigate-event/cross-window/click-samedocument-sameorigin.html": {
 		"clicking on an <a> element that navigates same-document targeting a same-origin window": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
@@ -81,9 +53,6 @@
 	},
 	"/navigation-api/navigate-event/cross-window/submit-crossdocument-sameorigin.html": {
 		"submitting a <form> element that navigates cross-document targeting a same-origin window": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
-	},
-	"/navigation-api/navigate-event/cross-window/submit-samedocument-crosssite.html": {
-		"submitting a <form> element that navigates same-document targeting a cross-site window": "FAIL: assert_equals: sourceElement expected (object) null but got (string) \"form\""
 	},
 	"/navigation-api/navigate-event/cross-window/submit-samedocument-sameorigin.html": {
 		"submitting a <form> element that navigates same-document targeting a same-origin window": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
@@ -195,15 +164,6 @@
 	"/navigation-api/navigation-activation/activation-initial-about-blank.html": {
 		"navigation.activation interaction with initial about:blank": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
 	},
-	"/navigation-api/navigation-activation/activation-reload.html": {
-		"navigation.activation after reload": "FAIL: assert_equals: expected null but got object \"[object NavigationHistoryEntry]\""
-	},
-	"/navigation-api/navigation-activation/activation-replace.html": {
-		"navigation.activation after replace": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Cannot read properties of null (reading 'key')\""
-	},
-	"/navigation-api/navigation-activation/activation-traverse.html": {
-		"navigation.activation after traverse": "FAIL: assert_equals: expected object \"[object NavigationHistoryEntry]\" but got null"
-	},
 	"/navigation-api/navigation-history-entry/entries-across-origins.html": {
 		"navigation.entries() should only contain entries that are both same-origin and contiguous": "TIMEOUT: Test timed out",
 		"(harness)": "TIMEOUT: "
@@ -215,15 +175,9 @@
 	"/navigation-api/navigation-history-entry/entries-after-javascript-url-navigation.html": {
 		"entries() after navigation to a javascript: URL": "FAIL: assert_equals: expected 2 but got 1"
 	},
-	"/navigation-api/navigation-history-entry/entries-after-navigations-in-multiple-windows.html": {
-		"navigation.entries() behavior when multiple windows navigate.": "FAIL: assert_equals: expected 2 but got 1"
-	},
 	"/navigation-api/navigation-history-entry/entries-after-srcdoc-navigation.html": {
 		"entries() after setting a srcdoc attribute": "TIMEOUT: Test timed out",
 		"(harness)": "TIMEOUT: "
-	},
-	"/navigation-api/navigation-history-entry/entries-mainframe-with-iframe.html": {
-		"navigation.entries() for main frame excludes iframe history entries": "FAIL: promise_test: Unhandled rejection with value: object \"SecurityError: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cr"
 	},
 	"/navigation-api/navigation-history-entry/entry-after-detach.html": {
 		"NavigationHistoryEntry properties after detach": "FAIL: assert_false: expected false got true"
@@ -234,9 +188,6 @@
 	"/navigation-api/navigation-history-entry/key-id-location-replace-cross-origin.html": {
 		"NavigationHistoryEntry's key and id after location.replace()": "TIMEOUT: Test timed out",
 		"(harness)": "TIMEOUT: "
-	},
-	"/navigation-api/navigation-history-entry/key-id-location-replace.html": {
-		"NavigationHistoryEntry's key and id after location.replace()": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
 	},
 	"/navigation-api/navigation-history-entry/no-referrer-dynamic-url-censored.html": {
 		"The url of a document is censored by a no-referrer policy dynamically": "FAIL: promise_test: Unhandled rejection with value: object \"TypeError: Cannot read properties of null (reading 'url')\""
@@ -261,9 +212,6 @@
 	},
 	"/navigation-api/navigation-methods/navigate-from-initial-about-blank.html": {
 		"navigate() from <iframe> still on initial about:blank works": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
-	},
-	"/navigation-api/navigation-methods/navigate-history-state.html": {
-		"history.state should be nulled by navigate()": "FAIL: assert_equals: expected (object) null but got (string) \"state1\""
 	},
 	"/navigation-api/navigation-methods/navigate-replace-cross-site.html": {
 		"(harness)": "TIMEOUT: ",
@@ -361,9 +309,6 @@
 	},
 	"/navigation-api/navigation-methods/return-value/traverseTo-detach-same-document.html": {
 		"traverseTo() promise rejections when detaching an iframe inside onnavigate (same-document)": "FAIL: assert_unreached: committed must not fulfill Reached unreachable code"
-	},
-	"/navigation-api/navigation-methods/sandboxing-navigate-parent.html": {
-		"A sandboxed iframe can use its sibling's navigation object to call navigate(), as long as allow-same-origin is present": "FAIL: Failed to read a named property 'navigateParent' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
 	},
 	"/navigation-api/navigation-methods/traverseTo-detach-between-navigate-and-navigatesuccess.html": {
 		"Detach a window between when a traverseTo() fires navigate and navigatesuccess": "TIMEOUT: Test timed out",
@@ -524,9 +469,6 @@
 		"entry.getState() behavior after navigating away and back": "TIMEOUT: Test timed out",
 		"(harness)": "TIMEOUT: "
 	},
-	"/navigation-api/state/cross-document-getState-undefined.html": {
-		"Default behavior for entry.getState() for a non-current cross-document entry": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."
-	},
 	"/navigation-api/state/cross-document-getState.html": {
 		"entry.getState() still works for a non-current cross-document entry": "FAIL: assert_not_equals: got disallowed value undefined"
 	},
@@ -551,9 +493,6 @@
 	"/navigation-api/updateCurrentEntry-method/same-document-away-and-back-location-api.html": {
 		"(harness)": "ERROR: Unhandled rejection: Cannot read properties of undefined (reading 'statevar')",
 		"entry.getState() behavior after navigating away using the location API, then back": "TIMEOUT: Test timed out"
-	},
-	"/navigation-api/updateCurrentEntry-method/unserializable.html": {
-		"updateCurrentEntry() must throw if state is unserializable (SharedArrayBuffer)": "FAIL: WebAssembly.Memory(): could not allocate memory"
 	},
 	"/navigation-api/navigation-methods/navigate-from-initial-about-blank-gc.html": {
 		"navigate() from <iframe> with src=\"\" but still on initial about:blank doesn't cause a crash on GC": "FAIL: Failed to read a named property 'navigation' from 'Window': Blocked a frame with origin \"http://localhost:PORT\" from accessing a cross-origin frame."

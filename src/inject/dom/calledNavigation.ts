@@ -1164,6 +1164,32 @@ export function calledNavigation(
 		}
 		return called.policy ?? '';
 	};
+	/**
+	 * The element a navigate event names, else null when it is of another
+	 * origin's document: a parent's link aimed at this frame by its name is
+	 * the browser's own navigation, and every proxied document is of one
+	 * real origin, so the browser shows the link to a frame of another site
+	 * that natively sees none (as the History module's navigatedBy does)
+	 */
+	const ownSource = (source: Element | null): Element | null => {
+		if (!source) return null;
+		try {
+			const document = source.ownerDocument;
+			if (document === global.document) return source;
+			const other = (document.defaultView as Record<string, unknown> | null)?.[
+				client.names.client
+			] as DocumentClient | undefined;
+			return other &&
+				!other.sandboxedOpaque &&
+				!client.sandboxedOpaque &&
+				other.url.url.origin === client.url.url.origin
+				? source
+				: null;
+		} catch (error) {
+			// a window gone, or of another real origin
+			return null;
+		}
+	};
 	/** a navigation API call's own (its info, state, history and promises), for the event it fires */
 	let calling: {
 		tracker: Tracker;
@@ -1195,10 +1221,13 @@ export function calledNavigation(
 		}
 		if (how.fragment) {
 			const from = client.locationHref;
+			// (a page reading history.state after `location.replace('#x')` or
+			// navigate('#x', {history: 'replace'}) finds null in Chrome, as
+			// after a push: the entry a fragment makes has no classic state)
 			commitSame(
 				facts.type === 'replace' ? 'replace' : 'push',
 				facts.url,
-				facts.type === 'replace' ? state : null,
+				null,
 				how.navState,
 				facts.tracker,
 			);
@@ -1329,7 +1358,7 @@ export function calledNavigation(
 				formData,
 				downloadRequest: download,
 				info: api?.tracker.info,
-				sourceElement: of(sourceOf) as Element | null,
+				sourceElement: ownSource(of(sourceOf) as Element | null),
 				tracker: api?.tracker ?? null,
 			});
 			// a download goes on as the browser's own, unless it was cancelled

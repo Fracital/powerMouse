@@ -75,6 +75,8 @@ type How = {
 	contentType?: string;
 	referrer: string;
 	policy?: string;
+	/** a step's: the entry it left (the frame's index has moved on) */
+	left?: KidEntry;
 };
 
 type KidEntry = CalledSession['entries'][number] & {
@@ -140,6 +142,16 @@ type Told = {
 
 const isText = (value: unknown, limit = MAX_URL): value is string =>
 	typeof value === 'string' && value.length <= limit;
+
+/** whether two pages' URLs are of one origin (an opaque one is of none), as the host's (justCallStomp.ts) */
+function sameOrigin(a: string, b: string): boolean {
+	try {
+		const origin = new URL(a).origin;
+		return origin !== 'null' && origin === new URL(b).origin;
+	} catch (error) {
+		return false;
+	}
+}
 
 /** `data` as what a frame's document may tell, else null (the host's check, src/controller/justCallStomp.ts toldOf) */
 function toldOf(data: unknown, File: typeof globalThis.File): Told | null {
@@ -808,6 +820,9 @@ export function calledFrames(
 			// no URL: the one asked for
 		}
 		const route = routeOn(answer.routed) || want.routed;
+		// (a frame's page reads navigation.activation.from as the entry its
+		// navigation left, when that is of its origin, as the tab's does)
+		const left = how.left ?? kid.entries[kid.index];
 		if (how.type === 'navigate') {
 			const made: KidEntry = {
 				url: shown,
@@ -841,6 +856,15 @@ export function calledFrames(
 						document,
 					})),
 					index: kid.index,
+					from:
+						left && sameOrigin(left.url, entry.url)
+							? {
+									url: left.url,
+									key: left.key,
+									id: left.id,
+									document: left.document,
+								}
+							: null,
 					state: entry.state,
 					type: how.type,
 					replaced: !!how.replace,
@@ -918,6 +942,7 @@ export function calledFrames(
 					load(element, kid, next.url, next.routed, {
 						type: 'back_forward',
 						referrer: next.referrer,
+						left: entry,
 					});
 				break;
 			}
