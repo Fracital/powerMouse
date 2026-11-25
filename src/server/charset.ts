@@ -163,12 +163,38 @@ export function encodeShell(
 }
 
 /**
+ * Whether a module script served as windows-1252 (or a label naming it:
+ * latin1, iso-8859-1, us-ascii) is decoded so. Chrome 152 and 157 do, and
+ * 159 reads it as UTF-8 (script-charset suite, which compares with the
+ * browser it runs in: CI's Chrome is 157, devbox's 159). Read once as this
+ * file loads, from the browser's own version (the brands of userAgentData
+ * first), before any page's configured identity could stand in for it.
+ */
+const MODULE_TAKES_1252 = (() => {
+	const nav = (
+		globalThis as {
+			navigator?: {
+				userAgent?: string;
+				userAgentData?: { brands?: { brand: string; version: string }[] };
+			};
+		}
+	).navigator;
+	const brand = nav?.userAgentData?.brands?.find(
+		({ brand }) => brand === 'Chromium' || brand === 'Google Chrome',
+	);
+	const major = Number(
+		brand?.version ?? /\bChrome\/(\d+)/.exec(nav?.userAgent ?? '')?.[1],
+	);
+	return !(major >= 159);
+})();
+
+/**
  * The encoding Chrome decodes a script's response with: a byte order mark
  * (UTF-8 only, for a module), then the Content-Type charset (a label
- * TextDecoder does not know is ignored; a module takes none: Chrome 159
- * reads one served as windows-1252 as UTF-8, where 152 and 157 honored
- * windows-1252 and the labels that name it, and every one of those reads
- * windows-1250 or shift_jis as UTF-8), else UTF-8 (measured for classic
+ * TextDecoder does not know is ignored; for a module only windows-1252 and
+ * the labels that name it, and only before Chrome 159 (MODULE_TAKES_1252):
+ * every version measured reads windows-1250 or shift_jis as UTF-8), else
+ * UTF-8 (measured for classic
  * and module scripts of an element and a dedicated worker's script,
  * script-charset suite). A classic script of a document with neither takes
  * the document's encoding (`environment`, src/server/documentEncodings.ts;
@@ -198,7 +224,8 @@ export function scriptEncoding(
 	if (label)
 		try {
 			const encoding = new TextDecoder(label).encoding;
-			if (!module) return encoding;
+			if (!module || (MODULE_TAKES_1252 && encoding === 'windows-1252'))
+				return encoding;
 		} catch {
 			// not an encoding: as if none were named
 		}

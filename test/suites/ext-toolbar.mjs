@@ -1013,15 +1013,29 @@ for (const [mode, base] of [
 			sizes['grow.html'] === '300x200',
 		JSON.stringify(sizes),
 	);
-	// native Chrome 157 gave <p>Hello popup</p> 36x58: its min-content
-	// width, in the 75% system font Chrome gives every extension page
+	// Chrome sizes a popup of <p>Hello popup</p> to its min-content width,
+	// in the 75% (12 px) platform font it gives every extension page. The
+	// pixels are the machine's fonts': native Chrome 157 gave 36x58 where it
+	// was measured, devbox's and CI's fonts make 38x52, so the paragraph is
+	// laid out so in this browser for the size to hold the popup to
+	const [wantWidth, wantHeight] = await page.evaluate(() => {
+		const box = document.createElement('div');
+		box.style.cssText =
+			'all:initial;position:absolute;visibility:hidden;display:flow-root;width:min-content;font-family:system-ui, Arial, sans-serif;font-size:12px';
+		box.innerHTML = '<p style="all:revert">Hello popup</p>';
+		document.body.append(box);
+		const { width, height } = box.getBoundingClientRect();
+		box.remove();
+		return [Math.round(width), Math.round(height)];
+	});
 	const [plainWidth, plainHeight] = (sizes['plain.html'] ?? '0x0')
 		.split('x')
 		.map(Number);
 	ok(
-		`${mode}: a paragraph's popup as native Chrome's 36x58 (Chrome's extension page font)`,
-		Math.abs(plainWidth - 36) <= 3 && Math.abs(plainHeight - 58) <= 3,
-		sizes['plain.html'],
+		`${mode}: a paragraph's popup as native Chrome's (its min-content width, Chrome's extension page font)`,
+		Math.abs(plainWidth - wantWidth) <= 3 &&
+			Math.abs(plainHeight - wantHeight) <= 3,
+		`${sizes['plain.html']}, native ${wantWidth}x${wantHeight}`,
 	);
 
 	await mount('tiny.html');

@@ -1544,10 +1544,9 @@ export class StompController extends EventTarget {
 			// Playwright's serviceWorkers: "block" makes register() resolve
 			// undefined rather than reject. That is not a worker: wait()
 			// reports it, and speak() is not called with nothing to read.
-			if (
-				!(given instanceof ServiceWorker) &&
-				!(given instanceof ServiceWorkerRegistration)
-			)
+			// Any object passes: offline.html's stand-in for the worker
+			// (demo/offline/host.mjs) is neither class, and is the worker there
+			if (!given || typeof given !== 'object')
 				throw new TypeError(
 					'StompController.register() resolved without a service worker registration',
 				);

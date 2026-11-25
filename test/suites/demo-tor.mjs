@@ -7,7 +7,7 @@
 // page's selection of Tor mode's transport, its scope, its profile and
 // what it turns off, not Tor. test/tor-client-smoke.mjs runs the real
 // client against the real Tor network.
-/* global TOR_REQUESTED, TOR_CLIENT, DIRECTORY, CACHE, HTTP3, WEB_TRANSPORT, JUST_CALL, wispURL */
+/* global TOR_REQUESTED, TOR_CLIENT, DIRECTORY, CACHE, HTTP3, WEB_TRANSPORT, JUST_CALL, relayURL */
 import {
 	activeFrame,
 	done,
@@ -46,7 +46,7 @@ const read = () => ({
 	status: document.getElementById('logMsg')?.textContent ?? '',
 	requested: TOR_REQUESTED,
 	client: TOR_CLIENT,
-	endpoint: TOR_REQUESTED && TOR_CLIENT ? wispURL() : null,
+	endpoint: TOR_REQUESTED && TOR_CLIENT ? relayURL() : null,
 	directory: DIRECTORY,
 	// the page dials (docs/dialing.md): its scopes are the server's neutral
 	// ones, the classic tabs' /stomp/ and /stomp-tor/

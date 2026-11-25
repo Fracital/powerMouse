@@ -375,6 +375,9 @@ const KNOWN_OPEN = {
 		// space in the host, an empty or percent-escaped host): native throws
 		// or does not load; the proxy throws a TypeError at a different point
 		// or resolves it differently. Per call, it does not abort the page.
+		// Chrome 157 (CI's) agrees with the proxy on every case: none is
+		// found there (run 45676161661, 2026-11-25), one on 159
+		since: 159,
 		why: 'a malformed URL fails at a different point proxied than native (new URL in the inject URL sinks)',
 		match: (c, f) =>
 			c.tags.spell.startsWith('invalid') && f.kind === 'breakage',

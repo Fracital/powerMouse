@@ -442,9 +442,9 @@ async function download(on) {
 		text: readFileSync(path, 'utf8'),
 	};
 }
-// (main.js's wispURL, a global of the page's script)
+// (main.js's relayURL, a global of the page's script)
 const configuredWisp = (on) =>
-	on.evaluate('new URL(wispURL(), location.href).href');
+	on.evaluate('new URL(relayURL(), location.href).href');
 
 const demo = await openDemo(browser);
 const placed = await demo.evaluate(() => {

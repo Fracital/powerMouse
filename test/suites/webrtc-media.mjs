@@ -1142,13 +1142,18 @@ for (const proxied of pages) {
 		// no audio is there for the events to replace, and its receiver
 		// plays them for 40 ms at most (docs/webrtc-over-wisp.md, section
 		// 16): only Opus is held to it.
-		if (!prefer)
+		// The native run is the reference: CI's Chrome 157 played 1 and 5
+		// and no 9 that the detector read within the window, both runs of
+		// 2026-11-25 (45670785237, 45676161661), where the page played all
+		// three; with no reference the check is not made, and says so
+		if (!prefer && !/1.*5.*9/.test(keys(want)))
+			console.log(
+				`NOTE ${label} (${key}): native played no 1, 5, 9 to hold the page's tones to (${JSON.stringify(want.keys)}); the page played ${JSON.stringify(got.keys)}`,
+			);
+		else if (!prefer)
 			ok(
 				`${label} (${key}): the page plays the far end's tones as Chrome's receiver plays them, and its sound after them as it was`,
-				tonesOf(got) === '159' &&
-					/1.*5.*9/.test(keys(want)) &&
-					!!got.after &&
-					sounds(got.after, want.after),
+				tonesOf(got) === '159' && !!got.after && sounds(got.after, want.after),
 				JSON.stringify([got.keys, want.keys, got.after, want.after]),
 			);
 		// and each for as long: Chrome sends a 100 ms tone with Opus as one

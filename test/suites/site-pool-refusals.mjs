@@ -45,7 +45,8 @@ import {
 const A = FIXTURE;
 const B = FIXTURE.replace('127.0.0.1', 'localhost');
 const PAGE = 'pages/site-pool-refusals.html';
-const NO_PARTS = '__stompDeferred=function(){throw new Error("no parts")};';
+const NO_PARTS =
+	'globalThis.__stompDeferred=function(){throw new Error("no parts")};';
 
 /** a server on a free port of 127.0.0.1, closed with the suite */
 async function listen(server) {
@@ -88,8 +89,10 @@ async function front(broken) {
 				answer.on('data', (chunk) => chunks.push(chunk));
 				answer.on('end', () => {
 					const file = Buffer.concat(chunks).toString();
-					const start = file.lastIndexOf('\n__stompDeferred=');
-					const end = file.lastIndexOf('\n__stompPasskeys=');
+					// (build.js names them on globalThis, which a strict
+					// file's assignment needs)
+					const start = file.lastIndexOf('\nglobalThis.__stompDeferred=');
+					const end = file.lastIndexOf('\nglobalThis.__stompPasskeys=');
 					const body =
 						start === -1 || end < start
 							? file

@@ -453,8 +453,7 @@ export async function runDifferential({
 					)
 				: [];
 			const matching = entries.filter(
-				(e) =>
-					(!e.chrome || e.chrome.includes(major)) && e.applies?.(c) !== false,
+				(e) => appliesTo(e, major) && e.applies?.(c) !== false,
 			);
 			for (const entry of matching) entry.ran++;
 			if (!findings.length) {
@@ -498,7 +497,7 @@ export async function runDifferential({
 	);
 	if (!nativeOnly)
 		for (const entry of entries) {
-			if (entry.chrome && !entry.chrome.includes(major)) continue;
+			if (!appliesTo(entry, major)) continue;
 			if (!entry.ran) {
 				console.log(`NOTE ${name}: known-open ${entry.key} met no case`);
 				continue;
@@ -515,6 +514,15 @@ export async function runDifferential({
 	await demo?.close();
 	await done(browser);
 }
+
+/**
+ * Whether a known-open entry is checked on this Chrome: `chrome`, the majors
+ * it holds on, or `since`, the first major it holds on (a finding a newer
+ * Chrome brought, which an older one, CI's, does not show)
+ */
+const appliesTo = (entry, major) =>
+	(!entry.chrome || entry.chrome.includes(major)) &&
+	(entry.since === undefined || major >= entry.since);
 
 /** HTML-escape text for an attribute value written with double quotes */
 export const attr = (text) =>

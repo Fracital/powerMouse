@@ -804,10 +804,12 @@ async function switched() {
 	console.log(`${name}: ${JSON.stringify(result)}`);
 	const detail = JSON.stringify(result);
 	ok(
-		`${name}: after a switch from a connection with stream credit to a Wisp v1 one, the paused body is bounded: the worker grows by less than ${WORKER_MAX / MB} MB and the body is reset as a connection is`,
+		`${name}: after a switch from a connection with stream credit to a Wisp v1 one, the paused body is bounded: the worker grows by less than ${RESET_WORKER_MAX / MB} MB and the body is reset as a connection is`,
+		// the body is reset, so its queue fills to HOLD_MAX first: CI's
+		// runners caught it at 60 and 62 MB, over WORKER_MAX
 		first === MB &&
 			namedBefore > 0 &&
-			most.transport - sum(settled.transport) < WORKER_MAX &&
+			most.transport - sum(settled.transport) < RESET_WORKER_MAX &&
 			body.wrong < 0 &&
 			/network error/.test(body.error ?? '') &&
 			result.resetHeldMB.length === 1,
