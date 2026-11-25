@@ -458,15 +458,15 @@ devbox, a shared Ryzen 9 7950X (nproc 28, 48 GB) that was not idle, so the milli
 are this host's. Compare rows within a line. The best proxy in each row is in bold.
 Native Chrome is the reference and never the winner.
 
-|                                           | native | STomp | STomp (no adblock) | Scramjet | Ultraviolet | stompV1 | powerMouseV1 | Ramjet |
-| ----------------------------------------- | ------ | ----- | ------------------ | -------- | ----------- | ------- | ------------ | ------ |
-| site support score (0-100)                | 99     | 94    | **96**             | 90       | 76          | 51      | 47           | 88     |
-| sites passed                              | 75     | 67    | **70**             | 65       | 48          | 27      | 17           | 62     |
-| fidelity checks equal to native (of 169)  | 169    | **159** | **159**          | 120      | 90          | 63      | 36           | 100    |
-| escape vectors leaked (of 80, lower best) | 0      | **0** | **0**              | 2        | 10          | 12      | 37           | 5      |
-| real-site load, x native (geomean, lower) | 1.00x  | 2.72x | 2.17x              | 3.24x    | 2.96x       | 1.82x   | **1.43x**    | 2.94x  |
-| in-browser rewrite (MB/s, higher best)    | 59.6   | 22.1  | 22.2               | 19.3     | 8.3         | 9.6     | **34.6**     | 19.3   |
-| download bundle (brotli KB, lower best)   | -      | 6,610 | 2,712              | 861      | 702         | 385     | **1**        | 840    |
+|                                           | native | STomp   | STomp (no adblock) | Scramjet | Ultraviolet | stompV1 | powerMouseV1 | Ramjet |
+| ----------------------------------------- | ------ | ------- | ------------------ | -------- | ----------- | ------- | ------------ | ------ |
+| site support score (0-100)                | 99     | 94      | **96**             | 90       | 76          | 51      | 47           | 88     |
+| sites passed                              | 75     | 67      | **70**             | 65       | 48          | 27      | 17           | 62     |
+| fidelity checks equal to native (of 169)  | 169    | **159** | **159**            | 120      | 90          | 63      | 36           | 100    |
+| escape vectors leaked (of 80, lower best) | 0      | **0**   | **0**              | 2        | 10          | 12      | 37           | 5      |
+| real-site load, x native (geomean, lower) | 1.00x  | 2.72x   | 2.17x              | 3.24x    | 2.96x       | 1.82x   | **1.43x**    | 2.94x  |
+| in-browser rewrite (MB/s, higher best)    | 59.6   | 22.1    | 22.2               | 19.3     | 8.3         | 9.6     | **34.6**     | 19.3   |
+| download bundle (brotli KB, lower best)   | -      | 6,610   | 2,712              | 861      | 702         | 385     | **1**        | 840    |
 
 STomp reproduces the real browser most faithfully: it matches native on 159 of 169 fidelity
 checks, where the next proxy matches 120, and it is the only one that leaks none of the 80
