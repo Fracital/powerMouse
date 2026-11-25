@@ -260,7 +260,8 @@ const UI_STORAGE = PMProfile.storage;
 // `{ module, sharedWorker, wasm }`, the transport module, the SharedWorker's
 // script (false: none, the transport runs its client itself) and arti's
 // wasm, each a URL, any left out where the demo's server has it
-// (/tor-client/).
+// (/tor-client/). `bootstrap`, the URL of a directory snapshot, is there
+// only where a server serves one (STOMP_TOR_BOOTSTRAP).
 const TOR_FILES =
 	typeof CFG.torClient === 'object' && CFG.torClient !== null
 		? CFG.torClient
@@ -529,6 +530,11 @@ const transports = {
 				// (resolved here: the transport worker's base is its script's)
 				...(typeof TOR_FILES.wasm === 'string' && {
 					wasm: new URL(TOR_FILES.wasm, location.href).href,
+				}),
+				// the server's directory snapshot, a first visit's directory in
+				// one fetch (tor-client/snapshot.mjs)
+				...(typeof TOR_FILES.bootstrap === 'string' && {
+					bootstrap: new URL(TOR_FILES.bootstrap, location.href).href,
 				}),
 				// offline.html's: a port to the client's worker of its own
 				...OFFLINE?.torOptions?.(),

@@ -60,12 +60,20 @@ export default class TorClientTransport {
 		wasm,
 		// the page's token of a new Tor session it began (TorService.newSession)
 		session,
+		// the server's directory snapshot, for a first visit (snapshot.mjs)
+		bootstrap,
 	} = {}) {
 		if (typeof wisp !== 'string') throw new TypeError('wisp: a URL');
 		this.#service =
 			typeof MessagePort === 'function' && sharedWorker instanceof MessagePort
-				? RemoteService.for(sharedWorker, { wisp, storageName, wasm, session })
-				: new TorService({ wisp, storageName, wasm });
+				? RemoteService.for(sharedWorker, {
+						wisp,
+						storageName,
+						wasm,
+						session,
+						bootstrap,
+					})
+				: new TorService({ wisp, storageName, wasm, bootstrap });
 		// the host page's channel to this transport (its status, New Identity,
 		// New circuit for this site); none where the page is of another origin
 		if (typeof channel === 'string' && typeof BroadcastChannel === 'function') {

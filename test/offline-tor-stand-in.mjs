@@ -29,6 +29,14 @@
 //   direct       bootstrap completes, but each stream dials the site itself
 //                instead of a relay (a tampered or broken arti): the
 //                service's relay check must refuse it
+//
+// A directory snapshot (TorClient's `bootstrap` option, service.mjs and
+// snapshot.mjs) is read as tor-js reads one: asked for only when the store
+// holds no consensus, its consensus written to the store as a checked one
+// (`SNAPSHOT_KEY`) before it is looked at, and then taken ("Loaded a good
+// directory from cache") or, when its text holds `BAD_SIGNATURE`, refused
+// as arti refuses a consensus whose signatures do not verify: the start
+// fails. `stand-in:snapshot` counts the snapshots it was given.
 let wasm = null;
 
 /** as tor-js's: a URL or a compiled module, which the stand-in only checks it was given */
@@ -154,6 +162,24 @@ function consensus(...addresses) {
 	});
 }
 
+export const SNAPSHOT_KEY = 'dir:consensus:microdesc:stand-in-snapshot';
+export const BAD_SIGNATURE = 'directory-signature stand-in-bad';
+
+/** a snapshot's consensus, as tor-js keeps it: its times from its text */
+function snapshotRecord(text) {
+	const time = (name) => {
+		const match = new RegExp(`^${name} (\\S+) (\\S+)$`, 'm').exec(text);
+		return match ? Date.parse(`${match[1]}T${match[2]}Z`) / 1000 : 0;
+	};
+	return JSON.stringify({
+		valid_after_secs: time('valid-after'),
+		fresh_until_secs: time('fresh-until'),
+		valid_until_secs: time('valid-until'),
+		pending: false,
+		content: text,
+	});
+}
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // a relay address the Wisp server cannot reach: a closed port of its own host
 const DEAD_RELAY = '127.0.0.1:9';
@@ -195,6 +221,29 @@ export class TorClient {
 				(Number(await this.#options.storage.get('stand-in:started')) || 0) + 1,
 			),
 		);
+		const { bootstrap, storage } = this.#options;
+		if (bootstrap && !(await storage.keys('dir:consensus:')).length) {
+			let bytes = null;
+			try {
+				// (tor-js: `withFastBootstrap(async () => supplied)`)
+				bytes = await (async () => bootstrap)();
+			} catch {
+				// tor-js: "Fast bootstrap failed (continuing normally)"
+			}
+			if (bytes) {
+				await storage.set(
+					'stand-in:snapshot',
+					String((Number(await storage.get('stand-in:snapshot')) || 0) + 1),
+				);
+				const text = new TextDecoder().decode(bytes);
+				await storage.set(SNAPSHOT_KEY, snapshotRecord(text));
+				if (text.includes(BAD_SIGNATURE))
+					throw new Error(
+						'Bootstrap failed: tor: corrupted data in cache: Unable to bootstrap a working directory',
+					);
+				log.rawLog('info', 'Loaded a good directory from cache.');
+			}
+		}
 		if (mode === 'hang') {
 			while (!this.#closed) await sleep(1000);
 			throw new Error('closed');

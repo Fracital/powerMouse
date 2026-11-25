@@ -14,7 +14,9 @@ sees in the new design:
 
 - the visitor's IP address, that the visitor uses Tor, and the guard relays
   (and, while bootstrapping, the fallback directories) the visitor's client
-  connects to, with timing and volume;
+  connects to, with timing and volume; where it serves a directory
+  snapshot, that a client with no directory fetched it ("The
+  fast-bootstrap snapshot"), which the link to a fallback told it before;
 - nothing else: the Wisp stream carries Tor's link TLS to the guard's ORPort,
   inside it cells encrypted to each hop, and inside those the site's own TLS.
   Destinations, DNS names, content and which site a circuit is for are
@@ -174,7 +176,11 @@ release commit's CI hash against the new binary, the fallback list.
 1. The transport worker loads the client and opens its storage:
    **the Tor client's state** (guards, the directory cache) under a store of
    its own (below, "Guard persistence").
-2. With no usable consensus, arti connects to one of its built-in fallback
+2. With no usable consensus, a client whose server serves a directory
+   snapshot loads it from the app's origin, and arti takes the directory from
+   it as from its own cache, checked as a download is ("The fast-bootstrap
+   snapshot"). With no snapshot, or one the client or arti refuses, arti
+   connects to one of its built-in fallback
    directories (a list of relays compiled in, `tor-dircommon/src/fallback.rs`)
    **over Wisp TCP to the fallback's ORPort**, does the link handshake (TLS,
    VERSIONS, CERTS against the fallback's identity), opens a one-hop
@@ -265,22 +271,12 @@ download (3.3 s from a slow fallback, 0.4 to 0.6 s from the others) and
 no certificate or microdescriptor fetched. `node --test
 test/tor-kept-state.mjs` checks the rule.
 
-What is left for a first visit is the download itself: the fast-bootstrap
-snapshot below would make it one HTTPS fetch from the app's origin, and
-only tor-js could make a later one shorter (it reads the whole directory
+What was left for a first visit was the download itself: the
+fast-bootstrap snapshot below makes it one fetch from the app's origin.
+Only tor-js could make a later one shorter (it reads the whole directory
 into arti at start, 9,500 microdescriptors, where arti needs the ones of
 the relays it picks; and arti links to its guard only once the directory is
 loaded, though its state names the guard's addresses).
-
-A fast-bootstrap snapshot (`bootstrap.zip.zst`, tor-js's gateway format:
-consensus, certificates and microdescriptors, about 3 MB) can be served from
-the app's own origin, refreshed hourly from the server's copy. The client
-checks its signatures as it checks a download, so it lends no trust to the
-server, and our server already knows the visitor's address (it serves the
-page), so the reason tor-js makes it optional (a gateway learns who uses
-Tor) does not apply. It turns a first bootstrap's many one-hop directory requests into one HTTPS
-download. Not in the
-prototype; measured times are in "Prototype".
 
 **Progress** follows Tor Browser's bootstrap phases, which arti's
 `BootstrapStatus` reports as a fraction and a blocker: "Connecting to a
@@ -289,6 +285,141 @@ m microdescriptors), "Building a circuit", "Connected". The transport posts
 them to the controller as a transport event and the Tor toggle's tooltip shows the
 percentage and the phase, the way `watchTor` shows `/api/tor` today, which in
 client mode reads the transport, not the server.
+
+### The fast-bootstrap snapshot
+
+A first visit's client has no directory, and arti downloads one through a
+fallback relay: the consensus (0.38 to 0.64 s), the 7 or 8 authority
+certificates (0.1 to 0.22 s) and about 9,550 microdescriptors (0.3 to
+1.3 s), each a one-hop directory request whose speed is the fallback's.
+Where the server serves a directory snapshot, the client loads those
+documents in one fetch from the app's own origin and arti takes them from
+its cache, as a later visit takes its kept directory.
+
+- **The file**: tor-js's `bootstrap` option (`TorClientOptions.bootstrap`,
+  the format tor-js-gateway serves at `/bootstrap.zip.zst`): a zip of
+  Stored members `bootstrap/consensus-microdesc.txt`,
+  `bootstrap/authority-certs.txt` and `bootstrap/microdescs.txt`, zstd
+  optional (tor-js reads the magic). It is about 8.0 MB, 1.43 MB with
+  brotli, 1.63 MB with gzip; the server sends it with Content-Encoding, so
+  the client hands tor-js the plain zip.
+- **Where the server gets it**: `scripts/tor-snapshot.mjs` runs tor-js
+  itself in Node, the same arti and wasm as the browser's, with direct TCP
+  to the fallback directories' ORPorts (one-hop `BEGIN_DIR`, as the
+  browser's client does through Wisp). It waits for arti to mark the
+  consensus usable (its record no longer `pending`: the signatures
+  checked), takes that consensus, the unexpired certificates and every
+  microdescriptor the consensus lists whose text has the listed SHA-256,
+  writes `bootstrap.zip`, `.br`, `.gz` and `bootstrap.json` (times, size,
+  digest; written last) by rename, and exits. It keeps no state: a run
+  downloads the whole directory, about 4 MB, in 4 to 9 s, at about 170 MB
+  of memory. No tor daemon on the server, and no parser or signature check
+  of our own: fetching from the directory authorities' DirPorts over HTTP
+  would need both (or publish what a client then refuses), and would load
+  the nine authorities, which dir-spec asks clients to spare.
+- **Where it is served**: `GET /tor-client/bootstrap.zip`
+  (`demo/torSnapshot.js`) from `STOMP_TOR_BOOTSTRAP`, the directory the
+  builder writes. The same bytes for every visitor: no query, the client
+  sends no credentials, `Cache-Control: no-cache` with an ETag (a 304 when
+  it has not changed), `Vary: Accept-Encoding`. A snapshot past its
+  consensus's valid-until, a torn one (the zip is not the size
+  bootstrap.json says) or none is a 404. `STOMP_TOR_BOOTSTRAP_EVERY`
+  (minutes) has the server run the builder itself at start and on that
+  period; without it a timer of the deployer's runs
+  `node scripts/tor-snapshot.mjs --out <dir>`. A consensus is published
+  every hour and valid for three, so every 30 minutes keeps the file at
+  most about an hour behind. `config.js` names it to the page
+  (`torClient.bootstrap`, `STOMP_CONFIG.torClient` above) only when
+  `STOMP_TOR_BOOTSTRAP` is set, so a host without it runs as before.
+- **When the client uses it** (`demo/public/tor-client/snapshot.mjs`,
+  `TorService`): tor-js asks for the option only when its store holds no
+  consensus (a first visit, or a kept one past its valid-until, which
+  `liveDirectory` hides). The option is a thenable that fetches when tor-js
+  asks, and sooner when the service's key-range read finds no consensus,
+  so the fetch runs beside the wasm's load; a later visit fetches nothing.
+
+**How the snapshot is checked.** The server is trusted with none of it:
+tor-js writes the three documents into its storage as arti's cache records
+(the consensus marked as checked), and arti's directory manager then loads
+them through its normal cache path, the one its kept directory takes
+(tor-dirmgr 0.47 at voltrevo/arti `2527494a`, the revision tor-js 0.4.4
+builds): `GetConsensusState::add_from_cache` calls the same
+`add_consensus_text` a download does (parse, time check, and
+`authorities_are_correct` against the authority identities compiled into
+arti), `GetCertsState::add_from_cache` checks each certificate's signature
+by its authority's identity key and its expiry, and `try_checking_sigs`
+checks the consensus's signatures with those certificates before the state
+advances. tor-js keys each microdescriptor by the SHA-256 of its text, and
+arti reads only the digests the checked consensus lists. Confirmed by
+reading that code and by running tor-js's wasm in Node with every link
+refused (`test/tor-snapshot.mjs`): a snapshot the builder made loads as
+"Loaded a good directory from cache" with no link at all; the same file
+with one byte of a relay's nickname changed fails the start ("corrupted
+data in cache: Unable to bootstrap a working directory") before any link.
+
+What arti does not refuse, the client does:
+
+- **A stale snapshot.** arti's clock tolerance (`DirTolerance`, three days
+  after valid-until) takes an old consensus: with the clock moved 4 hours
+  on (the snapshot's consensus 1 to 2 hours past its valid-until), arti
+  loaded it from cache and only then asked for a newer one. The client
+  checks the consensus's own `valid-until` line before arti sees the bytes
+  (`checkSnapshot`, whatever the server's bootstrap.json says) and refuses
+  one at or past it, one with no consensus member, a member that is not
+  Stored, a consensus that is not a microdesc one, and more than 32 MiB.
+  tor-js then downloads the directory, as with no snapshot.
+- **A snapshot arti refused, kept.** A consensus whose signatures do not
+  verify fails arti's cache load with an error that ends the start (a
+  `Reset` error, which `load_directory` returns from bootstrap), and tor-js
+  has written it to the store, marked as checked, before arti looked at
+  it: kept, it would fail every later start. So from the moment arti has
+  the snapshot, every write of a consensus key is held back
+  (`holdConsensus`) until arti says "Loaded a good directory from cache",
+  then written in order; a start that fails before that drops them, does
+  not use a snapshot again, and starts the client once more without one
+  (the download). If arti downloads a directory of its own instead (a
+  snapshot with certificates it could not use, say), the snapshot's
+  consensus is the one write left out. Certificates and microdescriptors
+  are not held: arti checks a certificate at every load and keys a
+  microdescriptor by its digest. The relay check ("Which relays the worker
+  may reach") hears of the snapshot's consensus only when it is written,
+  so it admits no relay of a consensus arti has not checked.
+
+It fails closed as the rest does: the snapshot is directory data on the
+way to arti's own checks, never a route; anything wrong with it is the
+download, and no request goes anywhere but through the client.
+
+Measured on 2026-11-25 from this machine (Chrome 159, the demo on
+localhost with its own holyWisp, the real Tor network, a fresh browser
+context for each first visit, the two servers in paired rounds, the order
+turned each round, load average 11 to 16 on 28 cores):
+
+| First visit               | Download (no snapshot)        | Snapshot                      |
+| ------------------------- | ----------------------------- | ----------------------------- |
+| bootstrap (`bootstrapMs`) | 0.86 to 4.74 s, median 3.44 s | 1.03 to 1.16 s, median 1.10 s |
+| Ready                     | 1.03 to 5.03 s, median 3.61 s | 1.23 to 1.34 s, median 1.29 s |
+
+Seven runs without and six with. A download is as fast as its fallback
+(two of seven took under 1.1 s, five 2.0 to 4.7 s); the snapshot takes the
+same 1.1 s every time. In Chrome, a snapshot with one byte of its
+consensus changed was refused and the client downloaded the directory
+(4.0 s), and its store then held only the downloaded consensus; the next
+visit started from it in 0.9 s. The protected site (`npm run build:demo-site`,
+`STOMP_DEMO_SITE`) serves the same route and its client took the snapshot
+(Ready in 5.2 s with the page's load, the client's bootstrap 1.7 s).
+
+Where a snapshot start's 1.1 s goes (the client's timeline): the fetch,
+55 ms on localhost, beside the wasm's load; tor-js reading the snapshot
+into the store, 0.2 s, 163 ms of it parsing the consensus with arti's
+parser only for its times; arti's cache load and its checks, 0.2 s, and
+the same load again when its download task starts, 0.12 s; then the link
+to a guard, 0.49 s, which arti opens only once the directory is loaded.
+What is left is tor-js's and arti's: reading the times from the
+consensus's preamble in tor-js's `fast_bootstrap.rs` would save about
+0.15 s (a patch and a wasm build), and the guard link could start before
+the directory only inside arti. From a remote server the fetch is 1.43 MB
+over the visitor's HTTPS connection to the app, which the download through
+a fallback also moves, over a Tor link and its flow control.
 
 ### Guard persistence
 
@@ -829,15 +960,19 @@ isolationKey)` (deploy/tor-js `0001`); left: `resolve()`,
    `bootstrapEvents` where tor-js has it; left: the tor-js side of
    `bootstrapEvents` (so "clock skew" and arti's other blockers show), the
    isolated mode.
-5. **Fast-bootstrap snapshot** (S): the server builds `bootstrap.zip.zst`
-   hourly (tor-js's gateway crate or a fetch of the consensus over Tor) and
-   serves it from the app origin; the client passes it as `bootstrap`
-   (tor-js's `withFastBootstrap`, used only when the store has no usable
-   consensus). It is what is left of a first visit's 1 to 2.4 s
-   ("Bootstrap from the kept state"); a later visit loads the kept
-   directory already.
+5. **Fast-bootstrap snapshot** (done; S left): `scripts/tor-snapshot.mjs`
+   builds `bootstrap.zip` with tor-js in Node (one-hop directory requests
+   to the fallbacks, only a consensus arti has checked), the server serves
+   it at `/tor-client/bootstrap.zip` from `STOMP_TOR_BOOTSTRAP` (and
+   rebuilds it every `STOMP_TOR_BOOTSTRAP_EVERY` minutes), and a client
+   with no consensus starts from it, its writes held until arti has loaded
+   it ("The fast-bootstrap snapshot"); a first visit's Ready went from 1.0
+   to 5.0 s (median 3.6 s) to 1.2 to 1.3 s. Left: the env (or a timer) on
+   terp; in tor-js, reading the consensus's times from its preamble rather
+   than with a full parse (about 0.15 s, a wasm build); in arti, the guard
+   link before the directory is loaded (0.49 s).
 6. **Tor-only Wisp endpoint** (M): `/wisp-or/` with the consensus allowlist,
-   refreshed hourly; `STOMP_CONFIG.torClient.wisp`.
+   refreshed hourly (the snapshot builder's checked consensus has it); `STOMP_CONFIG.torClient.wisp`.
 7. **Isolation UI** (done; S left): New Identity, New Tor circuit for this
    site and Tor circuit for this site in the menu, the last with the guard
    of the site's circuits (from arti's guard state and the kept consensus)

@@ -32,6 +32,7 @@ import {
 	mkdirSync,
 	readdirSync,
 	readFileSync,
+	rmSync,
 	writeFileSync,
 } from 'node:fs';
 import { createServer } from 'node:net';
@@ -116,8 +117,12 @@ const SUITE_ENV = {
 	// Tor mode's transport, answered with epoxy (demo/public/test/tor-stand-in.mjs)
 	'demo-tor': { STOMP_TOR_CLIENT: 'stand-in' },
 	// Tor mode's own client with tor-js replaced by a stand-in the suite
-	// breaks on purpose (test/offline-tor-stand-in.mjs)
-	'demo-tor-fail-closed': { STOMP_TOR_CLIENT: 'stand-in-arti' },
+	// breaks on purpose (test/offline-tor-stand-in.mjs), and a directory
+	// snapshot the suite writes (TOR_BOOTSTRAP below)
+	'demo-tor-fail-closed': {
+		STOMP_TOR_CLIENT: 'stand-in-arti',
+		TOR_BOOTSTRAP: '1',
+	},
 	'demo-settings-menu': { STOMP_TOR_CLIENT: 'stand-in' },
 	'demo-tor-routes': { STOMP_TOR_CLIENT: 'stand-in' },
 	// epoxy plus the fixture hosts of test/mixed-servers.mjs
@@ -638,6 +643,17 @@ async function startServersOnce(name) {
 		wispLog = `${root}test/out/wisp-${port}.log`;
 		writeFileSync(wispLog, '');
 	}
+	// TOR_BOOTSTRAP: the server serves Tor mode's directory snapshot from a
+	// directory of its own, empty at first (no snapshot), which the suite
+	// is told of and writes snapshots to (scripts/tor-snapshot.mjs publish)
+	let torBootstrap = null;
+	if (env.TOR_BOOTSTRAP) {
+		delete env.TOR_BOOTSTRAP;
+		torBootstrap = `${root}test/out/tor-bootstrap-${port}`;
+		rmSync(torBootstrap, { recursive: true, force: true });
+		mkdirSync(torBootstrap, { recursive: true });
+		env.STOMP_TOR_BOOTSTRAP = torBootstrap;
+	}
 	const server = spawn(process.execPath, [`${root}demo/server.js`], {
 		env,
 		stdio: ['ignore', 'pipe', 'inherit'],
@@ -678,6 +694,7 @@ async function startServersOnce(name) {
 		running.delete(stop);
 		server.kill();
 		fixture.close();
+		if (torBootstrap) rmSync(torBootstrap, { recursive: true, force: true });
 	};
 	running.add(stop);
 	try {
@@ -692,7 +709,15 @@ async function startServersOnce(name) {
 		stop();
 		throw error;
 	}
-	return { port, fixturePort, slotPorts, contentPorts, wispLog, stop };
+	return {
+		port,
+		fixturePort,
+		slotPorts,
+		contentPorts,
+		wispLog,
+		torBootstrap,
+		stop,
+	};
 }
 
 /**
@@ -702,7 +727,7 @@ async function startServersOnce(name) {
  */
 function runSuite(
 	name,
-	{ port, fixturePort, slotPorts, contentPorts, wispLog },
+	{ port, fixturePort, slotPorts, contentPorts, wispLog, torBootstrap },
 	browser,
 ) {
 	return new Promise((resolve) => {
@@ -719,6 +744,7 @@ function runSuite(
 				SITE_POOL_PORTS: slotPorts.join(','),
 				CONTENT_SLOT_PORTS: contentPorts.join(','),
 				...(wispLog && { WISP_LOG: wispLog }),
+				...(torBootstrap && { TOR_BOOTSTRAP_DIR: torBootstrap }),
 			},
 			stdio: ['ignore', 'pipe', 'inherit'],
 		});

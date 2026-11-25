@@ -49,6 +49,15 @@
 //                       client with test/offline-tor-stand-in.mjs in tor-js's
 //                       place, whose "Tor streams" reach the fixture and
 //                       which a suite can break on purpose
+//   STOMP_TOR_BOOTSTRAP a directory scripts/tor-snapshot.mjs writes Tor
+//                       mode's directory snapshot to (docs/tor-over-wisp.md
+//                       "The fast-bootstrap snapshot"): served at
+//                       /tor-client/bootstrap.zip and named to the page, so a
+//                       first visit's client loads the directory from here
+//                       instead of downloading it through a fallback relay
+//   STOMP_TOR_BOOTSTRAP_EVERY minutes: the server runs the builder into
+//                       STOMP_TOR_BOOTSTRAP itself, at start and on that
+//                       period (unset: a timer of the deployer's does)
 //   STOMP_PROXY_ORIGIN  origin that serves the proxy for isolation mode; empty
 //                       or unset runs the same-origin controller (README,
 //                       "Origin isolation")
@@ -212,6 +221,7 @@ import { keyOfOffline, offlineKey } from '../scripts/offline-key.mjs';
 import { createCommits, DEFAULT_REPO } from './commits.js';
 import { listenLocalhostDns } from './localhostDns.js';
 import { heldLoads, syncRelay } from './syncRelay.js';
+import { refreshTorSnapshot, torSnapshot } from './torSnapshot.js';
 import { createUserAgents } from './userAgent.js';
 
 const require = createRequire(import.meta.url);
@@ -340,12 +350,23 @@ Set STOMP_WISP_URL to use an external wisp server instead.`);
 // its settings are ignored, with a line saying so.
 const torClient = process.env.STOMP_TOR_CLIENT !== '0';
 const torArtiStandIn = process.env.STOMP_TOR_CLIENT === 'stand-in-arti';
+const TOR_SETTINGS = new Set([
+	'STOMP_TOR_CLIENT',
+	'STOMP_TOR_BOOTSTRAP',
+	'STOMP_TOR_BOOTSTRAP_EVERY',
+]);
 const relaySettings = Object.keys(process.env).filter(
 	(name) =>
 		name.startsWith('STOMP_TOR_') &&
-		name !== 'STOMP_TOR_CLIENT' &&
+		!TOR_SETTINGS.has(name) &&
 		process.env[name],
 );
+// the directory snapshot a first visit's client starts from (demo/torSnapshot.js)
+const TOR_BOOTSTRAP_PATH = '/tor-client/bootstrap.zip';
+const torBootstrap =
+	torClient && process.env.STOMP_TOR_BOOTSTRAP
+		? resolve(process.env.STOMP_TOR_BOOTSTRAP)
+		: null;
 if (relaySettings.length)
 	console.warn(
 		`Ignored ${relaySettings.join(', ')}: the server-side Tor relay is gone; Tor mode is the in-browser client (docs/tor-over-wisp.md)`,
@@ -470,11 +491,14 @@ const pageConfig = {
 	...(process.env.STOMP_TOR_CLIENT === 'stand-in' && { torStandIn: true }),
 	// (named as a host that serves the files itself names them: the
 	// stand-in checks it was given a wasm, and loads none)
-	...(torArtiStandIn && {
+	...((torArtiStandIn || torBootstrap) && {
 		torClient: {
-			wasm: demoSite
-				? '/tor-client/tor/client_bg.wasm'
-				: '/tor-client/tor-js/tor_js_bg.wasm',
+			...(torArtiStandIn && {
+				wasm: demoSite
+					? '/tor-client/tor/client_bg.wasm'
+					: '/tor-client/tor-js/tor_js_bg.wasm',
+			}),
+			...(torBootstrap && { bootstrap: TOR_BOOTSTRAP_PATH }),
 		},
 	}),
 	// on unless turned off; a wisp server without UDP costs it nothing (the
@@ -1154,6 +1178,11 @@ if (torArtiStandIn)
 			);
 		},
 	);
+if (torBootstrap) {
+	app.get(TOR_BOOTSTRAP_PATH, torSnapshot(torBootstrap));
+	const every = Number(process.env.STOMP_TOR_BOOTSTRAP_EVERY);
+	if (every > 0) refreshTorSnapshot(torBootstrap, every);
+}
 try {
 	const torFiles = express.static(
 		demoSite

@@ -8,6 +8,7 @@
 // or in a tab's own transport worker where there is none (transport.mjs).
 import { FALLBACK_ADDRESSES } from './fallbacks.js';
 import { CONSENSUS_KEYS, liveDirectory, rangedStorage } from './keptState.mjs';
+import { holdConsensus, Snapshot } from './snapshot.mjs';
 import {
 	ArtiSocket,
 	Log,
@@ -393,6 +394,9 @@ const WISP_REASONS = new Map([
 	[0x47, 'a stalled connection'],
 	[0x49, 'throttling'],
 ]);
+// arti's line once its cache load gave it a good directory: with a snapshot,
+// the snapshot's consensus checked against the authorities' keys
+const SNAPSHOT_TAKEN = /Loaded a good directory from cache/;
 // links that failed, with none reached, before bootstrap is said to be blocked
 const BLOCKED_AFTER = 2;
 // arti's BlockageKind (arti-client status.rs), as bootstrapEvents names them
@@ -432,6 +436,10 @@ export class TorService {
 	/** the page's token of the Tor session it began (newSession) */
 	#sessionToken = '';
 	#storageName;
+	/** the directory snapshot's URL (snapshot.mjs), or null for none */
+	#bootstrap = null;
+	/** arti refused a snapshot from it once: the client downloads from then on */
+	#snapshotRefused = false;
 	/** tor-js's IndexedDB store under the storage, for Forget Tor state */
 	#inner = null;
 	#storage = null;
@@ -477,13 +485,15 @@ export class TorService {
 	/**
 	 * `say(level, text)`: the client's own console lines (its bootstrap, a
 	 * refused link), the console's by default; `wasm`: where arti's wasm is
-	 * (useWasm), when not beside tor-js's module
+	 * (useWasm), when not beside tor-js's module; `bootstrap`: the URL of the
+	 * server's directory snapshot (snapshot.mjs), for a first visit
 	 */
 	constructor({
 		wisp,
 		storageName = 'stomp-tor-client',
 		say = (level, text) => console[level](text),
 		wasm,
+		bootstrap,
 	} = {}) {
 		if (typeof wisp !== 'string') throw new TypeError('wisp: a URL');
 		// the npm release has only fetch
@@ -498,6 +508,7 @@ export class TorService {
 		});
 		this.#storageName = storageName;
 		this.#say = say;
+		if (typeof bootstrap === 'string' && bootstrap) this.#bootstrap = bootstrap;
 	}
 
 	/** `listener(status)` at each change; returns its removal */
@@ -715,59 +726,118 @@ export class TorService {
 		this.#linkBlocked = null;
 		this.#artiBlocked = null;
 		this.#phase('bootstrapping', 5, 'Connecting to a relay');
-		const client = new TorClient({
-			socketProvider: {
-				connect: async (target) => {
-					await this.admit(target);
-					return wisp.open(target);
-				},
-				gateway: null,
-				close: () => wisp.close(),
-			},
-			// the client's guards and its directory cache, kept across
-			// sessions and New Identity as Tor Browser keeps them
-			storage: this.#storage,
-			// (a client Forget Tor state closed says nothing more)
-			log: new Log({
-				rawLog: (_level, ...args) => current() && this.#log(...args),
-			}),
-			logLevel: 'info',
-		});
-		this.#client = client;
-		// arti's own progress and blocker, where this tor-js tells them
-		const events =
-			typeof client.bootstrapEvents === 'function'
-				? client.bootstrapEvents(
-						(event) => current() && this.#bootstrapEvent(event),
-					)
+		// the directory from the app's origin where it serves a snapshot,
+		// for a store with no consensus (a first visit): one fetch in place
+		// of the download through a fallback relay
+		let snapshot =
+			this.#bootstrap && !this.#snapshotRefused
+				? new Snapshot(this.#bootstrap, { say: this.#say })
 				: null;
-		try {
-			await Promise.race([client.ready(), superseded]);
-		} catch (error) {
-			// nothing of a failed client is used again (a retry makes another)
-			try {
-				client.close();
-			} catch {
-				// closed already
+		let snapshotTaken = false;
+		for (;;) {
+			const hold = snapshot
+				? holdConsensus(this.#storage, snapshot, CONSENSUS_KEYS)
+				: null;
+			// (fetched as soon as the store is seen to hold no consensus, not
+			// when tor-js asks, after its wasm and its read of the store)
+			if (snapshot) {
+				const early = snapshot;
+				this.#storage.keys(CONSENSUS_KEYS).then(
+					(keys) => keys.length || early.start(),
+					() => {},
+				);
 			}
-			if (!current()) throw error;
-			// the blocker, where one is known, says more than arti's error
-			const blocked = this.#blocked();
-			this.#phase(
-				'failed',
-				0,
-				blocked?.message ?? String(error?.message ?? error),
-				{ error: String(error?.message ?? error) },
-			);
-			this.#starting = null;
-			this.#client = null;
-			throw error;
-		} finally {
-			if (typeof events === 'function') events();
+			// arti took the snapshot's consensus as a good directory: its
+			// signatures are checked, and its write may reach the store
+			let taken = false;
+			const client = new TorClient({
+				socketProvider: {
+					connect: async (target) => {
+						await this.admit(target);
+						return wisp.open(target);
+					},
+					gateway: null,
+					close: () => wisp.close(),
+				},
+				// the client's guards and its directory cache, kept across
+				// sessions and New Identity as Tor Browser keeps them
+				storage: hold?.storage ?? this.#storage,
+				...(snapshot && { bootstrap: snapshot }),
+				// (a client Forget Tor state closed says nothing more)
+				log: new Log({
+					rawLog: (_level, ...args) => {
+						if (!current()) return;
+						if (hold && !taken && SNAPSHOT_TAKEN.test(args.join(' '))) {
+							taken = true;
+							// (a store that held a consensus never asked for it)
+							snapshotTaken = snapshot.given;
+							hold.accept().catch(() => {});
+						}
+						this.#log(...args);
+					},
+				}),
+				logLevel: 'info',
+			});
+			this.#client = client;
+			// arti's own progress and blocker, where this tor-js tells them
+			const events =
+				typeof client.bootstrapEvents === 'function'
+					? client.bootstrapEvents(
+							(event) => current() && this.#bootstrapEvent(event),
+						)
+					: null;
+			try {
+				await Promise.race([client.ready(), superseded]);
+				// arti downloaded a directory of its own and never loaded the
+				// snapshot's from its cache: that one is not kept
+				if (hold && !taken)
+					await hold.accept({ except: snapshot.isConsensus }).catch(() => {});
+				break;
+			} catch (error) {
+				// nothing of a failed client is used again (a retry makes another)
+				try {
+					client.close();
+				} catch {
+					// closed already
+				}
+				if (!current()) throw error;
+				// arti had the snapshot and did not take it (a consensus whose
+				// signatures do not verify fails the cache load, and with it
+				// the start): forget it, and start as with no snapshot
+				if (snapshot?.given && !taken) {
+					hold.refuse();
+					this.#snapshotRefused = true;
+					this.#say(
+						'warn',
+						`[tor] the client refused the directory snapshot (${String(error?.message ?? error)}): it downloads the directory`,
+					);
+					snapshot.release();
+					snapshot = null;
+					continue;
+				}
+				// the blocker, where one is known, says more than arti's error
+				const blocked = this.#blocked();
+				this.#phase(
+					'failed',
+					0,
+					blocked?.message ?? String(error?.message ?? error),
+					{ error: String(error?.message ?? error) },
+				);
+				this.#starting = null;
+				this.#client = null;
+				throw error;
+			} finally {
+				if (typeof events === 'function') events();
+			}
 		}
 		if (!current()) throw new Error('the Tor client started again');
+		snapshot?.release();
 		const bootstrapMs = Math.round(performance.now() - started);
-		this.#phase('ready', 100, 'Done', { bootstrapMs });
+		this.#phase('ready', 100, 'Done', {
+			bootstrapMs,
+			// (the smoke's: the directory came from the snapshot)
+			...(snapshotTaken && { snapshot: true }),
+		});
 		this.#say('info', `[tor] bootstrapped in ${bootstrapMs} ms`);
 	}
 

@@ -13,7 +13,7 @@ import { serveStream } from './streamPort.mjs';
 /** `${wisp} ${storageName}`: the client and the ports it tells */
 const services = new Map();
 
-function serviceFor({ wisp, storageName, wasm }) {
+function serviceFor({ wisp, storageName, wasm, bootstrap }) {
 	const key = `${wisp} ${storageName ?? ''}`;
 	let entry = services.get(key);
 	if (!entry) {
@@ -22,6 +22,8 @@ function serviceFor({ wisp, storageName, wasm }) {
 			wisp,
 			storageName,
 			wasm,
+			// (the first tab's: every page of the origin is given the same)
+			bootstrap: typeof bootstrap === 'string' ? bootstrap : undefined,
 			// a tab's transport worker prints them too, where its page's
 			// console (and the smoke) sees them
 			say: (level, text) => {

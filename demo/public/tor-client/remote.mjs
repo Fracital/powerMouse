@@ -26,7 +26,7 @@ export class RemoteService {
 		return remote;
 	}
 
-	constructor(port, { wisp, storageName, wasm, session }) {
+	constructor(port, { wisp, storageName, wasm, session, bootstrap }) {
 		this.#port = port;
 		let heard;
 		const answered = new Promise((resolve) => (heard = resolve));
@@ -49,6 +49,7 @@ export class RemoteService {
 			storageName,
 			...(typeof wasm === 'string' && { wasm }),
 			...(typeof session === 'string' && { session }),
+			...(typeof bootstrap === 'string' && { bootstrap }),
 		});
 		let timer;
 		this.#settled = Promise.race([
@@ -58,7 +59,7 @@ export class RemoteService {
 					console.warn(
 						'[tor] the shared Tor client did not answer: this tab runs its own',
 					);
-					const own = new TorService({ wisp, storageName, wasm });
+					const own = new TorService({ wisp, storageName, wasm, bootstrap });
 					own.onStatus((status) => this.#status(status));
 					resolve(own);
 				}, SHARED_ANSWER_MS);

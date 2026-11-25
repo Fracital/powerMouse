@@ -11,7 +11,8 @@
 // request that went past Tor. Neither the stand-in nor this suite reaches
 // the Tor network; test/tor-client-smoke.mjs runs the real client.
 //
-// Also here: bootstrap progress and the reason it is blocked or failed,
+// Also here: the directory snapshot a first visit starts from (good, one
+// arti refuses, stale), bootstrap progress and the reason it is blocked or failed,
 // shown on the page (the client's link failures, and arti's own events
 // through `bootstrapEvents` as the stand-in gives them: tor-js has no such
 // call yet), a Tor tab that stays in Tor mode when another tab turns it
@@ -19,6 +20,10 @@
 // life (extendedLifetime, a new session on it), its circuit display and
 // Forget Tor state.
 /* global TOR_REQUESTED, DIRECTORY */
+import { createHash } from 'node:crypto';
+import { rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { publish, storedZip } from '../../scripts/tor-snapshot.mjs';
 import {
 	activeFrame,
 	done,
@@ -31,7 +36,11 @@ import {
 	waitActive,
 	waitForServer,
 } from '../lib.mjs';
-import { GUARD_FINGERPRINT } from '../offline-tor-stand-in.mjs';
+import {
+	BAD_SIGNATURE,
+	GUARD_FINGERPRINT,
+	SNAPSHOT_KEY,
+} from '../offline-tor-stand-in.mjs';
 
 await waitForServer(PROXY);
 const browser = await launch();
@@ -630,6 +639,133 @@ async function askFor(page, name, ms = 6000) {
 		JSON.stringify({ relanded, keptAgain }),
 	);
 	await context.close();
+}
+
+// The directory snapshot (docs/tor-over-wisp.md "The fast-bootstrap
+// snapshot"), served from the run's own directory (test/run.mjs
+// TOR_BOOTSTRAP) and read by the stand-in as tor-js reads one. A first
+// visit's client starts from a live one and keeps its consensus once arti
+// took it; one arti refuses (its signatures) fails that start, nothing of
+// its consensus is kept, and the client starts again without it; one past
+// its valid-until is never handed to the client, whatever the server's
+// bootstrap.json says. In each the page arrives over Tor, and only so.
+if (process.env.TOR_BOOTSTRAP_DIR) {
+	const dir = process.env.TOR_BOOTSTRAP_DIR;
+	const HOUR = 3600_000;
+	const stamp = (ms) =>
+		new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+	/** serve a snapshot whose consensus is valid from `after`, `extra` lines in it */
+	const serve = (after, extra = []) => {
+		const consensus = [
+			'network-status-version 3 microdesc',
+			'vote-status consensus',
+			`valid-after ${stamp(after)}`,
+			`fresh-until ${stamp(after + HOUR)}`,
+			`valid-until ${stamp(after + 3 * HOUR)}`,
+			...extra,
+			'',
+		].join('\n');
+		const zip = storedZip([
+			['bootstrap/consensus-microdesc.txt', Buffer.from(consensus)],
+			['bootstrap/authority-certs.txt', Buffer.from('')],
+			['bootstrap/microdescs.txt', Buffer.from('')],
+		]);
+		publish(dir, {
+			zip,
+			meta: {
+				validAfter: after,
+				// (the server's word, which the client does not take)
+				validUntil: Date.now() + 3 * HOUR,
+				bytes: zip.length,
+				sha256: createHash('sha256').update(zip).digest('hex'),
+			},
+		});
+	};
+	/** the stand-in client's store: its keys, its starts and the snapshots it was given */
+	const kept = (page) =>
+		page.evaluate(
+			() =>
+				new Promise((resolve, reject) => {
+					const open = indexedDB.open('stomp-tor-client-stand-in', 1);
+					open.onupgradeneeded = () => open.result.createObjectStore('kv');
+					open.onerror = () => reject(open.error);
+					open.onsuccess = () => {
+						const db = open.result;
+						const kv = db.transaction('kv', 'readonly').objectStore('kv');
+						const keys = kv.getAllKeys();
+						const started = kv.get('stand-in:started');
+						const given = kv.get('stand-in:snapshot');
+						keys.transaction.oncomplete = () => {
+							db.close();
+							resolve({
+								keys: keys.result.map(String).sort(),
+								started: Number(started.result ?? 0),
+								given: Number(given.result ?? 0),
+							});
+						};
+					};
+				}),
+		);
+	/** a first visit with the snapshot served now: the client's status, its store, and the page over Tor */
+	const visit = async (name) => {
+		const context = await browser.newContext();
+		const { page } = await torPage(context);
+		const ready = await until(
+			page,
+			read,
+			(value) => value?.client?.state === 'ready',
+		);
+		const k = key(name);
+		await submitLanding(page, target(k));
+		const frame = await waitActive(
+			page,
+			() => document.title === 'landed',
+		).catch(() => null);
+		const result = {
+			client: ready?.client,
+			store: await kept(page),
+			landed: !!frame && (await reached(k)) !== null,
+		};
+		await context.close();
+		return result;
+	};
+
+	serve(Date.now() - 600_000);
+	const good = await visit('snapshot-good');
+	ok(
+		"a first visit starts from the server's snapshot and keeps its consensus once arti took it",
+		good.client?.snapshot === true &&
+			good.store.given === 1 &&
+			good.store.started === 1 &&
+			good.store.keys.includes(SNAPSHOT_KEY) &&
+			good.landed,
+		JSON.stringify(good),
+	);
+
+	serve(Date.now() - 600_000, [BAD_SIGNATURE]);
+	const refused = await visit('snapshot-refused');
+	ok(
+		'a snapshot arti refuses: its start fails, nothing of its consensus is kept, the client starts again without it and the page arrives over Tor',
+		!refused.client?.snapshot &&
+			refused.store.given === 1 &&
+			refused.store.started === 2 &&
+			!refused.store.keys.includes(SNAPSHOT_KEY) &&
+			refused.landed,
+		JSON.stringify(refused),
+	);
+
+	serve(Date.now() - 4 * HOUR);
+	const stale = await visit('snapshot-stale');
+	ok(
+		'a stale snapshot (its consensus past valid-until) is never handed to the client',
+		!stale.client?.snapshot &&
+			stale.store.given === 0 &&
+			stale.store.started === 1 &&
+			!stale.store.keys.includes(SNAPSHOT_KEY) &&
+			stale.landed,
+		JSON.stringify(stale),
+	);
+	rmSync(join(dir, 'bootstrap.json'), { force: true });
 }
 
 await browser.close();

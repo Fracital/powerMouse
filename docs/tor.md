@@ -231,13 +231,27 @@ tor does.
   same one after a reload and a navigation, a new Tor session uses none of
   the last one's circuits, Tor circuit for this site shows the stand-in's
   guard, and Forget Tor state empties the client's store and starts it
-  again. It reaches no Tor network.
+  again. With a snapshot served (`STOMP_TOR_BOOTSTRAP`), a first visit's
+  client starts from it and keeps it; one whose signatures the stand-in
+  refuses is not kept and the client starts again without it and lands;
+  a stale one is never handed to the client. It reaches no Tor network.
 - `node --test test/store-names.mjs` also checks the Tor client's state is
   one store of no profile, `stomp-tor-client`.
 - `node --test test/tor-kept-state.mjs`: a later visit's client is handed
   a kept consensus only until its valid-until, an expired one is deleted,
   one whose times do not read is not used, and the guards, certificates and
   microdescriptors pass as they are.
+- `node --test test/tor-snapshot.mjs`: the client refuses a snapshot whose
+  consensus is at or past its valid-until, one that is empty, HTML,
+  truncated, deflated, a vote, not a microdesc consensus, without times or
+  over 32 MiB, and fetches only when tor-js asks; consensus writes are held
+  until arti loads the snapshot and dropped when it refuses it; the server
+  route answers 404 for none, a stale or a torn snapshot, and br, gzip, the
+  plain zip and 304 otherwise. Against the real Tor network it builds a
+  snapshot, then runs tor-js's wasm with every link refused: the snapshot
+  loads with no link, the same file with one byte of the consensus changed
+  fails the start, and one 1 to 2 hours past its valid-until is loaded by
+  arti (so the client's own check is what refuses it).
 - The `demo-tor-routes` suite: the demo behind a server that records every
   request the browser makes of it (path, query, Referer, body), with a page
   that loads images and stylesheets in about:blank and srcdoc frames, a

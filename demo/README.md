@@ -97,9 +97,21 @@ the demo-tor-fail-closed suite breaks on purpose. The tooltip and the
 status line say what blocks bootstrap or why it failed, and a tab in Tor
 mode stays in it across its reloads even when another tab turned Tor off.
 
+A first visit's client downloads the Tor directory through a fallback relay
+(1.0 to 5.0 s to Ready on 2026-11-25). With `STOMP_TOR_BOOTSTRAP=<dir>` the
+server serves a directory snapshot from it at `/tor-client/bootstrap.zip`
+and the client starts from that instead (1.2 to 1.3 s); arti checks its
+signatures as it does a download's, and a stale, refused or missing
+snapshot means the download. `node scripts/tor-snapshot.mjs --out <dir>`
+writes it (tor-js in Node, about 4 MB downloaded and 170 MB of memory per
+run, 4 to 9 s); `STOMP_TOR_BOOTSTRAP_EVERY=30` has the server run it at
+start and every 30 minutes, or a timer can. See docs/tor-over-wisp.md "The
+fast-bootstrap snapshot".
+
 There is no server-side Tor relay any more: `STOMP_TOR_SOCKS5`,
 `STOMP_TOR_WISP_URL`, `STOMP_TOR_CONTROL` and the other `STOMP_TOR_*`
-settings of the old `/wisp-tor/` relay are ignored, with one line at
+settings of the old `/wisp-tor/` relay (all but `STOMP_TOR_CLIENT` and
+`STOMP_TOR_BOOTSTRAP*`) are ignored, with one line at
 startup saying so. That relay saw every destination of every visitor.
 
 **Scope:** Tor mode is for sites opened through STomp's transport. It does
