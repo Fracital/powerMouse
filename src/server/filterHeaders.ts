@@ -1,6 +1,7 @@
 import { pastASCII, utf8Text } from '../byteString';
 import StompURL from '../StompURL';
 import { BYTES_MARKER } from '../transport/messages';
+import { fieldList } from './fieldList';
 
 const cspHeaders: string[] = [
 	'Content-Security-Policy',
@@ -158,7 +159,7 @@ export function filterNativeRequestHeaders(
 	url: StompURL,
 	additionalFilter: AdditionalFilter | void,
 ): Headers {
-	const filteredHeaders = new Headers(headers);
+	const filteredHeaders = new Headers(fieldList(headers));
 
 	if (additionalFilter) {
 		additionalFilter(headers, filteredHeaders, url);
@@ -177,7 +178,7 @@ export function filterResponseHeaders(
 	transformRoute: RouteTransform,
 	additionalFilter: AdditionalFilter | void,
 ): Headers {
-	const filteredHeaders = new Headers(headers);
+	const filteredHeaders = new Headers(fieldList(headers));
 
 	// Chrome follows a Location only for a redirect, and does nothing with
 	// a Content-Location: a 201's Location, a 200's and every

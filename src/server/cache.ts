@@ -20,6 +20,7 @@
 // (pre-rewrite) body and headers, so the rewriters run on hits as on fetches.
 
 import { storeName } from '../profile';
+import { fieldList } from './fieldList';
 
 const STORE = 'stomp-http-cache';
 const ENTRY_LIMIT = 5 * 1024 * 1024;
@@ -340,51 +341,82 @@ export function splitForStore(
 	body: ReadableStream<Uint8Array>,
 	headers: Headers,
 ): [ReadableStream<Uint8Array>, ReadableStream<Uint8Array>] {
-	const length = headers.get('content-length');
-	if (
-		length !== null &&
-		/^\d+$/.test(length) &&
-		Number(length) <= FINISHED_LENGTH
-	)
-		return body.tee();
+	const [[forStore], forPage] = splitForStores(body, headers, 1);
+	return [forStore, forPage];
+}
+
+/**
+ * splitForStore with a copy for each of `count` stores, and the page's: the
+ * HTTP cache and the memory cache that both keep a response read it from
+ * one split. The memory cache split the page's copy again before, and that
+ * copy was a Response of its own in between: a Response and a Headers more
+ * for each response both keep. Each store's copy is what it was after one
+ * split after another: a short body's is a tee of a tee, a long one's gets
+ * each chunk as the page reads it, and the page's giving up fails them all.
+ */
+export function splitForStores(
+	body: ReadableStream<Uint8Array>,
+	headers: Headers,
+	count: number,
+): [ReadableStream<Uint8Array>[], ReadableStream<Uint8Array>] {
+	if (shortBody(headers)) {
+		const teed: ReadableStream<Uint8Array>[] = [];
+		let rest = body;
+		for (let i = 0; i < count; i++) {
+			const [forStore, next] = rest.tee();
+			teed.push(forStore);
+			rest = next;
+		}
+		return [teed, rest];
+	}
 	const reader = body.getReader();
-	let store: ReadableStreamDefaultController<Uint8Array> | null = null;
-	const forStore = new ReadableStream<Uint8Array>({
-		start(controller) {
-			store = controller;
-		},
-		// the store took all it keeps (an entry over its limit): the page reads on
-		cancel() {
-			store = null;
-		},
-	});
+	const stores: (ReadableStreamDefaultController<Uint8Array> | null)[] = [];
+	const forStores = Array.from(
+		{ length: count },
+		(_, i) =>
+			new ReadableStream<Uint8Array>({
+				start(controller) {
+					stores[i] = controller;
+				},
+				// the store took all it keeps (an entry over its limit): the page reads on
+				cancel() {
+					stores[i] = null;
+				},
+			}),
+	);
 	const forPage = new ReadableStream<Uint8Array>({
 		async pull(controller) {
 			let chunk: ReadableStreamReadResult<Uint8Array>;
 			try {
 				chunk = await reader.read();
 			} catch (error) {
-				store?.error(error);
-				store = null;
+				stores.forEach((store, i) => {
+					store?.error(error);
+					stores[i] = null;
+				});
 				controller.error(error);
 				return;
 			}
 			if (chunk.done) {
-				store?.close();
-				store = null;
+				stores.forEach((store, i) => {
+					store?.close();
+					stores[i] = null;
+				});
 				controller.close();
 				return;
 			}
-			store?.enqueue(chunk.value);
+			for (const store of stores) store?.enqueue(chunk.value);
 			controller.enqueue(chunk.value);
 		},
 		cancel(reason) {
-			store?.error(new Error('the page gave the response up'));
-			store = null;
+			stores.forEach((store, i) => {
+				store?.error(new Error('the page gave the response up'));
+				stores[i] = null;
+			});
 			return reader.cancel(reason);
 		},
 	});
-	return [forStore, forPage];
+	return [forStores, forPage];
 }
 
 /** a body read whole, null when it is over the entry limit (the rest is dropped) */
@@ -558,7 +590,15 @@ export class HttpCache {
 		const cache = await this.open();
 		const stored = await cache.match(url);
 		if (!stored) return null;
-		const headers = new Headers(stored.headers);
+		// what a hit answers with, its fields edited in place: the store's
+		// Response has immutable ones, and a copy of them first was one more
+		// Headers for every hit
+		const response = new Response(stored.body, {
+			status: stored.status,
+			statusText: stored.statusText,
+			headers: fieldList(stored.headers),
+		});
+		const { headers } = response;
 		if (headers.has(VARY_ALL)) headers.set('vary', headers.get(VARY_ALL)!);
 		const control = parseCacheControl(headers.get('cache-control'));
 		const made = headers.get(CREDENTIALS) || '';
@@ -590,11 +630,7 @@ export class HttpCache {
 		// what a cache says about an entry it serves
 		headers.set('age', String(Math.max(0, Math.round(age))));
 		return {
-			response: new Response(stored.body, {
-				status: stored.status,
-				statusText: stored.statusText,
-				headers,
-			}),
+			response,
 			fresh: age < lifetime,
 			revalidate,
 			mismatch,
@@ -691,12 +727,7 @@ export class HttpCache {
 		body: ReadableStream<Uint8Array> | Blob | null,
 		part?: Part,
 	): Promise<void> {
-		const headers = new Headers(response.headers);
-		headers.delete('set-cookie');
-		// (the cache's own names are its own: an origin that sends one says nothing)
-		for (const name of OWN) headers.delete(name);
-		if (part) headers.set(PART, `${part.from}-${part.to}/${part.size}`);
-		let size = Number(headers.get('content-length')) || 0;
+		let size = Number(response.headers.get('content-length')) || 0;
 		let kept: ReadableStream<Uint8Array> | ArrayBuffer | Blob | null = body;
 		if (body instanceof Blob) {
 			if (body.size > ENTRY_LIMIT) return;
@@ -704,11 +735,24 @@ export class HttpCache {
 		}
 		// a body that does not say its length is read first: the budget counts
 		// what it is, and one over the entry limit is not kept
-		else if (body && !headers.has('content-length')) {
+		else if (body && !response.headers.has('content-length')) {
 			kept = await wholeBody(body);
 			if (kept === null) return;
 			size = kept.byteLength;
 		}
+		// The entry's fields are edited on the entry's own Response, which
+		// copies the answer's as it is made: a copy of them first was one
+		// more Headers for every write (some 2 ms of a page of 200 loads)
+		const entry = new Response(kept, {
+			status: response.status,
+			statusText: response.statusText,
+			headers: fieldList(response.headers),
+		});
+		const headers = entry.headers;
+		headers.delete('set-cookie');
+		// (the cache's own names are its own: an origin that sends one says nothing)
+		for (const name of OWN) headers.delete(name);
+		if (part) headers.set(PART, `${part.from}-${part.to}/${part.size}`);
 		const at = Date.now();
 		headers.set(STORED_AT, String(at));
 		headers.set(SIZE, String(size));
@@ -718,14 +762,7 @@ export class HttpCache {
 		if (credentials) headers.set(CREDENTIALS, credentials);
 		HttpCache.hideVaryAll(headers);
 		const cache = await this.open();
-		await cache.put(
-			url,
-			new Response(kept, {
-				status: response.status,
-				statusText: response.statusText,
-				headers,
-			}),
-		);
+		await cache.put(url, entry);
 		listed(url, { at, size });
 		// (the write is done: the entry is not held back while the store is walked)
 		if (listing.entries === null) void this.list();
@@ -808,7 +845,7 @@ export class HttpCache {
 				to = last;
 			}
 		}
-		const headers = new Headers(response.headers);
+		const headers = new Headers(fieldList(response.headers));
 		headers.delete('content-range');
 		headers.set('content-length', String(body.byteLength));
 		const whole = from === 0 && to === part.size - 1;
@@ -829,7 +866,7 @@ export class HttpCache {
 		const cache = await this.open();
 		const stored = await cache.match(url);
 		if (!stored) return hit.response;
-		const headers = new Headers(stored.headers);
+		const headers = new Headers(fieldList(stored.headers));
 		if (headers.has(VARY_ALL)) headers.set('vary', headers.get(VARY_ALL)!);
 		headers.delete(VARY_ALL);
 		// (confirmed now: its age is the 304's, none when it says none)
@@ -855,7 +892,7 @@ export class HttpCache {
 			new Response(body, {
 				status: stored.status,
 				statusText: stored.statusText,
-				headers,
+				headers: fieldList(headers),
 			}),
 		);
 		listed(url, { at, size: Number(headers.get(SIZE)) || 0 });
@@ -864,7 +901,7 @@ export class HttpCache {
 		return new Response(body, {
 			status: stored.status,
 			statusText: stored.statusText,
-			headers,
+			headers: fieldList(headers),
 		});
 	}
 	async clear(): Promise<void> {
@@ -945,7 +982,7 @@ export async function byteRange(
 	if (!asked) return null;
 	const { from, to } = asked;
 	await response.body?.cancel().catch(() => {});
-	const headers = new Headers(response.headers);
+	const headers = new Headers(fieldList(response.headers));
 	headers.set('content-range', `bytes ${from}-${to}/${size}`);
 	headers.set('content-length', String(to - from + 1));
 	return new Response(body.slice(from, to + 1), {
@@ -1088,22 +1125,28 @@ export class MemoryCache {
 			this.#drop(key, entry);
 			return null;
 		}
-		const headers = new Headers(entry.headers);
+		// (the Vary its entry was made under is its own fields' vary)
 		if (
 			entry.vary !== null &&
-			entry.vary !== HttpCache.varyKey(headers.get('vary'), requestHeaders)
+			entry.vary !==
+				HttpCache.varyKey(
+					entry.headers.find(([name]) => name === 'vary')?.[1] ?? null,
+					requestHeaders,
+				)
 		)
 			return null;
 		// the most recently used last
 		entry.usedAt = now;
 		this.#entries.delete(key);
 		this.#entries.set(key, entry);
-		headers.set('age', String(Math.max(0, Math.round(age))));
+		// made from the entry's fields at once, and given its age there: a
+		// Headers of them first was one more for every hit
 		const response = new Response(entry.body, {
 			status: entry.status,
 			statusText: entry.statusText,
-			headers,
+			headers: entry.headers,
 		});
+		response.headers.set('age', String(Math.max(0, Math.round(age))));
 		wholeBodies.set(response, entry.body);
 		return response;
 	}
@@ -1148,8 +1191,9 @@ export class MemoryCache {
 	keep(key: string, requestHeaders: Headers, response: Response, bytes: Blob) {
 		const size = bytes.size;
 		if (size > Math.min(MEMORY_ENTRY_LIMIT, this.#budget)) return;
-		const headers = new Headers(response.headers);
-		headers.delete('set-cookie');
+		// read from the answer's own fields, Set-Cookie left out of the
+		// entry's list: a copy of them was one more Headers for every entry
+		const { headers } = response;
 		const old = this.#entries.get(key);
 		if (old) this.#drop(key, old);
 		const now = Date.now();
@@ -1157,7 +1201,7 @@ export class MemoryCache {
 		this.#entries.set(key, {
 			status: response.status,
 			statusText: response.statusText,
-			headers: [...headers],
+			headers: [...headers].filter(([name]) => name !== 'set-cookie'),
 			body: bytes,
 			storedAt: now,
 			usedAt: now,

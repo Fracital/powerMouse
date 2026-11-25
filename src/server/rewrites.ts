@@ -258,6 +258,7 @@ import {
 	partitionedKey,
 	sameVersion,
 	splitForStore,
+	splitForStores,
 	wholeBodies,
 	type CacheHit,
 } from './cache';
@@ -350,6 +351,7 @@ import {
 import type { ExtensionRegistry } from './extensions/registry';
 import { textDocumentBody, textDocumentKind } from './extensions/textDocument';
 import { isStoreURL } from './extensions/webstore';
+import { fieldList } from './fieldList';
 import {
 	AdditionalFilter,
 	browserBytes,
@@ -448,6 +450,48 @@ setDocumentShells((name) => (name === 'modifyHTML' ? modifyHTML : modifyXML));
 const CACHE_GENERATION = REWRITE_GENERATION || BUILD;
 
 export const statusEmpty = [101, 204, 205, 304];
+
+/**
+ * `bare.fetch(url, { method, body, headers, redirect: 'manual' })`, the
+ * forward's one request to the origin, with the Response made from the
+ * transport's list of fields at once: BareResponse.fromTransferrableResponse
+ * makes a Headers of them first and the Response reads that again through
+ * its iterator, a Headers more for every request the worker sends (some 2
+ * ms of a page of 200 loads, Chrome 159). Its fields read the same, and
+ * its `redirected` stays the class's false (the library reads the list as
+ * a record, which has no `location`); a blob: URL is the library's to
+ * fetch, as before.
+ */
+async function transportFetch(
+	bare: BareCompatibleClient,
+	url: string,
+	method: string,
+	body: Blob | undefined,
+	headers: RawHeaders,
+): Promise<BareResponse> {
+	const remote = new URL(url);
+	if (remote.protocol === 'blob:')
+		return bare.fetch(url, { method, redirect: 'manual', body, headers });
+	if (!bare.transport.ready) await bare.transport.init();
+	const answer = await bare.transport.request(
+		remote,
+		method,
+		body as BodyInit | null,
+		headers,
+		undefined,
+	);
+	const response = new BareResponse(
+		statusEmpty.includes(answer.status) ? undefined : answer.body,
+		{
+			headers: answer.headers,
+			status: answer.status,
+			statusText: answer.statusText,
+		},
+	);
+	response.url = remote.toString();
+	response.rawHeaders = answer.headers;
+	return response;
+}
 
 /**
  * The forward's responses whose body is a Blob: whole before they go out, so
@@ -3749,8 +3793,12 @@ function genericForward(
 				raises.add(raise);
 				if (client) imageClients.set(id, client);
 			}
-			if (first && !headers.has('priority'))
+			// (on a copy: the fields given may be the request's own, which
+			// withValidators hands on as they are when it has no validator)
+			if (first && !headers.has('priority')) {
+				headers = new Headers(fieldList(headers));
 				headers.set('priority', `u=${FIRST_IMAGES_URGENCY}, i`);
+			}
 			let urgency = queueUrgency(shape);
 			if (first) urgency = Math.min(urgency, FIRST_IMAGES_URGENCY);
 			if (image && seenLately(page)) urgency = Math.min(urgency, SEEN_URGENCY);
@@ -3769,19 +3817,13 @@ function genericForward(
 					if (!sent) throw extensionRefusal();
 					ordered = sent;
 				}
-				const response = await rewriter.bare.fetch(url.toString(), {
-					method: serverRequest.method,
-					redirect: 'manual',
-					// redirect: serverRequest.redirect,
+				const response = await transportFetch(
+					rewriter.bare,
+					url.toString(),
+					serverRequest.method,
 					body,
-					headers: queued(
-						partitioned(ordered),
-						urgency,
-						credentials,
-						id,
-						image,
-					),
-				});
+					queued(partitioned(ordered), urgency, credentials, id, image),
+				);
 				upstreamFacts = factsOf(response.rawHeaders) ?? null;
 				if (!extensionRequest) return response;
 				const received = await rewriter.pipeline!.received(
@@ -4191,6 +4233,8 @@ function genericForward(
 		// natively the renderer's memory cache answers, or revalidates what it
 		// has, rather than the HTTP cache (messages.ts Delivery)
 		let memory = false;
+		// the memory cache's copy of the body, split with the HTTP cache's (splitForStores)
+		let memoryBranch: ReadableStream<Uint8Array> | null = null;
 		// (an entry the origin has to confirm for this request, or a request
 		// that asks for the confirmation, is not served stale on any terms)
 		const within = (window: number | null) =>
@@ -4200,8 +4244,16 @@ function genericForward(
 			cacheMode !== 'no-cache' &&
 			window !== null &&
 			hit.staleFor <= window;
-		const withValidators = (headers: Headers) => {
-			const conditional = new Headers(headers);
+		// The fields as they are when there is no validator to add: a copy
+		// of them was a Headers built for every request a miss sends (some 2
+		// ms of a page of 200 loads). fetchUpstream reads what it is given
+		// before its answer comes, while the forward waits for that answer
+		// and changes nothing; a revalidation the forward does not wait for
+		// (`copy`) is given a copy all the same
+		const withValidators = (headers: Headers, copy = false) => {
+			if (!hit?.etag && !hit?.lastModified)
+				return copy ? new Headers(fieldList(headers)) : headers;
+			const conditional = new Headers(fieldList(headers));
 			if (hit?.etag) conditional.set('if-none-match', hit.etag);
 			if (hit?.lastModified)
 				conditional.set('if-modified-since', hit.lastModified);
@@ -4260,7 +4312,7 @@ function genericForward(
 			const ask = async (first: number, last: number, conditional: boolean) => {
 				// (the bytes it lacks are asked for as of its version)
 				const sent = conditional
-					? withValidators(requestHeaders)
+					? withValidators(requestHeaders, true)
 					: new Headers(requestHeaders);
 				sent.set('range', `bytes=${first}-${last}`);
 				if (!conditional)
@@ -4398,7 +4450,9 @@ function genericForward(
 			cached = true;
 			// one revalidation per URL, however many stale hits arrive together
 			cache!.revalidateOnce(cacheKey!, async () => {
-				const upstream = await fetchUpstream(withValidators(requestHeaders));
+				const upstream = await fetchUpstream(
+					withValidators(requestHeaders, true),
+				);
 				// (no page reads this answer: its cookies are set here)
 				if (credentials)
 					for (const [header, value] of upstream.rawHeaders ?? [])
@@ -4551,17 +4605,19 @@ function genericForward(
 				if (blob && storable(upstream.status, upstream.headers))
 					cache!.put(cacheKey!, requestHeaders, upstream, blob);
 			} else if (upstream.body && storable(upstream.status, upstream.headers)) {
-				const [forStore, forPage] = splitForStore(
-					upstream.body,
-					upstream.headers,
+				// the memory cache's copy too, when it keeps this answer below
+				// (its conditions there hold here already: a storable answer
+				// clears nothing)
+				const [[forStore, forMemory], forPage] = storeCopies(
+					upstream,
+					memoryKey !== null &&
+						MemoryCache.keeps(upstream.status, upstream.headers)
+						? 2
+						: 1,
 				);
+				memoryBranch = forMemory ?? null;
 				cache!.put(cacheKey!, requestHeaders, upstream, forStore);
-				response = new Response(forPage, {
-					status: upstream.status,
-					statusText: upstream.statusText,
-					headers: upstream.headers,
-				});
-				response.rawHeaders = upstream.rawHeaders;
+				response = forPage;
 			} else {
 				response = upstream;
 			}
@@ -4652,20 +4708,18 @@ function genericForward(
 		) {
 			const whole = wholeBodies.get(response);
 			if (whole) memoryCache.keep(memoryKey, requestHeaders, response, whole);
+			else if (memoryBranch)
+				memoryCache
+					.put(memoryKey, requestHeaders, response, memoryBranch)
+					.catch(() => {});
 			else {
-				const [kept, forPage] = splitForStore(response.body, response.headers);
+				const [[kept], forPage] = storeCopies(response, 1);
 				memoryCache
 					.put(memoryKey, requestHeaders, response, kept)
 					.catch(() => {});
-				const teed: typeof response = new Response(forPage, {
-					status: response.status,
-					statusText: response.statusText,
-					headers: response.headers,
-				});
-				teed.rawHeaders = response.rawHeaders;
-				response = teed;
+				response = forPage;
 			}
-		}
+		} else void memoryBranch?.cancel().catch(() => {});
 
 		if (
 			!fromWorker &&
@@ -5954,7 +6008,7 @@ function genericForward(
 		const made = new Response(body, {
 			status: response.status,
 			statusText: response.statusText,
-			headers: responseHeaders,
+			headers: fieldList(responseHeaders),
 		});
 		if (body instanceof Blob) blobResponses.add(made);
 		return made;
@@ -6314,7 +6368,7 @@ async function wholeResponse<
 	const init = {
 		status: response.status,
 		statusText: response.statusText,
-		headers: response.headers,
+		headers: fieldList(response.headers),
 	};
 	let whole: R;
 	try {
@@ -6334,6 +6388,31 @@ async function wholeResponse<
 	}
 	whole.rawHeaders = response.rawHeaders;
 	return whole;
+}
+
+/**
+ * `response`'s body for each of `count` stores, and the Response the page
+ * is given around its own copy (splitForStores): one for the HTTP cache and
+ * the memory cache together. (Not `response.clone()`: a clone's tee copies
+ * every chunk for its branch, and reading the clones cost more than the
+ * Responses they saved, measured in Chrome 159.)
+ */
+function storeCopies<R extends Response & { rawHeaders?: RawHeaders }>(
+	response: R,
+	count: number,
+): [ReadableStream<Uint8Array>[], R] {
+	const [copies, forPage] = splitForStores(
+		response.body!,
+		response.headers,
+		count,
+	);
+	const page = new Response(forPage, {
+		status: response.status,
+		statusText: response.statusText,
+		headers: fieldList(response.headers),
+	}) as R;
+	page.rawHeaders = response.rawHeaders;
+	return [copies, page];
 }
 
 /** the Blob that is all of `response`'s body, while nothing has read it (wholeBodies) */

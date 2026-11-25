@@ -29,6 +29,7 @@
 // script of 4 MB or more; and there could be 300, which Discord's 450 to
 // 700 scripts pushed out of each other on every visit.
 import { storeName } from '../profile';
+import { fieldList } from './fieldList';
 
 const STORE = 'stomp-rewrite-cache';
 const LIMIT = 3000;
@@ -136,7 +137,8 @@ export class RewriteCache {
 	 * under `key` for `partition`, for matchServed; the caller need not wait.
 	 * The entry another partition's load left under `url` moves under its
 	 * own key first (match finds it there), and this output's copy under its
-	 * key, if it was there, goes: one copy of each.
+	 * key, if it was there, goes: one copy of each. `init.headers` becomes
+	 * the entry's own (the store's fields are set on it).
 	 */
 	putServed(
 		url: string,
@@ -151,7 +153,9 @@ export class RewriteCache {
 			// the entry names its partition by a digest: the response goes to
 			// the page as it is, and need not say a site in so many words
 			const made = await this.key([partition], new Uint8Array());
-			const headers = new Headers(init.headers);
+			// (set on the caller's Headers, which it made for this entry
+			// alone: a copy of it was one more Headers for every script kept)
+			const { headers } = init;
 			headers.set(DIGEST, key);
 			headers.set(PARTITION, made);
 			headers.set(SIZE, String(size));
@@ -187,7 +191,7 @@ export class RewriteCache {
 				new Response(body, {
 					status: init.status,
 					statusText: init.statusText,
-					headers,
+					headers: fieldList(headers),
 				}),
 				size,
 			);
