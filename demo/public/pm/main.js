@@ -1880,6 +1880,8 @@ async function switchTransport(name) {
 function createTab(id = 0, at = tabs.length) {
 	const element = document.createElement('iframe');
 	element.className = 'frame hidden';
+	// The protected host's VM must leave this frame's native realm to STomp.
+	element.setAttribute('data-native-realm', '');
 	element.inert = true; // in the background until activateTab shows it
 	element.title = 'Proxied page';
 	element.allow = FRAME_ALLOW;
@@ -8349,6 +8351,7 @@ const vibeHost = {
 	},
 	// an installed web app's window: a frame of the proxy's that is no tab
 	mountWebview: async (element, url) => {
+		element.setAttribute('data-native-realm', '');
 		await booted;
 		const frame = controller.createFrame(element);
 		if (JUST_CALL)

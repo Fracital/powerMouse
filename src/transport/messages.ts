@@ -1124,6 +1124,8 @@ export interface SrcdocMessage {
 export const CALL_HEADER = 'x-stomp-call';
 /** Just call stomp: the header of the worker's answer to a call that names the page's real URL (after its redirects) */
 export const CALLED_URL_HEADER = 'x-stomp-called-url';
+/** Just call stomp: the worker's binary route for an inline media document */
+export const CALLED_RESOURCE_HEADER = 'x-stomp-called-resource';
 /** just call stomp: the referrer policy of the call's navigation (its document's, or its link's), which the worker reads in place of the fetch's */
 export const CALL_POLICY_HEADER = 'x-stomp-call-policy';
 /**

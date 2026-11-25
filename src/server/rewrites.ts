@@ -262,7 +262,12 @@ import {
 	type CacheHit,
 } from './cache';
 import { cacheMarkOf, renewCacheSecret } from './cacheMarks';
-import { calledClient, emulatedWorker, isCallPage } from './called';
+import {
+	calledClient,
+	callingClient,
+	emulatedWorker,
+	isCallPage,
+} from './called';
 import {
 	decodeDocument,
 	decodeScript,
@@ -8631,6 +8636,18 @@ export function registerRewrites(
 				}
 				let contentType = responseHeaders.get('content-type');
 				let mime = getMime(contentType || '');
+				// A call writes an SVG as an image, not an XML shell whose
+				// script must run to reveal the SVG. Keep its original bytes
+				// for a call that cannot load the image by a binary GET.
+				if (
+					mime === 'image/svg+xml' &&
+					request.mode === 'navigate' &&
+					callingClient(request.clientId) &&
+					!/^\s*attachment\s*(?:;|$)/i.test(
+						response.headers.get('content-disposition') ?? '',
+					)
+				)
+					return false;
 				// a proxied top (not a document a page routed as nested): its
 				// shell loads the rewriter library
 				const top =

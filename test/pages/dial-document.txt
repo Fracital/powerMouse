@@ -1,0 +1,3 @@
+A plain text document & its markup:
+<script>window.dialTextExecuted = true;</script>
+<img src="https://example.invalid/not-an-image.png">

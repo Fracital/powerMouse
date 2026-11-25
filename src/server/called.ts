@@ -64,6 +64,7 @@ import {
 	CALL_TOKEN_HEADER,
 	CALL_WAIT_MS,
 	CALLED_KEY,
+	CALLED_RESOURCE_HEADER,
 	CALLED_URL_HEADER,
 	WORKER_BASE,
 } from '../transport/messages';
@@ -348,8 +349,55 @@ const callPageHTML = (
 				decoder = new TextDecoder();
 			}
 			let markup;
+			let jsonText, prettyText;
+			const mime = type.split(';')[0].trim().toLowerCase();
+			const media = /^(?:image|audio|video)\\//.test(mime);
+			const pdf = mime === 'application/pdf';
+			const html = mime === 'text/html' || mime === 'application/xhtml+xml' ||
+				mime === 'text/xml' || mime === 'application/xml' || mime.endsWith('+xml');
+			// Only HTML (or the worker's XML shell) is markup. A text file
+			// may contain arbitrary HTML and must not run it on this origin.
+			const quote = (value) => value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+			const head = '<!doctype html><html><head><meta charset="utf-8" /><meta name="color-scheme" content="light dark">';
 			try {
-				markup = decoder.decode(await body.arrayBuffer());
+				if (media || pdf) {
+					// A media element can seek through the worker's binary route.
+					// A POST must not be repeated as a GET, and Chrome sends an
+					// embed's request past its worker, so show those answers from
+					// the bytes the call already received. The document owns the
+					// Blob URL and the browser releases it when the frame goes.
+					const route = body.headers.get(${JSON.stringify(CALLED_RESOURCE_HEADER)});
+					const routed = route && ours(route);
+					let src;
+					if (media && routed && ${at === null}) {
+						src = routed.href;
+						void body.body?.cancel().catch(() => {});
+					} else {
+						src = URL.createObjectURL(new Blob([await body.arrayBuffer()], { type: mime }));
+					}
+					const url = quote(src);
+					if (mime.startsWith('image/')) {
+						markup = head + '<style>html,body{height:100%;margin:0;background:#0e0e0e}body{display:grid;place-items:center}img{max-width:100%;max-height:100%;object-fit:contain}</style></head><body><img src="' + url + '"></body></html>';
+					} else if (pdf) {
+						markup = head + '<style>html,body{width:100%;height:100%;margin:0}body{display:flex;flex-direction:column}header{padding:8px;font:menu}embed{width:100%;flex:1}</style></head><body><header><a download="document.pdf" href="' + url + '">Download PDF</a></header><embed type="application/pdf" src="' + url + '"></body></html>';
+					} else {
+						const tag = mime.startsWith('video/') ? 'video' : 'audio';
+						markup = head + '<style>html,body{height:100%;margin:0;background:#0e0e0e}body{display:grid;place-items:center}video,audio{max-width:100%;max-height:100%}</style></head><body><' + tag + ' controls autoplay src="' + url + '"></' + tag + '></body></html>';
+					}
+				} else {
+					const decoded = decoder.decode(await body.arrayBuffer());
+					if (mime === 'application/json' || mime.endsWith('+json')) {
+						try {
+							prettyText = JSON.stringify(JSON.parse(decoded), null, 2);
+							jsonText = decoded;
+						} catch (error) {
+							// Invalid JSON is still displayed as text.
+						}
+					}
+					markup = html ? decoded : head + '</head><body>' +
+						(jsonText === undefined ? '' : '<label><input type="checkbox" id="pretty-json"> Pretty print</label>') +
+						'<pre style="white-space:pre-wrap;word-wrap:break-word">\\n' + quote(decoded) + '</pre></body></html>';
+				}
 			} catch (error) {
 				if (!abort.signal.aborted) fail();
 				return;
@@ -359,7 +407,6 @@ const callPageHTML = (
 			// does not get from its headers: first in the shell, before any of
 			// its scripts (a meta's policy applies from where it is)
 			// and its referrer policy, before the page's own metas (a later one wins)
-			const quote = (value) => value.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 			const policies = (body.headers.get('content-security-policy') || '').split(',').map((policy) => policy.trim()).filter(Boolean);
 			const referrer = (body.headers.get('referrer-policy') || '').split(',').map((policy) => policy.trim()).filter(Boolean).pop();
 			const metas = policies.map((policy) => '<meta http-equiv="Content-Security-Policy" content="' + quote(policy) + '">').join('') + (referrer ? '<meta name="referrer" content="' + quote(referrer) + '">' : '');
@@ -371,6 +418,13 @@ const callPageHTML = (
 			performance.clearResourceTimings();
 			document.open();
 			document.write(markup);
+			if (jsonText !== undefined) {
+				const checkbox = document.getElementById('pretty-json');
+				const pre = document.querySelector('pre');
+				checkbox?.addEventListener('change', () => {
+					pre.textContent = checkbox.checked ? prettyText : jsonText;
+				});
+			}
 			// closed a task later, unless the shell's client wrote the page
 			// by then: its bundle can run inside the write (a script already
 			// at hand), and then it writes the page only from a microtask
@@ -545,6 +599,11 @@ export function calledClient(clientId: string | undefined): boolean {
 	return !!clientId && (done.has(clientId) || calling.has(clientId));
 }
 
+/** Whether this client is still receiving its call's navigation answer. */
+export function callingClient(clientId: string | undefined): boolean {
+	return !!clientId && calling.has(clientId);
+}
+
 /** whether the request is a call (it carries the header and is no navigation) */
 export function isCall(request: Request): boolean {
 	return request.mode !== 'navigate' && request.headers.has(CALL_HEADER);
@@ -674,6 +733,7 @@ export async function answerOf(
 	event: FetchEvent,
 	realURL: (url: string) => string | null,
 	isPoolOrigin: (origin: string) => boolean = () => false,
+	resourceRoute: (routed: string, real: string) => string | null = () => null,
 ): Promise<Response> {
 	const answer = (event as FetchEvent & { answered?: Promise<Response> | null })
 		.answered;
@@ -734,6 +794,16 @@ export async function answerOf(
 	if (response.type !== 'default' || !url) return response;
 	const headers = new Headers(response.headers);
 	headers.set(CALLED_URL_HEADER, url);
+	// Never take this header from a site. Only GETs can be loaded again
+	// as a media element, and its URL must be a route of this controller.
+	headers.delete(CALLED_RESOURCE_HEADER);
+	if (
+		event.request.method === 'GET' &&
+		/^(?:image|audio|video)\//i.test(headers.get('content-type') ?? '')
+	) {
+		const routed = resourceRoute(event.request.url, url);
+		if (routed) headers.set(CALLED_RESOURCE_HEADER, routed);
+	}
 	return new Response(response.body, {
 		status: response.status,
 		statusText: response.statusText,

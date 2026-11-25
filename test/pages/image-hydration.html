@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<title>Image hydration</title>
+	</head>
+	<body>
+		<div id="app">
+			<img id="logo" src="/pages/object-events.png?before" alt="logo" />
+			<picture>
+				<source srcset="/pages/object-events.png?before-picture" />
+				<img id="photo" src="/pages/object-events.png?fallback" alt="photo" />
+			</picture>
+		</div>
+		<script type="module">
+			// Svelte's hydration reads childNodes, then compares raw attributes
+			// and uses setAttribute on the existing parser-created elements.
+			const [logo, picture] = [
+				...document.getElementById('app').childNodes,
+			].filter((node) => node.nodeType === 1);
+			const [source, photo] = [...picture.childNodes].filter(
+				(node) => node.nodeType === 1,
+			);
+			function attr(node, name, value) {
+				if (node.getAttribute(name) !== value) node.setAttribute(name, value);
+			}
+			attr(
+				logo,
+				'src',
+				new URL('/pages/object-events.png?hydrated', location.href).href,
+			);
+			attr(source, 'srcset', '/pages/object-events.png?hydrated-picture');
+			attr(photo, 'src', '/pages/object-events.png?hydrated-fallback');
+			document.body.dataset.realm = String(
+				logo instanceof HTMLImageElement &&
+					source instanceof HTMLSourceElement &&
+					logo.setAttribute === Element.prototype.setAttribute,
+			);
+			// Firefox can reject decode() during the pending request switch.
+			// Wait for the actual replacement sources, not the initial images.
+			while (
+				!logo.complete ||
+				!photo.complete ||
+				!logo.naturalWidth ||
+				!photo.naturalWidth ||
+				!logo.currentSrc.endsWith('?hydrated') ||
+				!photo.currentSrc.endsWith('?hydrated-picture')
+			)
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			await Promise.all([logo.decode(), photo.decode()]);
+			document.body.dataset.loaded = 'yes';
+		</script>
+	</body>
+</html>

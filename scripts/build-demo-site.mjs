@@ -40,6 +40,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { parse as parseScript } from 'acorn';
+import { keepNativeRealms } from './estrogen-realms.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const args = process.argv.slice(2);
@@ -448,6 +449,9 @@ if (built.status === 0)
 	);
 for (let index = 0; index < LIBRARY_STATEMENTS.length; index++)
 	rmSync(statementFile(index), { force: true });
+// The host VM still protects its own code, but the proxy owns its frames'
+// DOM hooks. Keep the VM's cross-realm native wrappers out of those frames.
+if (built.status === 0) keepNativeRealms(out);
 // which hash each runtime file is asked for under, and the hash of its
 // protected bytes: the server keeps it for good only while it is that file
 writeFileSync(

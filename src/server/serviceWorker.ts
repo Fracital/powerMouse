@@ -3116,6 +3116,11 @@ async function answerCall(event: FetchEvent): Promise<Response> {
 		called,
 		realURL,
 		(origin) => !!ref && proxyOrigins(ref.config).includes(origin),
+		(routed, real) =>
+			controllerFor(new URL(unhomed(routed)).pathname)?.ready?.routeAs(
+				'binary',
+				real,
+			) ?? null,
 	);
 }
 
