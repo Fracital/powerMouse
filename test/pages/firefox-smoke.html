@@ -43,6 +43,16 @@
 				const headers = await (await fetch('/echo-headers')).json();
 				return (headers.cookie ?? '').split('; ').sort().join('; ');
 			});
+			// Firefox has no Request.prototype.body: the worker read every
+			// request there as bodiless and sent each POST upstream empty
+			await timed('postBody', async () => {
+				const posted = await fetch('/echo-body', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/sdp' },
+					body: 'v=0\r\ns=-\r\n',
+				});
+				return (await posted.json()).bytes;
+			});
 			await timed('localStorage', async () => {
 				localStorage.setItem('ff-smoke', 'kept');
 				sessionStorage.setItem('ff-smoke', 'session');

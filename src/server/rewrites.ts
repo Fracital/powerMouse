@@ -1161,6 +1161,13 @@ export function departingMixedContent(
 }
 
 const BODY_ILLEGAL = ['GET', 'HEAD'];
+// Firefox has no Request.prototype.body (Firefox 153): there `!request.body`
+// held for every request, and every POST and PUT went upstream empty (the
+// gateway of krunk.io's WebRTC signaling answered 400 "bad offer"). Where
+// the getter is missing the body is read whatever it is: a request without
+// one reads as an empty Blob, which goes out with Content-Length 0, as a
+// bodiless POST does natively
+const BODY_GETTER = 'body' in Request.prototype;
 
 /**
  * Request headers that are not the page's own for the CORS protocol: the
@@ -3718,7 +3725,8 @@ function genericForward(
 		// 411 Length Required: every Bing API call failed). Natively, only a
 		// page's own ReadableStream goes out without a length
 		const upload =
-			BODY_ILLEGAL.includes(serverRequest.method) || !serverRequest.body
+			BODY_ILLEGAL.includes(serverRequest.method) ||
+			(BODY_GETTER && !serverRequest.body)
 				? Promise.resolve(undefined)
 				: serverRequest.blob();
 		upload.catch(() => {});

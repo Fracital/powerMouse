@@ -5,8 +5,9 @@
 //    service worker is registered, the controller handshook;
 //  - a fixture page proxied, compared with the same page loaded natively
 //    (test/pages/firefox-smoke.html: title, element count, cookies, a
-//    fetch's Cookie header, localStorage, a synchronous XMLHttpRequest
-//    through the sync bridge, a WebSocket echo, a frame, a worker, a form),
+//    fetch's Cookie header, a POST's body, localStorage, a synchronous
+//    XMLHttpRequest through the sync bridge, a WebSocket echo, a frame, a
+//    worker, a form),
 //    in the isolated mode (localhost, the proxy on 127.0.0.1) and the
 //    same-origin one;
 //  - real sites render (Wikipedia, MDN, the Chrome Web Store, Hacker News;
@@ -1164,6 +1165,7 @@ async function offlineVibeOS(tab) {
 			);
 			for (const key of [
 				'location',
+				'postBody',
 				'localStorage',
 				'syncXhr',
 				'webSocket',
