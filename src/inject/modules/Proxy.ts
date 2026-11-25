@@ -714,8 +714,11 @@ export default class ProxyModule extends Module<Client> {
 				}
 				const string = Reflect.apply(target, that, args);
 				// a page's function: its source as the page wrote it, not the
-				// rewriter's output (src/functionSource.ts)
-				return isNative(string) ? string : (originalSource(string) ?? string);
+				// rewriter's output (src/functionSource.ts), its text kept while
+				// the function lives
+				return isNative(string)
+					? string
+					: (originalSource(string, that as Function) ?? string);
 			},
 		);
 		// the extensions' runtime, which loads first, shows what it defines

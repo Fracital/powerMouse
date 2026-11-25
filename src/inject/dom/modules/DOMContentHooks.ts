@@ -1,4 +1,5 @@
 import { MAY_ROUTE } from '../../../cssURL';
+import { keptBy } from '../../../functionSource';
 import {
 	isSpeculationRules,
 	NO_SPECULATION,
@@ -483,11 +484,8 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				'SVGScriptElement text',
 			);
 			if (passed === null) return;
-			const rewritten = modifyJS(
-				passed,
-				client.baseURL,
-				client.config,
-				scriptType(script),
+			const rewritten = keptBy(script, () =>
+				modifyJS(passed, client.baseURL, client.config, scriptType(script)),
 			);
 			rewrittenScripts.set(script as HTMLScriptElement, rewritten);
 			client.trustedApprove?.(rewritten);
@@ -562,7 +560,11 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				passed === ''
 					? ''
 					: (client.prewrittenScript(type === 'genericModule', passed, true) ??
-						modifyJS(passed, client.baseURL, client.config, type));
+						// (its functions read the text while the script lives,
+						// src/functionSource.ts)
+						keptBy(script, () =>
+							modifyJS(passed, client.baseURL, client.config, type),
+						));
 			if (type === 'genericModule')
 				rewritten = client.moduleText(rewritten, script);
 			// a rewrite that changed nothing leaves no mark. The mark is the
@@ -900,7 +902,9 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 				const type = scriptType(element);
 				let output =
 					client.prewrittenScript(type === 'genericModule', passed, true) ??
-					modifyJS(passed, client.baseURL, client.config, type);
+					keptBy(script, () =>
+						modifyJS(passed, client.baseURL, client.config, type),
+					);
 				if (type === 'genericModule')
 					output = client.moduleText(output, script);
 				client.trustedApprove?.(output);

@@ -654,7 +654,7 @@ export default class DOMAttributesModule extends Module<DocumentClient> {
 					// a placed one's head ends with its place (the mark's readback
 					// drops all of the head, functionSource.ts originalSource)
 					const key = sourceKey(source);
-					keepSource(key, source);
+					keepSource(key, source, element);
 					const placed = moduleClient.markupCopy;
 					const prewritten = moduleClient.prewrittenHandler(
 						name,

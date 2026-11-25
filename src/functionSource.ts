@@ -18,6 +18,7 @@
 // copy of the text but the script's own source.
 
 import { accessExpression } from './helperNames';
+import { LazyMap, LazyWeakMap } from './inject/ownCollections';
 
 /** the characters a kept text cannot carry in a block comment on one line, in the order `subs` replaces them */
 const CARRIED = ['*', '<', '\n', '\r', '\u2028', '\u2029'];
@@ -131,11 +132,39 @@ interface Kept {
 	 * weakly: the realm that ran the script keeps its own (keepEmbedded)
 	 */
 	holders?: [WeakRef<Function>, string][];
+	/** whether something of the page's keeps it (pin), past the table */
+	pinned?: true;
 }
 
-// one table for every realm a bundle hooks (a frame it injected reads its
-// functions through the same toString hook), never reachable from the page
-const kept = new Map<string, Kept>();
+// One table for every realm a bundle hooks (a frame it injected reads its
+// functions through the same toString hook), never reachable from the page.
+// Natively a script's text goes with its last function, and a page that
+// evaluates many distinct scripts (eval or new Function in a loop, a
+// challenge retried every second, an app injecting scripts) kept every one
+// here for its life: 4 KB a script, 40 MB for 10,000. No function can be
+// asked whether it lives (the browser keeps a script's text for its
+// functions, never through one of them), so the table keeps the newest used
+// MAX_KEPT and no more than KEPT_UNITS of the texts it owns, and an entry it
+// lets go is still found by its key for as long as something of the page's
+// it was pinned to lives: a function whose source was read, or that eval or
+// new Function handed the page, the script element or the element of the
+// handler attribute the text is of, a holder its realm keeps. A function
+// none of those reach, of a script older than the newest KEPT_UNITS kept
+// (one a direct eval made, or that evaluated code stored), reads as its
+// rewrite without the marks (unmarked): the page's own where the rewriter
+// changed nothing in it.
+const kept = new LazyMap<string, Kept>();
+const MAX_KEPT = 8192;
+/** the most text the table holds itself, in UTF-16 units (8 to 16 MB) */
+const KEPT_UNITS = 8 * 1024 * 1024;
+let keptUnits = 0;
+/** what keeps each entry the table may let go: weakly, by what it is of */
+const pins = new LazyWeakMap<object, Kept>();
+/** the entries the table let go that something pinned, by key */
+const fallen = new LazyMap<string, WeakRef<Kept>>();
+let sweepAt = MAX_KEPT;
+/** what the texts the rewrite under way keeps are of (keptBy) */
+let keeper: object | undefined;
 // the native toString, taken when the bundle loads, before any hook
 const nativeToString = Function.prototype.toString;
 // holders a key takes before one is read (the page can hand some over too)
@@ -146,12 +175,103 @@ const NativeWeakRef = WeakRef;
 const weakDeref = WeakRef.prototype.deref;
 const holderOf = (ref: WeakRef<Function>) =>
 	Reflect.apply(weakDeref, ref, []) as Function | undefined;
+// (a holder's text is a part of its script's own source, which its realm
+// keeps: only a text kept as it was handed over is the table's own)
+const unitsOf = (entry: Kept) =>
+	entry.subs === undefined ? (entry.text?.length ?? 0) : 0;
 
-/** keep a script's text the inject rewrote (it rewrote that very text) */
-export function keepSource(key: string, text: string) {
+/** the entry of `key`, now the newest used, wherever it is */
+function find(key: string): Kept | undefined {
+	let entry = kept.get(key);
+	if (entry) {
+		kept.delete(key);
+		kept.set(key, entry);
+		return entry;
+	}
+	const ref = fallen.get(key);
+	entry = ref && (Reflect.apply(weakDeref, ref, []) as Kept | undefined);
+	if (!entry) return undefined;
+	fallen.delete(key);
+	hold(key, entry);
+	return entry;
+}
+
+/** put `entry` in the table as its newest */
+function hold(key: string, entry: Kept) {
+	kept.set(key, entry);
+	keptUnits += unitsOf(entry);
+	trim(key);
+}
+
+/** let the oldest used go while the table is past its limits */
+function trim(newest: string) {
+	if (kept.size <= MAX_KEPT && keptUnits <= KEPT_UNITS) return;
+	// (the newest stays even past the limit)
+	for (const key of kept.keys()) {
+		if (key === newest || (kept.size <= MAX_KEPT && keptUnits <= KEPT_UNITS))
+			break;
+		const entry = kept.get(key)!;
+		kept.delete(key);
+		keptUnits -= unitsOf(entry);
+		if (!entry.pinned) continue;
+		fallen.set(key, new NativeWeakRef(entry));
+		if (fallen.size <= sweepAt) continue;
+		// (the keys of entries whose pins are all gone)
+		for (const [gone, ref] of [...fallen.entries()])
+			if (!Reflect.apply(weakDeref, ref, [])) fallen.delete(gone);
+		sweepAt = Math.max(MAX_KEPT, fallen.size * 2);
+	}
+}
+
+/** keep `entry` for as long as `owner` lives */
+function pin(owner: object, entry: Kept) {
+	pins.set(owner, entry);
+	entry.pinned = true;
+}
+
+/**
+ * Run `make` (a rewrite): the texts it keeps are kept for as long as
+ * `owner` lives (the script element they are the text of)
+ */
+export function keptBy<T>(owner: object, make: () => T): T {
+	const was = keeper;
+	keeper = owner;
+	try {
+		return make();
+	} finally {
+		keeper = was;
+	}
+}
+
+/**
+ * Keep the text of the script that made a function the page was handed
+ * (eval's value, new Function's) for as long as the function lives
+ */
+export function keepFunction(fn: unknown) {
+	if (typeof fn !== 'function') return;
+	try {
+		originalSource(Reflect.apply(nativeToString, fn, []), fn);
+	} catch (error) {
+		// (a function whose source cannot be read keeps nothing)
+	}
+}
+
+/**
+ * Keep a script's text the inject rewrote (it rewrote that very text), for
+ * as long as `owner` lives when one is given (the element whose handler
+ * attribute it is)
+ */
+export function keepSource(key: string, text: string, owner = keeper) {
 	if (report) return report(key, text);
-	const entry = kept.get(key);
-	if (entry?.text === undefined) kept.set(key, { text });
+	let entry = find(key);
+	if (!entry) hold(key, (entry = { text }));
+	else if (entry.text === undefined) {
+		entry.text = text;
+		entry.subs = entry.holders = undefined;
+		keptUnits += text.length;
+		trim(key);
+	}
+	if (owner) pin(owner, entry);
 }
 
 /**
@@ -175,15 +295,23 @@ export function keepEmbedded(
 		typeof holder !== 'function'
 	)
 		return false;
-	let entry = kept.get(key);
-	if (!entry) kept.set(key, (entry = {}));
-	if (entry.text !== undefined) return false;
+	let entry = find(key);
+	if (!entry) hold(key, (entry = {}));
+	if (entry.text !== undefined) {
+		// (the text another realm's holder carried, kept while this realm
+		// keeps its own)
+		pin(holder, entry);
+		return true;
+	}
 	// (the holders of realms that are gone make room)
 	const live: [WeakRef<Function>, string][] = [];
 	for (const held of entry.holders ?? [])
 		if (holderOf(held[0])) live.push(held);
 	const took = live.length < MAX_HOLDERS;
-	if (took) live.push([new NativeWeakRef(holder), subs]);
+	if (took) {
+		live.push([new NativeWeakRef(holder), subs]);
+		pin(holder, entry);
+	}
 	entry.holders = live;
 	return took;
 }
@@ -230,7 +358,7 @@ function textOf(key: string, entry: Kept): string | null {
  * LS and PS), or null (./inject/positionMaps.ts)
  */
 export function keptText(key: string): [string, string | undefined] | null {
-	const entry = kept.get(key);
+	const entry = find(key);
 	const text = entry ? textOf(key, entry) : null;
 	return text === null ? null : [text, entry!.subs];
 }
@@ -247,25 +375,40 @@ function decode(text: string, subs: string | undefined): string {
 }
 
 const MARK = /\/\*([0-9a-z]+)\.([0-9a-z]+)\.([0-9a-z]+)\*\//y;
+
+/**
+ * What a function of a script whose text is not kept reads as (one the
+ * table let go, nothing pinning it): its own source without the marks of
+ * its script, the page's own where the rewriter changed nothing in it
+ */
+const unmarked = (native: string, key: string) =>
+	native.replaceAll(
+		new RegExp(`/\\*${key}\\.[0-9a-z]+\\.[0-9a-z]+\\*/`, 'g'),
+		'',
+	);
 // the browser's wrapper of a handler attribute's body
 const HANDLER = /^function [^\s(]*\([^)]*\) \{\n\/\*([0-9a-z]+)\*\//;
 
 /**
  * The source a function's native source (the rewriter's output) stands
- * for, or null when it carries no mark this realm knows. A mark comes after
+ * for, or null when it carries no mark (one whose script's text this realm
+ * does not keep reads without its marks, unmarked). A mark comes after
  * the first token, with nothing that holds a comment before it but a quoted
  * method or pattern key: the scan skips strings and gives up at anything a
  * mark never follows (an `=`, a `;`, a `}`), so a function the rewriter
  * made itself, which has none, never reads as the first page function
- * nested in it.
+ * nested in it. The text read is kept for as long as `fn`, the function,
+ * lives.
  */
-export function originalSource(native: string): string | null {
+export function originalSource(native: string, fn?: Function): string | null {
 	const handler = HANDLER.exec(native);
 	if (handler) {
-		const entry = kept.get(handler[1]!);
-		if (!entry || !native.endsWith('\n}')) return null;
+		if (!native.endsWith('\n}')) return null;
+		const entry = find(handler[1]!);
+		if (!entry) return null;
 		const text = textOf(handler[1]!, entry);
 		if (text === null) return null;
+		if (fn) pin(fn, entry);
 		const at = handler[0].length - handler[1]!.length - 4;
 		return native.slice(0, at) + decode(text, entry.subs) + '\n}';
 	}
@@ -280,10 +423,10 @@ export function originalSource(native: string): string | null {
 			MARK.lastIndex = i;
 			const mark = MARK.exec(native);
 			if (!mark) return null;
-			const entry = kept.get(mark[1]!);
-			if (!entry) return null;
-			const text = textOf(mark[1]!, entry);
-			if (text === null) return null;
+			const entry = find(mark[1]!);
+			const text = entry ? textOf(mark[1]!, entry) : null;
+			if (!entry || text === null) return unmarked(native, mark[1]!);
+			if (fn) pin(fn, entry);
 			const start = parseInt(mark[2]!, 36);
 			const end = start + parseInt(mark[3]!, 36);
 			if (end > text.length) return null;

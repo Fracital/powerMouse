@@ -1,4 +1,4 @@
-import { keepEmbedded } from '../../functionSource';
+import { keepEmbedded, keepFunction } from '../../functionSource';
 import { HelperNames } from '../../helperNames';
 import { routeHTML } from '../../rewriteHTML';
 import { routeRefused } from '../../routeURL';
@@ -181,7 +181,12 @@ export default class AccessModule extends Module<Client> {
 			if (!isCode(x)) return x;
 			// (eval refused by the page's script-src throws in `evaluated`)
 			const code = evaluated(x, () => evalSnapshot(x as string));
-			return code === null ? undefined : evalSnapshot(code);
+			if (code === null) return undefined;
+			const value = evalSnapshot(code);
+			// (a function it makes keeps its text while it lives,
+			// src/functionSource.ts)
+			keepFunction(value);
+			return value;
 		};
 
 		const globalEvalProxy = proxyModule?.wrapFunction(

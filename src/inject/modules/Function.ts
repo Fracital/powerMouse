@@ -1,3 +1,4 @@
+import { keepFunction } from '../../functionSource';
 import Client from '../Client';
 import Module from '../Module';
 import { modifyJS } from '../rewriter';
@@ -84,6 +85,8 @@ export default class FunctionModule extends Module<Client> {
 					// toString shows the source the page gave, not the rewritten body
 					if (typeof made === 'function') {
 						proxyModule.functionStrings.set(made, written);
+						// (and the functions it makes read theirs while it lives)
+						keepFunction(made);
 						// `class Callable extends Function`, `Reflect.construct(
 						// Function, [code], Other)`: the function is made with the
 						// prototype of what was constructed, as natively
