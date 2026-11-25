@@ -49,3 +49,10 @@
   had renamed it, as every proxy name, to letters of its own each build
   ("KIujz 4.2.0"). The name is kept, in strings that ship encrypted, and
   the page a failed load shows says "This page could not load" in its HTML.
+- The protected site names its transports and relay again where its UI
+  does: the Transport menu said "ywoeq" and "ktjqtln" for epoxy and
+  libcurl, and the Download tooltip "this page's qvaj server". The UI now
+  names them inside phrases estrogen keeps ("epoxy transport", "libcurl
+  transport", "wisp server", "Wisp over", the offline file's "Wisp server"
+  setting), which ship encrypted; the code's own names are still renamed
+  each build.

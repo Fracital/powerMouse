@@ -244,6 +244,9 @@ writeFileSync(
 	index,
 	readFileSync(index, 'utf8')
 		.replaceAll('https://github.com/Fracital/powerMouse', 'https://github.com/')
+		// estrogen keeps "wisp server" (demo/estrogen.toml), which markup
+		// cannot encrypt; pm/main.js gives the link its tooltip back
+		.replaceAll("this page's wisp server", "this page's server")
 		.replaceAll('powerMouse', 'Browser')
 		.replaceAll('Fracital', 'GitHub'),
 );

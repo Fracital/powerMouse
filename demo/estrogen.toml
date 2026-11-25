@@ -10,6 +10,18 @@ keep = [
 	# the name the UI shows (About STomp, the version, passkeys): its strings
 	# ship encrypted, and no identifier is spelled so
 	"STomp",
+	# the transports and the relay as the UI names them (pm/main.js
+	# TRANSPORT_LABELS, the carrier line, the Download tooltip, the offline
+	# file's settings): each phrase has a space, so no identifier, route or
+	# store name is spelled so, and the strings that hold one ship encrypted.
+	# Not a bare "Wisp server": epoxy's wasm says "Wisp server closed", and
+	# a wasm data string cannot be encrypted
+	"epoxy transport",
+	"libcurl transport",
+	"Wisp server</h3>",
+	"Wisp server URL",
+	"wisp server",
+	"Wisp over",
 ]
 wasm_names = ["wisp"]
 store_names = [

@@ -24,11 +24,13 @@ const $ = (id) => document.getElementById(id);
 // title, the heading and the Download link's tooltip
 const BRAND = 'powerMouse';
 if (document.title === 'Browser') document.title = BRAND;
-for (const node of [document.querySelector('h1 > a'), $('offlineDownload')]) {
-	if (node?.textContent === 'Browser') node.textContent = BRAND;
-	if (node?.title?.includes('Browser'))
-		node.title = node.title.replace('Browser', BRAND);
-}
+const heading = document.querySelector('h1 > a');
+if (heading?.textContent === 'Browser') heading.textContent = BRAND;
+// the protected build's HTML has a neutral tooltip: "wisp server" is a
+// phrase demo/estrogen.toml keeps, so it ships here, encrypted
+if ($('offlineDownload'))
+	$('offlineDownload').title =
+		`Save ${BRAND} as one HTML file that runs from your computer through this page's wisp server`;
 
 // Console badges, after the two-tone "%c Browser %c ..." lines krunker's
 // dev console prints: a grey label cell and a coloured value cell. The
@@ -63,6 +65,21 @@ const recentsList = $('recentsList');
 const landingStatus = $('logMsg');
 const chromeStatus = $('chromeStatus');
 const transportSelect = $('transport');
+// The protected build renames the transports' names in every string
+// (demo/estrogen.toml names), and the select's values with them, but not
+// inside "epoxy transport" and "libcurl transport", which it keeps and
+// ships encrypted: the UI names a transport from these
+const TRANSPORT_LABELS = {
+	epoxy: 'epoxy transport',
+	libcurl: 'libcurl transport',
+};
+/** `epoxy transport` */
+const transportLabel = (name) => TRANSPORT_LABELS[name] ?? `${name} transport`;
+/** `epoxy` */
+const transportShown = (name) =>
+	transportLabel(name).replace(/ transport$/, '');
+for (const option of transportSelect.options)
+	option.textContent = transportShown(option.value);
 const adblockToggle = $('adblock');
 const torToggle = $('tor');
 const omni = $('omni');
@@ -1748,7 +1765,7 @@ async function startController(name) {
 							made.update().catch(() => {});
 						return made;
 					});
-		setStatus(`Loading ${name} transport…`);
+		setStatus(`Loading ${transportLabel(name)}…`);
 		controller = new StompController({
 			serviceworker: registration,
 			transport: transportFor(name),
@@ -1842,7 +1859,7 @@ async function boot() {
 
 async function switchTransport(name) {
 	rememberTransport(name);
-	setStatus(`Switching to ${name}…`);
+	setStatus(`Switching to ${transportShown(name)}…`);
 	try {
 		// until the new transport's carrier event says what it rides
 		transportName = name;
@@ -7976,7 +7993,7 @@ menuNewIdentity.addEventListener('click', async () => {
 /** the transport the bar's select chose, for the Transport fact */
 let transportName = '';
 const transportFact = (name) =>
-	`${name} over ${relayURL()}${TOR_REQUESTED ? ', Tor TCP route' : HTTP3 && name === 'epoxy' ? ', HTTP/3 on' : ''}`;
+	`${transportShown(name)} over ${relayURL()}${TOR_REQUESTED ? ', Tor TCP route' : HTTP3 && name === 'epoxy' ? ', HTTP/3 on' : ''}`;
 
 function showCarrier(info) {
 	const udp = info.carrier === 'webtransport';
