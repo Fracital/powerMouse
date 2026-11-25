@@ -247,6 +247,20 @@ writeFileSync(
 		.replaceAll('powerMouse', 'Browser')
 		.replaceAll('Fracital', 'GitHub'),
 );
+// The page a load that failed shows says so in its HTML too: the UI's own
+// strings keep STomp's name (demo/estrogen.toml keep), encrypted, and this
+// text is not a script's
+for (const page of ['public/error.html', 'examples/error.html']) {
+	const file = join(native, page);
+	if (!existsSync(file)) continue;
+	writeFileSync(
+		file,
+		readFileSync(file, 'utf8').replaceAll(
+			'STomp could not load',
+			'This page could not load',
+		),
+	);
+}
 const manifestFile = join(native, 'public/manifest.webmanifest');
 const manifest = JSON.parse(readFileSync(manifestFile, 'utf8'));
 manifest.name = manifest.short_name = 'Browser';

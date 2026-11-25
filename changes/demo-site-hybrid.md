@@ -44,3 +44,8 @@
   names it Browser there, and the page's script, whose strings are
   encrypted, gives it its name as it starts. An installed app's name, from
   the manifest, stays Browser.
+- The protected site names STomp again wherever its UI does (the version
+  under the heading, About STomp, the passkeys and shields notes): estrogen
+  had renamed it, as every proxy name, to letters of its own each build
+  ("KIujz 4.2.0"). The name is kept, in strings that ship encrypted, and
+  the page a failed load shows says "This page could not load" in its HTML.

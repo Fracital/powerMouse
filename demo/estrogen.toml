@@ -2,7 +2,15 @@
 scope = "build"
 names = ["stomp", "epoxy", "libcurl", "wisp", "tor-js", "tor_js", "__pm"]
 vendor = ["transport/**/*.wasm"]
-keep = ["wisp-v2", "/wisp/", "stomp-demo:", "stomp:debug-transport"]
+keep = [
+	"wisp-v2",
+	"/wisp/",
+	"stomp-demo:",
+	"stomp:debug-transport",
+	# the name the UI shows (About STomp, the version, passkeys): its strings
+	# ship encrypted, and no identifier is spelled so
+	"STomp",
+]
 wasm_names = ["wisp"]
 store_names = [
 	"stompCookies",
