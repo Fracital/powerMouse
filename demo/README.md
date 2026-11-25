@@ -98,15 +98,17 @@ status line say what blocks bootstrap or why it failed, and a tab in Tor
 mode stays in it across its reloads even when another tab turned Tor off.
 
 A first visit's client downloads the Tor directory through a fallback relay
-(1.0 to 5.0 s to Ready on 2026-11-25). With `STOMP_TOR_BOOTSTRAP=<dir>` the
-server serves a directory snapshot from it at `/tor-client/bootstrap.zip`
-and the client starts from that instead (1.2 to 1.3 s); arti checks its
-signatures as it does a download's, and a stale, refused or missing
-snapshot means the download. `node scripts/tor-snapshot.mjs --out <dir>`
-writes it (tor-js in Node, about 4 MB downloaded and 170 MB of memory per
-run, 4 to 9 s); `STOMP_TOR_BOOTSTRAP_EVERY=30` has the server run it at
-start and every 30 minutes, or a timer can. See docs/tor-over-wisp.md "The
-fast-bootstrap snapshot".
+(1.0 to 5.0 s to Ready on 2026-11-25), unless the server serves a
+directory snapshot at `/tor-client/bootstrap.zip`, which it does by
+default: the client starts from that instead (1.2 to 1.3 s); arti checks
+its signatures as it does a download's, and a stale, refused or missing
+snapshot means the download. The server runs `node scripts/tor-snapshot.mjs`
+into `build/tor-bootstrap` at start and every 30 minutes (tor-js in Node,
+about 8 MB downloaded and 170 MB of memory per run, 4 to 9 s).
+`STOMP_TOR_BOOTSTRAP=<dir>` puts it elsewhere and `STOMP_TOR_BOOTSTRAP=0`
+turns it off; `STOMP_TOR_BOOTSTRAP_EVERY` sets the minutes between runs,
+and `0` leaves the writing to a timer of the deployer's. The test runners
+turn it off. See docs/tor-over-wisp.md "The fast-bootstrap snapshot".
 
 There is no server-side Tor relay any more: `STOMP_TOR_SOCKS5`,
 `STOMP_TOR_WISP_URL`, `STOMP_TOR_CONTROL` and the other `STOMP_TOR_*`

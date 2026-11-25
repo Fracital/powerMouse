@@ -319,18 +319,25 @@ its cache, as a later visit takes its kept directory.
   the nine authorities, which dir-spec asks clients to spare.
 - **Where it is served**: `GET /tor-client/bootstrap.zip`
   (`demo/torSnapshot.js`) from `STOMP_TOR_BOOTSTRAP`, the directory the
-  builder writes. The same bytes for every visitor: no query, the client
+  builder writes (`build/tor-bootstrap` when unset, none when `0`). The same bytes for every visitor: no query, the client
   sends no credentials, `Cache-Control: no-cache` with an ETag (a 304 when
   it has not changed), `Vary: Accept-Encoding`. A snapshot past its
   consensus's valid-until, a torn one (the zip is not the size
-  bootstrap.json says) or none is a 404. `STOMP_TOR_BOOTSTRAP_EVERY`
-  (minutes) has the server run the builder itself at start and on that
-  period; without it a timer of the deployer's runs
+  bootstrap.json says) or none is a 404. The server runs the builder
+  itself at start and every `STOMP_TOR_BOOTSTRAP_EVERY` minutes (30 when
+  unset); with `0` a timer of the deployer's runs
   `node scripts/tor-snapshot.mjs --out <dir>`. A consensus is published
   every hour and valid for three, so every 30 minutes keeps the file at
   most about an hour behind. `config.js` names it to the page
-  (`torClient.bootstrap`, `STOMP_CONFIG.torClient` above) only when
-  `STOMP_TOR_BOOTSTRAP` is set, so a host without it runs as before.
+  (`torClient.bootstrap`, `STOMP_CONFIG.torClient` above) unless
+  `STOMP_TOR_BOOTSTRAP=0`. It is on by default because a first visit
+  without it downloads the directory through a fallback relay (median
+  3.6 s to Ready, against 1.3 s); the cost is the builder's runs, which
+  reach the Tor network's fallbacks from the server (directory documents
+  only, nothing of any visitor's). A stand-in Tor client (test runs) gets a
+  snapshot only from a directory named for it, and test/run.mjs and
+  test/firefox/servers.mjs turn it off, so a suite's server never reaches
+  the Tor network.
 - **When the client uses it** (`demo/public/tor-client/snapshot.mjs`,
   `TorService`): tor-js asks for the option only when its store holds no
   consensus (a first visit, or a kept one past its valid-until, which
@@ -963,12 +970,12 @@ isolationKey)` (deploy/tor-js `0001`); left: `resolve()`,
 5. **Fast-bootstrap snapshot** (done; S left): `scripts/tor-snapshot.mjs`
    builds `bootstrap.zip` with tor-js in Node (one-hop directory requests
    to the fallbacks, only a consensus arti has checked), the server serves
-   it at `/tor-client/bootstrap.zip` from `STOMP_TOR_BOOTSTRAP` (and
-   rebuilds it every `STOMP_TOR_BOOTSTRAP_EVERY` minutes), and a client
+   it at `/tor-client/bootstrap.zip` (by default from
+   `build/tor-bootstrap`, rebuilt every 30 minutes), and a client
    with no consensus starts from it, its writes held until arti has loaded
    it ("The fast-bootstrap snapshot"); a first visit's Ready went from 1.0
-   to 5.0 s (median 3.6 s) to 1.2 to 1.3 s. Left: the env (or a timer) on
-   terp; in tor-js, reading the consensus's times from its preamble rather
+   to 5.0 s (median 3.6 s) to 1.2 to 1.3 s, on by default since
+   2026-11-25. Left: in tor-js, reading the consensus's times from its preamble rather
    than with a full parse (about 0.15 s, a wasm build); in arti, the guard
    link before the directory is loaded (0.49 s).
 6. **Tor-only Wisp endpoint** (M): `/wisp-or/` with the consensus allowlist,

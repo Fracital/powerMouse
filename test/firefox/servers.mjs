@@ -60,6 +60,8 @@ export async function startServers({ env: extra = {}, slots = 4 } = {}) {
 		STOMP_SHIELDS_DEFAULTS: '0',
 		STOMP_DEFAULT_THEMES: '0',
 		STOMP_SITE_POOL: '0',
+		// no Tor directory snapshot: its builder would reach the Tor network
+		STOMP_TOR_BOOTSTRAP: '0',
 		STOMP_SLOT_PORTS: contentPorts.length ? contentPorts.join(',') : '0',
 		// classic tabs, as test/run.mjs runs every suite but the demo's own:
 		// the dialing checks ask for it with ?mode=just-call-stomp

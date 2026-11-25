@@ -14,13 +14,17 @@
 
 ### Deployment
 
-- `STOMP_TOR_BOOTSTRAP=<dir>` serves the snapshot in `<dir>` at
-  `/tor-client/bootstrap.zip` and names it in `config.js`; unset, Tor mode
-  starts as before. `node scripts/tor-snapshot.mjs --out <dir>` writes it
-  (tor-js in Node over one-hop directory requests to the fallbacks, no tor
-  daemon: about 4 MB downloaded, 170 MB of memory and 4 to 9 s a run), and
-  `STOMP_TOR_BOOTSTRAP_EVERY=30` has the server run it at start and every
-  30 minutes; a timer of the deployer's can instead. The file is the same
+- The demo server serves the snapshot by default, with nothing to set:
+  it runs `node scripts/tor-snapshot.mjs` into `build/tor-bootstrap` at
+  start and every 30 minutes (tor-js in Node over one-hop directory
+  requests to the fallbacks, no tor daemon: about 8 MB downloaded, 170 MB
+  of memory and 4 to 9 s a run), serves it at `/tor-client/bootstrap.zip`
+  and names it in `config.js`. A first visit in the 4 s before the first
+  run lands downloads the directory as before. `STOMP_TOR_BOOTSTRAP=<dir>`
+  puts the snapshot elsewhere and `STOMP_TOR_BOOTSTRAP=0` turns it off;
+  `STOMP_TOR_BOOTSTRAP_EVERY` sets the minutes between runs, and `0` leaves
+  the writing to a timer of the deployer's. The test runners turn it off,
+  so no suite's server reaches the Tor network. The file is the same
   for every visitor (no query, no cookie, `Cache-Control: no-cache` with
   an ETag), and a snapshot past its consensus's valid-until or half
   written is a 404.

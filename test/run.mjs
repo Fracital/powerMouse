@@ -653,7 +653,10 @@ async function startServersOnce(name) {
 		rmSync(torBootstrap, { recursive: true, force: true });
 		mkdirSync(torBootstrap, { recursive: true });
 		env.STOMP_TOR_BOOTSTRAP = torBootstrap;
-	}
+		// the suite writes the snapshots; the server's builder would reach
+		// the Tor network
+		env.STOMP_TOR_BOOTSTRAP_EVERY = '0';
+	} else env.STOMP_TOR_BOOTSTRAP = '0';
 	const server = spawn(process.execPath, [`${root}demo/server.js`], {
 		env,
 		stdio: ['ignore', 'pipe', 'inherit'],
@@ -745,6 +748,10 @@ function runSuite(
 				CONTENT_SLOT_PORTS: contentPorts.join(','),
 				...(wispLog && { WISP_LOG: wispLog }),
 				...(torBootstrap && { TOR_BOOTSTRAP_DIR: torBootstrap }),
+				// a demo server a suite starts itself (offline-html's cold
+				// one, demo-http3's) builds no Tor directory snapshot: the
+				// builder would reach the Tor network
+				STOMP_TOR_BOOTSTRAP: '0',
 			},
 			stdio: ['ignore', 'pipe', 'inherit'],
 		});

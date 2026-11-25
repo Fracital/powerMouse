@@ -49,15 +49,17 @@
 //                       client with test/offline-tor-stand-in.mjs in tor-js's
 //                       place, whose "Tor streams" reach the fixture and
 //                       which a suite can break on purpose
-//   STOMP_TOR_BOOTSTRAP a directory scripts/tor-snapshot.mjs writes Tor
+//   STOMP_TOR_BOOTSTRAP the directory scripts/tor-snapshot.mjs writes Tor
 //                       mode's directory snapshot to (docs/tor-over-wisp.md
-//                       "The fast-bootstrap snapshot"): served at
+//                       "The fast-bootstrap snapshot"), build/tor-bootstrap
+//                       when unset; `0` turns the snapshot off. Served at
 //                       /tor-client/bootstrap.zip and named to the page, so a
 //                       first visit's client loads the directory from here
 //                       instead of downloading it through a fallback relay
-//   STOMP_TOR_BOOTSTRAP_EVERY minutes: the server runs the builder into
-//                       STOMP_TOR_BOOTSTRAP itself, at start and on that
-//                       period (unset: a timer of the deployer's does)
+//   STOMP_TOR_BOOTSTRAP_EVERY minutes between the server's own runs of the
+//                       builder into STOMP_TOR_BOOTSTRAP, the first at start
+//                       (default 30; `0`: none, a timer of the deployer's
+//                       writes it)
 //   STOMP_PROXY_ORIGIN  origin that serves the proxy for isolation mode; empty
 //                       or unset runs the same-origin controller (README,
 //                       "Origin isolation")
@@ -361,12 +363,21 @@ const relaySettings = Object.keys(process.env).filter(
 		!TOR_SETTINGS.has(name) &&
 		process.env[name],
 );
-// the directory snapshot a first visit's client starts from (demo/torSnapshot.js)
+// the directory snapshot a first visit's client starts from
+// (demo/torSnapshot.js), on unless turned off: without it every first visit
+// downloads the directory through a fallback relay (median 3.6 s to Ready
+// against 1.3 s). A stand-in Tor client gets one only where it names a
+// directory, so a suite's server never reaches the Tor network for it
 const TOR_BOOTSTRAP_PATH = '/tor-client/bootstrap.zip';
+const torBootstrapSetting = process.env.STOMP_TOR_BOOTSTRAP;
 const torBootstrap =
-	torClient && process.env.STOMP_TOR_BOOTSTRAP
-		? resolve(process.env.STOMP_TOR_BOOTSTRAP)
-		: null;
+	!torClient || torBootstrapSetting === '0'
+		? null
+		: torBootstrapSetting
+			? resolve(torBootstrapSetting)
+			: process.env.STOMP_TOR_CLIENT?.startsWith('stand-in')
+				? null
+				: fileURLToPath(new URL('../build/tor-bootstrap', import.meta.url));
 if (relaySettings.length)
 	console.warn(
 		`Ignored ${relaySettings.join(', ')}: the server-side Tor relay is gone; Tor mode is the in-browser client (docs/tor-over-wisp.md)`,
@@ -1180,7 +1191,7 @@ if (torArtiStandIn)
 	);
 if (torBootstrap) {
 	app.get(TOR_BOOTSTRAP_PATH, torSnapshot(torBootstrap));
-	const every = Number(process.env.STOMP_TOR_BOOTSTRAP_EVERY);
+	const every = Number(process.env.STOMP_TOR_BOOTSTRAP_EVERY || 30);
 	if (every > 0) refreshTorSnapshot(torBootstrap, every);
 }
 try {
