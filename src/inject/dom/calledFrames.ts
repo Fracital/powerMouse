@@ -116,6 +116,8 @@ interface Kid {
 	frame: Element | null;
 	/** offline.html: the srcdoc this document gave the frame for its call page */
 	srcdoc: string | null;
+	/** the page's URL it waits under in `unplaced`, while it does */
+	unplaced: string | null;
 }
 
 /** what a called frame's document tells (calledHooks.ts) */
@@ -314,6 +316,7 @@ export function calledFrames(
 		const kid = unplaced.get(url);
 		if (!kid) return undefined;
 		unplaced.delete(url);
+		kid.unplaced = null;
 		kids.set(element, kid);
 		kid.frame = element;
 		return kid;
@@ -523,6 +526,7 @@ export function calledFrames(
 				holdTimer: undefined,
 				frame: element.isConnected ? element : null,
 				srcdoc: null,
+				unplaced: null,
 			};
 			kids.set(element, kid);
 		}
@@ -534,7 +538,11 @@ export function calledFrames(
 			how: { type: 'navigate', referrer: routed },
 			token: askToken(absolute),
 		};
-		if (!element.isConnected) unplaced.set(url, kid);
+		if (!element.isConnected) {
+			if (kid.unplaced !== null && unplaced.get(kid.unplaced) === kid)
+				unplaced.delete(kid.unplaced);
+			unplaced.set((kid.unplaced = url), kid);
+		}
 		return reach(element, kid);
 	};
 
@@ -548,6 +556,15 @@ export function calledFrames(
 		let kid = kids.get(element);
 		if (!kid) kid = placed(element);
 		if (!kid) return;
+		// (the frame the hooks saw out of the document is the one placed: no
+		// copy of it is to come, and `unplaced` drops its record, or a page
+		// that keeps making frames with their src set before it inserts
+		// them, as Turnstile does, kept every one's record, element and port)
+		if (kid.unplaced !== null) {
+			if (unplaced.get(kid.unplaced) === kid) unplaced.delete(kid.unplaced);
+			kid.unplaced = null;
+			kid.frame ??= element;
+		}
 		if (kid.writing) {
 			kid.writing = false;
 			release(kid);
@@ -656,6 +673,24 @@ export function calledFrames(
 			}),
 		});
 	}
+
+	/**
+	 * `port` as the one to the document shown in `kid`'s frame. Its listener
+	 * is made here, not in `call`: SpiderMonkey keeps every variable of an
+	 * async function in its environment, and a listener made there kept the
+	 * frame's window (`win`). Firefox keeps a port that has a listener while
+	 * it is entangled, and the port of a removed frame's document stayed
+	 * entangled, so every frame a page removed stayed with its whole realm
+	 * (a Turnstile widget replaces its challenge frame about once a second)
+	 */
+	const shownOn = (element: Element, kid: Kid, port: MessagePort) => {
+		kid.port?.close();
+		kid.port = port;
+		port.onmessage = ({ data }) => {
+			const what = toldOf(data, File);
+			if (what) void told(element, kid, port, what);
+		};
+	};
 
 	const call = async (element: Element, kid: Kid, win: Window) => {
 		const want = kid.want!;
@@ -793,12 +828,7 @@ export function calledFrames(
 		}
 		const entry = kid.entries[kid.index];
 		kid.routed = route;
-		kid.port?.close();
-		kid.port = port;
-		port.onmessage = ({ data }) => {
-			const what = toldOf(data, File);
-			if (what) void told(element, kid, port, what);
-		};
+		shownOn(element, kid, port);
 		kid.writing = true;
 		send(port, {
 			write: {

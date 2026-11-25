@@ -17,12 +17,7 @@ import { OwnWeakMap } from '../ownCollections';
 import type DocumentClient from './Client';
 import { deferred } from './deferred';
 import type ContextModule from './modules/Context';
-import {
-	invalidTargetOrigin,
-	isWindow,
-	newStandInEntry,
-	standInKey,
-} from './modules/Context';
+import { invalidTargetOrigin, isWindow, standInKey } from './modules/Context';
 import { markerPrefix } from './modules/MutationObserver';
 import { Pool } from './pool';
 import { pageSandbox, sandboxTokens } from './sandbox';
@@ -690,15 +685,10 @@ function makeSiteWindows() {
 				break;
 			}
 		}
-		const pool = keeper.pool;
-		let kept = key === null ? undefined : pool[Pool.AcrossStandIns]?.get(key);
-		if (key !== null && !kept) {
-			kept = new WeakMap();
-			(pool[Pool.AcrossStandIns] ??= new Map()).set(key, kept);
-		}
-		let entry = kept?.get(context);
-		if (kept && !entry) kept.set(context, (entry = newStandInEntry()));
-		return module.adopt(context, entry);
+		// (made by the keeper's realm, which may outlive this one: see
+		// keepStandIn)
+		const entry = key === null ? undefined : keeper.standInEntry(key, context);
+		return module.adopt(context, entry, keeper);
 	}
 
 	return {

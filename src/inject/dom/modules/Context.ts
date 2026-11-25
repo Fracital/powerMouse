@@ -132,6 +132,40 @@ export function newStandInEntry(): StandInEntry {
 
 // taken before the page runs: a page may replace the global
 const NativeWeakRef = WeakRef;
+
+/**
+ * `module` as the last holder of `entry`, and `standIn` as its stand-in
+ * when it made one. Run by the realm of the window that keeps the entry
+ * (its client's keepStandIn): the entry outlives the documents that took
+ * it, and an object keeps the realm that made it, so a holder or a WeakRef
+ * made by a frame's own realm kept the whole frame (every challenge frame
+ * of a Turnstile widget, one a second while its challenge fails, read
+ * `parent` and stayed). Holders whose documents are gone are dropped on
+ * the way to the end.
+ */
+export function keepStandIn(
+	entry: StandInEntry,
+	module: ContextModule,
+	standIn: object | undefined,
+	key: string | null,
+): void {
+	if (standIn !== undefined)
+		entry.standIn = new NativeWeakRef(standIn) as WeakRef<typeof globalThis>;
+	entry.key ??= key;
+	// (of no prototype, as the entry: no setter of the page's sees a holder)
+	const holder = {
+		__proto__: null,
+		module: new NativeWeakRef(module),
+		next: null,
+	} as StandInHolder;
+	let last: StandInHolder | null = null;
+	for (let at = entry.holders ?? null; at; at = at.next)
+		if (at.module.deref()) last = at;
+		else if (last) last.next = at.next;
+		else entry.holders = at.next;
+	if (last) last.next = holder;
+	else entry.holders = holder;
+}
 // a window's opener as the browser has it: a window's own accessor answers
 // for any window
 export const nativeOpener = Reflect.getOwnPropertyDescriptor(
@@ -1060,31 +1094,22 @@ export default class ContextModule extends Module<DocumentClient> {
 	}
 	/**
 	 * This module's stand-in for `context`: `entry`'s, the one every document
-	 * of this origin shares (made now when it has none), or one of its own
+	 * of this origin shares (made now when it has none), or one of its own.
+	 * `keeper` is the client of the window that keeps `entry`, whose realm
+	 * makes what this module leaves in it (keepStandIn)
 	 */
-	adopt(context: Context, entry?: StandInEntry): RestrictedContext {
+	adopt(
+		context: Context,
+		entry?: StandInEntry,
+		keeper: DocumentClient = this.client,
+	): RestrictedContext {
 		let restricted = entry?.standIn?.deref();
-		if (!restricted) {
-			restricted = this.restrictContext(context, entry);
-			if (entry) entry.standIn = new NativeWeakRef(restricted);
-		}
+		const made = restricted ? undefined : this.restrictContext(context, entry);
+		restricted ??= made!;
 		this.restricted.set(context, restricted);
 		this.restrictedContexts.set(restricted, context);
 		if (entry) {
-			entry.key ??= standInKey(this.client);
-			// (of no prototype, as the entry: no setter of the page's sees a
-			// holder)
-			const holder = {
-				__proto__: null,
-				module: (this.#self ??= new NativeWeakRef(this)),
-				next: null,
-			} as StandInHolder;
-			let last = entry.holders;
-			if (!last) entry.holders = holder;
-			else {
-				while (last.next) last = last.next;
-				last.next = holder;
-			}
+			keeper.keepStandIn(entry, this, made, standInKey(this.client));
 			this.#entries.set(context, entry);
 		}
 		return restricted;
@@ -1239,7 +1264,6 @@ export default class ContextModule extends Module<DocumentClient> {
 	}
 	/** the shared entry of each stand-in this module holds (StandInEntry) */
 	#entries = new LazyWeakMap<Context, StandInEntry>();
-	#self?: WeakRef<ContextModule>;
 	#restrict(context: Context): RestrictedContext {
 		const moduleClient = this.client;
 		const global = moduleClient.global;
@@ -1337,15 +1361,14 @@ export default class ContextModule extends Module<DocumentClient> {
 			// are, so the stand-ins that parent's getters return must be the
 			// ones this page's own reads return, or `t = t.parent` never
 			// reaches `top` (rubiconproject's usync in imgur's ad frames)
-			const standIns = (
-				(context as Record<string, any>)[moduleClient.names.client] as
-					DocumentClient | undefined
-			)?.standIns;
+			// (made by that window's realm, which keeps it: see keepStandIn)
+			const keeper = (context as Record<string, any>)[
+				moduleClient.names.client
+			] as DocumentClient | undefined;
 			const key = standInKey(moduleClient);
-			let entry = key === null ? undefined : standIns?.get(key);
-			if (!entry && key !== null)
-				standIns?.set(key, (entry = newStandInEntry()));
-			this.adopt(context, entry);
+			const entry =
+				key === null || !keeper ? undefined : keeper.standInEntry(key);
+			this.adopt(context, entry, keeper);
 		}
 
 		return this.restricted.get(context)!;

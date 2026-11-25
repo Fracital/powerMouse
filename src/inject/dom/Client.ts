@@ -100,7 +100,12 @@ import { activationPart, deferred, heldPart } from './deferred';
 import { heldClicks } from './heldClicks';
 import type { LegacyEncoder } from './legacyEncoding';
 import { initLoads, loadSource, type LoadSource } from './loadGrants';
-import { nativeConsoleError, type StandInEntry } from './modules/Context';
+import {
+	keepStandIn,
+	nativeConsoleError,
+	newStandInEntry,
+	type StandInEntry,
+} from './modules/Context';
 import DOMAttributesModule, {
 	scriptKind,
 	shouldRewriteScript,
@@ -3235,6 +3240,34 @@ export default class DocumentClient extends Client {
 	 * Context module) gets for this window when it is of another origin
 	 */
 	readonly standIns = new LazyMap<string, StandInEntry>();
+	/**
+	 * @internal `key`'s entry of `standIns`, or of the stand-ins this
+	 * window's pool shares for `across`, a window of another slot (siteWindows
+	 * restrictAcross), made now when it has none. By this realm, as the
+	 * entry's holders are (keepStandIn): a document of another realm asks,
+	 * and anything its own realm made would keep that realm while this
+	 * window lives
+	 */
+	standInEntry(key: string, across?: object): StandInEntry {
+		if (across === undefined) {
+			let entry = this.standIns.get(key);
+			if (!entry) this.standIns.set(key, (entry = newStandInEntry()));
+			return entry;
+		}
+		let kept = this.pool[Pool.AcrossStandIns]?.get(key);
+		if (!kept)
+			(this.pool[Pool.AcrossStandIns] ??= new Map()).set(
+				key,
+				(kept = new WeakMap()),
+			);
+		let entry = kept.get(across);
+		if (!entry) kept.set(across, (entry = newStandInEntry()));
+		return entry;
+	}
+	/** @internal keepStandIn (the Context module), by this realm */
+	keepStandIn(...args: Parameters<typeof keepStandIn>): void {
+		keepStandIn(...args);
+	}
 	/** @internal frame elements showing an opaque (data:) document: never injected from this page (DOMAttributes, IFrame) */
 	readonly opaqueFrames = new LazyWeakSet<Element>();
 	/**

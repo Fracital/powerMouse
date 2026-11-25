@@ -26,6 +26,12 @@
 // The table of the texts scripts hand over for their functions' sources is
 // the bundle's too, and it held each script's holder, a function of the
 // realm that ran the script (functionSource).
+//
+// A frame of another site that reads its parent (a message to it, as a
+// Turnstile challenge frame sends) takes the stand-in the parent's window
+// keeps for every document of the frame's origin, and the list of the
+// documents that took it, a WeakRef and the entry itself were made by the
+// frame's realm: each such frame stayed (Context keepStandIn).
 import {
 	done,
 	FIXTURE,
@@ -82,6 +88,17 @@ const CASES = {
 			frame.onload = () => setTimeout(() => (frame.remove(), resolve()), 50);
 			document.body.append(frame);
 		}),
+	'a frame of another site that messages its parent, in a closed shadow root, removed':
+		(i, same, cross, child) =>
+			new Promise((resolve) => {
+				const host = document.createElement('div');
+				const root = host.attachShadow({ mode: 'closed' });
+				const frame = document.createElement('iframe');
+				frame.src = `${cross}${child}?raf&fn&post&i=${i}`;
+				frame.onload = () => setTimeout(() => (host.remove(), resolve()), 50);
+				root.append(frame);
+				document.body.append(host);
+			}),
 	'an about:blank frame, written and removed': (i) =>
 		new Promise((resolve) => {
 			const frame = document.createElement('iframe');

@@ -22,6 +22,8 @@
 				document.body.append(image);
 			}
 			if (query.has('fn')) new Function('return ' + Math.random())();
+			if (query.has('post'))
+				parent.postMessage({ churn: location.search }, '*');
 			if (query.has('nest')) {
 				const inner = document.createElement('iframe');
 				inner.src = query.get('nest');
