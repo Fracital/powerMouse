@@ -737,16 +737,142 @@ export default class PermissionsModule extends Module<DocumentClient> {
 		speakers: () => boolean,
 		opaque: boolean,
 	): DeviceIds {
-		const installed = deferred('installDeviceIds')(
-			this.client,
-			salt,
-			refresh,
-			mayRead,
-			speakers,
-			opaque,
-		);
+		let installed: ReturnType<DeferredParts['installDeviceIds']>;
+		try {
+			installed = deferred('installDeviceIds')(
+				this.client,
+				salt,
+				refresh,
+				mayRead,
+				speakers,
+				opaque,
+			);
+		} catch (error) {
+			// the part is made as every document starts, so without it (a
+			// frame under a top of another build, whose file cannot be had)
+			// the document would load nothing at all: it loads, and what
+			// the part shows refuses instead (deferred-refusals)
+			return this.#devicesRefused(error);
+		}
 		this.#mediaOf = installed.mediaOf;
 		return installed.deviceIds;
+	}
+
+	/**
+	 * Where the device-id part cannot be had: each member it hooks throws
+	 * the part's error, or rejects with it where the call answers with a
+	 * promise, so neither the browser's ids, its labels, nor a device it
+	 * names reach the page as the proxy origin's (a member applied to
+	 * another realm's device or track would read them). A sinkId shows
+	 * only the values every site reads, an AudioContext made with a sinkId
+	 * throws, and no devicechange reaches the page.
+	 */
+	#devicesRefused(error: unknown): DeviceIds {
+		const global = this.client.global;
+		const proxyModule = this.client.getModule(ProxyModule)!;
+		const PagePromise = global.Promise;
+		const rejected = () =>
+			Reflect.apply(PagePromise.reject, PagePromise, [error]);
+		const thrown = () => {
+			throw error;
+		};
+		const hook = (
+			target: object | undefined,
+			names: string[],
+			wrap: (native: Function, that: unknown) => unknown,
+			part: 'value' | 'get' = 'value',
+		) => {
+			for (const name of names) {
+				const descriptor =
+					target && Reflect.getOwnPropertyDescriptor(target, name);
+				if (typeof descriptor?.[part] === 'function')
+					Reflect.defineProperty(target!, name, {
+						...descriptor,
+						[part]: proxyModule.wrapFunction(descriptor[part], wrap),
+					});
+			}
+		};
+		const info = global.MediaDeviceInfo?.prototype;
+		const track = global.MediaStreamTrack?.prototype;
+		const element = global.HTMLMediaElement?.prototype;
+		const NativeContext = global.AudioContext as
+			typeof AudioContext | undefined;
+		const context = NativeContext?.prototype;
+		hook(global.MediaDevices?.prototype, ['enumerateDevices'], rejected);
+		hook(track, ['applyConstraints'], rejected);
+		hook(element, ['setSinkId'], rejected);
+		hook(context, ['setSinkId'], rejected);
+		hook(track, ['getSettings', 'getCapabilities', 'getConstraints'], thrown);
+		hook(info, ['toJSON'], thrown);
+		hook(global.InputDeviceInfo?.prototype, ['getCapabilities'], thrown);
+		hook(info, ['deviceId', 'groupId', 'label'], thrown, 'get');
+		const sinkId = (native: Function, that: unknown) => {
+			const id: unknown = Reflect.apply(native, that, []);
+			return typeof id === 'string' &&
+				id !== 'default' &&
+				id !== 'communications'
+				? ''
+				: id;
+		};
+		hook(element, ['sinkId'], sinkId, 'get');
+		hook(context, ['sinkId'], sinkId, 'get');
+		if (NativeContext) {
+			const Wrapped = proxyModule.wrapFunction(
+				NativeContext,
+				// (a call without new is the browser's: Proxy.ts construct_)
+				(target, that, args, newTarget) => {
+					const options = args[0] as { sinkId?: unknown } | undefined;
+					if (
+						options !== null &&
+						typeof options === 'object' &&
+						typeof options.sinkId === 'string'
+					)
+						thrown();
+					return Reflect.construct(target, args, newTarget!);
+				},
+				true,
+			);
+			for (const name of ['AudioContext', 'webkitAudioContext']) {
+				const descriptor = Reflect.getOwnPropertyDescriptor(global, name);
+				if (descriptor?.value === NativeContext)
+					Reflect.defineProperty(global, name, {
+						...descriptor,
+						value: Wrapped,
+					});
+			}
+		}
+		// the inject reads the document's MediaDevices with the native
+		// getter; the page's first read stops every devicechange first
+		const navigator = global.Navigator.prototype;
+		const mediaOf = Reflect.getOwnPropertyDescriptor(
+			navigator,
+			'mediaDevices',
+		)?.get;
+		this.#mediaOf = mediaOf;
+		const addListener = global.EventTarget.prototype.addEventListener;
+		const stopImmediate = global.Event.prototype.stopImmediatePropagation;
+		let watched = false;
+		hook(
+			navigator,
+			['mediaDevices'],
+			(native, that) => {
+				const media = Reflect.apply(native, that, []) as object | undefined;
+				if (media && !watched) {
+					watched = true;
+					Reflect.apply(addListener, media, [
+						'devicechange',
+						(event: Event) => Reflect.apply(stopImmediate, event, []),
+					]);
+				}
+				return media;
+			},
+			'get',
+		);
+		return {
+			incoming: rejected,
+			learn: async () => {},
+			elsewhere: () => (constraint) => constraint,
+		};
 	}
 
 	/**

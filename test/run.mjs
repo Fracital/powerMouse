@@ -101,6 +101,12 @@ const SUITE_ENV = {
 		STOMP_USER_AGENT:
 			'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.1234.56 Safari/537.36',
 	},
+	// a configured user agent, as the public demo always has
+	'deferred-refusals-identity': {
+		STOMP_LIVE_USER_AGENT: '1',
+		STOMP_USER_AGENT:
+			'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.1234.56 Safari/537.36',
+	},
 	// epoxy that takes the TURN fixture's certificate authority (TURN over
 	// TLS), and the wisp server's streams (WISP_LOG)
 	'webrtc-net': { STOMP_TEST_TRANSPORT: '1', WISP_LOG: '1' },

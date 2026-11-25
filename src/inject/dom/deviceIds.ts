@@ -2,7 +2,8 @@
 // every origin its own, so the proxy origin's would be an identifier across
 // sites. The maps and the hooks that show them are installed with the
 // document's permission hooks, from a deferred part, so the document bundle
-// does not carry them.
+// does not carry them. Where the part cannot be had, the bundle refuses what
+// it hooks (modules/Permissions.ts devicesRefused), keep the two in step.
 import ProxyModule from '../modules/Proxy';
 import { LazyMap, LazyWeakSet } from '../ownCollections';
 import type DocumentClient from './Client';

@@ -59,9 +59,16 @@
 //   base, docs/tor.md "What our server sees") took it from 464.8 to 465.2
 //   KB, and the budget to 466 KB. A configured user-agent identity and the
 //   device-id maps (both deferred, and the identity only when one is set)
-//   had taken it to 468.5 KB; with them out it is 462.5 KB. Raise the budget
-//   in the same change as code that has to grow the bundle, and say why;
-//   first see whether it can be deferred.
+//   had taken it to 468.5 KB; with them out it is 462.5 KB. What a
+//   document does where those parts (and the Fingerprint module) cannot be
+//   had, so that it still loads (the device ids' refusals, the configured
+//   agent's Navigator strings), took it from 463.1 to 464.7 KB; the
+//   identity module itself back in the bundle would have been 466.4 KB.
+//   Keeping the texts of evaluated scripts bounded (functionSource.ts), the
+//   stand-in holders made in the keeping window's realm and the dialed
+//   frames' activation and sourceElement took it to 465.9 KB. Raise the
+//   budget in the same change as code that has to grow the bundle, and say
+//   why; first see whether it can be deferred.
 // - the JS heap one proxied frame adds (test/frame-memory.mjs, FRAMES frames
 //   of a small ad-like page, same site), against a ceiling above what this
 //   build measures: 1,094 to 1,100 KB with 20 frames on Chrome 152 and 156

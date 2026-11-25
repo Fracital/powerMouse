@@ -304,6 +304,19 @@
 					made((frame) => {
 						frame.src = `javascript:${JSON.stringify(MADE('self.origin'))}+' '.repeat(4200000)`;
 					}),
+				// what the page reads of the browser's identity
+				// (deferred-refusals-identity)
+				navigatorIdentity: () => ({
+					userAgent: navigator.userAgent,
+					appVersion: navigator.appVersion,
+					platform: navigator.platform,
+					userAgentData: 'userAgentData' in navigator,
+					brands: navigator.userAgentData?.brands?.map(
+						({ brand, version }) => `${brand} ${version}`,
+					),
+					NavigatorUAData: typeof NavigatorUAData,
+					cores: navigator.hardwareConcurrency,
+				}),
 				getUserMedia: () =>
 					outcome(() => navigator.mediaDevices.getUserMedia({ video: true })),
 				getCurrentPosition: () =>

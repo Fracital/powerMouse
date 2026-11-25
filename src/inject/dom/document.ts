@@ -9,6 +9,7 @@ import { legacyFileSystemParts } from '../legacyFileSystemParts';
 import { mixedContentParts } from '../mixedContentParts';
 import Module from '../Module';
 import baseModules from '../modules';
+import ProxyModule from '../modules/Proxy';
 import { originFromParts } from '../originFromParts';
 import { positionParts } from '../positionParts';
 import { reportParts } from '../reportParts';
@@ -19,6 +20,7 @@ import { windowArrayParts } from '../windowArrayParts';
 import { workerStartParts } from '../workerStartParts';
 import DocumentClient from './Client';
 import { deferred, heldPart } from './deferred';
+import type { DeferredParts } from './deferredParts';
 import AdblockModule from './modules/Adblock';
 import AnchorModule from './modules/Anchor';
 import AnimationFramesModule from './modules/AnimationFrames';
@@ -118,9 +120,21 @@ socketParts.standIns = () => deferred('socketStandIns');
 // routeHTML), with the first
 setDocumentShells((name) => deferred(name));
 
+// The two modules below are deferred parts a document applies as it starts,
+// so a document that cannot have the parts (a frame under a top of another
+// build whose file is gone) would load nothing: it loads without them
+// (deferred-refusals-identity).
 class FingerprintStandIn extends Module<DocumentClient> {
 	apply() {
-		const Fingerprint = deferred('FingerprintModule');
+		let Fingerprint: DeferredParts['FingerprintModule'];
+		try {
+			Fingerprint = deferred('FingerprintModule');
+		} catch (error) {
+			// every surface reads as natively, what the browser shows the
+			// page without the protection: the module leaves a surface it
+			// cannot hook native too
+			return;
+		}
 		new Fingerprint(this.client).apply();
 	}
 }
@@ -129,7 +143,45 @@ class FingerprintStandIn extends Module<DocumentClient> {
 // deferred part, so a frame with none carries none of it
 class NavigatorIdentityStandIn extends Module<DocumentClient> {
 	apply() {
-		const Identity = deferred('NavigatorIdentityModule');
+		let Identity: DeferredParts['NavigatorIdentityModule'];
+		try {
+			Identity = deferred('NavigatorIdentityModule');
+		} catch (error) {
+			// The browser's own agent would contradict the one the requests
+			// carry: Navigator's strings are the configured agent's, as
+			// src/userAgent.ts makes them (keep the two in step), and
+			// userAgentData is gone, as in a document Chrome gives none (an
+			// insecure context), so nothing of the browser's identity shows
+			const client = this.client;
+			const agent = client.configuredUserAgent!;
+			const prototype = client.global.Navigator.prototype;
+			const proxyModule = client.getModule(ProxyModule)!;
+			for (const [name, value] of [
+				['userAgent', agent],
+				['appVersion', agent.slice(agent.indexOf('/') + 1)],
+				[
+					'platform',
+					/\bAndroid\b/.test(agent) ? 'Linux armv8l' : 'Linux x86_64',
+				],
+			]) {
+				const descriptor = Reflect.getOwnPropertyDescriptor(prototype, name);
+				if (descriptor?.get)
+					Reflect.defineProperty(prototype, name, {
+						...descriptor,
+						get: proxyModule.wrapFunction(
+							descriptor.get,
+							(target, that, args) => {
+								// (the native getter still checks the receiver)
+								Reflect.apply(target, that, args);
+								return value;
+							},
+						),
+					});
+			}
+			Reflect.deleteProperty(prototype, 'userAgentData');
+			Reflect.deleteProperty(client.global, 'NavigatorUAData');
+			return;
+		}
 		new Identity(this.client).apply();
 	}
 }
