@@ -56,10 +56,16 @@ const request = (r) =>
 
 class IndexedDBStorage {
 	#db;
+	// as tor-js's: the database and its store's name, which the service's
+	// key-range reads use (keptState.mjs rangedStorage)
+	storeName = 'kv';
 	constructor(name) {
 		const open = indexedDB.open(`${name}-stand-in`, 1);
 		open.onupgradeneeded = () => open.result.createObjectStore('kv');
 		this.#db = request(open);
+	}
+	getDB() {
+		return this.#db;
 	}
 	async #store(mode) {
 		return (await this.#db).transaction('kv', mode).objectStore('kv');
@@ -123,15 +129,29 @@ export const GUARD_NICKNAME = 'StandInGuard';
 const GUARD_IDENTITY = 'AQIDBAUGBwgJCgsMDQ4PEBESExQ';
 export const GUARD_FINGERPRINT = '0102030405060708090A0B0C0D0E0F1011121314';
 
-/** a microdesc consensus's relay lines: `addresses` and enough others to read as one */
+/**
+ * A microdesc consensus as tor-js keeps it (its times, then the document as
+ * `content`), live for the next three hours: its relay lines are
+ * `addresses` and enough others to read as one
+ */
 function consensus(...addresses) {
-	const lines = addresses.map((address) => {
+	const lines = ['network-status-version 3 microdesc'];
+	for (const address of addresses) {
 		const [ip, port] = address.split(':');
-		return `r ${GUARD_NICKNAME} ${GUARD_IDENTITY} 2026-01-01 00:00:00 ${ip} ${port} 0`;
-	});
+		lines.push(
+			`r ${GUARD_NICKNAME} ${GUARD_IDENTITY} 2026-01-01 00:00:00 ${ip} ${port} 0`,
+		);
+	}
 	for (let i = 1; i <= 120; i++)
 		lines.push(`r other${i} AAAA 2026-01-01 00:00:00 192.0.2.${i} 9001 0`);
-	return lines.join('\n');
+	const now = Math.floor(Date.now() / 1000);
+	return JSON.stringify({
+		valid_after_secs: now - 600,
+		fresh_until_secs: now + 3000,
+		valid_until_secs: now + 10200,
+		pending: false,
+		content: lines.join('\n'),
+	});
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

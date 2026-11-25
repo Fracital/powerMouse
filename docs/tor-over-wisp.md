@@ -188,6 +188,90 @@ release commit's CI hash against the new binary, the fallback list.
 4. `ready()` resolves when a guard is connected and enough microdescriptors
    are in (arti's "usable" netdir).
 
+### Bootstrap from the kept state
+
+Where the time goes, measured on 2026-11-25 from this machine (Chrome,
+the demo on localhost with its own holyWisp, the real Tor network; the
+client's own timeline, `[tor]` log lines and IndexedDB reads timed in the
+SharedWorker). "Ready" is the host page's Ready, which waits for the
+client; the first page is check.torproject.org's answer, submitted at Ready.
+
+| From the host page's load              | Cold (empty store)      | Later visit, before | Later visit, after |
+| -------------------------------------- | ----------------------- | ------------------- | ------------------ |
+| the client starts (page, SharedWorker) | 0.16 to 0.20 s          | 0.15 to 0.18 s      | 0.14 to 0.15 s     |
+| wasm fetch, compile and instantiate    | 19 to 25 ms             | 16 to 28 ms         | 19 to 21 ms        |
+| relay check's read of the consensus    | none                    | 152 to 176 ms       | none (37 to 43 ms) |
+| tor-js's reads of the store            | 3 ms                    | 206 to 267 ms       | 142 to 150 ms      |
+| directory                              | 0.9 to 2.2 s (download) | 0.39 to 0.42 s      | 0.38 to 0.39 s     |
+| directory complete to ready (guard)    | 0.10 to 0.17 s          | 0.46 to 0.49 s      | 0.49 to 0.50 s     |
+| bootstrap (`bootstrapMs`)              | 1.0 to 2.4 s            | 1.25 to 1.39 s      | 1.04 to 1.06 s     |
+| Ready                                  | 1.2 to 2.6 s            | 1.43 to 1.58 s      | 1.20 to 1.22 s     |
+| first page                             | 3.1 to 4.1 s            | 2.98 to 4.05 s      | 3.33 to 3.51 s     |
+
+Cold is four runs (one after the change, which leaves it as it was), the
+later visit before three and after two. A reload while the SharedWorker
+lives (`extendedLifetime`) bootstraps nothing: Ready in 0.12 s, the page in
+1.0 s. The cold directory is the download through a fallback: the
+consensus 0.38 to 0.64 s, the 7 certificates 0.1 to 0.22 s, 9,562
+microdescriptors 0.3 to 1.3 s, depending on the fallback. From Ready the
+first page takes 1.5 to 2.5 s in every case: a circuit for the site (0.7
+to 1 s) and the site's TLS and answer over it, which no kept state
+shortens, and whose spread hides the later visit's gain in the last row.
+The wasm (5 MB) costs little here: V8 compiles it lazily, and its download
+from a remote server is a first visit's only (the HTTP cache revalidates
+it after).
+
+The kept state is tor-js's `TorStorage` (IndexedDB `stomp-tor-client`,
+"Guard persistence"), read back at each start: the 7 certificates, about
+9,500 microdescriptors (5 MB), the consensus (3.5 MB) and arti's state
+(the guards, the circuit timeouts). What made a later visit slower than it
+needs (before):
+
+- tor-js's IndexedDBStorage answers `getAll(prefix)` and `keys(prefix)` by
+  reading every key and value of the store and keeping the prefix's: a
+  start asked `getAll('state:')` (2 values) and `getAll('dir:')`, and paid
+  the whole store twice (115 ms each). The service gives tor-js its store
+  through `rangedStorage` (`demo/public/tor-client/keptState.mjs`), which
+  reads a prefix by a key range (`state:` in 1 to 2 ms).
+- The relay check (`admit`, "Which relays the worker may reach") read the
+  kept consensus (the whole store again, 116 ms) and parsed it (55 ms)
+  before the client was made, and parsed it again at each of the two times
+  a start keeps it (30 to 55 ms each). It now takes the consensus arti
+  reads back or keeps (`liveDirectory`'s `consensus` listener) and parses
+  the newest once, at the first link that is not a fallback; a link it does
+  not know of still reads the store before it is refused, so it fails
+  closed as before.
+- The Wisp WebSocket opens when the client starts, not at arti's first
+  link (`WispConnection.warm`): on localhost that is nothing, to a remote
+  Wisp server it is the WebSocket's handshake and TLS.
+
+**Only a live consensus is used.** `liveDirectory` hands arti a kept
+consensus only until its valid-until (tor-js keeps it as a record that
+starts with `valid_after_secs`, `fresh_until_secs` and `valid_until_secs`).
+arti reads a cached consensus's times from the signed document itself
+(a record with past times but a live document was loaded as live), and its
+tolerance for clocks that are off (arti's `DirTolerance`) can take one
+after its valid-until, with relays the network may have dropped. Past
+valid-until the consensus is not returned and is deleted: the client
+downloads a new one and keeps the rest, which is checked anew (a
+microdescriptor against the new consensus's digests, a certificate by its
+own expiry, the guards by arti's guard rules: guard-spec's sampling,
+confirmation and expiry, kept through its state manager). Between
+fresh-until and valid-until arti uses the kept one and fetches the next,
+as tor does. A record whose times do not read is not used either, and left
+in place. A later visit with the consensus expired (simulated by setting
+its record's valid-until an hour back) was ready in 3.7 s: one consensus
+download (3.3 s from a slow fallback, 0.4 to 0.6 s from the others) and
+no certificate or microdescriptor fetched. `node --test
+test/tor-kept-state.mjs` checks the rule.
+
+What is left for a first visit is the download itself: the fast-bootstrap
+snapshot below would make it one HTTPS fetch from the app's origin, and
+only tor-js could make a later one shorter (it reads the whole directory
+into arti at start, 9,500 microdescriptors, where arti needs the ones of
+the relays it picks; and arti links to its guard only once the directory is
+loaded, though its state names the guard's addresses).
+
 A fast-bootstrap snapshot (`bootstrap.zip.zst`, tor-js's gateway format:
 consensus, certificates and microdescriptors, about 3 MB) can be served from
 the app's own origin, refreshed hourly from the server's copy. The client
@@ -747,7 +831,11 @@ isolationKey)` (deploy/tor-js `0001`); left: `resolve()`,
    isolated mode.
 5. **Fast-bootstrap snapshot** (S): the server builds `bootstrap.zip.zst`
    hourly (tor-js's gateway crate or a fetch of the consensus over Tor) and
-   serves it from the app origin; the client passes it as `bootstrap`.
+   serves it from the app origin; the client passes it as `bootstrap`
+   (tor-js's `withFastBootstrap`, used only when the store has no usable
+   consensus). It is what is left of a first visit's 1 to 2.4 s
+   ("Bootstrap from the kept state"); a later visit loads the kept
+   directory already.
 6. **Tor-only Wisp endpoint** (M): `/wisp-or/` with the consensus allowlist,
    refreshed hourly; `STOMP_CONFIG.torClient.wisp`.
 7. **Isolation UI** (done; S left): New Identity, New Tor circuit for this
@@ -763,7 +851,11 @@ isolationKey)` (deploy/tor-js `0001`); left: `resolve()`,
    emptied and the client started again), store-names coverage ("Guard
    persistence"). tor-js has no call to forget the guards of a running
    client, so it is made again; a tab with a client of its own (no
-   SharedWorker) is not restarted by another tab's Forget Tor state.
+   SharedWorker) is not restarted by another tab's Forget Tor state. A
+   later visit reads it back by key range and uses a kept consensus only
+   until its valid-until ("Bootstrap from the kept state"); left, in
+   tor-js: reading the microdescriptors arti needs rather than all of them
+   at start, and linking to the kept guard before the directory is loaded.
 9. **Bridges** (L): WebTunnel (HTTPS + WebSocket, over Wisp TCP with epoxy's
    TLS, or the browser's own WebSocket) and Snowflake (WebRTC) as arti
    pluggable transports, so the operator does not see Tor use or the guard.

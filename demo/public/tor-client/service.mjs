@@ -7,6 +7,7 @@
 // It runs in the SharedWorker every tab's transport shares (shared.mjs),
 // or in a tab's own transport worker where there is none (transport.mjs).
 import { FALLBACK_ADDRESSES } from './fallbacks.js';
+import { CONSENSUS_KEYS, liveDirectory, rangedStorage } from './keptState.mjs';
 import {
 	ArtiSocket,
 	Log,
@@ -230,6 +231,16 @@ class WispConnection {
 		});
 	}
 
+	/**
+	 * The socket opened now, before arti asks for its first link: the
+	 * WebSocket's handshake (and its TLS, to a remote Wisp server) is then
+	 * done while the client loads its state rather than after. A socket
+	 * that fails says so at the first link, which opens another.
+	 */
+	warm() {
+		this.#connect().catch(() => {});
+	}
+
 	/** every link ends now, and the next one opens a socket of its own */
 	close() {
 		const socket = this.#current;
@@ -330,7 +341,6 @@ function guardsOf(entries) {
 	return [];
 }
 
-const CONSENSUS_KEYS = 'dir:consensus:';
 // where tor-js keeps arti's state manager's values, the guards among them
 const STATE_KEYS = 'state:';
 // how long a Tor stream may take to open on one circuit before it is tried
@@ -438,6 +448,15 @@ export class TorService {
 	#relays = new Set(FALLBACK_ADDRESSES);
 	/** `ip:port`: the nickname and fingerprint the newest consensus gives it */
 	#relayInfo = new Map();
+	/**
+	 * The newest consensus the client read back or kept, and its
+	 * valid-after: its relays are read from it when a link or the circuit
+	 * display first needs them (#relaysNow), not as arti hands it over,
+	 * which a start does twice or more for the same one
+	 */
+	#consensus = null;
+	#consensusAfter = -Infinity;
+	#consensusRead = null;
 	/**
 	 * What bootstrap took and what it is doing, for the page and the smoke:
 	 * `blocked` ({ kind, message }) says why it cannot go on, arti's own
@@ -592,14 +611,30 @@ export class TorService {
 			if (pattern.test(text)) this.#phase('bootstrapping', progress, summary);
 	}
 
-	/** the relays of the consensus the storage holds now */
+	/** the relays of the live consensus the storage holds now */
 	async #readConsensus() {
-		const kept = await this.#storage.getAll(CONSENSUS_KEYS).catch(() => []);
-		for (const [, value] of kept) this.#keepRelays(value);
+		// (liveDirectory hands each one to #keepConsensus)
+		await this.#storage.getAll(CONSENSUS_KEYS).catch(() => []);
+		this.#relaysNow();
 	}
 
-	#keepRelays(value) {
+	/**
+	 * A consensus arti read back or kept (liveDirectory; `newest` for one
+	 * it keeps, the newest it has whatever its times say), `times` its own
+	 */
+	#keepConsensus(value, times, newest) {
 		if (typeof value !== 'string') return;
+		const after = times?.validAfter ?? (newest ? Infinity : -Infinity);
+		if (!newest && after < this.#consensusAfter) return;
+		this.#consensus = value;
+		this.#consensusAfter = after;
+	}
+
+	/** the relays of the newest consensus, read once from it */
+	#relaysNow() {
+		const value = this.#consensus;
+		if (value === null || value === this.#consensusRead) return;
+		this.#consensusRead = value;
 		const relays = consensusRelays(value);
 		// a consensus lists thousands; anything less is not one
 		if (relays.size < 100) return;
@@ -616,7 +651,11 @@ export class TorService {
 	async admit(target) {
 		const address = target.toLowerCase();
 		if (this.#relays.has(address)) return;
-		// a consensus kept since the last look
+		// the consensus arti read or kept since the last look
+		this.#relaysNow();
+		if (this.#relays.has(address)) return;
+		// one of the store's arti has not handed over (a client started
+		// before it read its directory, or another tab's)
 		if (this.#storage) await this.#readConsensus();
 		if (this.#relays.has(address)) return;
 		this.status = {
@@ -644,21 +683,16 @@ export class TorService {
 	#openStorage() {
 		if (this.#storage) return this.#storage;
 		this.#inner = new storage.IndexedDBStorage(this.#storageName);
-		const kept = storage.addLocking(this.#inner, this.#storageName);
-		// every consensus arti keeps names the relays it may dial next
-		this.#storage = {
-			...kept,
-			get: (key) => kept.get(key),
-			getAll: (prefix) => kept.getAll(prefix),
-			keys: (prefix) => kept.keys(prefix),
-			delete: (key) => kept.delete(key),
-			tryLock: () => kept.tryLock(),
-			unlock: () => kept.unlock(),
-			set: async (key, value) => {
-				if (key.startsWith(CONSENSUS_KEYS)) this.#keepRelays(value);
-				return kept.set(key, value);
-			},
-		};
+		const kept = storage.addLocking(
+			rangedStorage(this.#inner),
+			this.#storageName,
+		);
+		// a kept consensus only until its valid-until; every consensus arti
+		// reads back or keeps names the relays it may dial next
+		this.#storage = liveDirectory(kept, {
+			consensus: (value, times, newest) =>
+				this.#keepConsensus(value, times, newest),
+		});
 		return this.#storage;
 	}
 
@@ -672,9 +706,11 @@ export class TorService {
 				reject(new Error('the Tor client started again (Forget Tor state)'));
 		});
 		superseded.catch(() => {});
+		// the client starts at once: the relays it may dial come with the
+		// directory arti reads back (#keepConsensus), and are read from it
+		// at its first link
 		this.#openStorage();
-		await this.#readConsensus();
-		if (!current()) throw new Error('the Tor client started again');
+		wisp.warm();
 		this.#links = { reached: 0, failed: 0, code: undefined };
 		this.#linkBlocked = null;
 		this.#artiBlocked = null;
@@ -793,6 +829,7 @@ export class TorService {
 	 * with no link open, the guard arti tries first (`linked` false).
 	 */
 	async circuitFor(url) {
+		this.#relaysNow();
 		let site = null;
 		for (const [key, use] of this.#siteUse)
 			if (
@@ -890,6 +927,9 @@ export class TorService {
 		}
 		this.#relays = new Set(FALLBACK_ADDRESSES);
 		this.#relayInfo = new Map();
+		this.#consensus = null;
+		this.#consensusAfter = -Infinity;
+		this.#consensusRead = null;
 		this.newIdentity();
 		this.#links = { reached: 0, failed: 0, code: undefined };
 		this.#linkBlocked = null;

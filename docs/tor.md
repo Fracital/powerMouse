@@ -65,7 +65,9 @@ protects and what it does not, and how its profile is kept apart.
 - **Guards kept, until you forget them.** The client keeps its guards and
   the directory across Tor sessions and New Identity, outside the Tor
   profile, as Tor Browser does. **Forget Tor state** (the menu) deletes
-  them and connects to Tor again with new guards. The client also outlives
+  them and connects to Tor again with new guards. A later visit starts
+  from them (docs/tor-over-wisp.md "Bootstrap from the kept state"), the
+  consensus only until its valid-until. The client also outlives
   a reload or a navigation of the last Tor page by up to five minutes in
   Chrome (a new Tor session in that time still gets new circuits).
 - **A profile of its own, for the session.** Tor mode has its own cookie
@@ -232,6 +234,10 @@ tor does.
   again. It reaches no Tor network.
 - `node --test test/store-names.mjs` also checks the Tor client's state is
   one store of no profile, `stomp-tor-client`.
+- `node --test test/tor-kept-state.mjs`: a later visit's client is handed
+  a kept consensus only until its valid-until, an expired one is deleted,
+  one whose times do not read is not used, and the guards, certificates and
+  microdescriptors pass as they are.
 - The `demo-tor-routes` suite: the demo behind a server that records every
   request the browser makes of it (path, query, Referer, body), with a page
   that loads images and stylesheets in about:blank and srcdoc frames, a
