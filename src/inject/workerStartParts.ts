@@ -12,5 +12,9 @@ export const workerStartParts: {
 /** the part's functions, as one */
 export type WorkerStartPart = Pick<
 	typeof workerStart,
-	'workerURL' | 'releaseOnLoad' | 'watchErrors'
+	| 'workerURL'
+	| 'releaseOnLoad'
+	| 'watchErrors'
+	| 'startWorker'
+	| 'startSharedWorker'
 >;

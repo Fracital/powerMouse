@@ -3,6 +3,7 @@ import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import { routedPrefix } from '../../modules/Unroute';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
+import { deferred } from '../deferred';
 import { hostGeometry } from '../hostGeometry';
 import { nativeTopOf, siteWindows } from '../siteWindows';
 import ContextModule, { reachableClients } from './Context';
@@ -94,11 +95,8 @@ export default class FramingModule extends Module<DocumentClient> {
 						typeof global.DOMRect !== 'function'
 					)
 						return native;
-					return global.Object.freeze(
-						global.Array.of(
-							new global.DOMRect(0, 0, global.innerWidth, global.innerHeight),
-						),
-					);
+					// (a deferred part, ../rareReads.ts: the getter throws without it)
+					return deferred('viewportSegments')(global);
 				}),
 			});
 

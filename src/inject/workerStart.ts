@@ -30,13 +30,33 @@ import {
 } from './modules/Unroute';
 import type { LazyWeakSet } from './ownCollections';
 import { modifyJS } from './rewriter';
-import { trustedTypesUsed, trustedWorker, useTrustedTypes } from './trusted';
+import {
+	trustedScriptURL,
+	trustedTypesUsed,
+	trustedWorker,
+	useTrustedTypes,
+} from './trusted';
 import { blobOf, PRIVATE_URL_MS, WORKER_LOADED } from './workerBlobs';
+
+/**
+ * A worker started from a blob: URL (its bootstrap) makes no request for its
+ * script, so the service worker cannot see who made it: the request for its
+ * transport says (InitRemoteTransportMessage)
+ */
+const blobScript = (url: unknown): string | undefined =>
+	typeof url === 'string' && url.startsWith('blob:') ? url : undefined;
+
+const isModuleOptions = (options: unknown) =>
+	typeof options === 'object' &&
+	options !== null &&
+	(options as WorkerOptions).type === 'module';
 
 /** what the Worker module took at load and hands the part */
 export interface WorkerStart {
 	client: Client;
 	global: typeof globalThis;
+	/** the realm's addEventListener, before the page's script ran */
+	listen: EventTarget['addEventListener'] | undefined;
 	/** the realm's own Blob (the bootstrap is our own code, made in it) */
 	NativeBlob: typeof Blob;
 	/** the workers the page terminated (the terminate hook) */
@@ -336,5 +356,76 @@ export function watchErrors(
 	);
 }
 
+/**
+ * `new Worker(...args)` past the page's checks (`source` its script URL,
+ * `target` the browser's Worker): started from the URL workerURL gives it,
+ * by the Worker of `controlledWorker()` where this document has no service
+ * worker for a blob: one (ended with this document, by `terminate`)
+ */
+export function startWorker(
+	start: WorkerStart,
+	target: Function,
+	args: unknown[],
+	newTarget: Function,
+	source: string,
+	controlledWorker: () => typeof Worker | null,
+	terminate: Worker['terminate'],
+): Worker {
+	const { client, global, listen } = start;
+	const { url, own } = workerURL(start, source, isModuleOptions(args[1]));
+	args[0] = trustedScriptURL(url);
+	const via = blobScript(url) ? controlledWorker() : null;
+	const worker: Worker = Reflect.construct(via ?? target, args, newTarget);
+	if (via && listen)
+		Reflect.apply(listen, global, [
+			'pagehide',
+			() => Reflect.apply(terminate, worker, []),
+			{ once: true },
+		]);
+	watchErrors(
+		start,
+		worker,
+		own,
+		client.encodingParse(source, client.baseHref).href,
+	);
+	client.provisionWorkerTransport(worker, blobScript(url));
+	if (own) releaseOnLoad(start, worker, own);
+	return worker;
+}
+
+/** `new SharedWorker(...args)` past the page's checks, as startWorker */
+export function startSharedWorker(
+	start: WorkerStart,
+	target: Function,
+	args: unknown[],
+	newTarget: Function,
+	source: string,
+): SharedWorker {
+	const { client, global } = start;
+	const { url, own } = workerURL(start, source, isModuleOptions(args[1]), true);
+	args[0] = trustedScriptURL(url);
+	// a shared worker has no postMessage to say it took its
+	// private URL: that one goes after PRIVATE_URL_MS
+	if (own) setTimeout(() => global.URL.revokeObjectURL(own), PRIVATE_URL_MS);
+	// shared workers are found by name within an origin: keep
+	// proxied origins, and partitions of one, apart
+	const suffix = `@${client.nativeKey}`;
+	const options = args[1] as { name?: unknown } | string | null | undefined;
+	if (typeof options === 'object' && options !== null)
+		args[1] = { ...options, name: `${options.name ?? ''}${suffix}` };
+	// (null is the empty options dictionary, as undefined is)
+	else
+		args[1] = `${options === undefined || options === null ? '' : String(options)}${suffix}`;
+	const worker: SharedWorker = Reflect.construct(target, args, newTarget);
+	client.provisionPortTransport(worker.port, blobScript(url));
+	return worker;
+}
+
 /** the part's functions, as one (./workerStartParts.ts) */
-export const workerStart = { workerURL, releaseOnLoad, watchErrors };
+export const workerStart = {
+	workerURL,
+	releaseOnLoad,
+	watchErrors,
+	startWorker,
+	startSharedWorker,
+};

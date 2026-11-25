@@ -2,7 +2,6 @@ import type { ControlInfo, PageEvent } from '../../../serviceWorkerTypes';
 import { SW_CONTROL, SW_EVENT } from '../../../transport/messages';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
-import { withStack } from '../../nativeErrors';
 import DocumentClient from '../Client';
 import { deferred } from '../deferred';
 import type { Emulated } from './serviceWorkerEmulation';
@@ -91,14 +90,10 @@ export default class ServiceWorkerModule extends Module<DocumentClient> {
 					// answer: its Illegal invocation for what is no Navigator)
 					if (that !== global.navigator)
 						return Reflect.apply(target, that, args);
-					// an opaque origin has no service workers
+					// an opaque origin has no service workers (Chrome's words, a
+					// deferred part, ../rareReads.ts: the getter throws without it)
 					if (client.opaqueRequests)
-						throw withStack(
-							new global.DOMException(
-								"Failed to read the 'serviceWorker' property from 'Navigator': Service worker is disabled because the context is sandboxed and lacks the 'allow-same-origin' flag.",
-								'SecurityError',
-							),
-						);
+						throw deferred('opaqueRefusal')(global, 'serviceWorker');
 					return emulate().container;
 				},
 			),

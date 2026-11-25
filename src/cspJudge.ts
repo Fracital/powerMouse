@@ -5,7 +5,7 @@
 // enforces them with this (src/inject/dom/policyChecks.ts), and the workers
 // read the hosts' part (hostsApply). In the document bundle, a deferred part
 // with those checks (src/inject/dom/deferred.ts).
-import { sourcesMatch } from './csp';
+import { sourcesMatch } from './cspSources';
 import { digest } from './sha';
 import { base64Standard } from './sri';
 

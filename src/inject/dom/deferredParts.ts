@@ -67,6 +67,38 @@
 // check a document with a policy of the page's makes, with a data: URL's
 // integrity, ../../sriDigest.ts, which shares the digests)
 //
+// (and whether a URL matches a source list of the page's own policy,
+// ../../cspSources.ts, at the first load or navigation a policy of the
+// page's governs that the document judges itself; a group of its own, as
+// the checks above carry their own copy)
+//
+// (and a form's submission as the worker is told of it and the page's
+// form-action judges it, ./formSubmissions.ts, at a document's first)
+//
+// (and a link opened in a new browsing context as a host tab or a sandboxed
+// popup, ./linkOpens.ts, at a document's first click on one)
+//
+// (and navigator.credentials.get(), store() and preventSilentAccess() past
+// their hooks, ./credentialCalls.ts, at a document's first call of one)
+//
+// (and a media session's artwork routed and read back, ./mediaArtwork.ts, at
+// a document's first)
+//
+// (and a javascript: URL's document and navigation.navigate(),
+// ./navigateCalls.ts, at a document's first of either)
+//
+// (and a click on a link to a fragment of the document, ./fragmentLinks.ts,
+// at a document's first)
+//
+// (and window.viewport.segments and what an opaque document is refused,
+// ./rareReads.ts, at a document's first of either)
+//
+// (and what document.startViewTransition() does in a frame past its hook,
+// ./viewTransitions.ts, at a page's first call)
+//
+// (and a page's import map as the browser gets it, ./importMaps.ts with
+// ../../importMap.ts, at a document's first import map)
+//
 // (and the document.write stream, ./WriteStream.ts with its tokenizer, at a
 // document's first write)
 //
@@ -134,10 +166,11 @@
 // it): constants and functions only, as the bundle's code reads what it
 // needs when it is called.
 import { compileFilter, proceduralRunner } from '../../blocker/procedural';
+import { sourcesMatch } from '../../cspSources';
 import { modifyHTML } from '../../htmlShell';
 import { noticeText } from '../../mixedContentNotices';
 import { dataIntegrity } from '../../sriDigest';
-import { codecBytes } from '../../wasm/codecBytes';
+import { codecBytes, codecInstance } from '../../wasm/codecBytes';
 import { modifyXML } from '../../xmlShell';
 import { accessFailures } from '../accessFailures';
 import { bareClient, socketStandIns } from '../bareClient';
@@ -158,7 +191,7 @@ import {
 	permissionElements,
 } from '../permissionGates';
 import { readers as positionReaders } from '../positionMaps';
-import { madeReport, reportsSeen } from '../reportsSeen';
+import { madeReport, observerCalls, reportsSeen } from '../reportsSeen';
 import { bucketMethods } from '../storageBucketMethods';
 import { storageUsage } from '../storageUsage';
 import { carry as carryWebTransport } from '../webTransport';
@@ -172,6 +205,11 @@ import { attributeViewMethods } from './attributeViewMethods';
 import { relayBeacon } from './beaconRelay';
 import { calledHooks } from './calledHooks';
 import {
+	credentialGet,
+	credentialStore,
+	preventSilentAccess,
+} from './credentialCalls';
+import {
 	identityFlow,
 	loginStatus,
 	relyingPartyGuard,
@@ -180,14 +218,19 @@ import { ownStoreRefusal } from './credentialStore';
 import { installDeviceIds } from './deviceIds';
 import { saveDownload } from './downloadSave';
 import { fetchLater } from './fetchLater';
+import { formSubmitted } from './formSubmissions';
+import { fragmentLink } from './fragmentLinks';
 import { hookHandlerName } from './handlerGetters';
+import { routedImportMap } from './importMaps';
 import { instructionData, loadXML, xmlProlog } from './instructions';
 import { lazyFonts } from './lazyFonts';
 import { formEncoding, legacyFormQuery, legacyQuery } from './legacyEncoding';
+import { linkOpens } from './linkOpens';
 import { markupMembers } from './markupMembers';
 import { codePlace, handlerPlace, markupScriptSite } from './markupPlaces';
 import { markupSinks } from './markupSinks';
 import { measuredMemory } from './measuredMemory';
+import { artworkView, routedArtwork } from './mediaArtwork';
 import { moduleGraph } from './moduleGraph';
 import FingerprintModule from './modules/Fingerprint';
 import { longFrames } from './modules/LongFrames';
@@ -200,6 +243,7 @@ import {
 	userMediaCall,
 } from './modules/permissionCalls';
 import { emulateServiceWorker } from './modules/serviceWorkerEmulation';
+import { javascriptDocument, navigationNavigate } from './navigateCalls';
 import { mayNavigate, navigateOther, navigationRefused } from './navigateOther';
 import { navigationRefusal, precommitRedirect } from './navigationRefusal';
 import { objectLoads } from './objectLoads';
@@ -209,6 +253,7 @@ import { policyChecks } from './policyChecks';
 import { presentationIds } from './presentations';
 import { protocolHandler } from './protocolHandlers';
 import { metaRefresh, opaqueDocument, reportBase } from './rareAttributes';
+import { opaqueRefusal, viewportSegments } from './rareReads';
 import { rtcInstall } from './rtcInstall';
 import { seenImages } from './seenImages';
 import {
@@ -238,6 +283,7 @@ import {
 	videoFrameRefusal,
 } from './taintRefusals';
 import { uncontrolledCopies } from './uncontrolledCopies';
+import { viewTransitionCall } from './viewTransitions';
 import { deliverReport } from './violationDelivery';
 import {
 	dispatchViolation,
@@ -247,7 +293,7 @@ import {
 	noteFormSite,
 	refusedTrustedPolicy,
 	trustedTypeError,
-	violationPageCode,
+	violationSample,
 	violationShows,
 	violationURL,
 } from './violations';
@@ -258,8 +304,10 @@ import { responseParser } from './xhrParse';
 
 export const parts = {
 	// the codec module's bytes, at a top's first seal (../../wasm/codecBytes.ts;
-	// ../../wasm/codec.ts)
+	// ../../wasm/codec.ts), and the instance made of them
+	// (../../wasm/codecInstance.ts)
 	codecBytes,
+	codecInstance,
 	bareClient,
 	// what the WebSocket and WebSocketStream stand-ins do, with the client
 	// (../bareClient.ts; ../socketParts.ts, ../modules/WebSocket.ts)
@@ -298,6 +346,9 @@ export const parts = {
 	// the un-routing of ReportingObserver's reports, at the first
 	// (../reportsSeen.ts; ../modules/Unroute.ts)
 	reportsSeen,
+	// and what the page's ReportingObservers do past their hooks, at its
+	// first (../reportsSeen.ts; ../modules/Unroute.ts)
+	observerCalls,
 	// the reports of the violations the inject makes itself, at the first
 	// (../reportsSeen.ts; ./policyChecks.ts)
 	madeReport,
@@ -313,6 +364,10 @@ export const parts = {
 	// what measureUserAgentSpecificMemory() answers the page, at its first
 	// call (./measuredMemory.ts; ./modules/Isolation.ts)
 	measuredMemory,
+	// whether a URL matches a source list of the page's policy, at the first
+	// check one of them governs (../../cspSources.ts; Client.ts
+	// pageRefusals, baseRefused, metaPolicy)
+	sourcesMatch,
 	// navigator.(un)registerProtocolHandler()'s checks, at a page's first
 	// call (./protocolHandlers.ts; ./modules/Navigator.ts)
 	protocolHandler,
@@ -366,6 +421,39 @@ export const parts = {
 	// a document's navigation of another window, refused as Chrome refuses
 	// it, at its first (./navigateOther.ts; modules/Context.ts)
 	navigateOther,
+	// a form's submission, told to the worker and judged by the page's
+	// form-action, at a document's first (./formSubmissions.ts;
+	// modules/NavigationHint.ts)
+	formSubmitted,
+	// a link a click opens in a new browsing context, as a host tab or a
+	// sandboxed popup, at a document's first (./linkOpens.ts; modules/Open.ts)
+	linkOpens,
+	// navigator.credentials.get() where STomp is no passkey provider,
+	// store() and preventSilentAccess(), at a document's first call of one
+	// (./credentialCalls.ts; modules/Credentials.ts)
+	credentialGet,
+	credentialStore,
+	preventSilentAccess,
+	// a media session's artwork, routed as the page sets it and read back
+	// as the page's, at a document's first (./mediaArtwork.ts;
+	// modules/MediaSession.ts)
+	routedArtwork,
+	artworkView,
+	// the document a javascript: URL's markup becomes (DocumentClient
+	// javascriptDocument) and navigation.navigate() (modules/History.ts),
+	// at a document's first of either (./navigateCalls.ts)
+	javascriptDocument,
+	navigationNavigate,
+	// a link to a fragment of this document, clicked, at a document's
+	// first (./fragmentLinks.ts; modules/Fragment.ts)
+	fragmentLink,
+	// window.viewport.segments as a top-level page reads it
+	// (modules/Framing.ts) and the SecurityErrors of an opaque document's
+	// storage, cookies, caches, service workers and IndexedDB
+	// (modules/Sandbox.ts, modules/ServiceWorker.ts), at a document's first
+	// (./rareReads.ts)
+	viewportSegments,
+	opaqueRefusal,
 	// and whether a sandboxed document may navigate another window, with the
 	// SecurityError it gets when it may not, at its first such navigation
 	// (DocumentClient.mayNavigate; modules/Sandbox.ts)
@@ -398,7 +486,7 @@ export const parts = {
 	// reaches the page (./modules/ContentSecurity.ts)
 	violationShows,
 	violationURL,
-	violationPageCode,
+	violationSample,
 	// and where a base or a form a violation may name was set or
 	// submitted, at a document's first its policy refuses (./violations.ts;
 	// modules/DOMAttributes.ts, modules/NavigationHint.ts, Client.ts
@@ -484,6 +572,12 @@ export const parts = {
 	onOwnSlot,
 	slotContainerPolicy,
 	seenImages,
+	// document.startViewTransition()'s checks of a frame's viewport, at a
+	// page's first call (./viewTransitions.ts; modules/ViewTransition.ts)
+	viewTransitionCall,
+	// a page's import map, its integrity told and its targets routed, at a
+	// document's first (./importMaps.ts; Client.ts routedImportMap)
+	routedImportMap,
 	// window.open(), at a document's first call (./windowOpen.ts;
 	// modules/DOMHooks.ts)
 	windowOpen,

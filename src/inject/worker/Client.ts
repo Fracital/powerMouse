@@ -3,11 +3,11 @@ import {
 	governing,
 	governsWorkerRequests,
 	parsePolicies,
-	sourcesMatch,
 	type Policy,
 	type WorkerPolicies,
 } from '../../csp';
 import { hostsApply } from '../../cspJudge';
+import { sourcesMatch } from '../../cspSources';
 import { workerKindPartition, workerKindUnisolated } from '../../partition';
 import { routeXHR } from '../../routeURL';
 import type { EmulateInfo } from '../../serviceWorkerTypes';

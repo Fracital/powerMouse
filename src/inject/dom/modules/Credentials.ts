@@ -2,6 +2,7 @@ import Module from '../../Module';
 import ProxyModule, { memberName } from '../../modules/Proxy';
 import { withStack } from '../../nativeErrors';
 import type DocumentClient from '../Client';
+import type { CredentialCallContext } from '../credentialCalls';
 import { deferred, passkeysPart } from '../deferred';
 import type { DeferredParts } from '../deferredParts';
 import {
@@ -278,31 +279,24 @@ export default class CredentialsModule extends Module<DocumentClient> {
 			return flow.runIdentity(identity, signal, mediation);
 		};
 
-		// preventSilentAccess(): Chrome answers a top-level document only
-		// (a frame's is refused, measured), and every proxied document is a
-		// frame to it; at a proxied top it resolves, and FedCM's next request
-		// of the site asks the user (what the browser keeps of a site's
-		// sign-ins is the worker's: src/server/identityStates.ts)
+		// preventSilentAccess(), store() and get() past their hooks are
+		// deferred parts (../credentialCalls.ts): each answers with a
+		// promise, so without them a rejection
+		const credentialCall =
+			(name: 'credentialGet' | 'credentialStore' | 'preventSilentAccess') =>
+			(target: Function, that: unknown, args: unknown[]): unknown => {
+				let call: DeferredParts[typeof name];
+				try {
+					call = deferred(name);
+				} catch (error) {
+					return reject(error);
+				}
+				return call(callContext, target, that, args);
+			};
 		if (typeof container.preventSilentAccess === 'function')
 			container.preventSilentAccess = proxyModule.wrapFunction(
 				container.preventSilentAccess,
-				(target, that, args) => {
-					if (that !== global.navigator.credentials)
-						return Reflect.apply(target, that, args);
-					if (client.ancestorOrigins().length)
-						return reject(
-							domException(
-								'Error connecting to Credential Management service.',
-								'NotSupportedError',
-							),
-						);
-					try {
-						identityFlow().preventSilent();
-					} catch (error) {
-						return reject(error);
-					}
-					return Reflect.apply(PagePromise.resolve, PagePromise, [undefined]);
-				},
+				credentialCall('preventSilentAccess'),
 			);
 
 		// --- the statics, each reading as the browser's and routing/emulating ---
@@ -571,72 +565,29 @@ export default class CredentialsModule extends Module<DocumentClient> {
 				? reject(domException(...refusal))
 				: Reflect.apply(PagePromise.resolve, PagePromise, [null]);
 		};
+		const callContext: CredentialCallContext = {
+			client,
+			PagePromise,
+			domException,
+			identityFlow,
+			browserGet,
+			ownStore,
+			runIdentity,
+			reject,
+		};
 		if (typeof container.store === 'function')
 			container.store = proxyModule.wrapFunction(
 				container.store,
-				(target, that, args) => {
-					const tag = Object.prototype.toString.call(args[0]);
-					return tag === '[object PasswordCredential]' ||
-						tag === '[object FederatedCredential]'
-						? ownStore().then(() => undefined)
-						: Reflect.apply(target, that, args);
-				},
+				credentialCall('credentialStore'),
 			);
 
+		const getCall = credentialCall('credentialGet');
 		container.get = proxyModule.wrapFunction(
 			container.get,
-			(target, that, args) => {
-				if (provider) return provider()?.get(that, args) ?? declined();
-				const options = args[0];
-				if (
-					options === null ||
-					(typeof options !== 'object' && typeof options !== 'function')
-				)
-					return browserGet(target, that, args);
-				// the members are read once and pinned: a getter cannot hand the
-				// browser a request this never saw. A password or a federated
-				// sign-in alone is the site's own store's (above); a passkey
-				// asked for with one is the passkey's alone
-				let identity: unknown;
-				let password: unknown;
-				let federated: unknown;
-				let publicKey: unknown;
-				try {
-					federated = options.federated;
-					identity = options.identity;
-					password = options.password;
-					publicKey = options.publicKey;
-				} catch (error) {
-					return reject(error);
-				}
-				const own =
-					identity === undefined && (!!password || federated !== undefined);
-				if (own && publicKey === undefined) return ownStore();
-				const pinned = [
-					{
-						__proto__: options,
-						identity,
-						publicKey,
-						...(own
-							? { password: false, federated: undefined }
-							: { password, federated }),
-					},
-					...args.slice(1),
-				];
-				const asked = (): unknown => browserGet(target, that, pinned);
-				if (own) return ownStore().then(asked);
-				// no identity: the browser's own get (a passkey, NotSupportedError)
-				if (identity === undefined) return asked();
-				let signal: unknown;
-				let mediation: unknown;
-				try {
-					signal = options.signal;
-					mediation = options.mediation;
-				} catch (error) {
-					return reject(error);
-				}
-				return runIdentity(identity, signal, mediation);
-			},
+			(target, that, args) =>
+				provider
+					? (provider()?.get(that, args) ?? declined())
+					: getCall(target, that, args),
 		);
 	}
 }

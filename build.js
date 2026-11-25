@@ -617,6 +617,7 @@ const DEFERRED_FILES = new Set(
 		'node_modules/entities/dist/escape.js',
 		'src/blocker/procedural.ts',
 		'src/cspJudge.ts',
+		'src/cspSources.ts',
 		'src/inject/bareClient.ts',
 		'src/inject/cacheCalls.ts',
 		'src/inject/cookieStoreMethods.ts',
@@ -629,24 +630,32 @@ const DEFERRED_FILES = new Set(
 		'src/inject/dom/calledFrames.ts',
 		'src/inject/dom/calledNavigation.ts',
 		'src/inject/dom/beaconRelay.ts',
+		'src/inject/dom/credentialCalls.ts',
 		'src/inject/dom/credentialFlows.ts',
 		'src/inject/dom/credentialStore.ts',
 		'src/inject/dom/deferredParts.ts',
 		'src/inject/dom/downloadSave.ts',
 		'src/inject/dom/fetchLater.ts',
+		'src/inject/dom/formSubmissions.ts',
+		'src/inject/dom/fragmentLinks.ts',
 		'src/inject/dom/animatedHref.ts',
 		'src/inject/dom/handlerGetters.ts',
+		'src/inject/dom/importMaps.ts',
 		'src/inject/dom/legacyEncoding.ts',
+		'src/inject/dom/linkOpens.ts',
 		'src/inject/dom/lazyFonts.ts',
 		'src/inject/dom/instructions.ts',
 		'src/inject/dom/markupMembers.ts',
 		'src/inject/dom/measuredMemory.ts',
+		'src/inject/dom/mediaArtwork.ts',
 		'src/inject/dom/objectLoads.ts',
 		'src/inject/dom/markupSinks.ts',
+		'src/inject/dom/navigateCalls.ts',
 		'src/inject/dom/openerFacts.ts',
 		'src/inject/dom/pictureWindows.ts',
 		'src/inject/dom/policyChecks.ts',
 		'src/inject/dom/rareAttributes.ts',
+		'src/inject/dom/rareReads.ts',
 		'src/inject/dom/modules/Fingerprint.ts',
 		'src/inject/modules/NavigatorIdentity.ts',
 		'src/userAgent.ts',
@@ -674,6 +683,7 @@ const DEFERRED_FILES = new Set(
 		'src/inject/dom/taintRefusals.ts',
 		'src/inject/dom/violationDelivery.ts',
 		'src/inject/dom/violations.ts',
+		'src/inject/dom/viewTransitions.ts',
 		'src/inject/dom/markupPlaces.ts',
 		'src/inject/violationDispatch.ts',
 		'src/inject/dom/uncontrolledCopies.ts',
@@ -690,6 +700,7 @@ const DEFERRED_FILES = new Set(
 		'src/refresh.ts',
 		'src/refusalName.ts',
 		'src/wasm/codecBytes.ts',
+		'src/wasm/codecInstance.ts',
 		'src/inject/serviceWorkerObjects.ts',
 		'src/inject/positionMaps.ts',
 		'src/inject/originFrom.ts',
@@ -702,6 +713,7 @@ const DEFERRED_FILES = new Set(
 		'src/sha.ts',
 		'src/sriDigest.ts',
 		'src/htmlShell.ts',
+		'src/importMap.ts',
 		'src/inject/accessFailures.ts',
 		'src/inject/reportsSeen.ts',
 		'src/inject/workerStart.ts',
@@ -724,10 +736,16 @@ const DEFERRED_FILES = new Set(
  * hashes joined the page's policy checks, the integrity checks and the
  * position maps with long animation frames into one group of 21 KB, which
  * a frame under a script policy evaluated whole (about 2 to 3 KB of heap a
- * frame more than its checks alone, measured, Chrome 157).
+ * frame more than its checks alone, measured, Chrome 157). cspSources.ts,
+ * the source matching, is a part of its own (DocumentClient pageRefusals,
+ * the violations, the site pool's frames) and in the policy checks' group:
+ * joined by it the two would be one, and a document's first load a policy
+ * of the page's governs would evaluate the checks with it.
  */
 const COPIED_FILES = new Set(
-	['src/sha.ts'].map((file) => realpathSync(resolve(file))),
+	['src/cspSources.ts', 'src/sha.ts'].map((file) =>
+		realpathSync(resolve(file)),
+	),
 );
 const DEFERRED_ENTRY = 'src/inject/dom/deferredParts.ts';
 /** what the parts read of the bundle: by file (from the root), the names */
@@ -1400,6 +1418,23 @@ const stubCrypto = {
  *
  * @type {import('esbuild').Plugin}
  */
+/**
+ * The document bundles' codec instance (src/wasm/codecInstance.ts) is a
+ * deferred part: codec.ts imports src/wasm/codecInstanceStub.ts there,
+ * which asks the part, so the 0.8 KB of the instance's code are in no frame
+ * (a frame seals in its top's instance)
+ */
+const stubCodecInstance = {
+	name: 'stub-codec-instance',
+	setup(pluginBuild) {
+		pluginBuild.onResolve({ filter: /^\.\/codecInstance$/ }, (args) =>
+			args.importer === resolve('src/wasm/codec.ts')
+				? { path: resolve('src/wasm/codecInstanceStub.ts') }
+				: undefined,
+		);
+	},
+};
+
 const stubSIV = {
 	name: 'stub-siv',
 	setup(pluginBuild) {
@@ -1848,7 +1883,13 @@ const builds = [
 		alias: stubCrypto,
 		inject: [snapshot, domSnapshot],
 		write: false,
-		plugins: [stubSIV, rewriterLib, deferredTable, pooledNames],
+		plugins: [
+			stubSIV,
+			stubCodecInstance,
+			rewriterLib,
+			deferredTable,
+			pooledNames,
+		],
 		define: documentDefine,
 	},
 	{
@@ -1857,7 +1898,7 @@ const builds = [
 		...DOCUMENT_GUARD,
 		inject: [snapshot, domSnapshot],
 		write: false,
-		plugins: [rewriterLib, deferredTable, pooledNames],
+		plugins: [stubCodecInstance, rewriterLib, deferredTable, pooledNames],
 		define: documentDefine,
 	},
 	{

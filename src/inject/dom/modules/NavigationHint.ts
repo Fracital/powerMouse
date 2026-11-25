@@ -2,17 +2,15 @@ import {
 	NAVIGATION_HINT,
 	type NavigationHintMessage,
 } from '../../../transport/messages';
-import { withQuery } from '../../../urlShape';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
 import { activationState } from '../activation';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { deferred } from '../deferred';
+import type { DeferredParts } from '../deferredParts';
 import { destinationURL } from '../freshContext';
-import { baseTarget, clickedLink } from '../links';
-import { nativeElement } from './DOMHooks';
-import { hookWrite } from './MutationObserver';
+import { clickedLink } from '../links';
 
 // a window's opener as the browser has it, taken when the bundle runs
 const nativeOpener = Reflect.getOwnPropertyDescriptor(window, 'opener')!.get!;
@@ -247,127 +245,32 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 						mouse.shiftKey,
 				]);
 		};
-		// a form's submission, wherever it goes (a named popup or frame
-		// navigates for this document, under this document's activation): its
-		// destination as the browser builds it, the query the form's data for
-		// a GET
+		// A form's submission is about to be made, wherever it goes (a named
+		// popup or frame navigates for this document, under this document's
+		// activation): the worker is told, and the page's form-action judges
+		// it (../formSubmissions.ts, a deferred part made at a document's
+		// first submission). Without the part nothing is submitted: a submit
+		// event is cancelled with the browser's preventDefault, taken before
+		// the page could replace it, and submit() throws the part's error
+		const preventDefault = global.Event.prototype.preventDefault;
 		const onSubmit = (event: Event) => {
 			const form = event.target;
 			if (!(form instanceof global.HTMLFormElement)) return;
+			let submitted: DeferredParts['formSubmitted'];
+			try {
+				submitted = deferred('formSubmitted');
+			} catch (error) {
+				Reflect.apply(preventDefault, event, []);
+				return;
+			}
 			submitted(
+				moduleClient,
+				send,
 				form,
 				(event as SubmitEvent).submitter as
 					HTMLButtonElement | HTMLInputElement | null,
 				event,
 			);
-		};
-		/**
-		 * A form's submission is about to be made: the worker is told where
-		 * it goes, and the page's form-action judges it (src/csp.ts). One it
-		 * refuses goes to a refusal URL (its element's action, put back in a
-		 * moment): the browser refuses it there and reports it as natively,
-		 * nothing is sent and no window opens. The action is put back in the
-		 * next task (a submit event's submission reads it once the event is
-		 * done), or by the returned function (at the end of submit()). `event`:
-		 * the submit event, which the page may still cancel
-		 */
-		const submitted = (
-			form: HTMLFormElement,
-			submitter: HTMLButtonElement | HTMLInputElement | null,
-			event?: Event,
-		): (() => void) | null => {
-			const own = (name: string) => !!submitter?.hasAttribute(name);
-			const action = own('formaction') ? submitter!.formAction : form.action;
-			const method = (
-				(own('formmethod') ? submitter!.formMethod : form.method) || 'get'
-			).toLowerCase();
-			if (method === 'dialog') return null;
-			// a javascript: action, judged as its submission starts
-			// (DocumentClient jsStarts)
-			moduleClient.jsStarts(
-				(own('formtarget')
-					? submitter!.getAttribute('formtarget')
-					: form.getAttribute('target')) || baseTarget(global.document),
-				action,
-				event,
-				own('formaction') ? submitter! : form,
-			);
-			try {
-				let url = new URL(action);
-				// a form without fields submits to `action?` (src/urlShape.ts)
-				if (method === 'get')
-					url = withQuery(
-						url,
-						`?${new URLSearchParams(
-							new global.FormData(
-								form,
-								submitter ?? undefined,
-							) as unknown as Record<string, string>,
-						).toString()}`,
-					);
-				if (!/^https?:$/.test(url.protocol)) return null;
-				const target = own('formtarget')
-					? submitter!.getAttribute('formtarget')
-					: form.getAttribute('target');
-				const policies = moduleClient.hopPolicies('form-action');
-				// where the page's code submitted it, which a violation of it
-				// names, a redirect's too (a new window's navigation names
-				// none, as natively)
-				if (policies)
-					try {
-						deferred('noteFormSite')(moduleClient, url.href, target);
-					} catch (error) {
-						// the part cannot be had: the violation names no place
-					}
-				if (
-					policies &&
-					moduleClient
-						.pageRefusals('form-action', url)
-						.some(({ policy }) => policy.disposition === 'enforce')
-				) {
-					const element: Element = own('formaction') ? submitter! : form;
-					const name = element === form ? 'action' : 'formaction';
-					const written = nativeElement.getAttribute.call(element, name);
-					const refusal = moduleClient.refusalURL(
-						'https',
-						url.href,
-						url.href.replace(/#.*$/s, ''),
-					);
-					const write = (value: string | null) =>
-						hookWrite(
-							element,
-							() => [name],
-							() =>
-								value === null
-									? nativeElement.removeAttribute.call(element, name)
-									: nativeElement.setAttribute.call(element, name, value),
-						);
-					write(refusal);
-					const restore = () => {
-						if (nativeElement.getAttribute.call(element, name) === refusal)
-							write(written);
-					};
-					Reflect.apply(setTimeout, global, [restore, 0]);
-					return restore;
-				}
-				// (a report-only one's refusal is reported a task later, as the
-				// browser would, unless the page cancelled the submission)
-				if (policies)
-					Reflect.apply(setTimeout, global, [
-						() => {
-							if (!event?.defaultPrevented)
-								moduleClient.reportRefusal('form-action', url);
-						},
-						0,
-					]);
-				send(url.href, undefined, policies ? { policies } : undefined, [
-					target,
-					false,
-				]);
-			} catch (error) {
-				// an action that is no URL submits nowhere
-			}
-			return null;
 		};
 		// submit() fires no submit event
 		const proxyModule = moduleClient.getModule(ProxyModule)!;
@@ -375,12 +278,22 @@ export default class NavigationHintModule extends Module<DocumentClient> {
 		global.HTMLFormElement.prototype.submit = proxyModule.wrapFunction(
 			nativeSubmit,
 			(target, that, args) => {
-				let restore: (() => void) | null = null;
+				let form = false;
 				try {
-					if (that instanceof global.HTMLFormElement)
-						restore = submitted(that, null);
+					form = that instanceof global.HTMLFormElement;
 				} catch (error) {
 					// no form: the call throws on its own
+				}
+				// (the function that puts a refused one's action back)
+				let restore: (() => void) | null = null;
+				if (form) {
+					const submitted = deferred('formSubmitted');
+					try {
+						restore = submitted(moduleClient, send, that, null);
+					} catch (error) {
+						// a throw while it was judged (a getter of the page's
+						// form): the browser's submit() goes on
+					}
 				}
 				try {
 					return Reflect.apply(target, that, args);

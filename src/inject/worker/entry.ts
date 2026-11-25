@@ -24,7 +24,7 @@ import { originFromParts } from '../originFromParts';
 import { readers } from '../positionMaps';
 import { positionParts } from '../positionParts';
 import { reportParts } from '../reportParts';
-import { reportsSeen } from '../reportsSeen';
+import { observerCalls, reportsSeen } from '../reportsSeen';
 import { handModules } from '../rewriter';
 import { socketParts } from '../socketParts';
 import { bucketMethods } from '../storageBucketMethods';
@@ -65,6 +65,7 @@ positionParts.maps = () => readers;
 accessFailureParts.failures = () => accessFailures;
 // and the un-routing of ReportingObserver's reports (../reportParts.ts)
 reportParts.seen = () => reportsSeen;
+reportParts.calls = () => observerCalls;
 // and what a worker's construction does past its checks (../workerStartParts.ts)
 workerStartParts.start = () => workerStart;
 // and what a WebSocket stand-in does (../socketParts.ts)

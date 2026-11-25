@@ -6,12 +6,12 @@
 // The hooks that call these stay in the bundle, and decide there whether a
 // call is the pool's at all, so a document that never meets another slot
 // never evaluates the parts.
-import { sourcesMatch } from '../../csp';
 import { namedRefusal } from '../../refusalName';
 import type { NavigationHintMessage } from '../../transport/messages';
 import { routedPrefix, unrouteURL } from '../modules/Unroute';
 import type DocumentClient from './Client';
 import type { AcrossNavigation } from './Client';
+import { deferred } from './deferred';
 import type { Pool } from './pool';
 import { siteWindows } from './siteWindows';
 
@@ -60,7 +60,8 @@ export function judgeAcross(
 		([directive, sources, disposition, self]) => {
 			if (directive !== 'frame-src' || disposition !== 'enforce') return false;
 			try {
-				return !sourcesMatch(sources, url, new URL(self));
+				// (the source matching is a part of its own: ../../cspSources.ts)
+				return !deferred('sourcesMatch')(sources, url, new URL(self));
 			} catch (error) {
 				return false;
 			}

@@ -1,17 +1,15 @@
 import {
-	ancestorAllowed,
 	CODE_DIRECTIVES,
 	FALLBACK,
 	governing,
 	governsWorkerRequests,
-	hopRefusals,
 	parsePolicies,
 	REFUSED_URL,
-	sourcesMatch,
 	type Policy,
 	type WorkerPolicies,
 } from '../csp';
 import { hostsApply } from '../cspJudge';
+import { ancestorAllowed, hopRefusals, sourcesMatch } from '../cspSources';
 import { namedRefusal } from '../refusalName';
 import { CSP_REPORT } from '../transport/messages';
 import type { NavigationChain } from './navigationHints';

@@ -14,12 +14,12 @@ export {
 	isBareSpecifier,
 	postMessageMethod,
 	PROVIDERS,
-	rewriteImportMap,
 	routeImport,
 	routeJS,
 	UNDEFINABLE,
 	type ScriptType,
 } from './scriptRoutes';
+export { rewriteImportMap } from './importMap';
 export { scriptLead };
 
 /** whether a script is printed compact: minified code comes back minified */

@@ -1,12 +1,9 @@
-import { routeBinary } from '../../../routeURL';
-import StompURL from '../../../StompURL';
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
-import { unrouteURL } from '../../modules/Unroute';
 import { LazyWeakMap } from '../../ownCollections';
 import type DocumentClient from '../Client';
-
-type Image = { src?: unknown; sizes?: unknown; type?: unknown };
+import { deferred } from '../deferred';
+import type { ArtworkImage } from '../mediaArtwork';
 
 /**
  * A media session's artwork. The browser fetches it itself, for its media
@@ -24,53 +21,29 @@ export default class MediaSessionModule extends Module<DocumentClient> {
 		if (typeof NativeMetadata !== 'function') return;
 		const proxyModule = client.getModule(ProxyModule)!;
 
-		// an image list with each web URL routed, resolved against the page
-		const routed = (artwork: unknown): unknown => {
-			if (artwork === null || typeof artwork !== 'object') return artwork;
-			if (!(Symbol.iterator in artwork)) return artwork;
-			return [...(artwork as Iterable<Image>)].map((image) => {
-				if (image === null || typeof image !== 'object') return image;
-				let url: URL;
-				try {
-					url = new URL(String(image.src), client.baseHref);
-				} catch (error) {
-					// the native constructor throws its own TypeError
-					return image;
-				}
-				if (url.protocol !== 'http:' && url.protocol !== 'https:') return image;
-				return {
-					...image,
-					src: routeBinary(new StompURL(url, client.url)),
-				};
-			});
-		};
+		// the routing and the reading back are a deferred part
+		// (../mediaArtwork.ts): without it the artwork is refused (a throw),
+		// and no URL of the page's reaches the browser
+		const routed = (artwork: unknown): unknown =>
+			deferred('routedArtwork')(client, artwork);
 
 		const prototype = NativeMetadata.prototype;
 		const descriptor = Reflect.getOwnPropertyDescriptor(prototype, 'artwork');
 		if (descriptor?.get && descriptor.set) {
 			// the page's view of each native frozen array, made once: the
 			// getter answers with the same object every time, as natively
-			const views = new LazyWeakMap<object, readonly Image[]>();
+			const views = new LazyWeakMap<object, readonly ArtworkImage[]>();
 			Reflect.defineProperty(prototype, 'artwork', {
 				...descriptor,
 				get: proxyModule.wrapFunction(descriptor.get, (target, that, args) => {
-					const list = Reflect.apply(target, that, args) as readonly Image[];
+					const list = Reflect.apply(
+						target,
+						that,
+						args,
+					) as readonly ArtworkImage[];
 					if (!Array.isArray(list)) return list;
 					if (!views.has(list))
-						views.set(
-							list,
-							Object.freeze(
-								list.map((image) =>
-									Object.freeze({
-										...image,
-										src:
-											typeof image.src === 'string'
-												? (unrouteURL(client, image.src) ?? image.src)
-												: image.src,
-									}),
-								),
-							),
-						);
+						views.set(list, deferred('artworkView')(client, list));
 					return views.get(list);
 				}),
 				set: proxyModule.wrapFunction(descriptor.set, (target, that, args) =>
@@ -88,9 +61,7 @@ export default class MediaSessionModule extends Module<DocumentClient> {
 						? [
 								{
 									...init,
-									artwork: routed(
-										(init as Image & { artwork: unknown }).artwork,
-									),
+									artwork: routed((init as { artwork: unknown }).artwork),
 								},
 							]
 						: args;

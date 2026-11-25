@@ -1,10 +1,6 @@
 import { MAY_ROUTE } from '../../../cssURL';
 import { keptBy } from '../../../functionSource';
-import {
-	isSpeculationRules,
-	NO_SPECULATION,
-	rewriteImportMap,
-} from '../../../scriptRoutes';
+import { isSpeculationRules, NO_SPECULATION } from '../../../scriptRoutes';
 import Module from '../../Module';
 import ProxyModule, {
 	applyDescriptors,
@@ -513,10 +509,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 			if (script.type.trim().toLowerCase() === 'importmap') {
 				if (rewrittenScripts.has(script)) return;
 				rewrittenScripts.set(script, script.text);
-				client.noteImportMap(script.text);
-				script.text = trustedScript(
-					rewriteImportMap(script.text, client.baseURL, client.config),
-				);
+				script.text = trustedScript(client.routeImportMap(script.text));
 				return;
 			}
 			// speculation rules: none reach the browser (scriptRoutes.ts)
@@ -882,8 +875,7 @@ export default class DOMContentHooks extends Module<DocumentClient> {
 					(element.getAttribute('type') || '').trim().toLowerCase() ===
 					'importmap'
 				) {
-					client.noteImportMap(text);
-					return rewriteImportMap(text, client.baseURL, client.config);
+					return client.routeImportMap(text);
 				}
 				if (isSpeculationRules(element.getAttribute('type')))
 					return NO_SPECULATION;

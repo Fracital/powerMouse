@@ -1642,7 +1642,7 @@ export default class AccessModule extends Module<Client> {
 			// what a module's own import.meta.resolve answered (an import map's
 			// target is a route): the page's URL (src/scriptLead.ts). A prefix
 			// target's route is the sealed prefix and the suffix the browser
-			// appended (scriptRoutes.ts routeModulePrefix): the suffix resolves
+			// appended (importMap.ts routeModulePrefix): the suffix resolves
 			// against the opened prefix, as the worker resolves it
 			resolved: (url: string): string => {
 				const real = unrouteURL(moduleClient, url);

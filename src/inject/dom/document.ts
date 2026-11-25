@@ -1,6 +1,7 @@
 import type { FpSurface } from '../../blocker/types';
 import { setDocumentShells } from '../../rewriteHTML';
 import { codecParts } from '../../wasm/codec';
+import { codecInstanceParts } from '../../wasm/codecInstanceStub';
 import { accessFailureParts } from '../accessFailureParts';
 import { cacheCallParts } from '../cacheCallParts';
 import { createClientFactory } from '../Client';
@@ -96,11 +97,14 @@ mixedContentParts.noticeText = () => deferred('noticeText');
 accessFailureParts.failures = () => deferred('accessFailures');
 // and the un-routing of ReportingObserver's reports, with the first
 reportParts.seen = () => deferred('reportsSeen');
+reportParts.calls = () => deferred('observerCalls');
 reportParts.made = () => deferred('madeReport');
 // and the codec module's bytes, which a top compiles at its first seal from
 // the parts its shell loaded (a document without them seals in JavaScript,
-// with no request: ../../wasm/codec.ts)
+// with no request: ../../wasm/codec.ts), with the code that makes its
+// instance of them (../../wasm/codecInstance.ts)
 codecParts.bytes = () => heldPart('codecBytes')?.();
+codecInstanceParts.made = () => heldPart('codecInstance');
 // and what a page's add(), addAll() and caches.match() do, with the first
 cacheCallParts.calls = () => deferred('cacheCalls');
 // and what Origin.from() answers, with a realm's first call

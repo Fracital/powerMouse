@@ -6,6 +6,7 @@ import { unrouteURL } from '../../modules/Unroute';
 import { withStack } from '../../nativeErrors';
 import { LazyWeakMap, OwnWeakMap } from '../../ownCollections';
 import DocumentClient from '../Client';
+import { deferred } from '../deferred';
 import { destinationURL } from '../freshContext';
 import { Pool } from '../pool';
 import { nativeEventTarget } from './DOMHooks';
@@ -181,45 +182,22 @@ export default class HistoryModule extends Module<DocumentClient> {
 		const accessor = (proto: object, name: string) =>
 			Reflect.getOwnPropertyDescriptor(proto, name)!.get!;
 		type Entry = { readonly key: string };
-		// navigation.navigate(url): the page's URL, resolved against its
-		// document's base URL as natively (a `<base href>` moves a bare
-		// fragment to another document), is routed as a navigation of the
-		// document is
-		// (location.assign, or with `history: 'replace'` location.replace).
-		// Unhooked, the URL resolved against the proxy's address and the frame
-		// left the proxy for the proxy origin's own path.
+		// navigation.navigate(url): the page's URL routed as a navigation of
+		// the document is, a deferred part (../navigateCalls.ts) made at the
+		// first call: without it the call throws and navigates nothing
 		if (typeof navigationProto.navigate === 'function')
 			navigationProto.navigate = proxyModule.wrapFunction(
 				method('navigate'),
-				(target, that, args) => {
-					if (that !== navigation || !args.length)
-						return Reflect.apply(target, that, args);
-					let destination: URL;
-					try {
-						destination = new URL(String(args[0]), moduleClient.baseHref);
-					} catch (error) {
-						// the browser's own SyntaxError
-						return Reflect.apply(target, that, args);
-					}
-					const options = args[1] as { history?: unknown } | undefined;
-					const routed =
-						options?.history === 'replace'
-							? routeHTML(
-									new StompURL(destination, moduleClient.url),
-									moduleClient.url,
-									moduleClient.config,
-									false,
-									moduleClient.nestedRoute,
-								)
-							: moduleClient.navigationRoute(destination);
-					// to a fragment of this document as written (the Fragment module)
-					const live =
-						moduleClient
-							.getModule(FragmentModule)
-							?.live(new URL(routed, moduleClient.global.location.href).href) ??
-						routed;
-					return Reflect.apply(target, that, [live, ...args.slice(1)]);
-				},
+				(target, that, args) =>
+					that !== navigation || !args.length
+						? Reflect.apply(target, that, args)
+						: deferred('navigationNavigate')(
+								moduleClient,
+								moduleClient.getModule(FragmentModule),
+								target,
+								that,
+								args,
+							),
 			);
 		const nativeEntries = method('entries');
 		const nativeTraverseTo = method('traverseTo');

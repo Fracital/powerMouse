@@ -1,13 +1,12 @@
-import { routeHTML } from '../../../rewriteHTML';
 import { openFragment, sealedFragmentText } from '../../../routeURL';
-import StompURL, { sealFragmentText } from '../../../StompURL';
-import { beforeFragment } from '../../../urlShape';
+import { sealFragmentText } from '../../../StompURL';
 import Module from '../../Module';
-import { unrouteURL } from '../../modules/Unroute';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
+import { deferred } from '../deferred';
+import type { DeferredParts } from '../deferredParts';
+import type { FragmentLinks } from '../fragmentLinks';
 import { baseTarget, clickedLink, SAME_FRAME } from '../links';
 import HistoryModule from './History';
-import { hookWrite } from './MutationObserver';
 
 type Entry = object;
 interface NavigationLike extends EventTarget {
@@ -330,43 +329,23 @@ export default class FragmentModule extends Module<DocumentClient> {
 			const routed = Reflect.apply(getAttribute, link, ['href']) as
 				string | null;
 			if (!routed || split(routed)[1] === null) return;
-			// the URL it stands for (a link route's too), as this document's
-			// own address would name it: a link to this document only
-			let address: string;
+			// the rest is a deferred part (../fragmentLinks.ts), made at a
+			// document's first click on a link with a fragment: without it
+			// the link goes to its route, the fragment sealed
+			let follow: DeferredParts['fragmentLink'];
 			try {
-				const real = unrouteURL(client, new URL(routed, href()).href);
-				if (real === null) return;
-				const url = new URL(real);
-				if (beforeFragment(url) !== beforeFragment(client.url.url)) return;
-				address = new URL(
-					routeHTML(
-						new StompURL(url, client.url),
-						client.url,
-						client.config,
-						false,
-						client.nestedRoute,
-					),
-					href(),
-				).href;
+				follow = deferred('fragmentLink');
 			} catch (error) {
 				return;
 			}
-			const live = this.live(address);
-			if (live === address) return;
-			const set = (value: string) =>
-				hookWrite(
-					link,
-					() => ['href'],
-					() => Reflect.apply(setAttribute, link, ['href', value]),
-				);
-			set(live);
-			// back as soon as the browser took it (it navigates right after the
-			// click, or never: a cancelled click)
-			post(() => {
-				set(routed);
-				// a click the page cancelled: the entry made ready for it is sealed
-				if (!inFlight) seal();
-			});
+			follow(client, this, link, routed, links);
+		};
+		const links: FragmentLinks = {
+			href,
+			post,
+			setAttribute,
+			inFlight: () => inFlight,
+			seal,
 		};
 		const listenClicks = () => global.addEventListener('click', onClick, true);
 		listenClicks();

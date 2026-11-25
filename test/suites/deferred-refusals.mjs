@@ -24,7 +24,12 @@
 // texture or an OffscreenCanvas's export, or a tainted ImageBitmap cloned,
 // refuses with the parts' own error instead of Chrome's
 // (src/inject/dom/taintRefusals.ts), and navigator.login.setStatus()
-// rejects (src/inject/dom/credentialFlows.ts); an
+// rejects (src/inject/dom/credentialFlows.ts), and so do
+// navigator.credentials.get() and preventSilentAccess()
+// (src/inject/dom/credentialCalls.ts), and a ReportingObserver's
+// construction (src/inject/reportsSeen.ts), a frame's
+// document.startViewTransition() (src/inject/dom/viewTransitions.ts) and a
+// MediaMetadata with artwork (src/inject/dom/mediaArtwork.ts) throw; an
 // image in a frame
 // no service worker controls keeps its route and loads nothing (its copy
 // is a part, src/inject/dom/uncontrolledCopies.ts); an XML document a
@@ -186,6 +191,11 @@ const REFUSING = [
 	'taintTexture',
 	'taintExport',
 	'loginStatus',
+	'credentialGet',
+	'preventSilentAccess',
+	'reportingObserver',
+	'viewTransition',
+	'mediaArtwork',
 	'execCommand',
 	'contextualFragment',
 	'open',
@@ -220,6 +230,8 @@ const PROMISED = [
 	'taintTexture',
 	'taintExport',
 	'loginStatus',
+	'credentialGet',
+	'preventSilentAccess',
 ];
 
 /** counting stand-ins for the browser's functions, in every document */
@@ -787,7 +799,7 @@ const name = await page.evaluate(() => window.controller.config.names.client);
 		/^rejected: no parts/.test(out[call]?.promise ?? '') ||
 		// (a browser without WebGL has no texture to refuse)
 		(call === 'taintTexture' && out[call]?.promise === 'rejected: no webgl') ||
-		(call === 'identity' &&
+		((call === 'identity' || call === 'credentialGet') &&
 			/^rejected: The operation either timed out or was not allowed/.test(
 				out[call]?.promise ?? '',
 			));

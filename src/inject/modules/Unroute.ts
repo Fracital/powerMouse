@@ -1087,7 +1087,8 @@ export default class UnrouteModule extends Module<Client> {
 			Observer.prototype,
 			'takeRecords',
 		)?.value;
-		const { observers } = this.madeReports;
+		const madeReports = this.madeReports;
+		const { observers } = madeReports;
 		if (typeof nativeTakeRecords === 'function')
 			Observer.prototype.takeRecords = proxyModule.wrapFunction(
 				nativeTakeRecords,
@@ -1116,84 +1117,28 @@ export default class UnrouteModule extends Module<Client> {
 					(target, that, args) => {
 						const result = Reflect.apply(target, that, args);
 						const observer = observers.get(that);
-						if (!observer) return result;
-						const { observing } = this.madeReports;
-						let at = -1;
-						for (let i = 0; i < observing.length; i++)
-							if (observing[i] === that) at = i;
-						if (name === 'disconnect') {
-							if (at >= 0) {
-								for (let i = at + 1; i < observing.length; i++)
-									observing[i - 1] = observing[i];
-								observing.length--;
-							}
-							return result;
-						}
-						if (at >= 0) return result;
-						observing[observing.length] = that as object;
-						// handed the reports before once, as it first observes
-						// (as the browser's registers it)
-						if (observer.buffered) {
-							observer.buffered = false;
-							if (this.madeReports.buffer.length)
-								reportParts.made?.().buffered(this.madeReports, that, observer);
-						}
+						// (an observer of the page's, made by the part below)
+						if (observer)
+							reportParts.calls!().observed(madeReports, name, that, observer);
 						return result;
 					},
 				);
 		}
+		// what a page's observer does past the hooks is a deferred part
+		// (../reportsSeen.ts observerCalls): without it no observer is made
 		global.ReportingObserver = proxyModule.wrapFunction(
 			Observer,
-			(target, that, args, newTarget) => {
+			(target, that, args, newTarget) =>
 				// called without new: the browser's TypeError
-				if (!newTarget) return Reflect.apply(target, that, args);
-				const callback = args[0];
-				if (typeof callback === 'function') {
-					args[0] = function (this: unknown, ...called: unknown[]) {
-						const came = Array.isArray(called[0]) ? called[0].length : 0;
-						try {
-							called[0] = seen(called[0]);
-						} catch (error) {
-							return;
-						}
-						// (nothing left: there was no report of the page's. A list
-						// that came empty is the browser's own call, after the page
-						// took its records)
-						if (came && Array.isArray(called[0]) && !called[0].length) return;
-						return Reflect.apply(callback, this, called);
-					};
-				}
-				const made = Reflect.construct(target, args, newTarget);
-				if (typeof callback === 'function') {
-					// the types it takes (strings of an array, as most pages
-					// give them; any other list takes the inject's reports too)
-					let types: string[] | null = null;
-					let buffered = false;
-					try {
-						const options = args[1] as
-							{ types?: unknown; buffered?: unknown } | null | undefined;
-						if (options && typeof options === 'object') {
-							buffered = !!options.buffered;
-							const given = options.types;
-							if (Array.isArray(given)) {
-								types = [];
-								for (let i = 0; i < given.length; i++)
-									if (typeof given[i] === 'string')
-										types[types.length] = given[i];
-							}
-						}
-					} catch (error) {
-						// options the browser read already
-					}
-					observers.set(made, {
-						callback,
-						types,
-						buffered,
-						pending: [],
-					});
-				}
-				return made;
-			},
+				newTarget
+					? reportParts.calls!().construct(
+							madeReports,
+							seen,
+							target,
+							args,
+							newTarget,
+						)
+					: Reflect.apply(target, that, args),
 			true,
 		);
 	}

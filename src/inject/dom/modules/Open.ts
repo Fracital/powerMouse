@@ -1,6 +1,7 @@
 import Module from '../../Module';
-import { mayOpenPopup, popupOpened } from '../activation';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
+import { deferred } from '../deferred';
+import type { DeferredParts } from '../deferredParts';
 import { heldClicks } from '../heldClicks';
 import { baseTarget, clickedLink, SAME_FRAME } from '../links';
 
@@ -67,52 +68,16 @@ export default class OpenModule extends Module<DocumentClient> {
 					client.namedWindow?.(link.getAttribute('target'), true))
 			)
 				return;
-			let url: URL;
+			// the rest is a deferred part (../linkOpens.ts): without it the
+			// click opens nothing, as a popup the browser blocks
+			let opens: DeferredParts['linkOpens'];
 			try {
-				url = client.encodingParse(link.getAttribute('href')!, client.baseHref);
+				opens = deferred('linkOpens');
 			} catch (error) {
-				// no URL: the click opens nothing, here or in the browser
+				clicks.hold(event, () => {});
 				return;
 			}
-			if (!['http:', 'https:'].includes(url.protocol)) return;
-			if (sandboxed) {
-				// refused by the browser, as natively
-				if (!client.allows('allow-popups')) return;
-				if (!client.allows('allow-popups-to-escape-sandbox')) {
-					// the link's popup has no opener (a _blank target implies
-					// noopener) unless it asks for one; a popup that runs no
-					// script keeps it, so a document of it the inject starts
-					// afresh still finds the opener's sandbox. Opened without
-					// one: a window opened on a URL may already be another
-					// origin's when open() returns, which refuses to leave its
-					// opener, and a sandboxed document may navigate only a popup
-					// it is still the opener of
-					const rel = (link.getAttribute('rel') || '')
-						.toLowerCase()
-						.split(/\s+/);
-					const noopener =
-						rel.includes('noopener') ||
-						rel.includes('noreferrer') ||
-						(target === '_blank' && !rel.includes('opener'));
-					const features =
-						noopener && client.allows('allow-scripts')
-							? [rel.includes('noreferrer') ? 'noreferrer' : 'noopener']
-							: [];
-					clicks.hold(event, () =>
-						global.open(url.href, target || '_blank', ...features),
-					);
-					return;
-				}
-				if (!client.config.openTab) return;
-			}
-			const href = url.toString();
-			// as the browser's popup blocker decides once the click went
-			// through the page: none without a transient activation (a
-			// script's click at load opens nothing), one for each
-			clicks.hold(event, () => {
-				if (mayOpenPopup(client) && client.openInHost(href))
-					popupOpened(client);
-			});
+			opens(client, clicks, event, link, target, sandboxed);
 		};
 		// a refused javascript: URL of statements throws: nothing ran natively,
 		// so no listener of the page's hears of it (DocumentClient codeRuns)

@@ -10,7 +10,7 @@
 // whether or not the part can be had. The part also reads the browser's own
 // violations back as the page sees them (./modules/ContentSecurity.ts), from
 // the first one that reaches the page.
-import { governing, sourcesMatch, type Policy } from '../../csp';
+import { governing, type Policy } from '../../csp';
 import ProxyModule from '../modules/Proxy';
 import UnrouteModule, {
 	unrouteURL,
@@ -488,7 +488,11 @@ function shows(
 		if (!page || page === blocked) return true;
 		const url = new URL(page);
 		const governed = governing(entry.policy, directive);
-		if (!governed || !sourcesMatch(governed.sources, url, entry.self))
+		// (the source matching is a part of its own: ../../cspSources.ts)
+		if (
+			!governed ||
+			!deferred('sourcesMatch')(governed.sources, url, entry.self)
+		)
 			return true;
 		// allowed here: a refusal URL is this policy's to report only where it
 		// refuses the load; a refused route is shown for a refusal no policy
@@ -527,6 +531,39 @@ export function violationURL(
 	if (page === null || (slotted.slot && page === slotted.value)) return '';
 	// a report names no fragment
 	return key === 'blockedURI' ? page.replace(/#.*$/s, '') : page;
+}
+
+/**
+ * A violation's `sample` as the page reads it (`value` the browser's, of
+ * the event `that`): the page's code, which the rewriter changed
+ * ('report-sample'), what it evaluated for an eval's, or the text the page
+ * reads back of the element for an inline one's (violationPageCode)
+ */
+export function violationSample(
+	client: DocumentClient,
+	natives: ViolationNatives,
+	nativeTarget: Function,
+	that: unknown,
+	value: string,
+): unknown {
+	try {
+		const blocked = Reflect.apply(natives.blocked, that, []);
+		if (blocked === 'eval') return client.codeSample(value);
+		if (blocked !== 'inline') return value;
+	} catch (error) {
+		return value;
+	}
+	try {
+		return (
+			violationPageCode(
+				natives,
+				Reflect.apply(nativeTarget, that, []) as unknown,
+				value,
+			) ?? value
+		);
+	} catch (error) {
+		return value;
+	}
 }
 
 /**

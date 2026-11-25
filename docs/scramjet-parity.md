@@ -462,7 +462,7 @@ from 14 when this section was last written.
    - Import map scope keys stay as written: URL prefixes the browser
      matches against module URLs, which a codec-encoded route cannot keep.
      A package prefix (a trailing-slash target) is routed
-     (`routeModulePrefix` in `src/scriptRoutes.ts`).
+     (`routeModulePrefix` in `src/importMap.ts`).
    - A synchronous XHR that needs the network deadlocks only with an in-page
      transport; the transport worker (the default for a descriptor) is the
      answer, not a change to the sync bridge.

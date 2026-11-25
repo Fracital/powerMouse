@@ -28,6 +28,7 @@ import {
 	type Policy,
 	type ScriptFacts,
 } from '../csp';
+import { sourcesMatch } from '../cspSources';
 import type { DnrOutcome } from '../extensions/dnr';
 import {
 	displayExtensionURL,
@@ -8248,7 +8249,7 @@ export function registerRewrites(
 		scriptTypeFactory('workerModule'),
 	);
 
-	// an import map's trailing-slash prefix target (src/scriptRoutes.ts
+	// an import map's trailing-slash prefix target (src/importMap.ts
 	// routeModulePrefix): the path is a codec-sealed prefix URL in one segment
 	// and the suffix the browser appended to it, so the real module URL is the
 	// suffix resolved against the opened prefix. It redirects to the module's
@@ -8886,6 +8887,7 @@ export function registerRewrites(
 				const policies = browserHeaders(
 					pageHeaders,
 					policyMark(),
+					sourcesMatch,
 					url.url,
 					// (a slot of the site pool: a frame or a form of a site
 					// another slot shows goes there by a 307 the browser judges)
@@ -8923,7 +8925,7 @@ export function registerRewrites(
 					const texts = [
 						...policies.texts.map(([browser]) => browser).filter(Boolean),
 						...metas
-							.map((policy) => browserContentPolicy(policy))
+							.map((policy) => browserContentPolicy(policy, sourcesMatch))
 							.filter((text) => text !== null),
 					];
 					// the page's own policies (headers' and the head's metas'), which

@@ -13,6 +13,7 @@ import {
 	type MadeReports,
 } from './modules/Unroute';
 import { OwnWeakMap, OwnWeakSet, type LazyWeakSet } from './ownCollections';
+import { reportParts } from './reportParts';
 
 /** the deprecation report's id for a synchronous request on a document's main thread */
 const SYNCHRONOUS_REQUEST_REPORT =
@@ -385,5 +386,101 @@ export const madeReport = {
 		for (let i = 0; i < buffer.length; i++)
 			if (takes(state, buffer[i]!.type))
 				hand(observer, state, buffer[i]!.report);
+	},
+};
+
+/**
+ * What the page's ReportingObservers do past their hooks
+ * (./modules/Unroute.ts applyReports), from a realm's first observer
+ */
+export const observerCalls = {
+	/**
+	 * `new ReportingObserver(...args)` (`target` the browser's, `newTarget`
+	 * the page's): the callback is handed only what `seen` leaves of a
+	 * list, and the observer is noted in `made` for the reports the inject
+	 * makes itself
+	 */
+	construct(
+		made: MadeReports,
+		seen: (reports: unknown) => unknown,
+		target: Function,
+		args: unknown[],
+		newTarget: Function,
+	): object {
+		const { observers } = made;
+		const callback = args[0];
+		if (typeof callback === 'function') {
+			args[0] = function (this: unknown, ...called: unknown[]) {
+				const came = Array.isArray(called[0]) ? called[0].length : 0;
+				try {
+					called[0] = seen(called[0]);
+				} catch (error) {
+					return;
+				}
+				// (nothing left: there was no report of the page's. A list
+				// that came empty is the browser's own call, after the page
+				// took its records)
+				if (came && Array.isArray(called[0]) && !called[0].length) return;
+				return Reflect.apply(callback, this, called);
+			};
+		}
+		const observer = Reflect.construct(target, args, newTarget) as object;
+		if (typeof callback === 'function') {
+			// the types it takes (strings of an array, as most pages
+			// give them; any other list takes the inject's reports too)
+			let types: string[] | null = null;
+			let buffered = false;
+			try {
+				const options = args[1] as
+					{ types?: unknown; buffered?: unknown } | null | undefined;
+				if (options && typeof options === 'object') {
+					buffered = !!options.buffered;
+					const given = options.types;
+					if (Array.isArray(given)) {
+						types = [];
+						for (let i = 0; i < given.length; i++)
+							if (typeof given[i] === 'string') types[types.length] = given[i];
+					}
+				}
+			} catch (error) {
+				// options the browser read already
+			}
+			observers.set(observer, {
+				callback,
+				types,
+				buffered,
+				pending: [],
+			});
+		}
+		return observer;
+	},
+	/** `name` of `that`, one of the page's observers (`observer`), once the browser's ran */
+	observed(
+		made: MadeReports,
+		name: 'observe' | 'disconnect',
+		that: object,
+		observer: MadeObserver,
+	): void {
+		const { observing } = made;
+		let at = -1;
+		for (let i = 0; i < observing.length; i++)
+			if (observing[i] === that) at = i;
+		if (name === 'disconnect') {
+			if (at >= 0) {
+				for (let i = at + 1; i < observing.length; i++)
+					observing[i - 1] = observing[i];
+				observing.length--;
+			}
+			return;
+		}
+		if (at >= 0) return;
+		observing[observing.length] = that;
+		// handed the reports before once, as it first observes
+		// (as the browser's registers it)
+		if (observer.buffered) {
+			observer.buffered = false;
+			if (made.buffer.length)
+				reportParts.made?.().buffered(made, that, observer);
+		}
 	},
 };

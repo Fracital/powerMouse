@@ -164,29 +164,16 @@ export default class ContentSecurityModule extends Module<DocumentClient> {
 				...sample,
 				get: proxyModule.wrapFunction(sample.get, (target, that, args) => {
 					const value = Reflect.apply(target, that, args);
-					if (typeof value !== 'string' || !value) return value;
-					let blocked: unknown;
-					try {
-						blocked = Reflect.apply(nativeBlocked, that, []);
-						if (blocked === 'eval') return client.codeSample(value);
-						if (blocked !== 'inline') return value;
-					} catch (error) {
-						return value;
-					}
-					// an inline one's: a deferred part (../violations.ts), the getter
-					// throws without it
-					const pageCode = deferred('violationPageCode');
-					try {
-						return (
-							pageCode(
+					// a deferred part (../violations.ts), the getter throws without it
+					return typeof value !== 'string' || !value
+						? value
+						: deferred('violationSample')(
+								client,
 								natives,
-								Reflect.apply(nativeTarget, that, []) as unknown,
+								nativeTarget,
+								that,
 								value,
-							) ?? value
-						);
-					} catch (error) {
-						return value;
-					}
+							);
 				}),
 			});
 		// A violation the inject fires reads back trusted, as the browser's

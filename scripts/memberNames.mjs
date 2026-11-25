@@ -87,7 +87,7 @@ export const MEMBERS = [
 	'transportClient',
 	'restrictContext',
 	'isolationFacts',
-	'noteImportMap',
+	'routeImportMap',
 	'legacyEncoder',
 	'abortRequest',
 	'canvasTaints',

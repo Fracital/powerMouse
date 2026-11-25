@@ -10,7 +10,6 @@ import {
 	policyMark,
 	policySandbox,
 	refusalNamed,
-	sourcesMatch,
 	trustedTypesRequired,
 	type HopPolicy,
 	type Policy,
@@ -53,9 +52,7 @@ import {
 	isSpeculationRules,
 	markedSpeculationRules,
 	NO_SPECULATION,
-	rewriteImportMap,
 } from '../../scriptRoutes';
-import { IMPORT_MAP_ROUTE } from '../../sri';
 import StompURL from '../../StompURL';
 import {
 	CALLED_KEY,
@@ -97,6 +94,7 @@ import cloneRawNode, {
 	startedScripts,
 } from './cloneNode';
 import { activationPart, deferred, heldPart } from './deferred';
+import type { DeferredParts } from './deferredParts';
 import { heldClicks } from './heldClicks';
 import type { LegacyEncoder } from './legacyEncoding';
 import { initLoads, loadSource, type LoadSource } from './loadGrants';
@@ -1526,7 +1524,12 @@ export default class DocumentClient extends Client {
 			// the browser enforces no Trusted Types policy of the page's
 			// (src/csp.ts), so a meta that sets one does not turn STomp's own
 			// Trusted Types on
-			const text = browserPolicy(policy, this.url.url, this.sites?.origins);
+			const text = browserPolicy(
+				policy,
+				(sources, url, self) => this.#sourcesMatch(sources, url, self),
+				this.url.url,
+				this.sites?.origins,
+			);
 			texts.push([
 				text === null
 					? ''
@@ -1653,6 +1656,26 @@ export default class DocumentClient extends Client {
 		count: number;
 		own: { policy: Policy; browser: string; self: URL }[];
 	} | null = null;
+	/**
+	 * Whether `url` matches a directive's `sources` of a page's policy whose
+	 * 'self' is `self` (src/cspSources.ts): a deferred part, made the first
+	 * time a policy of the page's governs what this document judges itself.
+	 * Where it cannot be had nothing matches, so the policy refuses.
+	 */
+	#sourcesMatch(
+		sources: string[],
+		url: URL,
+		self: URL,
+		redirected = false,
+	): boolean {
+		let matches: DeferredParts['sourcesMatch'];
+		try {
+			matches = deferred('sourcesMatch');
+		} catch (error) {
+			return false;
+		}
+		return matches(sources, url, self, redirected);
+	}
 	/** the page's policies of this document that natively refuse (or report) `url` for `directive` */
 	pageRefusals(
 		directive: string,
@@ -1663,7 +1686,7 @@ export default class DocumentClient extends Client {
 			const governed = governing(policy, directive);
 			return (
 				governed !== null &&
-				!sourcesMatch(governed.sources, url, self, redirected)
+				!this.#sourcesMatch(governed.sources, url, self, redirected)
 			);
 		});
 	}
@@ -2454,7 +2477,8 @@ export default class DocumentClient extends Client {
 				'meta',
 			)) {
 				const sources = policy.directives.get('base-uri');
-				if (sources && !sourcesMatch(sources, url, this.url.url)) return true;
+				if (sources && !this.#sourcesMatch(sources, url, this.url.url))
+					return true;
 			}
 		}
 		return false;
@@ -3276,31 +3300,9 @@ export default class DocumentClient extends Client {
 	 * run injected; routeHTML's javascript: wrapper calls this.
 	 */
 	javascriptDocument(markup: string, documentURL?: string): string {
-		// served by the worker as an inline document, so it is controlled and
-		// its subresources reach the worker; the javascript: document itself is
-		// a raw bootstrap that replaces itself with it. The replaced document
-		// was an iframe's initial about:blank, whose URL strips to no referrer,
-		// or another (an srcdoc), whose requests refer like the page
-		const url = this.url.toString();
-		const route = this.inlineDocument(
-			markup,
-			url,
-			documentURL === 'about:blank' ? 'about:blank' : url,
-		);
-		// (the shell is a deferred part: without it the URL throws, and its
-		// frame keeps the document it had)
-		if (!route)
-			return deferred('modifyHTML')(
-				markup,
-				this.url,
-				this.config,
-				true,
-				undefined,
-				this.scriptNonce,
-			);
-		// (with the nonce of the policy the document inherits from this one)
-		const nonce = this.scriptNonce;
-		return `<!doctype html><script${nonce ? ` nonce="${nonce.replace(/[^\w+/=-]/g, '')}"` : ''}>location.replace(${JSON.stringify(route).replace(/</g, '\\u003c')})</script>`;
+		// (a deferred part, ./navigateCalls.ts: without it the URL throws,
+		// and its frame keeps the document it had)
+		return deferred('javascriptDocument')(this, markup, documentURL);
 	}
 
 	postToHost(message: object): boolean {
@@ -3397,39 +3399,20 @@ export default class DocumentClient extends Client {
 		return this.getModule(SyncModule);
 	}
 	/**
-	 * An import map's `integrity` (its JSON `text`, as the page wrote it) goes
-	 * to the worker before the browser has the map, so before any module it
-	 * names is asked for: the worker checks a module script whose element
-	 * named no integrity of its own against it (server/integrityLoads.ts).
-	 * The keys are URLs, resolved against the document's base as the browser
-	 * resolves them; the routed modules never match them in the browser.
+	 * A page's import map (its JSON `text`) as the browser gets it: its
+	 * integrity told to the worker and its targets routed (./importMaps.ts),
+	 * a deferred part made at a document's first import map. Without it the
+	 * browser gets a map of nothing: no module the page names by it resolves
+	 * past the proxy.
 	 */
-	noteImportMap(text: string) {
-		let integrity: unknown;
+	routeImportMap(text: string): string {
+		let routed: DeferredParts['routedImportMap'];
 		try {
-			integrity = (JSON.parse(text) as { integrity?: unknown })?.integrity;
+			routed = deferred('routedImportMap');
 		} catch (error) {
-			return;
+			return '{}';
 		}
-		if (typeof integrity !== 'object' || integrity === null) return;
-		const entries: [string, string][] = [];
-		for (const [key, value] of Object.entries(integrity)) {
-			if (typeof value !== 'string') continue;
-			try {
-				entries.push([
-					new URL(key, this.baseHref).href.replace(/#.*$/s, ''),
-					value,
-				]);
-			} catch (error) {
-				// not a URL: the browser ignores the entry
-			}
-		}
-		if (!entries.length) return;
-		try {
-			this.syncBridge?.jsonAPI(`${this.directory}${IMPORT_MAP_ROUTE}`, entries);
-		} catch (error) {
-			// a document with no bridge: the modules go unchecked
-		}
+		return routed(this, text);
 	}
 	/**
 	 * @internal inject this page's bundle into a child frame's window nothing
@@ -3995,8 +3978,7 @@ export default class DocumentClient extends Client {
 			if (
 				(script.getAttribute('type') || '').trim().toLowerCase() === 'importmap'
 			) {
-				this.noteImportMap(read());
-				write(rewriteImportMap(read(), this.baseURL, this.config));
+				write(this.routeImportMap(read()));
 				continue;
 			}
 			// (scriptRoutes.ts NO_SPECULATION), with the text marked for the page

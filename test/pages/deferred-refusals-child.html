@@ -561,6 +561,24 @@
 				// navigator.login.setStatus() (src/inject/dom/credentialFlows.ts)
 				loginStatus: () =>
 					outcome(() => navigator.login.setStatus('logged-in')),
+				// navigator.credentials.get() of a password and
+				// preventSilentAccess() (src/inject/dom/credentialCalls.ts)
+				credentialGet: () =>
+					outcome(() => navigator.credentials.get({ password: true })),
+				preventSilentAccess: () =>
+					outcome(() => navigator.credentials.preventSilentAccess()),
+				// a ReportingObserver's construction
+				// (src/inject/reportsSeen.ts observerCalls)
+				reportingObserver: () => outcome(() => new ReportingObserver(() => {})),
+				// a frame's view transition (src/inject/dom/viewTransitions.ts)
+				viewTransition: () =>
+					outcome(() => document.startViewTransition(() => {})),
+				// a media session's artwork, routed by a part
+				// (src/inject/dom/mediaArtwork.ts)
+				mediaArtwork: () =>
+					outcome(
+						() => new MediaMetadata({ artwork: [{ src: '/artwork.png' }] }),
+					),
 				// Origin.from() of this window (src/inject/originFrom.ts)
 				originFrom: () => outcome(() => Origin.from(window)),
 				// an array method called with a window as its receiver

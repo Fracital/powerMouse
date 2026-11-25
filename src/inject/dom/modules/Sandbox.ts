@@ -1,16 +1,13 @@
 import Module from '../../Module';
 import ProxyModule from '../../modules/Proxy';
 import { unrouteURL } from '../../modules/Unroute';
-import { failsToParse, withStack } from '../../nativeErrors';
+import { failsToParse } from '../../nativeErrors';
 import { OwnWeakMap } from '../../ownCollections';
 import DocumentClient, { addDocumentOpenListener } from '../Client';
 import { deferred } from '../deferred';
 import type { DeferredParts } from '../deferredParts';
 import { baseTarget, clickedLink } from '../links';
 import { Pool } from '../pool';
-
-const LACKS_SAME_ORIGIN =
-	"The document is sandboxed and lacks the 'allow-same-origin' flag.";
 
 /**
  * What an opaque origin may not touch. A document the page sandboxed
@@ -41,15 +38,17 @@ export default class SandboxModule extends Module<DocumentClient> {
 		const global = client.global;
 		const proxyModule = client.getModule(ProxyModule)!;
 		const opaque = () => client.sandboxedOpaque;
-		const securityError = (message: string) =>
-			withStack(new global.DOMException(message, 'SecurityError'));
+		// the refusals' SecurityErrors, in Chrome's words, are a deferred part
+		// (../rareReads.ts): without it a refusal is the part's error
+		const refusal = (property: string, set = false): unknown => {
+			try {
+				return deferred('opaqueRefusal')(global, property, set);
+			} catch (error) {
+				return error;
+			}
+		};
 
-		const guardGetter = (
-			owner: object,
-			property: string,
-			message: string,
-			setMessage?: string,
-		) => {
+		const guardGetter = (owner: object, property: string, setter = false) => {
 			const descriptor = Reflect.getOwnPropertyDescriptor(owner, property);
 			if (!descriptor?.get) return;
 			// what the refusal is about: this window, or its document. Called
@@ -62,16 +61,15 @@ export default class SandboxModule extends Module<DocumentClient> {
 			Reflect.defineProperty(owner, property, {
 				...descriptor,
 				get: proxyModule.wrapFunction(descriptor.get, (target, that, args) => {
-					if (opaque() && subject(that)) throw securityError(message);
+					if (opaque() && subject(that)) throw refusal(property);
 					return Reflect.apply(target, that, args);
 				}),
-				...(descriptor.set && setMessage
+				...(descriptor.set && setter
 					? {
 							set: proxyModule.wrapFunction(
 								descriptor.set,
 								(target, that, args) => {
-									if (opaque() && subject(that))
-										throw securityError(setMessage);
+									if (opaque() && subject(that)) throw refusal(property, true);
 									return Reflect.apply(target, that, args);
 								},
 							),
@@ -80,23 +78,10 @@ export default class SandboxModule extends Module<DocumentClient> {
 			});
 		};
 
-		for (const store of ['localStorage', 'sessionStorage'])
-			guardGetter(
-				global,
-				store,
-				`Failed to read the '${store}' property from 'Window': ${LACKS_SAME_ORIGIN}`,
-			);
-		guardGetter(
-			global.Document.prototype,
-			'cookie',
-			`Failed to read the 'cookie' property from 'Document': ${LACKS_SAME_ORIGIN}`,
-			`Failed to set the 'cookie' property on 'Document': ${LACKS_SAME_ORIGIN}`,
-		);
-		guardGetter(
-			global,
-			'caches',
-			"Failed to read the 'caches' property from 'Window': Cache storage is disabled because the context is sandboxed and lacks the 'allow-same-origin' flag.",
-		);
+		guardGetter(global, 'localStorage');
+		guardGetter(global, 'sessionStorage');
+		guardGetter(global.Document.prototype, 'cookie', true);
+		guardGetter(global, 'caches');
 		const resolve = (value: unknown) => new URL(String(value), client.baseHref);
 		const LOCATION_PARTS = [
 			'href',
@@ -493,12 +478,7 @@ export default class SandboxModule extends Module<DocumentClient> {
 							that === global.indexedDB &&
 							args.length >= target.length
 						) {
-							// (Chrome words databases()'s refusal its own way)
-							const error = securityError(
-								method === 'databases'
-									? "Failed to execute 'databases' on 'IDBFactory': Access to the IndexedDB API is denied in this context."
-									: `Failed to execute '${method}' on 'IDBFactory': access to the Indexed Database API is denied in this context.`,
-							);
+							const error = refusal(method);
 							// databases() rejects, the others throw
 							if (method === 'databases') return global.Promise.reject(error);
 							throw error;

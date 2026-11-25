@@ -66,7 +66,16 @@
 //   identity module itself back in the bundle would have been 466.4 KB.
 //   Keeping the texts of evaluated scripts bounded (functionSource.ts), the
 //   stand-in holders made in the keeping window's realm and the dialed
-//   frames' activation and sourceElement took it to 465.9 KB. Raise the
+//   frames' activation and sourceElement took it to 465.9 KB, 59 bytes
+//   under the budget. More rare paths in parts (the CSP source matching,
+//   a frame's view transition, import maps, the codec's wasm instance,
+//   which a top makes once for its tab from the parts its shell holds, a
+//   ReportingObserver's calls, a form's submission, a link opened as a new
+//   window, credentials.get(), store() and preventSilentAccess(), media
+//   session artwork, a violation's sample, a worker's start past its
+//   checks, a javascript: URL's document, navigation.navigate(), a click
+//   on a fragment link, viewport.segments and an opaque document's
+//   refusals) took it to 457.7 KB (477,125 to 468,680 bytes). Raise the
 //   budget in the same change as code that has to grow the bundle, and say
 //   why; first see whether it can be deferred.
 // - the JS heap one proxied frame adds (test/frame-memory.mjs, FRAMES frames

@@ -7,21 +7,12 @@ import { failsToParse, withStack } from '../nativeErrors';
 import { LazyWeakSet } from '../ownCollections';
 import { requestRefused } from '../requestVerdict';
 import { trustedScriptURL } from '../trusted';
-import { PRIVATE_URL_MS } from '../workerBlobs';
 import type { WorkerStart } from '../workerStart';
 import { workerStartParts } from '../workerStartParts';
 import ProxyModule, { catchRequiredArguments } from './Proxy';
 
 const WORKER_CTOR_ERROR = (name: string) =>
 	`Failed to construct '${name}': Please use the 'new' operator, this DOM object constructor cannot be called as a function.`;
-
-/**
- * A worker started from a blob: URL (its bootstrap) makes no request for its
- * script, so the service worker cannot see who made it: the request for its
- * transport says (InitRemoteTransportMessage)
- */
-const blobScript = (url: unknown): string | undefined =>
-	typeof url === 'string' && url.startsWith('blob:') ? url : undefined;
 
 export default class WorkerModule extends Module<Client> {
 	/** the realm's Worker before the hook below: the inject's own workers (the WebRTC worker) start through it */
@@ -70,11 +61,6 @@ export default class WorkerModule extends Module<Client> {
 		const messageOf = nativeField('message');
 		const filenameOf = nativeField('filename');
 
-		const isModuleOptions = (options: unknown) =>
-			typeof options === 'object' &&
-			options !== null &&
-			(options as WorkerOptions).type === 'module';
-
 		/**
 		 * The workers the page terminated. Chrome reports an import a
 		 * terminated worker was still loading as an error event on its
@@ -90,6 +76,7 @@ export default class WorkerModule extends Module<Client> {
 		const start: WorkerStart = {
 			client: moduleClient,
 			global: global as typeof globalThis,
+			listen: global.EventTarget?.prototype.addEventListener,
 			NativeBlob,
 			terminated,
 			messageOf,
@@ -111,7 +98,6 @@ export default class WorkerModule extends Module<Client> {
 			if (!via || via === moduleClient) return null;
 			return via.getModule(WorkerModule)?.nativeWorker ?? null;
 		};
-		const listen = global.EventTarget?.prototype.addEventListener;
 
 		// a shared worker scope has no Worker constructor
 		if (typeof global.Worker === 'function') {
@@ -154,34 +140,15 @@ export default class WorkerModule extends Module<Client> {
 					}
 					// (a deferred part, ../workerStart.ts: without it the constructor
 					// throws here, before the browser's is called)
-					const parts = workerStartParts.start!();
-					const { url, own } = parts.workerURL(
+					return workerStartParts.start!().startWorker(
 						start,
-						source,
-						isModuleOptions(args[1]),
-					);
-					args[0] = trustedScriptURL(url);
-					const via = blobScript(url) ? controlledWorker() : null;
-					const worker: Worker = Reflect.construct(
-						via ?? target,
+						target,
 						args,
 						newTarget,
+						source,
+						controlledWorker,
+						terminate,
 					);
-					if (via && listen)
-						Reflect.apply(listen, global, [
-							'pagehide',
-							() => Reflect.apply(terminate, worker, []),
-							{ once: true },
-						]);
-					parts.watchErrors(
-						start,
-						worker,
-						own,
-						moduleClient.encodingParse(source, moduleClient.baseHref).href,
-					);
-					moduleClient.provisionWorkerTransport(worker, blobScript(url));
-					if (own) parts.releaseOnLoad(start, worker, own);
-					return worker;
 				},
 				true,
 			);
@@ -205,32 +172,14 @@ export default class WorkerModule extends Module<Client> {
 					if (failsToParse(moduleClient, source))
 						return Reflect.construct(target, args, newTarget);
 					checkOrigin('SharedWorker', source);
-					const { url, own } = workerStartParts.start!().workerURL(
+					// (a deferred part, as the Worker's)
+					return workerStartParts.start!().startSharedWorker(
 						start,
-						source,
-						isModuleOptions(args[1]),
-						true,
-					);
-					args[0] = trustedScriptURL(url);
-					// a shared worker has no postMessage to say it took its
-					// private URL: that one goes after PRIVATE_URL_MS
-					if (own)
-						setTimeout(() => global.URL.revokeObjectURL(own), PRIVATE_URL_MS);
-					// shared workers are found by name within an origin: keep
-					// proxied origins, and partitions of one, apart
-					const suffix = `@${moduleClient.nativeKey}`;
-					if (typeof args[1] === 'object' && args[1] !== null)
-						args[1] = { ...args[1], name: `${args[1].name ?? ''}${suffix}` };
-					// (null is the empty options dictionary, as undefined is)
-					else
-						args[1] = `${args[1] === undefined || args[1] === null ? '' : String(args[1])}${suffix}`;
-					const worker: SharedWorker = Reflect.construct(
 						target,
 						args,
 						newTarget,
+						source,
 					);
-					moduleClient.provisionPortTransport(worker.port, blobScript(url));
-					return worker;
 				},
 				true,
 			);

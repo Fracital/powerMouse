@@ -14,7 +14,6 @@ import {
 	BLOB_COPIES,
 	governing,
 	governsWorkerRequests,
-	sourcesMatch,
 	trustedTypesRequired,
 	type Policy,
 	type WorkerPolicies,
@@ -27,6 +26,7 @@ import {
 	integrityMatches,
 	type CodeItem,
 } from '../../cspJudge';
+import { sourcesMatch } from '../../cspSources';
 import { keptText, sourceKey } from '../../functionSource';
 import { routeHTML } from '../../rewriteHTML';
 import { proxyBlobURL } from '../../routeURL';
