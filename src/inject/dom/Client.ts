@@ -3603,7 +3603,32 @@ export default class DocumentClient extends Client {
 		named: unknown;
 		href: string;
 		directory: string;
+		origin: string;
 	} | null = null;
+	/** #documentMemo while it is the current document's, else null */
+	#currentMemo() {
+		const memo = this.#documentMemo;
+		if (!memo) return null;
+		try {
+			return memo.location === this.#locationHref(this.global.location) &&
+				memo.document === this.global.document &&
+				memo.named === this.namedBase
+				? memo
+				: null;
+		} catch (error) {
+			return null;
+		}
+	}
+	/**
+	 * The storage key from the origin `url` keeps with its memo: the Storage
+	 * stand-in asks for it on every call, and making the document's URL for
+	 * it (a parse of the address) was most of a localStorage.getItem in
+	 * Firefox, 3.5 us a call where the native one takes 0.1
+	 */
+	override get storageKey(): string {
+		const memo = this.#currentMemo();
+		return memo ? `${memo.origin}${this.partition}` : super.storageKey;
+	}
 	/**
 	 * The page URL of this document itself: what its origin, its site, its
 	 * storage, its cookies, its partition and the window membrane are of.
@@ -3641,6 +3666,7 @@ export default class DocumentClient extends Client {
 			named,
 			href: url.url.href,
 			directory: url.directory,
+			origin: url.url.origin,
 		};
 		return url;
 	}
