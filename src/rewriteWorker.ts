@@ -6,8 +6,11 @@
 // hands over is a channel to the service worker, which sends a script with
 // everything its output depends on and gets back what modifyJS makes of it,
 // the same as it would have made itself. It also compiles the content
-// blocker's engine from its lists when the service worker asks.
+// blocker's engine from its lists when the service worker asks, and runs
+// the blocker's module once on a small engine when the controller hands it
+// over (src/blocker/warm.ts).
 import { buildEngine } from './blocker/build';
+import { warmBlocker } from './blocker/warm';
 import { parseConfig } from './config';
 import { packRewrite, scriptPreamble } from './prewrite';
 import { modifyJS, SCRIPT_FILE, type RewrittenBy } from './rewriteJS';
@@ -21,7 +24,11 @@ import {
 } from './rewriteMessages';
 import { addRouteScopes } from './routeURL';
 import StompURL from './StompURL';
-import { REWRITE_MODULES, REWRITE_PORT } from './transport/messages';
+import {
+	REWRITE_MODULES,
+	REWRITE_PORT,
+	REWRITE_WARM_BLOCKER,
+} from './transport/messages';
 import { RpcHelper } from './transport/rpc';
 import { rewriteBytesInWasm } from './wasm/rewriteBytes';
 import { takeApart } from './wasm/rewriter';
@@ -137,6 +144,8 @@ setMemoryLimit(SERVING_MEMORY_LIMIT);
 
 self.addEventListener('message', (event) => {
 	if (event.data?.[REWRITE_PORT] && event.ports[0]) serve(event.ports[0]);
+	else if (event.data?.[REWRITE_WARM_BLOCKER] instanceof WebAssembly.Module)
+		warmBlocker(event.data[REWRITE_WARM_BLOCKER]);
 	else if (event.data?.[REWRITE_MODULES])
 		// the controller hears which modules this thread holds now
 		adoptModules(event.data[REWRITE_MODULES])

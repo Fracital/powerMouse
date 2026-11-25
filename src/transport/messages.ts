@@ -1429,6 +1429,11 @@ export interface ControllerModulesMessage {
 export const REWRITE_PORT = '$stomp$rewritePort';
 /** controller -> rewrite worker: the compiled wasm modules by Assets key (src/wasm/thread.ts); the worker answers with the names it holds */
 export const REWRITE_MODULES = '$stomp$rewriteModules';
+/**
+ * controller -> one rewrite worker: the blocker's compiled module, to run
+ * once on a small engine (src/blocker/warm.ts); nothing answers
+ */
+export const REWRITE_WARM_BLOCKER = '$stomp$rewriteWarmBlocker';
 export interface InitRemoteTransportMessage {
 	directory: string;
 	/**

@@ -1,4 +1,8 @@
-import { REWRITE_MODULES, REWRITE_PORT } from '../transport/messages';
+import {
+	REWRITE_MODULES,
+	REWRITE_PORT,
+	REWRITE_WARM_BLOCKER,
+} from '../transport/messages';
 
 /** rewrite workers when the host does not say: half the cores, one to four */
 export function defaultRewriteWorkers(): number {
@@ -51,6 +55,14 @@ export default class RewriteWorkers {
 	adopt(modules: Record<string, WebAssembly.Module>) {
 		for (const worker of this.#workers)
 			worker.postMessage({ [REWRITE_MODULES]: modules });
+	}
+	/**
+	 * The blocker's compiled module, to one worker to run on a small engine
+	 * (src/blocker/warm.ts): never adopted as one of its modules, the
+	 * blocker runs in the service worker alone
+	 */
+	warmBlocker(module: WebAssembly.Module) {
+		this.#workers[0]?.postMessage({ [REWRITE_WARM_BLOCKER]: module });
 	}
 	/** the modules each running worker holds, as it last said */
 	held(): string[][] {

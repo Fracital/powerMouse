@@ -351,6 +351,8 @@ export class BrokeredPool {
 	}
 	/** the hub's workers hold the hub's modules */
 	adopt() {}
+	/** (an agent compiles no blocker: its slot's worker asks the hub's) */
+	warmBlocker() {}
 	held(): string[][] {
 		return [];
 	}

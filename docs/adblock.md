@@ -65,7 +65,17 @@ wasm modules (`src/wasm/thread.ts`): the controller fetches it once and
 hands its bytes to the service worker with the handshake
 (`ControllerInitMessage.modules.blocker`), which compiles them on its own
 thread. A compiled `WebAssembly.Module` cannot be posted to a service
-worker, so the controller never compiles it. Compiling the lists into an
+worker, so the module the controller compiles is not the worker's: it is
+kept, so that V8 keeps the code the worker compiled for the same bytes in
+the process when Chrome stops the worker, and one rewrite worker runs it
+once on a small engine at the start (`src/blocker/warm.ts`). V8 compiles
+a wasm function on its first call and shares the code with every thread of
+the process that compiled the same bytes, so the worker's first engine load
+and first questions find most of it compiled (Chrome 159: some 120
+functions, 2.3 ms, of the 939 it compiled on its own thread, 22 ms). V8's
+code cache does not do this: it keeps only the functions that ran hot,
+and a `compileStreaming` of the module in the worker that consumed one
+compiled the same 939. Compiling the lists into an
 engine is one call into the module (220 to 280 ms for the default lists),
 which on the service worker's thread held every request of the pages it
 served meanwhile: when the controller runs rewrite workers, the service
