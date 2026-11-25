@@ -945,7 +945,20 @@ export async function waitActive(page, pred, timeout = 40000) {
 		}
 		await sleep(250);
 	}
-	throw new Error('frame condition timeout');
+	// what the frame shows instead: a real site's error page (Wikimedia's
+	// "Too many requests", which its edge answers this machine's Chrome
+	// with now and then, proxied or not) reads as a proxy fault otherwise
+	const shown = await activeFrame(page)
+		.then((frame) =>
+			frame?.evaluate(() => ({
+				title: document.title,
+				text: document.body?.innerText.slice(0, 120),
+			})),
+		)
+		.catch(() => null);
+	throw new Error(
+		`frame condition timeout${shown ? ` (the frame shows ${JSON.stringify(shown)})` : ''}`,
+	);
 }
 
 export const omni = (page) =>
