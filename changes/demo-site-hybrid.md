@@ -39,3 +39,8 @@
   one as it activates.
 - The protected site keeps what HSTS remembered across deploys: its
   database is among the stores whose name estrogen keeps the same.
+- The protected site is named powerMouse again in its tab, its heading and
+  its Download link's tooltip. Its HTML is served as written, so the build
+  names it Browser there, and the page's script, whose strings are
+  encrypted, gives it its name as it starts. An installed app's name, from
+  the manifest, stays Browser.

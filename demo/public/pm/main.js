@@ -18,6 +18,18 @@ const QUICK_LINKS = [
 
 const $ = (id) => document.getElementById(id);
 
+// The protected site's HTML is served as it is written, so its build names
+// the page Browser there (scripts/build-demo-site.mjs); this script's strings
+// are encrypted, and it gives the page its name back as it starts: the tab's
+// title, the heading and the Download link's tooltip
+const BRAND = 'powerMouse';
+if (document.title === 'Browser') document.title = BRAND;
+for (const node of [document.querySelector('h1 > a'), $('offlineDownload')]) {
+	if (node?.textContent === 'Browser') node.textContent = BRAND;
+	if (node?.title?.includes('Browser'))
+		node.title = node.title.replace('Browser', BRAND);
+}
+
 // Console badges, after the two-tone "%c Browser %c ..." lines krunker's
 // dev console prints: a grey label cell and a coloured value cell. The
 // deployment facts (mode, origins, transport, version) go here, not on the

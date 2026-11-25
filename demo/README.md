@@ -188,7 +188,7 @@ those statements one at a time. The public deploy
 (`deploy/terp-deploy-gate.sh`) builds this site and fails when its gate
 fails.
 
-The protected site shows the same commits and repository links. Each answer
+The protected site shows the same name, commits and repository links. Its HTML names the page Browser, and `pm/main.js`, whose strings are encrypted, sets the title and the heading back to powerMouse as it starts. Each answer
 of `/api/commits` is its JSON XORed with a key of its own, sent beside it
 (`{ k, v }`, both base64), which the page decodes, so no answer names the
 project as written. Every build names its bundles by hashes of its own
