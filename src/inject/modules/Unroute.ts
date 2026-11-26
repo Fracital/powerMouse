@@ -397,11 +397,25 @@ export default class UnrouteModule extends Module<Client> {
 			Reflect.apply(nameDescriptor.get!, entry, []);
 		// null for an entry of the proxy's own machinery, and for one the
 		// page's resource timing would not have natively (ResourceTiming)
-		const pageName = (entry: PerformanceEntry): string | null =>
-			client.unreportedEntry?.(entry)
-				? null
-				: (client.calledName?.(String(nativeName(entry))) ??
-					unrouteURL(client, String(nativeName(entry))));
+		// The page's URL for an entry's routed name, kept by entry (whose name
+		// never changes): ResourceBuffer counts the whole buffer again each
+		// time the browser's full buffer drops what waited, which a page
+		// that never clears its 250 entries meets with every load. krunk.io's
+		// game holds 272 entries, heard about 14 drops a second as a match
+		// started, and each count parsed 272 routed URLs (2.1 ms in Chrome)
+		const unrouted = new LazyWeakMap<object, string | null>();
+		const pageName = (entry: PerformanceEntry): string | null => {
+			if (client.unreportedEntry?.(entry)) return null;
+			const name = String(nativeName(entry));
+			const called = client.calledName?.(name);
+			if (called !== undefined) return called;
+			let page = unrouted.get(entry);
+			if (page === undefined) {
+				page = unrouteURL(client, name);
+				unrouted.set(entry, page);
+			}
+			return page;
+		};
 
 		Reflect.defineProperty(PerformanceEntry.prototype, 'name', {
 			...nameDescriptor,
