@@ -149,6 +149,8 @@ type PostMessage = (
 ) => void;
 
 type CallIn = (method: Function, that: unknown, args: unknown[]) => unknown;
+/** an observer's callback (MutationObserver and the like) */
+export type RecordsCallback = (records: unknown[], observer: unknown) => void;
 
 /** compiled wasm modules by Assets key, as a context is handed them */
 export type HandedModules = Record<string, WebAssembly.Module>;
@@ -472,6 +474,22 @@ export default class Client {
 	 */
 	ownCallback(callback: () => void): () => void {
 		return this.#ownCallback(callback);
+	}
+	readonly #ownRecords: ((callback: RecordsCallback) => RecordsCallback) | null;
+	/**
+	 * `callback` behind a function of this client's window's realm (the one
+	 * it had when the client was made) that hands it an observer's records
+	 * and the observer, or null where the window cannot make one and this
+	 * bundle is another realm's. The browser makes the records in the realm
+	 * of the callback it calls, and a node read through them that has no
+	 * wrapper yet gets one of that realm, with that realm's prototypes,
+	 * which none of the window's hooks are on (dom/Client.ts #watchParsed).
+	 * A window whose document has a realm of its own since (a new window's
+	 * page after its initial about:blank) still gets records of the old
+	 * one, which their reader checks for
+	 */
+	ownRecords(callback: RecordsCallback): RecordsCallback | null {
+		return this.#ownRecords ? this.#ownRecords(callback) : null;
 	}
 	readonly #ownImport?: (url: string) => Promise<unknown>;
 	/**
@@ -991,6 +1009,10 @@ export default class Client {
 				[],
 				`return function (callback) { return function () { callback(); }; };${sourceURL}`,
 			)() as (callback: () => void) => () => void;
+			this.#ownRecords = made(
+				[],
+				`return function (callback) { return function (records, observer) { callback(records, observer); }; };${sourceURL}`,
+			)() as (callback: RecordsCallback) => RecordsCallback;
 			if (global !== globalThis)
 				this.#ownImport = made(['url'], `return import(url);${sourceURL}`) as (
 					url: string,
@@ -998,6 +1020,8 @@ export default class Client {
 		} catch (error) {
 			this.#callIn = (method, that, args) => Reflect.apply(method, that, args);
 			this.#ownCallback = (callback) => () => callback();
+			this.#ownRecords =
+				global === globalThis ? (callback: RecordsCallback) => callback : null;
 		}
 		this.global = global;
 		this.applied = false;

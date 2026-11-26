@@ -457,7 +457,13 @@ export default class NavigateModule extends Module<DocumentClient> {
 		// (autofocus): 11 to 12 ms of every 8 s of play in Chrome 159.
 		// A record that touches none of those leaves both alone; one this
 		// cannot read counts as touching everything, as every record did
-		// before
+		// before. A node the parser made has no wrapper until code reads it,
+		// and one read through the records gets the wrapper of the records'
+		// realm (Client.ts #watchParsed): for a new window that was its
+		// opener's, and the page's head had the opener's prototypes, past
+		// every hook of its own (speculation-rules). So the records come
+		// through a function of the window's realm (Client ownRecords), and
+		// records of any realm but the document's are not read: both run
 		const nodeProto = global.Node.prototype;
 		const elementProto = global.Element.prototype;
 		const getterOf = (proto: object, name: string) =>
@@ -472,6 +478,7 @@ export default class NavigateModule extends Module<DocumentClient> {
 		const recordTarget = getterOf(recordProto, 'target');
 		const recordAdded = getterOf(recordProto, 'addedNodes');
 		const recordRemoved = getterOf(recordProto, 'removedNodes');
+		const listLength = getterOf(global.NodeList.prototype, 'length');
 		const DECLARED = /^(title|link|base|head|html)$/i;
 		/** an element the title, an icon or the base may be in or be */
 		const declares = (node: unknown) =>
@@ -488,13 +495,23 @@ export default class NavigateModule extends Module<DocumentClient> {
 				!recordType ||
 				!recordTarget ||
 				!recordAdded ||
-				!recordRemoved
+				!recordRemoved ||
+				!listLength
+			)
+				return SEEN_ALL;
+			// records of another realm than the document's: a node read
+			// through them gets that realm's wrapper (see above)
+			if (
+				!records.length ||
+				Reflect.getPrototypeOf(records[0] as object) !==
+					global.MutationRecord?.prototype
 			)
 				return SEEN_ALL;
 			const lists: Function[] = [recordAdded, recordRemoved];
 			try {
 				let seen = 0;
-				for (const record of records) {
+				for (let index = 0; index < records.length; index++) {
+					const record = records[index];
 					const type = Reflect.apply(recordType!, record, []);
 					const target = Reflect.apply(recordTarget!, record, []);
 					if (type === 'attributes') seen |= SEEN_DECLARED;
@@ -510,7 +527,8 @@ export default class NavigateModule extends Module<DocumentClient> {
 							seen |= SEEN_DECLARED;
 						for (const list of lists) {
 							const nodes: ArrayLike<unknown> = Reflect.apply(list, record, []);
-							for (let i = 0; i < nodes.length; i++) {
+							const length: number = Reflect.apply(listLength, nodes, []);
+							for (let i = 0; i < length; i++) {
 								const node = nodes[i];
 								if (Reflect.apply(nodeType, node, []) !== 1) continue;
 								if (!(seen & SEEN_DECLARED) && declares(node))
@@ -532,11 +550,16 @@ export default class NavigateModule extends Module<DocumentClient> {
 				return SEEN_ALL;
 			}
 		};
-		const observer = new global.MutationObserver((records: unknown[]) => {
+		const everything = () => {
+			schedule();
+			autofocus?.();
+		};
+		const filtered = moduleClient.ownRecords((records) => {
 			const seen = mutationsSeen(records, !!autofocus);
 			if (seen & SEEN_DECLARED) schedule();
 			if (seen & SEEN_ELEMENT) autofocus?.();
 		});
+		const observer = new global.MutationObserver(filtered ?? everything);
 		const observe = () =>
 			observer.observe(global.document, {
 				subtree: true,

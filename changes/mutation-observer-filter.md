@@ -10,7 +10,10 @@
   base, head or html element (or a text node in one), an href or rel
   attribute, or the document itself. Autofocus runs only for an added
   element that has or holds `[autofocus]`. A record the observer cannot
-  read counts as touching everything, as every record did before. In
+  read counts as touching everything, as every record did before, and so
+  do records of another realm than the document's (a new window whose
+  client its opener's bundle made): a node read through them would get
+  that realm's wrapper, which none of the window's hooks see. In
   Chrome 159 the observer's share of 8 s of play went from 11 to 12 ms to
-  about 1 ms. The focus and history suites cover autofocus and the host's
-  title and icon.
+  about 1 ms. The focus and navigate-events suites cover autofocus and the
+  host's title and icon, speculation-rules a new window's own hooks.
