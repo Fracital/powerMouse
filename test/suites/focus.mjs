@@ -97,8 +97,9 @@ for (const [mode, base] of [
 // typed next go into it (Bing's search box). In isolation mode the proxied
 // frame is of another origin than the host's page, where Chrome refuses
 // autofocus ("Blocked autofocusing ... in a cross-origin subframe"): the
-// first candidate that takes the focus, past one that cannot, and one the
-// page inserts after load, against the page loaded natively.
+// first candidate that takes the focus, past one that cannot, one the page
+// inserts after load and one inside a subtree it inserts, against the page
+// loaded natively.
 const autofocused = async (frame) => {
 	for (let i = 0; i < 80; i++) {
 		const loaded = await frame()
@@ -116,7 +117,11 @@ const typed = (frame) =>
 		?.evaluate(() => document.getElementById('q')?.value ?? null)
 		.catch((error) => String(error));
 
-for (const name of ['autofocus.html', 'autofocus-inserted.html']) {
+for (const name of [
+	'autofocus.html',
+	'autofocus-inserted.html',
+	'autofocus-nested.html',
+]) {
 	const url = `${FIXTURE}pages/${name}`;
 	const tab = await browser.newPage();
 	await tab.goto(url);

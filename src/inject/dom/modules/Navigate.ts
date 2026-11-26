@@ -28,6 +28,12 @@ import HistoryModule from './History';
  * document in a frame of the page tells it which service
  * worker client it is.
  */
+/** a turn's mutations may have changed what the host is told (title, icon, base) */
+const SEEN_DECLARED = 1;
+/** they added an autofocus candidate */
+const SEEN_ELEMENT = 2;
+const SEEN_ALL = SEEN_DECLARED | SEEN_ELEMENT;
+
 export default class NavigateModule extends Module<DocumentClient> {
 	apply() {
 		const moduleClient = this.client;
@@ -442,14 +448,95 @@ export default class NavigateModule extends Module<DocumentClient> {
 
 		// and the page's autofocus where the browser refuses it (../autofocus)
 		const autofocus = autofocusFlush(moduleClient);
-		const observer = new global.MutationObserver(
-			autofocus
-				? () => {
-						schedule();
-						autofocus();
+		// What a turn's mutations can have changed, by the browser's own
+		// getters taken before the page ran: post() reads the title, the
+		// icon links and the base URL, and autofocus looks at elements added.
+		// krunk.io's HUD rewrites a dozen text nodes in every frame, and each
+		// frame made a timer, a read of the title and the icon links, two
+		// JSON strings (post) and a querySelectorAll of the whole document
+		// (autofocus): 11 to 12 ms of every 8 s of play in Chrome 159.
+		// A record that touches none of those leaves both alone; one this
+		// cannot read counts as touching everything, as every record did
+		// before
+		const nodeProto = global.Node.prototype;
+		const elementProto = global.Element.prototype;
+		const getterOf = (proto: object, name: string) =>
+			Reflect.getOwnPropertyDescriptor(proto, name)?.get;
+		const nodeType = getterOf(nodeProto, 'nodeType');
+		const nodeName = getterOf(nodeProto, 'nodeName');
+		const parentNode = getterOf(nodeProto, 'parentNode');
+		const querySelector = elementProto.querySelector;
+		const hasAttribute = elementProto.hasAttribute;
+		const recordProto = global.MutationRecord.prototype;
+		const recordType = getterOf(recordProto, 'type');
+		const recordTarget = getterOf(recordProto, 'target');
+		const recordAdded = getterOf(recordProto, 'addedNodes');
+		const recordRemoved = getterOf(recordProto, 'removedNodes');
+		const DECLARED = /^(title|link|base|head|html)$/i;
+		/** an element the title, an icon or the base may be in or be */
+		const declares = (node: unknown) =>
+			DECLARED.test(Reflect.apply(nodeName!, node, [])) ||
+			Reflect.apply(querySelector, node, ['title,link,base']) !== null;
+		const candidate = (node: unknown) =>
+			Reflect.apply(hasAttribute, node, ['autofocus']) ||
+			Reflect.apply(querySelector, node, ['[autofocus]']) !== null;
+		const mutationsSeen = (records: unknown[], focus: boolean): number => {
+			if (
+				!nodeType ||
+				!nodeName ||
+				!parentNode ||
+				!recordType ||
+				!recordTarget ||
+				!recordAdded ||
+				!recordRemoved
+			)
+				return SEEN_ALL;
+			const lists: Function[] = [recordAdded, recordRemoved];
+			try {
+				let seen = 0;
+				for (const record of records) {
+					const type = Reflect.apply(recordType!, record, []);
+					const target = Reflect.apply(recordTarget!, record, []);
+					if (type === 'attributes') seen |= SEEN_DECLARED;
+					else if (type === 'characterData') {
+						const parent = Reflect.apply(parentNode, target, []);
+						if (parent && DECLARED.test(Reflect.apply(nodeName, parent, [])))
+							seen |= SEEN_DECLARED;
+					} else {
+						if (
+							Reflect.apply(nodeType, target, []) !== 1 ||
+							DECLARED.test(Reflect.apply(nodeName, target, []))
+						)
+							seen |= SEEN_DECLARED;
+						for (const list of lists) {
+							const nodes: ArrayLike<unknown> = Reflect.apply(list, record, []);
+							for (let i = 0; i < nodes.length; i++) {
+								const node = nodes[i];
+								if (Reflect.apply(nodeType, node, []) !== 1) continue;
+								if (!(seen & SEEN_DECLARED) && declares(node))
+									seen |= SEEN_DECLARED;
+								if (
+									focus &&
+									list === recordAdded &&
+									!(seen & SEEN_ELEMENT) &&
+									candidate(node)
+								)
+									seen |= SEEN_ELEMENT;
+							}
+						}
 					}
-				: schedule,
-		);
+					if (seen === SEEN_ALL) break;
+				}
+				return seen;
+			} catch (error) {
+				return SEEN_ALL;
+			}
+		};
+		const observer = new global.MutationObserver((records: unknown[]) => {
+			const seen = mutationsSeen(records, !!autofocus);
+			if (seen & SEEN_DECLARED) schedule();
+			if (seen & SEEN_ELEMENT) autofocus?.();
+		});
 		const observe = () =>
 			observer.observe(global.document, {
 				subtree: true,

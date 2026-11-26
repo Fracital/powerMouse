@@ -1,0 +1,23 @@
+<!doctype html>
+<title>autofocus nested</title>
+<p>
+	Autofocus probe (focus suite): a candidate inside a subtree the page inserts
+	later.
+</p>
+<input id="before" />
+<script>
+	window.__autofocus = { loaded: false };
+	addEventListener('load', () =>
+		setTimeout(() => {
+			const form = document.createElement('form');
+			const label = document.createElement('label');
+			const input = document.createElement('input');
+			input.id = 'q';
+			input.autofocus = true;
+			label.append(input);
+			form.append(label);
+			document.body.append(form);
+			setTimeout(() => (window.__autofocus.loaded = true), 500);
+		}, 300),
+	);
+</script>

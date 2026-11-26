@@ -1,0 +1,26 @@
+<!doctype html>
+<title>LATE 0</title>
+<p id="hud">0</p>
+<script>
+	// navigate-events: a title the page changes with no history call. The
+	// host hears each change however it is made (document.title, the
+	// title's text node, a new title element), and a HUD's text changing in
+	// every frame between them is no change of the title
+	const hud = document.getElementById('hud');
+	let frames = 0;
+	const tick = () => {
+		hud.textContent = String(++frames);
+		if (frames < 90) requestAnimationFrame(tick);
+	};
+	requestAnimationFrame(tick);
+	setTimeout(() => (document.title = 'LATE 1'), 300);
+	setTimeout(() => {
+		document.querySelector('title').firstChild.data = 'LATE 2';
+	}, 600);
+	setTimeout(() => {
+		document.querySelector('title').remove();
+		const title = document.createElement('title');
+		title.textContent = 'LATE 3';
+		document.head.append(title);
+	}, 900);
+</script>

@@ -159,6 +159,26 @@ for (const [mode, base] of [
 		icons.none === null,
 		JSON.stringify(icons.none),
 	);
+	// a title the page changes with no history call, each way it can, with
+	// a HUD's text changing in every frame meanwhile
+	const titles = await page.evaluate(async (fixture) => {
+		const element = document.createElement('iframe');
+		document.body.append(element);
+		const frame = window.controller.createFrame(element);
+		const seen = [];
+		frame.addEventListener('navigate', (event) =>
+			seen.push(event.detail.title),
+		);
+		await frame.go(`${fixture}pages/title-late.html`);
+		await new Promise((resolve) => setTimeout(resolve, 2000));
+		return [...new Set(seen)];
+	}, FIXTURE);
+	ok(
+		`${mode}: the host hears a title set, its text node changed and a new title element`,
+		JSON.stringify(titles) ===
+			JSON.stringify(['LATE 0', 'LATE 1', 'LATE 2', 'LATE 3']),
+		JSON.stringify(titles),
+	);
 	ok(
 		`${mode}: unroute() inverts route() and answers null for anything that is not a route`,
 		icons.roundTrip === `${FIXTURE}pages/icon-1.html` &&
