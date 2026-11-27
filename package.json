@@ -93,14 +93,14 @@
 		"eslint-config-prettier": "^10.1.0",
 		"express": "^5.1.0",
 		"globals": "^17.14.0",
-		"holywisp": "0.5.3",
+		"holywisp": "0.5.4",
 		"playwright-core": "1.65.1",
 		"prettier": "^3.10.1",
 		"rimraf": "^6.0.1",
 		"tor-js": "github:Fracital/tor-js#789147dba8ff95d6fc4f0f3d2af068a2607603a4",
 		"typescript": "^5.9.0",
 		"typescript-eslint": "^8.73.0",
-		"werift": "^0.27.0",
+		"werift": "^0.28.0",
 		"ws": "^8.23.0"
 	}
 }
